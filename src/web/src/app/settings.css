@@ -83,6 +83,35 @@
   overflow: auto;
   overflow-anchor: none;
 }
+.repository-management .settings-table {
+  table-layout: fixed;
+}
+.repository-name-column {
+  width: 26%;
+}
+.repository-services-column {
+  width: 136px;
+}
+.repository-actions-column {
+  width: 128px;
+}
+.repository-management .settings-table th,
+.repository-management .settings-table td {
+  padding: 10px 16px;
+  vertical-align: middle;
+}
+.repository-management .settings-table td strong,
+.repository-management .settings-table td code,
+.repository-management .settings-service-link {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repository-management .settings-service-link {
+  text-align: left;
+}
 .repository-management .settings-table th {
   position: sticky;
   z-index: 1;
@@ -385,7 +414,8 @@
   .repository-management .settings-table tbody {
     display: block;
   }
-  .repository-management .settings-table thead {
+  .repository-management .settings-table thead,
+  .repository-management .settings-table colgroup {
     display: none;
   }
   .repository-management .settings-table tr {
@@ -420,21 +450,19 @@
   .settings-target-fields {
     grid-template-columns: minmax(0, 1fr);
   }
-  .service-tabs-inner {
+  .service-toolbar-inner {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-    padding-block: 8px;
+    gap: 10px;
+    padding-inline: 0;
   }
   .service-tab-list {
-    width: 100%;
+    width: auto;
+    justify-self: center;
   }
   .service-tab-actions {
+    position: static;
     justify-self: end;
-    gap: 4px;
-  }
-  .service-tab-actions .ui-button {
-    padding-inline: 8px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

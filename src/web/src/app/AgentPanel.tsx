@@ -162,20 +162,14 @@ function BashMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "ba
 }
 
 function AssistantBlock(props: { issue: IssueDetail; block: Extract<ConversationEntry, { kind: "assistant" }>["blocks"][number]; streaming: boolean }) {
-  const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
-  // Stream as text. Completed thinking stays available without rendering it in every transcript.
+  // Keep streaming as text; completed answers and thinking render inline as Markdown.
   return (
     <Show
       when={props.streaming}
       fallback={
-        <Show when={props.block.type === "thinking"} fallback={<IssueMarkdown issue={props.issue} source={props.block.value} />}>
-          <details class="agent-thinking" onToggle={(event) => setExpanded(event.currentTarget.open)}>
-            <summary>思考过程</summary>
-            <Show when={expanded()}>
-              <IssueMarkdown issue={props.issue} source={props.block.value} />
-            </Show>
-          </details>
-        </Show>
+        <div class={{ "agent-thinking": props.block.type === "thinking" }}>
+          <IssueMarkdown issue={props.issue} source={props.block.value} />
+        </div>
       }
     >
       <div class={{ "agent-thinking": props.block.type === "thinking" }}>

@@ -101,7 +101,7 @@ SSE 顺序为持久／当前回放、snapshot_ready、live 与 heartbeat。历�
 
 会话使用不可变归约和 Solid keyed For，块按 contentIndex 保持身份；流式不解析 Markdown，工具详情惰性挂载。CodeBrowser 按需加载，独立释放 editor／model，维护撤销、冲突与导航状态。统计采样和排序优化不代替实际操作前重新检查。
 
-实时归约保留既有条目 ID 和顺序，只原位更新或追加；未读计数只处理追加部分，完整快照仍独立替换。可见且停在末尾时跟随新内容，浏览历史或隐藏会话时不强制拉到底部；输入区独立于历史滚动，完成的思考内容按需展开。用户操作见[使用指南](USAGE.md#阅读与补充)，owner 为 [AgentPanel.tsx](../src/web/src/app/AgentPanel.tsx)。
+实时归约保留既有条目 ID 和顺序，只原位更新或追加；未读计数只处理追加部分，完整快照仍独立替换。可见且停在末尾时跟随新内容，浏览历史或隐藏会话时不强制拉到底部；输入区独立于历史滚动，正文使用会话可用宽度，思考内容直接显示而不折叠。用户操作见[使用指南](USAGE.md#阅读与补充)，owner 为 [AgentPanel.tsx](../src/web/src/app/AgentPanel.tsx)。
 
 代码浏览器、Monaco 和按需工具详情不承担业务授权；编辑器构建与升级约定集中在[开发指南](DEVELOPMENT.md#web-与浏览器)，真实布局、交互和 SSE 验收见[浏览器验收](DEVELOPMENT.md#可重复的真实浏览器验收)。
 

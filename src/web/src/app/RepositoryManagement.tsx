@@ -195,6 +195,12 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
         <Show when={!loadError()}>
           <div ref={list} class="settings-table-scroll ip-scrollbar" role="region" aria-label="仓库列表" tabindex={0}>
             <table class="settings-table">
+              <colgroup>
+                <col class="repository-name-column" />
+                <col />
+                <col class="repository-services-column" />
+                <col class="repository-actions-column" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>名称</th>
@@ -215,7 +221,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
                   {(row) => (
                     <tr>
                       <td>
-                        <strong>{row.name}</strong>
+                        <strong title={row.name}>{row.name}</strong>
                       </td>
                       <td>
                         <code title={row.url}>{row.url}</code>
@@ -223,7 +229,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
                       <td>
                         <For each={row.services} fallback="—">
                           {(service) => (
-                            <button class="settings-service-link" type="button" onClick={() => props.onSelectService?.(service.key)}>
+                            <button class="settings-service-link" type="button" title={service.name} onClick={() => props.onSelectService?.(service.key)}>
                               {service.name}
                             </button>
                           )}

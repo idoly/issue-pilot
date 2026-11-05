@@ -2,7 +2,7 @@
 
 [项目首页](../../README.md) · [文档导航](../README.md)
 
-本页保存既有展示图，对应 [manifest.json](manifest.json) 的 `sourceCommit=195c25b5ed7187f37ec0b9b6769f6c06e951b69d`，不是当前 checkout 的重新截图或验收证明。尤其是会话输入、思考折叠与滚动交互已继续演进，当前行为见[使用指南](../USAGE.md#阅读与补充)。本次文档同步不修改图片字节或 manifest 中的捕获记录。
+本页保存既有展示图，对应 [manifest.json](manifest.json) 的 `sourceCommit=195c25b5ed7187f37ec0b9b6769f6c06e951b69d`，不是当前 checkout 的重新截图或验收证明。尤其是会话输入、思考展示与滚动交互已继续演进，当前行为见[使用指南](../USAGE.md#阅读与补充)。本次文档同步不修改图片字节或 manifest 中的捕获记录。
 
 按捕获记录，图片使用该版本 Web 生产构建，在独立 Fastify 应用中以演示 SQLite、Pi JSONL 和临时本地 Git 仓库生成，未读取真实 `.issue-pilot`、真实人员／凭证，也未执行模型或远程查询。图中调查结论是演示文本，不是业务证据。
 

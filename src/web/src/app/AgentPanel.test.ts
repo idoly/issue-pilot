@@ -1100,12 +1100,9 @@ describe("Agent conversation state", () => {
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")?.textContent).toContain("Final response");
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
     expect(view.container.querySelector(".agent-message.assistant")).toBe(assistantNode);
-    expect(markdownParse).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Final reasoning")).toBeNull();
-    const reasoning = screen.getByText("思考过程").closest("details")!;
-    reasoning.open = true;
-    fireEvent(reasoning, new Event("toggle"));
     await screen.findByText("Final reasoning");
+    expect(view.container.querySelector(".agent-thinking details")).toBeNull();
+    expect(screen.queryByText("思考过程")).toBeNull();
     expect(markdownParse).toHaveBeenCalledTimes(2);
     expect(view.container.querySelector(".markdown-body img")?.hasAttribute("onerror")).toBe(false);
     expect(screen.queryByText("First second queued")).toBeNull();

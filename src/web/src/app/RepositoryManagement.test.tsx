@@ -35,6 +35,28 @@ for (const outcome of ["success", "failure"] as const)
     expect(screen.queryByText("Stale repository")).toBeNull();
     expect(screen.queryByText("old_identity_load_failed")).toBeNull();
   });
+it("keeps a large repository directory in a keyboard-focusable list region", async () => {
+  state.user = () => alice;
+  state.load.mockResolvedValue(Array.from({ length: 300 }, (_, index) => ({ ...repository, id: `repository-${index}`, name: `Repository ${index}`, url: `git@example.test:repo-${index}.git` })));
+  render(() => <RepositoryManagement />);
+  const list = await screen.findByRole("region", { name: "仓库列表" });
+  await within(list).findByText("Repository 299");
+  expect(list.getAttribute("tabindex")).toBe("0");
+  expect(list.classList.contains("ip-scrollbar")).toBe(true);
+  expect(within(list).getAllByRole("row")).toHaveLength(301);
+  expect(within(list).queryByRole("button", { name: "登记仓库" })).toBeNull();
+});
+it("retains full long names, addresses and service labels for truncated display", async () => {
+  state.user = () => alice;
+  const name = "example-docking-a-very-long-repository-name";
+  const url = `git@example.test:digital-biz-projects/example/docking-servers/${name}.git`;
+  state.load.mockResolvedValue([{ ...repository, name, url, services: [{ key: "ai-platform", name: "ai-platform" }] }]);
+  render(() => <RepositoryManagement />);
+  const list = await screen.findByRole("region", { name: "仓库列表" });
+  expect((await within(list).findByText(name)).getAttribute("title")).toBe(name);
+  expect(within(list).getByText(url).getAttribute("title")).toBe(url);
+  expect(within(list).getByRole("button", { name: "ai-platform" }).getAttribute("title")).toBe("ai-platform");
+});
 it("shows repository usage and developer controls while retaining the full address", async () => {
   state.user = () => alice;
   render(() => <RepositoryManagement />);

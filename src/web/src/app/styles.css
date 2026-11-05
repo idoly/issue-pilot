@@ -1458,9 +1458,7 @@ textarea {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  max-width: 960px;
   flex: 1 0 auto;
-  margin-inline: auto;
   padding: 0 8px 12px 12px;
 }
 .agent-message {
@@ -1534,17 +1532,6 @@ textarea {
 .agent-thinking .markdown-body {
   color: inherit;
   font-family: inherit;
-}
-.agent-thinking > summary {
-  width: fit-content;
-  padding-block: 4px;
-  cursor: pointer;
-  font-size: 13px;
-}
-.agent-thinking[open] > .markdown-body {
-  margin-top: 6px;
-  padding-left: 12px;
-  border-left: 1px solid var(--agent-border-muted);
 }
 .agent-thinking .markdown-body > :first-child {
   margin-top: 0;
@@ -1921,8 +1908,7 @@ summary.agent-tool-head > svg {
   color: var(--agent-dim);
 }
 .agent-composer:focus-within {
-  outline: 1px solid var(--agent-accent);
-  outline-offset: 1px;
+  border-color: var(--agent-accent);
 }
 .agent-composer-actions {
   display: flex;
@@ -2860,30 +2846,36 @@ summary.agent-tool-head > svg {
 }
 .service-panel {
   min-width: 0;
-  background: #f7f9f8;
+  background: transparent;
 }
-.service-tabs {
+.service-toolbar {
   position: sticky;
   z-index: 3;
   top: 0;
-  padding: 0 24px;
-  background: rgb(255 255 255 / 96%);
-  backdrop-filter: blur(8px);
+  width: min(1032px, calc(100% - 48px));
+  margin: 18px auto 0;
+  padding: 4px 0;
+  border-radius: 8px;
+  background: #f1f4f2;
 }
-.service-tabs-inner {
+.service-toolbar-inner {
+  position: relative;
   display: flex;
-  width: 100%;
-  min-height: 58px;
+  min-width: 0;
+  min-height: 42px;
   align-items: center;
-  gap: 12px;
-  margin-inline: auto;
+  justify-content: center;
+  /* Reserve the same action space on both sides to keep Tabs centered without overlap. */
+  padding-inline: 176px;
 }
 .service-tab-list {
   display: flex;
   min-width: 0;
-  flex: 1;
+  max-width: 100%;
+  flex: 0 1 auto;
   gap: 4px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 5px;
   border-radius: 9px;
   background: #edf2ef;
@@ -2895,13 +2887,17 @@ summary.agent-tool-head > svg {
 }
 .service-tab-list button {
   min-height: 32px;
+  max-width: 240px;
   flex: 0 0 auto;
+  overflow: hidden;
   padding: 5px 15px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: #5e6b65;
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 .service-tab-list button:hover {
@@ -2915,8 +2911,10 @@ summary.agent-tool-head > svg {
   box-shadow: 0 1px 4px rgb(20 39 32 / 12%);
 }
 .service-tab-actions {
+  position: absolute;
+  right: 0;
   display: flex;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   gap: 8px;
 }
 .service-detail {
@@ -3490,8 +3488,9 @@ summary.agent-tool-head > svg {
   .configuration-workspace {
     overflow: visible;
   }
-  .service-tabs {
-    padding-inline: 12px;
+  .service-toolbar {
+    width: calc(100% - 24px);
+    margin-top: 14px;
   }
   .service-detail {
     width: calc(100% - 24px);
@@ -3625,23 +3624,6 @@ summary.agent-tool-head > svg {
   }
   .user-management-header {
     padding: 14px 16px;
-  }
-  .service-tabs {
-    padding-inline: 12px;
-  }
-  .service-tabs-inner {
-    display: grid;
-    gap: 8px;
-    padding-block: 10px;
-  }
-  .service-tab-list {
-    width: 100%;
-    max-width: 100%;
-    justify-content: flex-start;
-  }
-  .service-tab-actions {
-    position: static;
-    justify-self: end;
   }
   .statistics-header .ui-select {
     width: 100%;

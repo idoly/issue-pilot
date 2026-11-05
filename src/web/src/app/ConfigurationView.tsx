@@ -782,14 +782,15 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
         </section>
       </Show>
       <section class="service-panel" hidden={!configurationLoaded()}>
-        <div class="service-tabs">
-          <div class="service-tabs-inner">
-            <div class="service-tab-list" role="tablist" aria-label="服务列表">
+        <div class="service-toolbar">
+          <div class="service-toolbar-inner">
+            <div class="service-tab-list ip-scrollbar" role="tablist" aria-label="服务列表">
               <For each={configuration().services}>
                 {(service) => (
                   <button
                     type="button"
                     role="tab"
+                    title={service.name}
                     aria-selected={selectedServiceKey() === service.key ? "true" : "false"}
                     class={selectedServiceKey() === service.key ? "selected" : ""}
                     onClick={() => {
@@ -802,7 +803,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
                 )}
               </For>
             </div>
-            <div class="service-tab-actions">
+            <div class="service-tab-actions" role="group" aria-label="服务操作">
               <Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>
                 添加
               </Button>

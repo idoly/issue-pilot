@@ -87,6 +87,26 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+test("keeps service Tabs separate from actions with many long labels", async () => {
+  const next = configuration();
+  next.services = Array.from({ length: 20 }, (_, index) => ({ ...next.services[0]!, key: `service-${index}`, name: `digital-biz-projects/example-${index}/servers` }));
+  state.replaceConfiguration(next);
+  const select = vi.fn();
+  render(() => <ConfigurationView onSelectService={select} />);
+  const tabs = screen.getByRole("tablist", { name: "服务列表" });
+  expect(within(tabs).getAllByRole("tab")).toHaveLength(20);
+  const last = within(tabs).getByRole("tab", { name: next.services[19]!.name });
+  expect(last.getAttribute("title")).toBe(next.services[19]!.name);
+  fireEvent.click(last);
+  await waitFor(() => expect(last.getAttribute("aria-selected")).toBe("true"));
+  expect(select).toHaveBeenCalledWith("service-19");
+  const actions = screen.getByRole("group", { name: "服务操作" });
+  expect(within(actions).getByRole("button", { name: "添加" })).toBeTruthy();
+  expect(within(actions).getByRole("button", { name: "编辑" })).toBeTruthy();
+  expect(within(tabs).queryByRole("button", { name: "添加" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "选择服务" })).toBeNull();
+});
+
 for (const outcome of ["success", "failure"] as const)
   test(`closing a private MySQL load invalidates its late ${outcome} before creating another service`, async () => {
     let finish!: () => void;

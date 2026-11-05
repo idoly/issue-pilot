@@ -25,7 +25,7 @@ try {
   const engine = new TestAgentController();
   const events = new AgentEventBus();
   const databaseFile = path.join(root, "issues.db");
-  app = await buildApi({ stateRoot: root, databaseFile, engine, events, modelCatalog, logger: false, webRoot: path.resolve("src/web/dist") });
+  app = await buildApi({ stateRoot: root, databaseFile, engine, events, modelCatalog, logger: false, webRoot: path.resolve(process.env.ISSUE_PILOT_BROWSER_WEB_ROOT ?? "src/web/dist") });
   await createService(app, "browser", ["dev"]);
   const mdmRepositories = Array.from({ length: 24 }, (_, index) => `git@example.test:digital-biz-projects/mdm/servers/repository-${index}.git`);
   const mallRepository = "https://example.test/digital-biz-projects/xhgj-mall/fronts/mall.git";
@@ -141,6 +141,11 @@ try {
   await page.getByRole("button", { name: "关闭代码浏览器", exact: true }).click();
   const draft = page.getByRole("textbox", { name: "发送给 Agent", exact: true });
   await draft.fill("unsent browser draft");
+  const composerFocus = await draft.evaluate((element) => {
+    const composer = getComputedStyle(element.closest(".agent-composer"));
+    return { outline: composer.outlineStyle, borderWidth: composer.borderTopWidth, borderColor: composer.borderTopColor, inputOutline: getComputedStyle(element).outlineStyle };
+  });
+  assert.deepEqual(composerFocus, { outline: "none", borderWidth: "1px", borderColor: "rgb(138, 190, 183)", inputOutline: "none" });
   await page.getByRole("radio", { name: "首页", exact: true }).click();
   await page.getByRole("radio", { name: "工单", exact: true }).click();
   await draft.waitFor();
@@ -184,13 +189,14 @@ try {
   assert.match(selected, /Browser SSE evidence/);
   assert.match(selected, /Second paragraph 订单/);
   await page.evaluate(() => window.getSelection().removeAllRanges());
-  const thinking = message.locator("summary").filter({ hasText: "思考过程" });
   const reasoning = page.getByText("Browser reasoning evidence", { exact: true });
-  assert.equal(await reasoning.count(), 0);
-  await thinking.press("Enter");
   await reasoning.waitFor();
-  await thinking.press("Space");
-  await reasoning.waitFor({ state: "detached" });
+  assert.equal(await message.locator(".agent-thinking details, .agent-thinking summary").count(), 0);
+  await page.setViewportSize({ width: 1920, height: 1050 });
+  const transcriptWidth = await page.locator(".agent-scroll").evaluate((element) => element.clientWidth);
+  const conversationWidth = await page.locator(".agent-conversation").evaluate((element) => element.getBoundingClientRect().width);
+  assert.ok(transcriptWidth > 960 && Math.abs(transcriptWidth - conversationWidth) < 2, `Conversation width ${conversationWidth} does not fill ${transcriptWidth}`);
+  await page.setViewportSize({ width: 1680, height: 1050 });
 
   for (let index = 1; index <= 40; index += 1) publish({ type: "issue_user", message: `Browser history entry ${index}` });
   await page.getByText("Browser history entry 40", { exact: true }).waitFor();
@@ -252,6 +258,104 @@ try {
   if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) {
     await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, "code-1280.png"), fullPage: true });
   }
+  await page.getByRole("button", { name: "关闭代码浏览器", exact: true }).click();
+  for (let index = 0; index < 300; index += 1) {
+    const registered = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: `Repository ${index}`, url: `git@example.test:repo-${String(index).padStart(3, "0")}.git` } });
+    assert.equal(registered.statusCode, 201, registered.body);
+  }
+  const longName = "example-mall-docking-chinarailway";
+  const longUrl = `git@example.test:digital-biz-projects/example/docking-servers/${longName}.git`;
+  const longRepository = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: longName, url: longUrl } });
+  assert.equal(longRepository.statusCode, 201, longRepository.body);
+  await createService(app, "ai-platform", ["test"], [longUrl]);
+  await page.getByRole("radio", { name: "配置", exact: true }).click();
+  await page.getByRole("tab", { name: "仓库", exact: true }).click();
+  const repositoryList = page.getByRole("region", { name: "仓库列表", exact: true });
+  await repositoryList.getByText("Repository 299", { exact: true }).waitFor({ state: "attached" });
+  for (const width of [1280, 520]) {
+    await page.setViewportSize({ width, height: 800 });
+    assert.equal(await repositoryList.getAttribute("tabindex"), "0");
+    assert.equal(await repositoryList.evaluate((element) => element.scrollHeight > element.clientHeight && getComputedStyle(element).overflowY === "auto"), true);
+    await repositoryList.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const listBounds = await repositoryList.boundingBox();
+    const lastBounds = await repositoryList.getByRole("row").last().boundingBox();
+    assert.ok(lastBounds.y >= listBounds.y && lastBounds.y + lastBounds.height <= listBounds.y + listBounds.height + 1);
+    assert.equal(await page.getByRole("button", { name: "登记仓库", exact: true }).isVisible(), true);
+    const longRow = repositoryList.getByRole("row").filter({ has: page.getByText(longName, { exact: true }) });
+    await longRow.scrollIntoViewIfNeeded();
+    const nameCell = longRow.getByText(longName, { exact: true });
+    const addressCell = longRow.getByText(longUrl, { exact: true });
+    const serviceCell = longRow.getByRole("button", { name: "ai-platform", exact: true });
+    assert.equal(await nameCell.getAttribute("title"), longName);
+    assert.equal(await addressCell.getAttribute("title"), longUrl);
+    assert.equal(await serviceCell.getAttribute("title"), "ai-platform");
+    assert.equal(await addressCell.evaluate((element) => getComputedStyle(element).whiteSpace), "nowrap");
+    assert.ok((await addressCell.boundingBox()).height <= 20);
+    assert.ok((await serviceCell.boundingBox()).height <= 32);
+    if (width === 1280) assert.ok((await longRow.boundingBox()).height <= 56);
+    assert.equal(await repositoryList.evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+    if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `repositories-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole("tab", { name: "服务", exact: true }).click();
+  const compactTabs = page.getByRole("tablist", { name: "服务列表", exact: true });
+  await compactTabs.getByRole("tab").first().waitFor();
+  const compactBounds = await compactTabs.boundingBox();
+  const compactToolbar = await page.locator(".service-toolbar-inner").boundingBox();
+  assert.ok(compactBounds.width < compactToolbar.width / 2);
+  assert.ok(Math.abs(compactBounds.x + compactBounds.width / 2 - compactToolbar.x - compactToolbar.width / 2) < 1);
+  assert.equal(await compactTabs.evaluate((element) => getComputedStyle(element).overflowY === "hidden" && element.scrollHeight <= element.clientHeight), true);
+  for (let index = 0; index < 20; index += 1) await createService(app, `demo-namespace-${String(index).padStart(2, "0")}-servers`, ["test"]);
+  await page.reload();
+  await page.getByRole("radio", { name: "配置", exact: true }).click();
+  await page.getByRole("tab", { name: "服务", exact: true }).click();
+  const serviceTabs = page.getByRole("tablist", { name: "服务列表", exact: true });
+  const serviceActions = page.getByRole("group", { name: "服务操作", exact: true });
+  await serviceTabs.getByRole("tab", { name: "demo-namespace-19-servers", exact: true }).waitFor({ state: "attached" });
+  for (const width of [1280, 700, 520]) {
+    await page.setViewportSize({ width, height: 800 });
+    const tabBounds = await serviceTabs.boundingBox();
+    const toolbarInnerBounds = await page.locator(".service-toolbar-inner").boundingBox();
+    assert.ok(Math.abs(tabBounds.x + tabBounds.width / 2 - toolbarInnerBounds.x - toolbarInnerBounds.width / 2) < 1);
+    assert.equal(await serviceTabs.evaluate((element) => getComputedStyle(element).overflowY === "hidden" && element.scrollHeight <= element.clientHeight), true);
+    const actionBounds = await serviceActions.boundingBox();
+    assert.ok(tabBounds.x >= 0 && actionBounds.x + actionBounds.width <= width);
+    if (width > 700) assert.ok(tabBounds.x + tabBounds.width + 8 <= actionBounds.x);
+    else assert.ok(tabBounds.y + tabBounds.height + 4 <= actionBounds.y);
+    assert.equal(await serviceTabs.evaluate((element) => element.scrollWidth > element.clientWidth), true);
+    const lastService = serviceTabs.getByRole("tab", { name: "demo-namespace-19-servers", exact: true });
+    await lastService.scrollIntoViewIfNeeded();
+    await lastService.click();
+    assert.equal(await lastService.getAttribute("aria-selected"), "true");
+    const activeStyle = await lastService.evaluate((element) => ({
+      background: getComputedStyle(element).backgroundColor,
+      radius: getComputedStyle(element).borderRadius,
+      border: getComputedStyle(element).borderBottomWidth,
+    }));
+    assert.deepEqual(activeStyle, { background: "rgb(255, 255, 255)", radius: "6px", border: "0px" });
+    assert.equal(await page.getByRole("combobox", { name: "选择服务", exact: true }).count(), 0);
+    assert.equal(await serviceActions.getByRole("button", { name: "添加", exact: true }).isVisible(), true);
+    assert.equal(await serviceActions.getByRole("button", { name: "编辑", exact: true }).isVisible(), true);
+    assert.equal(
+      await page.locator(".service-toolbar").evaluate((element) => {
+        const style = getComputedStyle(element);
+        return style.backgroundColor === "rgb(241, 244, 242)" && style.borderRadius === "8px" && style.borderTopWidth === "0px";
+      }),
+      true,
+    );
+    const toolbarBounds = await page.locator(".service-toolbar").boundingBox();
+    const detailBounds = await page.locator(".service-detail").boundingBox();
+    assert.ok(Math.abs(toolbarBounds.x - detailBounds.x) < 1 && Math.abs(toolbarBounds.width - detailBounds.width) < 1);
+    await page.locator(".service-detail h2").first().click();
+    if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `services-${width}.png`), fullPage: true });
+  }
+  await serviceActions.getByRole("button", { name: "编辑", exact: true }).click();
+  const serviceDialog = page.getByRole("dialog", { name: "编辑服务", exact: true });
+  await serviceDialog.waitFor();
+  await serviceDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.getByRole("radio", { name: "配置", exact: true }).click();
   const settingsTabs = page.getByRole("tablist", { name: "配置分类" });
   await settingsTabs.getByRole("tab", { name: "仓库", exact: true }).click();
@@ -353,7 +457,15 @@ try {
         chromium: browser.version(),
         revision,
         sourceDiffSha256: createHash("sha256").update(sourceDiff).digest("hex"),
-        viewports: [{ width: 1680, height: 1050 }, { width: 1280, height: 800 }, settingsViewport, ...homeViewports],
+        viewports: [
+          { width: 1680, height: 1050 },
+          { width: 1920, height: 1050 },
+          { width: 1280, height: 800 },
+          { width: 700, height: 800 },
+          { width: 520, height: 800 },
+          settingsViewport,
+          ...homeViewports,
+        ],
         issue: issue.key,
         checks: [
           "real HTTP and SQLite",
@@ -373,7 +485,15 @@ try {
           "real SSE",
           "Markdown fence and link parsing",
           "cross-paragraph selection",
-          "keyboard toggle of lazily rendered thinking",
+          "thinking rendered inline without disclosure controls",
+          "full-width conversation on a wide viewport",
+          "300 repositories scroll in a focusable region on desktop and mobile",
+          "long repository names and URLs stay on one line with full titles",
+          "service labels do not split across lines",
+          "composer focus uses a single border without a second outline",
+          "service Tabs retain their original rounded rail and white selected pill",
+          "service Tabs shrink to content, stay centered and never show a vertical scrollbar",
+          "service toolbar aligns with details and keeps actions separate on narrow screens",
           "history scroll and unread indicator with real SSE",
           "long draft and accessible send control at 1280px",
           "click sends through HTTP and returns focus to composer",

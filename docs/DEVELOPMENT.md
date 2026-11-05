@@ -117,7 +117,7 @@ CodeBrowser／Monaco 按需加载。图标使用主题的明确字段，JSON 使
 
 ## 可重复的真实浏览器验收
 
-`tests/browser/acceptance.mjs` 启动临时 SQLite、Issue 根、Git worktree 和真实 HTTP/SSE 服务，再用生产构建与 Chromium 检查高亮、查找、粘贴、保存、CRLF、撤销／重做、差异、冲突、导航、Agent 草稿及选区。会话场景还覆盖 40 条实时历史、浏览历史时的未读提示和滚动位置、长草稿、键盘展开思考内容、点击发送及焦点恢复。Agent 执行器和模型目录使用测试实现，不发起远程模型请求。脚本最后关闭浏览器／API 并删除其临时状态；输出浏览器版本、源码基线／diff 哈希、视口、场景及加载资源。
+`tests/browser/acceptance.mjs` 启动临时 SQLite、Issue 根、Git worktree 和真实 HTTP/SSE 服务，再用生产构建与 Chromium 检查高亮、查找、粘贴、保存、CRLF、撤销／重做、差异、冲突、导航、Agent 草稿及选区。会话场景还覆盖 40 条实时历史、浏览历史时的未读提示和滚动位置、长草稿、直接展示思考内容、宽屏会话宽度、点击发送及焦点恢复；另以 300 条仓库检查桌面／窄屏列表滚动、长名称／地址截断及服务名不拆行，并检查输入区聚焦时没有重复描边，以及服务 Tab 直接切换、圆角与白底选中态、居中与内容收缩、无竖向滚动条、与详情卡片对齐及窄屏操作区布局。Agent 执行器和模型目录使用测试实现，不发起远程模型请求。脚本最后关闭浏览器／API 并删除其临时状态；输出浏览器版本、源码基线／diff 哈希、视口、场景及加载资源。
 
 Playwright 是独立验收工具，不加入应用依赖。以下 Bash 示例只在**自己的独立开发 checkout**执行：脚本固定读取仓库的 `src/web/dist`，不要对正在提供服务的目录执行构建。Linux 先准备浏览器系统库和中文字体（如 `fonts-noto-cjk`）；`install --only-shell` 只下载浏览器，不会安装这些系统包，CI 的安装方式见 [ci.yml](../.github/workflows/ci.yml)。工具安装需要网络，既不修改应用依赖，也不修改全局 Pi 配置。
 
@@ -134,7 +134,7 @@ ISSUE_PILOT_BROWSER_ARTIFACTS="$verification_root/artifacts" \
 npm run test:browser
 ```
 
-截图输出可选：设置 `ISSUE_PILOT_BROWSER_ARTIFACTS` 时输出 `application.png`、`code-1280.png`，失败时尝试保存 `failure.png`；它们仅包含本次夹具，不是 README 展示图。浏览器模块变量指向已安装工具的 `index.mjs`，浏览器路径须与下载时一致；不设置模块变量则尝试普通 `playwright` 包解析。
+截图输出可选：设置 `ISSUE_PILOT_BROWSER_ARTIFACTS` 时输出 `application.png`、`code-1280.png`、`repositories-1280.png`／`repositories-520.png` 及 `services-1280.png`／`services-700.png`／`services-520.png`，失败时尝试保存 `failure.png`；它们仅包含本次夹具，不是 README 展示图。浏览器模块变量指向已安装工具的 `index.mjs`，浏览器路径须与下载时一致；不设置模块变量则尝试普通 `playwright` 包解析。
 
 成功日志含浏览器版本、源码 commit、受检源文件 diff 哈希、视口、场景和资源，不应仅凭生成图片判断通过。验收脚本始终尝试关闭浏览器／API 并删除临时业务 state，但不会删除外部工具与截图目录；检查完日志和图片后，在同一 Shell 确认 `verification_root` 是本次 `mktemp` 的路径，再执行：
 
@@ -142,7 +142,7 @@ npm run test:browser
 rm -rf -- "$verification_root"
 ```
 
-这些环境变量只配置验收工具，不能覆盖应用的生产状态路径。
+验收默认读取 `src/web/dist`；设置 `ISSUE_PILOT_BROWSER_WEB_ROOT` 可改为本次独立构建的绝对目录，避免覆盖正在使用的产物。这些环境变量只配置验收工具，不能覆盖应用的生产状态路径。
 
 本地协议夹具不能替代实际厂商验收。模型、DMS/SLS、钉钉及外部 MCP 需要明确的独立测试目标、受控凭证位置、允许的只读查询与预期结果；不得自行选择生产连接，也不得用协议模拟结果声称外部系统已通过。
 
