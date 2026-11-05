@@ -2,23 +2,17 @@
 
 [文档导航](README.md) · [配置](CONFIGURATION.md) · [运维](RUNBOOK.md)
 
-## 部署拓扑
+## 部署模型
 
-应用在 Linux 主机或单副本容器运行。API 同源提供网页、HTTP、SSE 和入站 MCP，同一 state root 只能有一个 API 实例。生产访问经可信认证网关，不能仅把 subject 请求头或页面账号选择当认证。
+Linux 主机或单副本容器运行 Node API，同源提供 Web、HTTP、SSE、/mcp。一个 state root 只有一个 API；可选 4173 前端不是独立业务实例。
 
-| 资源 | 要求 |
-| --- | --- |
-| 业务 state | SQLite 文件组、工单、Git、控制目录持久化 |
-| Operator 配置 | 运行账号的 Pi 设置／模型／资源、SSH known_hosts 和工具配置 |
-| 系统能力 | 非特权 namespace、seccomp、SRT 依赖和实际开发工具 |
-| 外部出口 | 精确模型、Git、查询目标和服务 MCP 地址 |
-| 网关 | 认证并绑定 subject，限制传输和内存压力，支持长 SSE |
+部署需准备持久 state、运行用户的 Operator 配置、系统工具、允许的外部出口和可信认证网关。subject 请求头只是选择身份，网关必须校验并绑定，不能允许任意冒充。
 
 ## 首次本地运行
 
-开发／CI 使用 Node 24.18.0，容器使用 Node 26。安装 Python 与 venv、Git、ripgrep、fd／fdfind、OpenSSH client、bubblewrap、socat、proxychains4；SLS 需要 aliyun CLI，开发项目另需对应 Java／Maven／Node 工具。
+使用 Node 24.18.0（容器 Node 26）、Python/venv、Git、rg、fd/fdfind、OpenSSH client、bubblewrap、socat、proxychains4。SLS 需要 aliyun CLI；开发任务按项目安装 Java／Maven 等正常工具。
 
-在独立安装目录检查 [issue-pilot.config.ts](../issue-pilot.config.ts)：bootstrapUser、监听地址、端口、预算和根路径必须适合该部署。准备运行用户的 Pi models／settings 和可信 known_hosts，再执行：
+在独立安装目录检查[根配置](../issue-pilot.config.ts)的 bootstrapUser、监听、区域、路径与预算，准备 Pi models/settings 和可信 known_hosts，再执行：
 
 ```bash
 npm ci
@@ -28,64 +22,50 @@ npm run build
 node --experimental-strip-types src/http/production.ts
 ```
 
-npm postinstall 校验固定版本补丁，需要 Git，不可跳过。不要擅自批准被安装策略阻止的脚本；外部数据库原生驱动等能力需单独验收。
+postinstall 使用 Git 校验固定补丁，不可跳过。被策略阻止的原生驱动等脚本要单独审查与验收，不因 npm 安装成功声称全部数据库驱动可用。
 
-state 默认是安装目录 `.issue-pilot`，数据库文件名来自根配置。路径相对于源码根解析，没有 state／database 环境变量覆盖；手工隔离服务器使用独立项目和根配置，测试使用构造器注入。
+state 默认是源码根下 .issue-pilot，databaseFile 相对此根，无 state/database 环境变量覆盖。手工隔离使用独立项目和根配置，测试使用构造器注入。业务设置由页面写 SQLite，不创建用户／服务 YAML。
 
-用户、凭证、仓库、服务与部署由页面／API 保存到 SQLite，不创建业务 YAML。模型请求 Key 来自数据库，Pi 的认证文件不作为 fallback。
+## 入口与 supervisor
 
-## HTTP 与 Web 入口
-
-| 入口 | 行为 |
+| 入口 | 用途 |
 | --- | --- |
-| API 3000 | 提供构建后的 Web、API、SSE 和 MCP |
-| dev:web 4173 | 开发 HMR，代理 /api 和 /mcp |
-| vite preview 4173 | 提供已构建产物，代理到同一 API |
+| API 3000 | 构建网页、HTTP、SSE、MCP |
+| npm run dev:web，4173 | HMR 开发，代理 /api、/mcp |
+| Vite preview，4173 | 提供构建产物并代理同一 API |
 
 ```bash
-npm run dev:web
-# 或仅提供构建产物
 node node_modules/vite/bin/vite.js preview --config src/web/vite.config.ts --strictPort
-```
-
-现有主机的 user units 为 issue-pilot-api.service 和 issue-pilot-web.service。4173 是可选入口，但已有使用者时不能仅因 API 也能提供网页就认定它无用。
-
-```bash
 systemctl --user show issue-pilot-api.service issue-pilot-web.service \
   --property=MainPID,ExecStart,WorkingDirectory --no-pager
 ```
 
-supervisor 应使用匹配的源码、依赖、venv 和产物，后端允许足够时间优雅排空。已有实例的更新、备份和回退遵循[运维手册](RUNBOOK.md)，不能在运行中混装依赖。
+主机使用 user units，需匹配实际 Node/PATH、源码、依赖、venv 和 dist，并允许足够时间排空 Engine。API 的 shutdownGraceMs 有界关闭卡住 HTTP 连接，不替代 Agent 优雅结束。已有安装的更新按[发布步骤](RUNBOOK.md#按风险发布与重启)，不要混装运行中依赖。
 
-## 容器构建
+参数 Tab 可以调整一部分运维策略，不需要重启；state 路径、端口、bootstrap、区域及硬预算仍是部署级变更。不要把“参数热更新”扩展解释为任意代码配置都能即时切换。
 
-[Containerfile](../Containerfile) 使用 Node 26 构建 Web 并保留已修补生产依赖；从 Maven 镜像提供 Java 8／Maven，从独立阶段构建 Git 2.56.0，安装 aliyun CLI 3.5.2 和 Python requirements。Git 采用 NO_RUST 构建，不依赖主机 Git。
+## 容器
+
+[Containerfile](../Containerfile) 以 Node 26 构建 Web 与修补后的生产依赖，使用 Maven 镜像提供 Java 8／Maven，独立构建 Git 2.56.0，安装 aliyun CLI 3.5.2、Python requirements 和 SRT 系统依赖。
 
 ```bash
 podman build -f Containerfile -t registry.example.com/issue-pilot:<version> .
 podman push registry.example.com/issue-pilot:<version>
 ```
 
-替换 registry 和版本，网络须能访问声明的基础镜像、包源和源码。构建缓存是可再生成资源，但当前 Containerfile 引用的基础镜像不是运行服务本身；清理前区分镜像、容器、挂载和 volume。
+替换镜像地址和版本，核对包源／镜像／源码网络。基础镜像按声明 tag，准确软件依赖按锁文件；不能用删除必要构建镜像或弱化 sandbox 的方式掩盖环境失败。
 
 ## Kubernetes
 
-[deploy/issue-pilot.yaml](../deploy/issue-pilot.yaml) 使用单副本 Recreate、UID／GID 1000、只读根文件系统、RuntimeDefault seccomp，不挂载 ServiceAccount token，并移除 capabilities。不能用 privileged 或弱隔离绕过 SRT 失败。
+[示例清单](../deploy/issue-pilot.yaml) 为单副本 Recreate、UID/GID 1000、RuntimeDefault seccomp、只读根文件系统，移除 capabilities，不挂载 ServiceAccount token。节点须支持 SRT 所需的非特权 namespace，不采用 privileged 绕过。
 
-| 主机资源 | 容器路径 |
+| 资源 | 容器位置 |
 | --- | --- |
 | /var/lib/issue-pilot | /opt/issue-pilot/.issue-pilot，持久 state |
-| /etc/issue-pilot | /home/node，只读 Operator 配置 |
-| emptyDir | /tmp，临时执行资源 |
+| /etc/issue-pilot | /home/node，只读 Operator HOME |
+| emptyDir | /tmp，临时执行空间 |
 
-hostPath 不受 `fsGroup` 影响，state 目录必须由容器用户（UID/GID 1000）拥有，否则启动时创建／收紧 0700 目录失败：
-
-```bash
-install -d -m 0700 -o 1000 -g 1000 /var/lib/issue-pilot
-install -d -m 0755 -o 1000 -g 1000 /etc/issue-pilot
-```
-
-准备 owner／mode、容量、节点标签 `issue-pilot/state=true`、网关与镜像后执行：
+准备 owner/mode、容量、节点标签、网关和镜像后：
 
 ```bash
 kubectl -n issue-pilot apply -f deploy/issue-pilot.yaml
@@ -93,12 +73,12 @@ kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
 kubectl -n issue-pilot get deployment,pod,service
 ```
 
-示例域名和 registry 不能直接当生产配置。绝对路径已成为状态记录时，迁移路径必须独立演练，不能仅改挂载点或批量改数据库绑定。
+示例 registry 不是可直接使用的生产地址。现有绝对路径已进入绑定时，迁移路径需独立演练，不能只改 mount 或批量改 DB。
 
-## 网络与验收
+## 网络与上线验收
 
-网关限制可信 subject、源码／下载／私有配置／MCP 的访问，日志不能记录密钥或完整敏感响应。应用为 HTML 响应设置 CSP（不含外部脚本、表单或内联框架来源）、`X-Frame-Options: DENY` 与 `Referrer-Policy: no-referrer`；`/assets` 中仅内容哈希文件可长期缓存。优雅停机等待进行中的请求，超过 `http.shutdownGraceMs`（默认 30 秒）后强制关闭连接，`terminationGracePeriodSeconds` 应大于该值。SSE 代理关闭缓冲并设置合理长连接超时；应用附件没有业务总大小／数量上限，边缘层应约束请求和容量。
+网关保护源码、下载、私有配置和 MCP，限制传输和内存压力；SSE 关闭代理缓冲，设置长连接超时。HTTP 附件不设业务总量／数量上限，入站 MCP Base64 有独立限额，不能混同。
 
-本地工具及 stdio MCP 按全局 runtime 追加精确出口域名／端口，SSH 与 HTTPS 分别配置；不能用允许列表代替外部业务授权。
+参数维护网络基础列表，全局 Agent runtime 可追加精确域名／端口；SSH 和 HTTPS 分别声明，允许出口不代表业务授权。Operator 身份和模型密钥选择继续由应用隔离。
 
-上线验收至少覆盖健康、页面与身份、SSE、动态工具执行、文件越界拒绝、Python／Excel、stdio MCP、Git 与个人 SSH。健康 200 只说明服务可响应，不能证明外部模型、数据库、认证或所有沙箱链路可用。验收方法见[开发指南](DEVELOPMENT.md#验证)，真实状态检查见[运维手册](RUNBOOK.md)。
+验收至少覆盖 health、页面、身份、SSE、动态 native executor、路径越界、Python/Excel、stdio MCP 与 Git/SSH。health 200 不证明模型、外部数据库、驱动或 sandbox 可用。CI、本机与真实容器结果分别报告，不互相替代。

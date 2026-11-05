@@ -1,123 +1,100 @@
 # 数据存储
 
-[文档导航](README.md) · [架构](ARCHITECTURE.md) · [运维](RUNBOOK.md)
+[文档导航](README.md) · [架构](ARCHITECTURE.md) · [恢复](RUNBOOK.md)
 
-## 事实来源与状态分类
+## 事实与保留单位
 
-| 分类 | 内容 | 处理原则 |
-| --- | --- | --- |
-| 持久 | SQLite 文件组、Pi JSONL、附件、工作文件、私有 Git refs／新对象／索引 | 匹配恢复，不能作为缓存删除 |
-| 有条件持久 | 活动开发 worktree、未提交／untracked／ignored 文件 | 只有满足 owner 释放条件才移除 |
-| 生成 | 运行视图、控制 socket、临时网络配置、受管共享 checkout、缓存 | 先确认归属与状态，异常内容可能是恢复证据 |
-| 配置 | 根配置、SQLite 业务设置、Operator Pi／工具配置 | 与运行版本一起保留 |
-| 安装产物 | node_modules、venv、构建网页 | 从匹配锁文件、依赖补丁和 requirements 生成 |
-
-SQLite 是业务配置与关系来源，JSONL 是对话来源，Git 是代码来源，普通文件保存原件和成果。Agent 对话不另存 SQL 消息表；人工评论独立保存在 issue_comments。GET 脱敏不等于存储加密，数据库和恢复点均属敏感数据。
-
-共享路径探测只把 `ENOENT` 视为不存在；权限、I/O 和目录结构错误向调用方传播，不能据此选择其他 Git store、重新创建会话或报告状态缺失。
-
-## 数据表关系
-
-当前结构以 [schema.ts](../src/db/schema.ts)、[bootstrap.ts](../src/db/bootstrap.ts) 和不可变 [drizzle](../drizzle) 为准。`issues.type` 由 0070 触发器限定为 `ISSUE_TYPES`，表默认值仍是历史 `request`，因此省略 type 的插入会以 `invalid_issue_type` 失败；Drizzle 不再提供该默认值。admin 保存的运行参数位于 `application_settings.parameters`（由 [parameters.ts](../src/configuration/parameters.ts) 校验），`max_concurrent_issues` 已由 0069 迁移复制进该列，仅保留为恢复证据。
-
-| 关系 | 要点 |
+| 内容 | 来源与 owner |
 | --- | --- |
-| subjects → credentials／preferences | 角色、管理标记、活跃状态与个人组分离 |
-| services + environments → deployments | 服务／环境组合唯一，部署保存目标和仓库基线 |
-| repositories → service_repositories | URL 去重，服务关联保存别名 |
-| deployment → mcp_services | 标记工具归属，生成连接随对应目标管理 |
-| issues → issue_workspaces | 每张工单恰有一条 Workspace |
-| issues → issue_pilot_sessions | 绑定当前 JSONL 和工作根 |
-| issues → issue_repositories | 记录 URL、基线／工作分支、路径、workspace name 和 commit |
-| issues → attachments | 文件名、物理路径、mediaType、size、SHA-256、上传者 |
-| issues → scopes／transitions | 包含服务意图与范围变更快照 |
-| issues → comments／cc／relations／pins | 评论、抄送、有向关联和用户置顶 |
+| 配置、工单关系、参数和绑定 | SQLite，[schema.ts](../src/db/schema.ts) |
+| 对话、工具结果、会话分支 | Pi JSONL，Agent 会话 owner |
+| 附件原件及事务 | 文件＋DB，[attachment-store.ts](../src/http/attachment-store.ts) |
+| 脚本、报告、导出 | 普通文件，[work-files.ts](../src/workspace/work-files.ts) |
+| 代码、refs、对象与索引 | 共享／工单 Git owner |
 
-内部 issues.id 为 UUID，业务编号为配置时区的 `ISSUE-YYYYMMDD-NNN...`。HTTP 工单 DTO 的 id 使用业务编号，磁盘目录使用小写。工单服务／环境须匹配 Deployment，resolved 与非空 resolved_at 等价。
+人工评论独立于 Pi 对话，应用不另建 SQL 聊天表。SQLite rollback 不撤销文件或 Git，恢复必须匹配各介质。GET 脱敏不等于存储加密。
 
-用户、个人凭证、仓库和服务使用 revision；共享 DMS／SLS 各有独立版本，保存在 application_settings。共享模型组在 global_agent_configuration，个人模型组在 user_credentials.model_credentials。历史私有字段不能用于补齐当前配置。
+## 数据关系
 
-## 目录布局
+用户有活跃状态、业务角色和独立 isAdmin；个人凭证、共享凭证、全局模型与参数各由所属表维护。应用参数保存显式覆盖与 revision，默认值仍来自代码。
+
+服务关联仓库目录，Deployment 绑定服务／环境、查询目标和基线分支，部署 MCP 有明确归属。每张工单恰有一条 Workspace，当前会话绑定、仓库历史、附件、服务范围、关联、抄送和置顶分别记录。
+
+内部 issueId 为 UUID，业务编号为配置时区的 ISSUE-YYYYMMDD-NNN...；HTTP 工单 id 使用业务编号，目录小写。服务／环境必须匹配有效部署，resolved 与 resolved_at 非空等价，Issue type 由数据库 guard 约束为当前闭集。
+
+字段、索引和触发器以 [schema](../src/db/schema.ts)、[bootstrap](../src/db/bootstrap.ts) 和已发布 [迁移](../drizzle) 为准，不修改历史 SQL／journal。
+
+## 目录与模式
 
 ```text
-应用目录/
-├── issue-pilot.config.ts
-├── node_modules/
-├── .venv/
-└── .issue-pilot/
-    ├── issues.db{,-wal,-shm}
-    ├── git/
-    │   ├── repositories/<url-hash>/
-    │   └── checkouts/<url-hash>/<commit>/
-    ├── workspaces/<issue-key>/
-    │   ├── <repository>/
-    │   ├── .issue-git/<url-hash>/
-    │   ├── .session-<name>.jsonl
-    │   ├── .attachment-<uuid>-<原名>
-    │   ├── .issue-runtime.json
-    │   ├── .related-<key>{,.json,.jsonl}
-    │   ├── .npm-cache/、.maven-cache/
-    │   └── 普通脚本、日志、报告与检查点
-    └── control/
+.issue-pilot/
+├── issues.db{,-wal,-shm}
+├── git/
+│   ├── repositories/<url-hash>/
+│   └── checkouts/<url-hash>/<commit>/
+├── workspaces/<issue-key>/
+│   ├── <repository>/
+│   ├── .issue-git/<url-hash>/
+│   ├── .session-<name>.jsonl
+│   ├── .attachment-<id>.<ext>
+│   ├── .issue-runtime.json
+│   ├── .related-<key>{,.json,.jsonl}
+│   └── 普通文件、报告、脚本和缓存
+└── control/
 ```
 
-[issueRoot](../src/workspace/state.ts) 是统一工作根和 Agent cwd。state 为 0700，数据库／JSONL 为 0600，附件为 0400。资源来自 Operator 全局 Pi 目录，完整恢复点必须在 state 之外。
-
-工作目录 API 可列管理文件名称，但不提供普通原始下载。源码和工作文件使用校验后的固定目录／文件描述符，拒绝越界、Git 控制文件、特殊文件和非法链接。写操作固定父目录后执行临时写入、回滚与清理，不能仅在写后检查路径。
+state 为 0700、DB／JSONL 为 0600、附件为 0400。统一 issueRoot 是 cwd；管理文件可列名但不能普通原始下载。node_modules、venv、Web 构建和恢复点位于模型工作根之外，工单内自己的依赖缓存另行分类。
 
 ## 文件写入与发布
 
-### 附件
+### 原始附件
 
-[attachment-store.ts](../src/http/attachment-store.ts) 暂存原件、计算大小／哈希，再与工单事务协调：原件在 SQLite 写事务之前复制进工单根，事务内只插入记录，回滚时删除本次独占创建的文件，避免大文件复制占用写锁。物理名包含 UUID，并遵守文件名 UTF-8 字节预算；原名留在元数据与下载响应。
+先暂存、计算 size／SHA-256，再协调工单事务和文件公开。物理名含 UUID 并遵守 UTF-8 字节预算，原名保留元数据与标准下载文件名。
 
-读取要求直属工单根、regular file、精确 0400、DB 大小与 SHA-256 匹配。下载先有界完整校验，再从同一描述符发送，避免校验后重新打开可变路径；取消关闭句柄。Agent 准备也验证原件，但不声称持续监控之后的外部修改。
+读取要求直属工单根、regular file、精确 0400、大小和 hash 匹配。下载先有界完整校验，再从同一描述符发送；取消关闭句柄，不重新打开可变路径。Agent 准备校验原件但不声称持续监控外部修改。
 
-删除先 quarantine，事务失败恢复，提交后 finalize；事务失败时原失败和收尾失败都保留。提交后的 finalize 失败只记录日志并保留 `.deleting` 文件供 Operator 清理，不把已提交的编辑报告为失败。准备 Agent 不自动复制可编辑附件，粘贴图片属于 Pi 消息。
+删除先 quarantine，rollback 恢复、commit 后 finalize；收尾失败不掩盖原错误。新原件在关闭旧会话及预约后写入，避免旧沙箱保护列表漏掉它。没有自动可编辑副本，粘贴图片属于消息。
 
-### 工作文件与导出
+### 普通工作文件
 
-[work-files.ts](../src/workspace/work-files.ts) 负责普通工作文件。导出先校验目标，再独占临时文件、完成内容与协议收尾、复查取消，最后原子 rename 替换。提交前失败保留旧文件，清理失败不掩盖原错误；已经提交的 rename 不因后续诊断自动回滚。
+查询导出校验路径／取消，独占临时文件，内容与协议收尾完成后再原子替换；提交前失败保留旧内容，不自动重查。路径级串行和等待取消避免同名导出互相覆盖。
 
-同一路径导出串行，等待取消不启动生产者。下载文件名使用标准 Content-Disposition；不存在或非目录祖先返回 404，链接循环返回 400，不暴露内部路径。预览有预算，普通下载不因此截断。
+工作文件与 Source 使用固定目录／文件描述符、实际打开路径复核、管理名及 Git 控制路径拒绝，避免父目录变化把写入导向外部。清理只处理本次拥有的临时文件，操作与清理失败聚合。
 
-对话链接解析当前 workspace、普通相对路径和授权相关工单。`outputs/`、`work/`、`attachments/` 是真实相对目录，不剥除为旧别名；旧 issues 绝对路径不自动转换，历史 JSONL 和离线索引不改写。
+源码保存比较读取时 SHA-256，冲突返回 source_file_changed。文本、diff、历史与 MCP 读取各有独立预算；超限返回元数据或明确错误，不无界缓冲。预览预算不截断普通下载。
 
-### 源码保存
-
-Source API 使用读取时 SHA-256 检测冲突，`source_file_changed` 不可盲目覆盖。临时文件独占创建，只清理本次拥有且未发布的路径；原写入和清理失败聚合报告。目录并发变化可使读取失败，不能把写入重定向到外部链接目标。
+对话只解析当前 workspace、普通相对路径和已授权相关工单；outputs／work／attachments 是真实目录，不剥除为旧别名。历史 issues 绝对路径不自动转换，迁移索引不成为下载兼容层。
 
 ## Git 与工作区
 
-共享 bare store 提供基线对象及 detached 只读快照。开发工单持有私有 store、分支、新对象、worktree 和索引，只读复用基线对象，不跨工单共享可写硬链接。
+共享 bare store 保存基线对象与引用，checkout 是 detached 展开快照。开发工单持有私有 store、分支、新对象、worktree 和索引，只读复用共享对象，不跨工单共享可写硬链接。
 
-| 仓库集合状态 | local_path | working_branch |
+| 仓库集合 | local_path | working_branch |
 | --- | --- | --- |
 | read_only | 全 NULL | 全 NULL |
 | development_workspace | 全非空 | 全非空 |
 | development_snapshot | 全 NULL | 全非空 |
-| invalid | 空集合、混合或其他组合 | 拒绝并检查 |
+| invalid | 空集合／混合／其他组合 | 拒绝并检查 |
 
-只读基线按完整远端 ref 解析；冷启动可准备新共享快照并刷新对应 commit 基线，不修改历史分支／路径。已有开发分支只从本地 store／ref 恢复，缺失或损坏时报错，不 reset、远程回退或猜测修复。工单根缺失的开发工单（私有 store 随之丢失）回收和重开都以 `workspace_missing` 拒绝，不标记为已回收，也不从较旧的共享 ref 重建。
+共享基线按完整 ref 解析，复用检查 HEAD、common dir、tracked／untracked／ignored。开发恢复只使用本地合法分支，不 reset、远端 fallback 或改绑定。config、hooks、alternates、索引与 backpointer 各有安全检查。
 
-复用 checkout 检查 HEAD、common dir 和 tracked／untracked／ignored；config、hooks、alternates、指针和 link count 也由 owner 检查。模型不可改 Git 配置，推送可显式指定分支；远端成功而本地 upstream 更新失败时先核对远端，不自动重复推送。
+释放要求已解决、空闲、布局／分支匹配且干净，含 ignored 内容；只移除登记代码，保留根、文件、会话与持久分支。开发工单根丢失时拒绝释放／重开，不能把共享 ref 当完整历史。发布使用 compare-and-swap，外部 ref 变化拒绝覆盖。
 
-释放要求已解决、空闲、布局与分支匹配且 clean，包括 staged、untracked、ignored。只移除登记的代码 worktree，保留工单根、文件、会话和持久分支。发布使用 compare-and-swap，外部 ref 变化拒绝覆盖；跨媒体失败按 owner 恢复，不能用 SQL rollback 代替。
+scope 先保存意图，再准备资源，同 URL 分支冲突拒绝。失败记录与已有事实保留供重试，代码释放后运行视图恢复失败由维护在预约内重新检查。
 
-服务 scope 先保存意图，再准备资源；相同 URL 的分支冲突拒绝。失败保留事实供重试，释放后视图恢复失败记录 runtimeReady／lastError，维护在预约内重新检查。
+## 容量统计
 
-### 容量统计
+工单 totalBytes 包含附件、会话、工作文件、缓存和私有 Git；sharedGitBytes 单独统计。它不是全盘容量或同一时刻磁盘快照。
 
-`totalBytes` 统计工单根分配空间，含缓存和私有 Git，`sharedGitBytes` 单独计量。结果不是主机全盘占用或原子磁盘快照。
+并发读取共享扫描，完成结果最多缓存 60 秒；refresh=true 重新采样并返回 sampledAt。生命周期使缓存失效，实际回收重新检查，候选大小不等于释放量。保留期、高水位、目标和周期来自热参数；taskConcurrency 是后台批次并发，不是 Agent 名额。
 
-维护逐工单测量磁盘占用；单个工单测量失败记入该轮 failures，不阻塞启动、其他工单释放或下一轮周期，也不写入统计缓存。
+## 备份与精简边界
 
-并发读取共享同一次扫描，完成的快照在下一个维护周期内复用（默认 15 分钟；维护间隔为 0 时 5 秒）。释放、重开、转换和自动维护使缓存失效；Agent 处理与源码编辑等其它变更在下一次采样后反映，页面显示 `sampledAt`，`GET /api/workspaces/stats?refresh=true` 强制重新采样。真实释放重新检查；候选占用不等于可释放量，释放量以实际减少为准。
+- **持久**：DB 文件组、会话、附件、工作文件、私有 Git 必须匹配保留。
+- **有条件持久**：开发 worktree 的 dirty、untracked、ignored 内容在安全释放前不能删。
+- **可再生**：依赖缓存、构建产物与共享快照可经验证排除，但名称不能证明无价值。
+- **恢复证据**：未知目录、quarantine、异常临时文件、迁移记录先查 owner，不按垃圾删除。
 
-## 升级与恢复
+默认恢复点排除 node_modules、target、.maven-cache、.npm-cache、venv、__pycache__、.gradle 等可再生产物。若其中存在本地独有依赖或报告，必须明确记录取舍，不能保证远端可重新取得。
 
-数据库使用 WAL 和 FK，配置读取使用 read snapshot。已发布 SQL／journal 不改写，升级增加新迁移并验证 fresh DB、已有 schema、失败回滚和重试。
-
-正常启动不自动解析旧目录或采用未知路径。离线迁移工具独立处理确认过的旧状态，见[旧目录迁移](operations/legacy-layout-migration.md)。迁移索引仅是恢复证据，正常运行读取当前工作文件。
-
-未知目录、quarantine、异常临时文件或变化的 checkout 先查所属阶段，不当作垃圾删除。备份、发布检查与恢复顺序统一见[运维手册](RUNBOOK.md)。
+排除共享 checkout 前验证干净、对象完整、精确 commit 和登记；保留 pin、manifest、离线重建脚本。压缩备份需先校验流和内容／元数据，恢复先解压再重建，不是只恢复 DB。完整步骤见[运维手册](RUNBOOK.md)。

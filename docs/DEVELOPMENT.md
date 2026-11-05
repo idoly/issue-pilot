@@ -1,48 +1,28 @@
 # 开发指南
 
-[文档导航](README.md) · [架构](ARCHITECTURE.md) · [Agent 规则](../AGENTS.md)
+[文档导航](README.md) · [架构](ARCHITECTURE.md) · [代理规则](../AGENTS.md)
 
-## 环境与依赖
+## 环境与入口
 
-| 项目 | 当前约束 |
-| --- | --- |
-| Node | 本地／CI 24.18.0，容器 Node 26；后端直接 strip-types 执行 TS |
-| Pi AI／Coding Agent／Schema | 1.5.0，Coding Agent 有固定补丁 |
-| Solid | runtime／web 2.0.0-rc.20，Vite 插件 3.0.0-next.55，编译器按锁文件 |
-| SRT | 0.0.81，需要真实 Linux namespace／seccomp 能力 |
-| Monaco | 0.57.0，使用公开 editor／model API |
-| Python | 应用 .venv，版本约束见 requirements.txt |
-| DBHub | 1.5.0，stdio 与只读配置由应用生成 |
+后端直接用 Node strip-types 执行 TypeScript，开发／CI 使用 Node 24.18.0，容器 Node 26。Pi AI／Coding Agent／Schema 1.5.0，Solid runtime／web 2.0.0-rc.20 与对应 Vite 插件、Monaco 0.57.0、SRT 0.0.81 按锁文件配套。
 
-准确 npm 版本与 overrides 以 [package.json](../package.json)／[package-lock.json](../package-lock.json) 为准。安装入口见[部署](DEPLOYMENT.md#首次本地运行)，补丁含义见[依赖补丁](../patches/README.md)。不得跳过 postinstall，也不批准来源未审查的安装脚本。
+准确版本见 [package.json](../package.json)、[package-lock.json](../package-lock.json)、[requirements.txt](../requirements.txt)。安装须执行 postinstall 校验[依赖补丁](../patches/README.md)，不默许被策略阻止的脚本。工具环境见[部署](DEPLOYMENT.md#首次本地运行)。
 
-## 开始修改
-
-1. 运行 `git status --short`，固定任务基线，保留已有改动。
-2. 找到 owner、业务契约、根配置、schema 和聚焦测试，先读当前实现。
-3. 将影响状态分类为持久、有条件持久或生成，确认提交／推送／重启／真实状态操作的授权范围。
-4. 实现最小完整修改，不把路由变成协议、Git 或存储的第二个 owner。
-5. 验证边界与失败路径，检查最终 diff 中的无关改动、密钥、生成文件和迁移前缀。
-
-责任索引见[架构](ARCHITECTURE.md#owner-与入口)。业务规则集中在 domain，路径和预算集中在根配置，配置／凭证集中在 configuration，媒体事务交给存储 owner。
+修改前运行 git status，固定基线，读取 owner、契约、配置、schema 与聚焦测试；区分持久、有条件持久和生成状态。路由协调 owner，不重实现协议／Git／附件授权，不为风格重写合理设计。
 
 ## 代码约定
 
-TS／TSX 沿用相邻风格，模块 kebab-case、组件与类型 PascalCase、局部符号 camelCase。后端不使用 strip-types 不支持的 enum、参数属性或装饰器。内部 UUID 称 issueId，业务编号称 issueKey，普通工作文件称 workFile，不混淆持久名称。
+模块 kebab-case，组件／类型 PascalCase，局部符号 camelCase，遵循相邻 TS／TSX 风格。内部 UUID 称 issueId，业务编号称 issueKey；后端不用 strip-types 不支持的 enum、参数属性或装饰器。
 
-应用 schema 使用公开 Pi Schema builders 与 `compile().check()`，默认对象关闭额外字段。HTTP、入站 MCP 和 execute 检查严格，不靠 coercion 修正输入；Pi 的初始模型工具管线可做其协议规范化，但不能代替可变钩子后的执行检查。外部格式显式使用官方 formats，重复验证器编译复用，公开 schema 与执行快照隔离。
+业务规则集中在 domain，参数及凭证有各自 owner。应用 schema 用公开 Pi Schema builders 和 compile().check()；HTTP／入站 MCP／execute 严格，不隐式 coercion。公开 schema 与执行快照隔离，外部格式使用官方 formats，重复验证器只编译一次。SDK 内部传递依赖不代表应用仍直接依赖 TypeBox。
 
-第三方 SDK／SRT 的 schema 继续使用其官方类型。应用不直接使用 TypeBox；SDK 的传递依赖仍可能包含它。默认值、凭证选择和授权不放进 schema 转换器。
+不同时间点的重授权、可变钩子后的校验和跨介质收尾不是冗余。抽象、缓存和依赖须有具体维护收益；微小性能差异不构成改写理由。
 
-抽象须有具体维护收益。重复校验若保护不同时间点／边界不能删；仅转发的层、不显著的扫描合并和无依据缓存也不应加入。
+## 隔离测试
 
-## 隔离与变更边界
+真实 .issue-pilot 含凭证、附件、JSONL、分支和恢复证据，不作夹具。后端通过 buildApi({ stateRoot, databaseFile }) 或 manager 注入临时根；手工服务器使用独立项目与根配置，没有 state 环境变量覆盖。
 
-真实 `.issue-pilot` 可能含密钥、附件、会话、dirty worktree 和恢复证据，绝不能作为测试夹具。后端使用 `buildApi({ stateRoot, databaseFile })` 或 manager 构造器注入临时根；手工服务器使用独立项目及根配置，没有 state 环境变量覆盖。
-
-Pi 会话测试显式传临时 agentDirectory，不能因注入模型 runtime 就忽略资源目录隔离。结束时关闭会话、扩展、协议和句柄；断言失败也必须 finally／onTestFinished 清理。
-
-不要在运行中的 checkout 安装依赖或覆盖 dist。动态 native-tool-executor／network-exec 会读取磁盘源码，即使 API 主进程没重启；健康 200 不证明动态执行可用。运行环境切换按[发布流程](RUNBOOK.md#按风险发布与重启)。
+Pi 会话显式使用临时 agentDirectory，注入模型不能替代资源隔离。所有会话、连接、句柄和临时根在 finally／onTestFinished 关闭，断言失败也清理。不要在运行中的 checkout 安装依赖或覆盖 dist；动态 executor 会读取磁盘源码，health 200 不代表其可用。
 
 ## 验证
 
@@ -55,46 +35,44 @@ npm run lint
 git diff --check
 ```
 
-检查失败时先区分格式化、lint 与类型错误，再运行测试。资源受限时使用等价的有界并发：
+资源受限可用等价有界并发：
 
 ```bash
 node --experimental-strip-types --test --test-concurrency=2 'tests/**/*.test.ts'
 npx vitest run --config src/web/vite.config.ts --environment jsdom --maxWorkers=1
 ```
 
-| 范围 | 验证重点 |
+| 变更 | 必要覆盖 |
 | --- | --- |
-| 后端 | 身份重检、事务、预约、文件模式／哈希、Git、协议与关闭 |
-| Web | DTO、身份切换、取消、草稿、重连、冲突与局部状态 |
-| 迁移 | fresh DB、已有 schema、无损失败、纠正后重试、幂等和历史保留 |
-| 工具 | 可变钩子后输入、范围、只读、取消、预算与凭证不回退 |
-| 构建 | Worker、动态入口、字体、图标、许可证和生产依赖可导入 |
+| 业务／HTTP | 身份与等待后重检、DTO、预约、事务、错误含义 |
+| Agent／协议 | 可变钩子后输入、范围、只读、取消、预算、重试与 shutdown |
+| 文件／Git | mode/hash、符号链接、竞争、rollback/finalize、refs 与 dirty 状态 |
+| 迁移 | fresh／已有 DB、失败原子性、纠正重试、历史保留 |
+| Web | 导航、身份切换、草稿、重连、冲突、图片 URL 和 editor/model 释放 |
+| 文档／截图 | 当前代码依据、相对链接与锚点、图片 hash、浏览器可见内容与演示隔离 |
 
-运行时、依赖、协议安全或容器变化还检查：
+运行时、依赖、协议安全、容器变化还执行生产 npm audit、pip check 和可用部署健康验证。SSH E2E 缺 sshd fixture 明确 skip，不当作通过；远程模型／数据库／认证与完整容器需要对应环境。本机结果不代表远程 CI 成功。
 
-```bash
-npm audit --omit=dev --audit-level=high
-.venv/bin/python3 -m pip check
-```
-
-审计不能靠屏蔽或降级通过，主版本 override 必须覆盖父依赖实际 API。需要 sshd 的 SSH 测试缺夹具时明确 skip，不得把 skip 当通过。远程模型、认证、数据库和容器验收需要对应环境，测试不能证明所有代码安全。
-
-CI 见 [.github/workflows/ci.yml](../.github/workflows/ci.yml)：main push／PR 使用 Ubuntu 24.04，安装匹配依赖与 Python 后运行类型、测试、构建；本机通过不代表远程 Actions 已通过。
+纯文档可以按文档范围验证，不必为了文档运行用户工单的依赖安装或完整构建。应用自身检查与工单 Agent 的“默认不构建”策略是不同职责。
 
 ## Web 与浏览器
 
-Solid 2 使用双参数 createEffect；回调只返回清理函数或 undefined。显式键的 For 子项是 accessor，读取最新值，不捕获会失效的原始对象。Match render callback 保留参数，零参数函数会按 accessor 处理，可能重建 DOM。
+Solid 2 使用 compute／callback 形式的 createEffect；callback 只返回清理或 undefined。函数 keyed For 的子项是 accessor，避免捕获过时原始对象；Match render callback 保留参数，零参数函数可能被当 accessor 重建 DOM。
 
-会话应覆盖流式帧批处理、最终覆盖、完整消息选区、原生 details 键盘操作、快照去重和身份隔离。不能只用 jsdom 断言节点来代替浏览器选区与布局检查。
+会话验证帧批处理、最终覆盖、完成消息选区、原生 details 键盘操作、快照去重和身份隔离。jsdom 不替代真实浏览器布局、选区和网络验收。
 
-Markdown／HTML 经过授权路径解析和 DOMPurify。预览按响应声明与实际字节限制，超限取消读取；下载不因此截断。Monaco 负责释放 editor／model，保留 SHA-256 冲突、CRLF、撤销、自动保存和导航拦截。
+Markdown 在链接授权解析后清洗 HTML；文件预览同时检查声明和实际字节。Monaco 保存需处理 SHA-256、换行、撤销、自动保存及导航拦截，关闭释放 editor/model。CodeBrowser 动态加载，大型上游 chunk 提醒不通过抬阈值或随意拆分掩盖。
 
-CodeBrowser／Monaco 已动态加载。单个上游编辑器或语言服务仍可能超过默认 chunk 提醒；先看加载图和压缩传输，不为消除提示抬高阈值、任意拆分或删掉编辑能力。
+## 页面图维护
 
-真实浏览器使用独立演示数据、临时工具／镜像，记录源码版本、工具版本、视口、场景及缺口；不要把历史截图当当前验收。图片读取夹具在 [tests/fixtures](../tests/fixtures/README.md)，替换其字节须运行 `tests/agent/codemode.test.ts`。
+[页面图](images/README.md) 用当前源码的独立应用、演示 SQLite／JSONL、临时本地 Git 和替代 Agent controller 生成，不读真实业务、不调用模型或外部查询。记录 sourceCommit、Web tree、浏览器版本、视口和 SHA-256；不要把旧图说成当前验收。
 
-## 文档与资源清理
+可在临时工具目录安装 Playwright，不增加应用依赖、不修改全局 Pi 设置。中文字体在临时 fontconfig 中引用，不能分发系统字体。检查截图文本、状态、加载完成、无页面异常和横向溢出，结束关闭浏览器／服务器并删除临时安装。
 
-指南按 owner 描述当前契约，不维护功能变更流水账。检查相对链接、锚点、示例和源码一致性；旧方案留在 Git 历史，必要离线迁移说明单独保存。
+原始图片读取夹具在 [tests/fixtures](../tests/fixtures/README.md)，不是产品截图；不要因替换页面图而改变该夹具。
 
-删除前检查静态和动态 import、CLI、Worker、构建复制、URL、测试夹具和外部使用者。迁移 SQL／journal 不变，无法证明无用的路径保留。node_modules、venv 和 dist 若服务仍在使用就不是垃圾；测试临时根、旧构建与镜像也须确认进程／挂载和持久引用后再删。
+## 文档、清理与交付
+
+现行指南描述当前契约，历史审查留在 records，不追加成变更流水账。静态／动态 import、Worker、CLI、构建复制、资源 URL 和测试引用都确认后才删除文件；迁移 SQL／journal 不变。
+
+真实操作遵循[运维](RUNBOOK.md)，未知状态和独有证据保留。完成时报告改动、检查与缺口；提交、推送、部署和状态 mutation 依授权分别执行。
