@@ -18,8 +18,9 @@ test("personal SSH authenticates Git through SRT and rejects another identity an
   const sshd = process.env.ISSUE_PILOT_TEST_SSHD ?? "/usr/sbin/sshd";
   try {
     await access(sshd);
-  } catch {
-    context.skip("openssh-server fixture is verified in the container harness");
+  } catch (error) {
+    if (process.env.ISSUE_PILOT_TEST_SSHD) throw error;
+    context.skip("openssh-server unavailable; run npm run test:ssh for the isolated fixture");
     return;
   }
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-ssh-transport-"));
@@ -96,7 +97,10 @@ test("personal SSH authenticates Git through SRT and rejects another identity an
       const data = result.structuredContent;
       assert.ok(data && typeof data === "object" && "exit_code" in data);
       if (scenario === "personal") assert.equal(data.exit_code, 0, JSON.stringify(result));
-      else assert.notEqual(data.exit_code, 0, scenario);
+      else {
+        assert.notEqual(data.exit_code, 0, scenario);
+        assert.match(JSON.stringify(result), scenario === "other" ? /Permission denied/ : /Host key verification failed/);
+      }
     }
   } finally {
     context.mock.restoreAll();

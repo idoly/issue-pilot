@@ -35,8 +35,30 @@ jobs:
         run: npm run typecheck
       - name: Test
         run: npm test
+      - name: SSH transport fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman fonts-noto-cjk openssl
+          npm run test:ssh
+      - name: Real SLS CLI protocol acceptance
+        run: |
+          cli_version=$(sed -n 's/^ARG ALIYUN_CLI_VERSION=//p' Containerfile)
+          cli_root="${RUNNER_TEMP}/issue-pilot-aliyun"
+          mkdir -p "$cli_root"
+          curl --fail --location --silent --show-error "https://aliyuncli.alicdn.com/aliyun-cli-linux-${cli_version}-$(dpkg --print-architecture).tgz" --output "$cli_root/aliyun.tgz"
+          tar --extract --gzip --file "$cli_root/aliyun.tgz" --directory "$cli_root" aliyun
+          test "$("$cli_root/aliyun" version)" = "$cli_version"
+          PATH="$cli_root:$PATH" npm run test:sls-cli
       - name: Build
         run: npm run build
+      - name: Real browser acceptance
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/issue-pilot-browsers
+          ISSUE_PILOT_PLAYWRIGHT_MODULE: ${{ runner.temp }}/issue-pilot-browser-tools/node_modules/playwright/index.mjs
+        run: |
+          npm install --prefix "${RUNNER_TEMP}/issue-pilot-browser-tools" --ignore-scripts --no-audit --no-fund playwright@1.64.1
+          "${RUNNER_TEMP}/issue-pilot-browser-tools/node_modules/.bin/playwright" install chromium --only-shell --with-deps
+          npm run test:browser
       - name: Format check
         run: npm run format:check
       - name: Lint

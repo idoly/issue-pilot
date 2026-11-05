@@ -3,13 +3,16 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Server } from "node:net";
 import { test } from "node:test";
 
 import { inspect } from "node:util";
 import { DrizzleQueryError } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
-import { buildApi, installShutdownHandlers, type AgentController } from "../../src/http/api.ts";
+import { buildApi, installShutdownHandlers, startApi, type AgentController } from "../../src/http/api.ts";
+import { errorChain } from "../../src/diagnostics.ts";
+import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
 import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 
@@ -184,6 +187,114 @@ test("closes initialized resources when API assembly fails", async () => {
     assert.deepEqual((await database.client.execute("pragma integrity_check")).rows, [{ integrity_check: "ok" }]);
     await database.close();
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preserves assembly and cleanup failures while closing every initialized owner once", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-startup-cleanup-"));
+  const databaseFile = path.join(root, "issues.db");
+  const engine = new StartupEngine();
+  const engineFailure = new Error("fixture_engine_close_failed");
+  const leaseFailure = new Error("fixture_lease_close_failed");
+  engine.closeError = engineFailure;
+  const lease = new ApplicationStateLease(root);
+  let leaseCloses = 0;
+  try {
+    await assert.rejects(
+      buildApi({
+        stateRoot: root,
+        databaseFile,
+        engine,
+        modelCatalog,
+        logger: false,
+        workspacePolicy: { retentionMs: 0, highWaterBytes: 1, targetBytes: 1, maintenanceIntervalMs: 0, taskConcurrency: 1 },
+        stateLease: {
+          start: () => lease.start(),
+          async close() {
+            leaseCloses++;
+            assert.equal(engine.closed, 1);
+            await lease.close();
+            throw leaseFailure;
+          },
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        const failures = errorChain(error);
+        assert.ok(failures.some((failure) => failure instanceof Error && failure.message === "workspace_target_must_be_below_high_water"));
+        assert.ok(failures.includes(engineFailure));
+        assert.ok(failures.includes(leaseFailure));
+        return true;
+      },
+    );
+    assert.equal(engine.closed, 1);
+    assert.equal(leaseCloses, 1);
+    const retry = await buildApi({ stateRoot: root, databaseFile, engine: new StartupEngine(), modelCatalog, logger: false });
+    assert.equal((await retry.inject({ method: "GET", url: "/health" })).statusCode, 200);
+    await retry.close();
+  } finally {
+    await lease.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retains lease acquisition and release failures before the database opens", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-lease-cleanup-"));
+  const acquisition = new Error("fixture_lease_start_failed");
+  const release = new Error("fixture_lease_release_failed");
+  let closes = 0;
+  try {
+    await assert.rejects(
+      buildApi({
+        stateRoot: root,
+        databaseFile: path.join(root, "issues.db"),
+        logger: false,
+        stateLease: {
+          async start() {
+            throw acquisition;
+          },
+          async close() {
+            closes++;
+            throw release;
+          },
+        },
+      }),
+      (error) => {
+        assert.equal(errorChain(error).filter((failure) => failure === acquisition || failure === release).length, 2);
+        return true;
+      },
+    );
+    assert.equal(closes, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retains listen and cleanup failures and removes signal handlers", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-listen-cleanup-"));
+  const engine = new StartupEngine();
+  const listenFailure = new Error("fixture_listen_failed");
+  const cleanupFailure = new Error("fixture_listen_cleanup_failed");
+  engine.closeError = cleanupFailure;
+  const listen = Server.prototype.listen;
+  const handlers = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+  context.mock.method(Server.prototype, "listen", function (this: Server, ...args: Parameters<Server["listen"]>) {
+    // The state lease uses a Unix socket; fail only the API TCP listener.
+    if (typeof args[0] === "object" && args[0] && "port" in args[0]) throw listenFailure;
+    return Reflect.apply(listen, this, args);
+  });
+  try {
+    await assert.rejects(startApi({ stateRoot: root, databaseFile: path.join(root, "issues.db"), engine, modelCatalog, logger: false }), (error) => {
+      const failures = errorChain(error);
+      assert.ok(failures.includes(listenFailure));
+      assert.ok(failures.includes(cleanupFailure));
+      return true;
+    });
+    assert.equal(engine.closed, 1);
+    assert.deepEqual([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")], handlers);
+  } finally {
+    context.mock.restoreAll();
     await rm(root, { recursive: true, force: true });
   }
 });

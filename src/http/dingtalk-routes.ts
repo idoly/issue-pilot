@@ -28,6 +28,8 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       try {
         return await operation(request, signal);
       } catch (error) {
+        // A cancellation must not hide incomplete cleanup of the response or staged files.
+        if (error instanceof Error && error.message === "dingtalk_attachment_cleanup_failed") throw error;
         if (signal.aborted) throw new ApiError(408, "dingtalk_request_cancelled_or_timed_out");
         if (error instanceof DingtalkError) throw new ApiError(error.statusCode, error.message);
         throw error;

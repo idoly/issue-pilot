@@ -76,7 +76,7 @@ test("serves the production Web and keeps unlisted files private", async (contex
   }
 });
 
-test("the patched glob dependency preserves Fastify static precomputed routes and dotfile exclusion", async () => {
+test("Fastify static preserves precomputed routes, special filenames and dotfile exclusion", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-static-glob-"));
   const app = Fastify();
   try {

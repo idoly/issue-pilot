@@ -23,7 +23,7 @@ import "monaco-editor/languages/definitions/python/register.js";
 import "monaco-editor/languages/definitions/shell/register.js";
 import "monaco-editor/languages/definitions/yaml/register.js";
 import "monaco-editor/languages/definitions/markdown/register.js";
-import { jsonDefaults } from "monaco-editor/languages/features/json/register.js";
+import { createTokenizationSupport } from "monaco-editor/languages/features/json/tokenization.js";
 import { sourceIndentation } from "./source-editor-settings";
 import { sourceLanguage } from "./source-language";
 
@@ -33,17 +33,21 @@ declare global {
   }
 }
 window.MonacoEnvironment = { getWorker: () => new EditorWorker() };
-jsonDefaults.setModeConfiguration({
-  tokens: true,
-  diagnostics: false,
-  completionItems: false,
-  hovers: false,
-  documentSymbols: false,
-  colors: false,
-  foldingRanges: false,
-  selectionRanges: false,
-  documentFormattingEdits: false,
-  documentRangeFormattingEdits: false,
+// JSON needs the bundled tokenizer, not the language-service worker (which also loads all editor contributions).
+monaco.languages.register({ id: "json", extensions: [".json"], aliases: ["JSON", "json"], mimetypes: ["application/json"] });
+monaco.languages.setTokensProvider("json", createTokenizationSupport(true));
+monaco.languages.setLanguageConfiguration("json", {
+  wordPattern: /(-?\d*\.\d\w*)|([^\[\{\]\}\:\"\,\s]+)/g,
+  comments: { lineComment: "//", blockComment: ["/*", "*/"] },
+  brackets: [
+    ["{", "}"],
+    ["[", "]"],
+  ],
+  autoClosingPairs: [
+    { open: "{", close: "}", notIn: ["string"] },
+    { open: "[", close: "]", notIn: ["string"] },
+    { open: '"', close: '"', notIn: ["string"] },
+  ],
 });
 let modelId = 0;
 export const createSourceModel = (path: string, text: string) =>

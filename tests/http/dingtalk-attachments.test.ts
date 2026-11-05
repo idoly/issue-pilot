@@ -1,12 +1,95 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import fs, { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { downloadDingtalkAttachments } from "../../src/http/dingtalk-attachments.ts";
 import { removePendingAttachments } from "../../src/http/attachment-store.ts";
+import { errorChain, errorDiagnostic } from "../../src/diagnostics.ts";
 
 const file = { id: "file", fileName: "evidence.txt", size: 4, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file?signature=fixture-private" };
+
+for (const operation of ["mkdtemp", "open"] as const) {
+  test(`cancels the download when staging ${operation} fails before reading the body`, async (context) => {
+    let cancellations = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancellations++;
+      },
+    });
+    context.mock.method(fs, operation, async () => {
+      throw Object.assign(new Error("fixture_staging_failed"), { code: "ENOSPC" });
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response(stream)),
+        /dingtalk_attachment_download_failed/,
+      );
+      assert.equal(cancellations, 1);
+      assert.equal(stream.locked, false);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      if (!cancellations) await stream.cancel();
+    }
+  });
+}
+
+test("preserves staging and response cleanup failures even when the import is cancelled", async (context) => {
+  const controller = new AbortController();
+  const staging = Object.assign(new Error("fixture-private-staging-details"), { code: "ENOSPC" });
+  const cleanup = new Error("fixture-private-response-details");
+  const stream = new ReadableStream<Uint8Array>({
+    cancel() {
+      throw cleanup;
+    },
+  });
+  context.mock.method(fs, "mkdtemp", async () => {
+    controller.abort();
+    throw staging;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      downloadDingtalkAttachments([file], controller.signal, async () => new Response(stream)),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "dingtalk_attachment_cleanup_failed");
+        assert.ok(errorChain(error).includes(staging));
+        assert.ok(errorChain(error).includes(cleanup));
+        assert.doesNotMatch(String(errorDiagnostic(error)), /fixture-private/);
+        return true;
+      },
+    );
+    assert.equal(stream.locked, false);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await stream.cancel().catch(() => undefined);
+  }
+});
+
+test("reports response cleanup failure after an unsuccessful HTTP status", async () => {
+  const cleanup = new Error("fixture-private-response-cleanup");
+  const stream = new ReadableStream<Uint8Array>({
+    cancel() {
+      throw cleanup;
+    },
+  });
+  await assert.rejects(
+    downloadDingtalkAttachments([file], new AbortController().signal, async () => new Response(stream, { status: 503 })),
+    (error) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "dingtalk_attachment_cleanup_failed");
+      assert.ok(errorChain(error).includes(cleanup));
+      assert.ok(errorChain(error).some((cause) => cause instanceof Error && cause.message === "dingtalk_attachment_download_failed"));
+      return true;
+    },
+  );
+  assert.equal(stream.locked, false);
+});
 test("downloads attachment bytes to private staging and validates size", async () => {
   const pending = await downloadDingtalkAttachments([file], new AbortController().signal, async (_url, init) => {
     assert.equal(init?.redirect, "error");

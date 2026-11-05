@@ -27,6 +27,21 @@ describe("Markdown", () => {
     expect(screen.getByText("unsafe")).toBeTruthy();
   });
 
+  it("keeps a mixed fence and HTML example inside its code block", () => {
+    const view = render(() => <Markdown source={'```text\nvalue\n```~\n<img src="x">\n```'} />);
+    expect(view.container.querySelector("pre code")?.textContent).toBe('value\n```~\n<img src="x">\n');
+    expect(view.container.querySelector("img")).toBeNull();
+  });
+
+  it("does not turn an escaped closing parenthesis into an unfinished link", () => {
+    const view = render(() => <Markdown source={"[unfinished](/file\\) and [valid](/file\\))"} />);
+    const links = view.container.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toBe("valid");
+    expect(links[0]?.getAttribute("href")).toBe("/file)");
+    expect(view.container.textContent).toContain("[unfinished](/file)");
+  });
+
   it("opens external links in a new tab without exposing the opener", () => {
     const view = render(() => <Markdown source={"[docs](https://example.test/docs) and [local](/api/issues)"} />);
     const [external, local] = Array.from(view.container.querySelectorAll("a"));

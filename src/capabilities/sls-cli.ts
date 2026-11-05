@@ -89,6 +89,7 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
     for (const name of ["PATH", "LANG", "LC_ALL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"])
       if (process.env[name] !== undefined) environment[name] = process.env[name]!;
     const records: unknown[] = [];
+    let recordsBytesUpperBound = 0;
     let analysis = false;
     while (true) {
       signal.throwIfAborted();
@@ -134,8 +135,10 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
       if ((!meta.hasSQL && page.length > limits.sls.pageResults) || (records.length && meta.hasSQL)) throw new Error("sls_query_invalid_response");
       if (meta.hasSQL && typeof meta.limited === "number" && meta.limited > 0 && page.length >= meta.limited) throw new Error("sls_sql_limit_required");
       analysis = meta.hasSQL;
-      records.push(...page);
-      capabilityResultText({ records });
+      // Separate page envelopes overestimate the merged JSON size. Only rescan the whole result near the limit.
+      recordsBytesUpperBound += Buffer.byteLength(capabilityResultText({ records: page }));
+      for (const record of page) records.push(record);
+      if (recordsBytesUpperBound > limits.resultBytes) recordsBytesUpperBound = Buffer.byteLength(capabilityResultText({ records }));
       if (analysis || page.length < limits.sls.pageResults) break;
     }
     const metadata = {

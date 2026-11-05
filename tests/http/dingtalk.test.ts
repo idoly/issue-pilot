@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import fs, { readdir } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -331,6 +332,44 @@ test("record attachments are downloaded and saved atomically; failure leaves an 
     assert.doesNotMatch(response.body, /fixture-private|aliyuncs/);
   } finally {
     download.mock.restore();
+    await f.cleanup();
+  }
+});
+
+test("import cleanup failures take precedence over cancellation without exposing private diagnostics", async (context) => {
+  const f = await fixture();
+  const controller = new AbortController();
+  let cancelled = 0;
+  context.mock.method(AbortSignal, "timeout", () => controller.signal);
+  context.mock.method(
+    globalThis,
+    "fetch",
+    async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled++;
+            throw new Error("fixture-private-download-cleanup");
+          },
+        }),
+      ),
+  );
+  context.mock.method(fs, "mkdtemp", async () => {
+    controller.abort();
+    throw new Error("fixture-private-staging");
+  });
+  syncBuiltinESMExports();
+  try {
+    f.state.row.cells.attachments = [{ resourceId: "resource", filename: "evidence.txt", size: 4, url: "https://alidocs2.oss-cn-zhangjiakou.aliyuncs.com/file" }];
+    const response = await f.submit();
+    assert.equal(response.statusCode, 500, response.body);
+    assert.doesNotMatch(response.body, /fixture-private/);
+    assert.equal(cancelled, 1);
+    assert.equal(f.state.closed, 1);
+    assert.deepEqual(await f.database.db.select().from(issues), []);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     await f.cleanup();
   }
 });

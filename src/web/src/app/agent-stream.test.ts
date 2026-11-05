@@ -49,7 +49,13 @@ describe("AgentStreamController", () => {
         expect(onEvent).not.toHaveBeenCalled();
         expect(onError).toHaveBeenCalledTimes(2);
         expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
+        expect(second.closeCalls).toBe(1);
         second.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));
+        expect(onEvent).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1000);
+        const third = sources[2]!;
+        third.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState: "running" }) }));
+        third.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));
         expect(onEvent).toHaveBeenCalledTimes(1);
       } finally {
         controller.dispose();
@@ -58,6 +64,52 @@ describe("AgentStreamController", () => {
       vi.useRealTimers();
     }
   });
+
+  for (const phase of ["replay", "live"]) {
+    it(`recovers a complete conversation after a malformed ${phase} message instead of keeping a partial stream`, async () => {
+      vi.useFakeTimers();
+      const sources: ClosingErrorEventSource[] = [];
+      const onSnapshot = vi.fn(),
+        onEvent = vi.fn(),
+        onError = vi.fn();
+      const controller = new AgentStreamController(
+        (id) => `/stream/${id}`,
+        1000,
+        45000,
+        { onConnection() {}, onError, onSnapshot, onEvent },
+        (url) => {
+          const source = new ClosingErrorEventSource(url);
+          sources.push(source);
+          return source as unknown as EventSource;
+        },
+      );
+      const userMessage = JSON.stringify({ id: "user-1", createdAt: "2026-11-05T00:00:00Z", event: { type: "issue_user", message: "persisted message" } });
+      try {
+        controller.connect("ISSUE-20261105-001");
+        const first = sources[0]!;
+        first.dispatchEvent(new MessageEvent("message", { data: userMessage }));
+        if (phase === "live") first.dispatchEvent(new MessageEvent("snapshot_ready", { data: "{}" }));
+        const accepted = onSnapshot.mock.calls.length;
+        first.dispatchEvent(new MessageEvent("message", { data: "{incomplete" }));
+        expect(first.closeCalls).toBe(1);
+        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: "{}" }));
+        first.dispatchEvent(new MessageEvent("message", { data: userMessage }));
+        expect(onSnapshot).toHaveBeenCalledTimes(accepted);
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(sources).toHaveLength(2);
+        sources[1]!.dispatchEvent(new MessageEvent("message", { data: userMessage }));
+        sources[1]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: "{}" }));
+        const replay = onSnapshot.mock.lastCall![1];
+        expect(replay.entries).toHaveLength(1);
+        expect(JSON.stringify(replay.entries)).toContain("persisted message");
+      } finally {
+        controller.dispose();
+        vi.useRealTimers();
+      }
+    });
+  }
 
   it("reconnects on a session reset and discards events from the previous stream", async () => {
     const sources: ClosingErrorEventSource[] = [],

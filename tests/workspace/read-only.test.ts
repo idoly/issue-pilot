@@ -1,7 +1,8 @@
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -14,6 +15,7 @@ import {
   agentSessions,
   environments,
   issueRepositories,
+  issueRelations,
   issues,
   issueWorkspaces,
   serviceDeploymentRepositories,
@@ -22,10 +24,117 @@ import {
   services,
   subjects,
 } from "../../src/db/schema.ts";
-import { prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
+import { IssueProjectManager, prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
+import { WorktreeManager } from "../../src/workspace/git.ts";
+import { errorChain } from "../../src/diagnostics.ts";
 import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+for (const repositoryFails of [false, true]) {
+  test(`read-only recovery waits for repository preparation after related context fails (repository failure: ${repositoryFails})`, async (context) => {
+    const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-readonly-settlement-"));
+    const database = await openApplicationDatabase(path.join(root, "issues.db"));
+    const release = deferred();
+    const entered = deferred();
+    const relatedChecked = deferred();
+    const repositoryFailure = new Error("fixture_repository_failed");
+    let pending: Promise<unknown> | undefined;
+    try {
+      const [prod] = await database.db.select().from(environments).where(eq(environments.kind, "prod"));
+      const [service] = await database.db.insert(services).values({ key: "settlement", name: "Settlement" }).returning();
+      await database.db.insert(subjects).values({ subject: "tester" });
+      const remote = path.join(root, "remote.git");
+      await registerTestRepositories(database.db, [remote]);
+      const [repository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "remote", url: remote }).returning();
+      const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prod!.id, config: {} }).returning();
+      await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: repository!.id, baseBranch: "main" });
+      const [issue, related] = await database.db
+        .insert(issues)
+        .values(
+          ["001", "002"].map((suffix) => ({
+            key: `ISSUE-20261105-${suffix}`,
+            title: "Settle runtime",
+            type: "smart_analysis" as const,
+            serviceId: service!.id,
+            environmentId: prod!.id,
+            reporterSubject: "tester",
+          })),
+        )
+        .returning();
+      await database.db.insert(issueWorkspaces).values([issue!, related!].map(({ id }) => ({ issueId: id })));
+      await database.db.insert(issueRelations).values({ issueId: issue!.id, relatedIssueId: related!.id });
+      const relatedRoot = issueRoot(root, related!.key);
+      await mkdir(path.dirname(relatedRoot), { recursive: true });
+      // A stored session whose ancestor is now a regular file causes a real ENOTDIR boundary failure.
+      await writeFile(relatedRoot, "preserve recovery evidence");
+      const sessionFile = path.join(relatedRoot, ".session-current.jsonl");
+      await database.db.insert(agentSessions).values({ issueId: related!.id, sessionFile, workspacePath: relatedRoot });
+      const access = fs.access;
+      context.mock.method(fs, "access", async (...args: Parameters<typeof fs.access>) => {
+        try {
+          return await access(...args);
+        } finally {
+          if (args[0] === sessionFile) relatedChecked.resolve();
+        }
+      });
+      syncBuiltinESMExports();
+      const checkout = path.join(sharedCheckoutsRoot(root), "repository", "commit");
+      await mkdir(checkout, { recursive: true });
+      const worktrees = new WorktreeManager(root);
+      let failRepository = repositoryFails;
+      worktrees.prepareShared = async () => {
+        entered.resolve();
+        await release.promise;
+        if (failRepository) throw repositoryFailure;
+        return { cachePath: path.join(root, "cache"), workspacePath: checkout, baseBranch: "main", workingBranch: null, baseCommit: "fixture-commit" };
+      };
+      const projects = new IssueProjectManager(database.db, root, worktrees);
+      let settled = false;
+      const outcome = projects.hydrateReadOnlyRuntime(issue!).then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      pending = outcome;
+      await entered.promise;
+      await relatedChecked.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(settled, false, "recovery must retain ownership until the Git operation finishes");
+      release.resolve();
+      const failures = errorChain(await outcome);
+      assert.ok(failures.some((error) => error && typeof error === "object" && "code" in error && error.code === "ENOTDIR"));
+      assert.equal(failures.includes(repositoryFailure), repositoryFails);
+      assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).length, 0);
+
+      failRepository = false;
+      await rm(relatedRoot);
+      await mkdir(relatedRoot);
+      await projects.hydrateReadOnlyRuntime(issue!);
+      assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.runtimeReady, true);
+    } finally {
+      release.resolve();
+      await pending;
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      await database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 async function git(args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();

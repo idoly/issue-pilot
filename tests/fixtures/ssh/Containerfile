@@ -1,0 +1,6 @@
+FROM docker.io/library/node:26-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server git && rm -rf /var/lib/apt/lists/* && mkdir -p /run/sshd
+ARG FIXTURE_USER
+ARG FIXTURE_UID
+ARG FIXTURE_GID
+RUN groupmod -g "$FIXTURE_GID" node && usermod -l "$FIXTURE_USER" -u "$FIXTURE_UID" -g "$FIXTURE_GID" node

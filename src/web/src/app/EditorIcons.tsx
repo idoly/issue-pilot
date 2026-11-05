@@ -1,4 +1,15 @@
-import themeData from "material-icon-theme/dist/material-icons.json";
+import {
+  iconDefinitions,
+  fileNames,
+  fileExtensions,
+  folderNames,
+  folderNamesExpanded,
+  file,
+  folder,
+  folderExpanded,
+  rootFolder,
+  rootFolderExpanded,
+} from "material-icon-theme/dist/material-icons.json";
 import { version } from "material-icon-theme/package.json";
 
 type IconTheme = {
@@ -13,7 +24,7 @@ type IconTheme = {
   rootFolder: string;
   rootFolderExpanded: string;
 };
-const theme = themeData as IconTheme;
+const theme: IconTheme = { iconDefinitions, fileNames, fileExtensions, folderNames, folderNamesExpanded, file, folder, folderExpanded, rootFolder, rootFolderExpanded };
 
 export function EditorFileIcon(props: { path: string; directory?: boolean; expanded?: boolean; root?: boolean }) {
   const source = () => {

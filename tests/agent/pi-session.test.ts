@@ -272,44 +272,45 @@ test("an export writer does not register a separate publication tool", async () 
 for (const cleanupFails of [false, true])
   test(`disposes an SDK session and stdio process when stop fails (cleanup=${cleanupFails})`, async () => {
     const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-sdk-"));
-    const manager = await createPrivateSessionManager(root, root);
-    const managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
-      manager,
-      context: context({ writable: false }),
-      deploymentConfig: {},
-      workspaceRoot: root,
-      agentDirectory: root,
-      mcpConfigurations: localMcp(root),
-      systemPrompt: "",
-      onEvent: () => undefined,
-    });
-    await waitForMcp(managed);
-    await readFile(join(root, "pid"), "utf8");
-    const child = await hostMcpPid(join(root, "pid"));
-    let disposed = false;
-    const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
-    const dispose = session.dispose.bind(session);
-    const abortError = new Error("abort_failed");
-    const shutdownError = new Error("shutdown_failed");
-    const disposeError = new Error("dispose_failed");
-    Object.defineProperty(session, "isIdle", { configurable: true, get: () => false });
-    session.abort = async () => {
-      throw abortError;
-    };
-    if (cleanupFails) {
-      const emit = session.extensionRunner.emit.bind(session.extensionRunner);
-      session.extensionRunner.emit = async (event) => {
-        const result = await emit(event);
-        if (event.type === "session_shutdown") throw shutdownError;
-        return result;
-      };
-    }
-    session.dispose = () => {
-      disposed = true;
-      dispose();
-      if (cleanupFails) throw disposeError;
-    };
+    let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
     try {
+      const manager = await createPrivateSessionManager(root, root);
+      managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+        manager,
+        context: context({ writable: false }),
+        deploymentConfig: {},
+        workspaceRoot: root,
+        agentDirectory: root,
+        mcpConfigurations: localMcp(root),
+        systemPrompt: "",
+        onEvent: () => undefined,
+      });
+      await waitForMcp(managed);
+      await readFile(join(root, "pid"), "utf8");
+      const child = await hostMcpPid(join(root, "pid"));
+      let disposed = false;
+      const session = managed.session as AgentSession & { abort: () => Promise<void>; dispose: () => void };
+      const dispose = session.dispose.bind(session);
+      const abortError = new Error("abort_failed");
+      const shutdownError = new Error("shutdown_failed");
+      const disposeError = new Error("dispose_failed");
+      Object.defineProperty(session, "isIdle", { configurable: true, get: () => false });
+      session.abort = async () => {
+        throw abortError;
+      };
+      if (cleanupFails) {
+        const emit = session.extensionRunner.emit.bind(session.extensionRunner);
+        session.extensionRunner.emit = async (event) => {
+          const result = await emit(event);
+          if (event.type === "session_shutdown") throw shutdownError;
+          return result;
+        };
+      }
+      session.dispose = () => {
+        disposed = true;
+        dispose();
+        if (cleanupFails) throw disposeError;
+      };
       await assert.rejects(managed.stop(), (error) => {
         if (cleanupFails) {
           assert.ok(error instanceof AggregateError);
@@ -322,7 +323,11 @@ for (const cleanupFails of [false, true])
       assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
       await managed.stop();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      try {
+        await managed?.stop();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   });
 

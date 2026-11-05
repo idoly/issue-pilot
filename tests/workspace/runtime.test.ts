@@ -10,6 +10,72 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issues as issueRecords, issueWorkspaces, serviceDeployments, services } from "../../src/db/schema.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch } from "../../src/workspace/runtime.ts";
 import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { errorChain } from "../../src/diagnostics.ts";
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+test("waits for runtime preparation to settle and fails when readiness cannot be invalidated", async () => {
+  const preparationFailure = new Error("fixture_runtime_preparation_failed");
+  const stateFailure = new Error("fixture_runtime_state_failed");
+  const held = deferred();
+  const invalidated = deferred();
+  const issues = ["001", "002", "003"].map((id) => ({ id, key: `ISSUE-20261105-${id}` }));
+  const completed: string[] = [];
+  const database = {
+    update() {
+      return {
+        set: () => ({
+          where: async () => {
+            invalidated.resolve();
+            throw stateFailure;
+          },
+        }),
+      };
+    },
+  };
+  let settled = false;
+  const pending = prepareIssueRuntimeBatch(
+    database as never,
+    issues,
+    async (issue) => {
+      if (issue.id === "001") throw preparationFailure;
+      if (issue.id === "002") await held.promise;
+      completed.push(issue.id);
+    },
+    { concurrency: 2 },
+  );
+  const outcome = pending.then(
+    (value) => {
+      settled = true;
+      return { value, error: undefined };
+    },
+    (error: unknown) => {
+      settled = true;
+      return { value: undefined, error };
+    },
+  );
+  try {
+    await invalidated.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, "a failed state write must not leave other preparation running after return");
+    held.resolve();
+    const result = await outcome;
+    const failures = errorChain(result.error);
+    assert.ok(failures.includes(preparationFailure));
+    assert.ok(failures.includes(stateFailure));
+    assert.deepEqual(completed.sort(), ["002", "003"]);
+    assert.equal(result.value, undefined);
+  } finally {
+    held.resolve();
+    await outcome;
+  }
+});
 
 test("bounds runtime preparation concurrency and preserves Issue result order", async () => {
   const issues = ["001", "002", "003", "004"].map((suffix) => ({ id: suffix, key: `ISSUE-20260816-${suffix}` }));
@@ -83,6 +149,18 @@ test("keeps unchanged runtime timestamps across preparation failures and retries
     for (const workspace of await database.db.select().from(issueWorkspaces)) {
       assert.equal(workspace.updatedAt.getTime(), firstStates.get(workspace.issueId)!.updatedAt.getTime());
     }
+    await database.db.update(issueWorkspaces).set({ runtimeReady: true }).where(eq(issueWorkspaces.issueId, rows[0]!.id));
+    await database.client.execute(
+      "CREATE TRIGGER reject_runtime_invalidation BEFORE UPDATE OF runtime_ready ON issue_workspaces WHEN NEW.runtime_ready = 0 BEGIN SELECT RAISE(ABORT, 'fixture_runtime_state_failed'); END",
+    );
+    await assert.rejects(prepareIssueRuntimeBatch(database.db, rows, prepare), (error) => {
+      assert.ok(errorChain(error).some((cause) => cause instanceof Error && cause.message === "workspace_runtime_state_failed"));
+      return true;
+    });
+    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, rows[0]!.id)))[0]!.runtimeReady, true);
+    await database.client.execute("DROP TRIGGER reject_runtime_invalidation");
+    assert.deepEqual(await prepareIssueRuntimeBatch(database.db, rows, prepare), first);
+    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, rows[0]!.id)))[0]!.runtimeReady, false);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

@@ -271,7 +271,13 @@ export class IssueProjectManager {
       preparation = this.prepareReadOnlyDeployment({ serviceIds, environmentId: issue.environmentId });
       preparations?.set(preparationKey, preparation);
     }
-    const [{ names, repositories }, relatedIssues] = await Promise.all([preparation, this.prepareRelatedIssueRuntimes(issue.id)]);
+    // Both operations belong to this recovery attempt, including when either one fails first.
+    const [deployment, related] = await Promise.allSettled([preparation, this.prepareRelatedIssueRuntimes(issue.id)]);
+    if (deployment.status === "rejected" && related.status === "rejected") throw new AggregateError([deployment.reason, related.reason], "readonly_runtime_preparation_failed");
+    if (deployment.status === "rejected") throw deployment.reason;
+    if (related.status === "rejected") throw related.reason;
+    const { names, repositories } = deployment.value;
+    const relatedIssues = related.value;
     const runtimeRoot = await prepareIssueRuntime(
       this.stateRoot,
       issue.key,

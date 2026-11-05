@@ -415,7 +415,7 @@ describe("Agent conversation state", () => {
     view.unmount();
   });
 
-  it("previews pasted images and sends them as multipart Agent input", async () => {
+  it("previews pasted images and sends multipart input with the button, without sending on composition or Shift+Enter", async () => {
     EventSourceMock.instances.length = 0;
     const issue = {
       id: "ISSUE-20260810-001",
@@ -445,6 +445,12 @@ describe("Agent conversation state", () => {
     expect(createObjectUrl).toHaveBeenCalledWith(image);
     fireEvent.input(editor, { target: { value: "检查这张图片" } });
     await waitFor(() => expect(editor.value).toBe("检查这张图片"));
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", isComposing: true });
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", shiftKey: true });
+    expect(fetchRequest).not.toHaveBeenCalled();
+    const send = screen.getByRole("button", { name: "发送消息" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
     fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(fetchRequest).toHaveBeenCalledTimes(1));
     const body = fetchRequest.mock.calls[0]?.[1]?.body;
@@ -721,11 +727,26 @@ describe("Agent conversation state", () => {
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
     const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
     const transcript = panel.querySelector(".agent-scroll") as HTMLDivElement;
+    let viewportHeight = 300;
     Object.defineProperties(transcript, {
       scrollHeight: { configurable: true, value: 1_000 },
-      clientHeight: { configurable: true, value: 200 },
+      clientHeight: { configurable: true, get: () => viewportHeight },
       scrollTop: { configurable: true, value: 0, writable: true },
+      scrollTo: {
+        configurable: true,
+        value: ({ top }: ScrollToOptions) => {
+          transcript.scrollTop = top!;
+        },
+      },
     });
+    fireEvent.keyDown(panel, { key: "Enter" });
+    expect(transcript.scrollTop).toBe(700);
+    viewportHeight = 200;
+    // A scroll event for the old bottom position reaches the panel before resize observation.
+    fireEvent.scroll(transcript);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
+    transcript.scrollTop = 0;
     fireEvent.scroll(transcript);
     source.emit("message", event({ type: "issue_user", message: "Arrived after scrolling" }, "message-unread"));
     await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
@@ -1079,6 +1100,12 @@ describe("Agent conversation state", () => {
     expect(view.container.querySelector(".agent-message.assistant .markdown-body")?.textContent).toContain("Final response");
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
     expect(view.container.querySelector(".agent-message.assistant")).toBe(assistantNode);
+    expect(markdownParse).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Final reasoning")).toBeNull();
+    const reasoning = screen.getByText("思考过程").closest("details")!;
+    reasoning.open = true;
+    fireEvent(reasoning, new Event("toggle"));
+    await screen.findByText("Final reasoning");
     expect(markdownParse).toHaveBeenCalledTimes(2);
     expect(view.container.querySelector(".markdown-body img")?.hasAttribute("onerror")).toBe(false);
     expect(screen.queryByText("First second queued")).toBeNull();

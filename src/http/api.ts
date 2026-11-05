@@ -95,6 +95,22 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   let modelRuntime: ReturnType<typeof createPiModelRuntime> | undefined;
   let stateLease: Pick<ApplicationStateLease, "start" | "close"> | undefined;
   let stopWorkspaceMaintenance: (() => Promise<void>) | undefined;
+  const scopeQueue = new SerialQueue();
+  let closingResources: Promise<void> | undefined;
+  const closeResources = () =>
+    (closingResources ??= (async () => {
+      const failures: unknown[] = [];
+      // Startup rollback and normal shutdown share ownership and ordering. Keep the lease until all writers stop.
+      for (const close of [() => stopWorkspaceMaintenance?.(), () => engine?.close?.(), () => scopeQueue.idle(), () => modelRuntime?.close(), () => connection?.close(), () => stateLease?.close()]) {
+        try {
+          await close();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "api_close_failed");
+    })());
 
   try {
     // Bootstrap recovers persistent state, so claim the control socket first.
@@ -138,7 +154,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         sharedModelRuntime(),
         parameters.maxConcurrentIssues,
       );
-    const scopeQueue = new SerialQueue();
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy ?? workspaceLifecyclePolicy(parameters));
     const maintenanceStartedAt = performance.now();
@@ -230,51 +245,21 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerSourceBrowserRoutes(routeContext);
     registerWorkspaceRoutes(routeContext);
     if (options.webRoot) await registerWebRoutes(app, options.webRoot);
-    app.addHook("onClose", async () => {
-      const failures: unknown[] = [];
-      try {
-        await stopWorkspaceMaintenance?.();
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await engine?.close?.();
-      } catch (error) {
-        failures.push(error);
-      }
-      // Scope-only writes (repositories, users, configuration) must finish before the database closes.
-      await scopeQueue.idle();
-      try {
-        await modelRuntime?.close();
-      } catch (error) {
-        failures.push(error);
-      }
-      // Keep the state lease until the database is closed so a new instance cannot start against live state.
-      try {
-        await database.close();
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await stateLease?.close();
-      } catch (error) {
-        failures.push(error);
-      }
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) throw new AggregateError(failures, "api_close_failed");
-    });
+    app.addHook("onClose", closeResources);
     return app;
   } catch (error) {
-    if (stopWorkspaceMaintenance) await stopWorkspaceMaintenance().catch(() => undefined);
-    if (engine?.close) await engine.close().catch(() => undefined);
-    await modelRuntime?.close().catch(() => undefined);
-    await app.close().catch(() => undefined);
+    const failures: unknown[] = [error];
     try {
-      await connection?.close();
-    } catch {
-      // Preserve the startup error that triggered cleanup.
+      await closeResources();
+    } catch (cleanup) {
+      failures.push(cleanup);
     }
-    await stateLease?.close().catch(() => undefined);
+    try {
+      await app.close();
+    } catch (cleanup) {
+      if (!failures.includes(cleanup)) failures.push(cleanup);
+    }
+    if (failures.length > 1) throw new AggregateError(failures, "api_startup_cleanup_failed");
     throw error;
   }
 }
@@ -286,7 +271,11 @@ export async function startApi(options: ApiOptions = {}): Promise<FastifyInstanc
     await app.listen({ port: applicationConfig.http.port, host: options.listenHost ?? applicationConfig.http.host });
   } catch (error) {
     removeShutdownHandlers();
-    await app.close().catch(() => undefined);
+    try {
+      await app.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "api_listen_cleanup_failed");
+    }
     throw error;
   }
   return app;

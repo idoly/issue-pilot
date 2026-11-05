@@ -82,7 +82,7 @@ npx vitest run --config src/web/vite.config.ts --environment jsdom --maxWorkers=
 | Web | 导航、身份切换、草稿、重连、冲突、图片 URL 和 editor/model 释放 |
 | 文档／截图 | 当前代码依据、相对链接与锚点、图片 hash、浏览器可见内容与演示隔离 |
 
-运行时、依赖、协议安全、容器变化还执行生产 npm audit、pip check 和可用部署健康验证。SSH E2E 缺 sshd fixture 明确 skip，不当作通过；远程模型／数据库／认证与完整容器需要对应环境。本机结果不代表远程 CI 成功。
+运行时、依赖、协议安全、容器变化还执行生产 npm audit、pip check 和可用部署健康验证。SSH E2E 缺 sshd fixture 明确 skip，不当作通过；`npm run test:ssh` 使用 rootless Podman 提供独立 OpenSSH 服务并要求实际执行。显式指定 `ISSUE_PILOT_TEST_SSHD` 但程序不存在时直接失败。夹具范围见 [tests/fixtures](../tests/fixtures/README.md#ssh-服务)；远程模型／数据库／认证与完整容器需要对应环境。本机结果不代表远程 CI 成功。
 
 纯文档可以按文档范围验证，不必为了文档运行用户工单的依赖安装或完整构建。应用自身检查与工单 Agent 的“默认不构建”策略是不同职责。
 
@@ -95,6 +95,37 @@ Solid 2 使用 compute／callback 形式的 createEffect；callback 只返回清
 会话验证帧批处理、最终覆盖、完成消息选区、原生 details 键盘操作、快照去重和身份隔离。jsdom 不替代真实浏览器布局、选区和网络验收。
 
 Markdown 在链接授权解析后清洗 HTML；文件预览同时检查声明和实际字节。Monaco 保存需处理 SHA-256、换行、撤销、自动保存及导航拦截，关闭释放 editor/model。CodeBrowser 动态加载，大型上游 chunk 提醒不通过抬阈值或随意拆分掩盖。
+
+Markdown 解析依赖 marked 18.1.3 的混合围栏、转义链接和未闭合强调符扫描修复。升级时保留页面解析、链接授权及清洗回归；上游解析器修复不替代应用的 DOMPurify 和链接策略。
+
+CodeBrowser／Monaco 按需加载。图标使用主题的明确字段，JSON 使用固定 Monaco 版本提供的 tokenizer，并通过公开 languages API 注册高亮和括号配置；不引入已禁用的 JSON 语言服务及 Worker。升级 Monaco 时复查该 tokenizer 导出及浏览器验收。
+
+## 可重复的真实浏览器验收
+
+`tests/browser/acceptance.mjs` 启动临时 SQLite、Issue 根、Git worktree 和真实 HTTP/SSE 服务，再用生产构建与 Chromium 检查高亮、查找、粘贴、保存、CRLF、撤销／重做、差异、冲突、导航、Agent 草稿及选区。会话场景还覆盖 40 条实时历史、浏览历史时的未读提示和滚动位置、长草稿、键盘展开思考内容、点击发送及焦点恢复。Agent 执行器和模型目录使用测试实现，不发起远程模型请求。脚本最后关闭浏览器／API 并删除其临时状态；输出浏览器版本、源码基线／diff 哈希、视口、场景及加载资源。
+
+CI 同时执行 SSH 夹具和真实浏览器验收；本机结果不代表远程 Actions 已运行。Playwright 是独立验收工具，不加入应用依赖。Linux 需要浏览器系统库和中文字体（如 `fonts-noto-cjk`）；CI 显式安装这些依赖。本地示例：
+
+```bash
+verification_root=$(mktemp -d)
+npm install --prefix "$verification_root/tools" --ignore-scripts --no-audit --no-fund playwright@1.64.1
+PLAYWRIGHT_BROWSERS_PATH="$verification_root/browsers" "$verification_root/tools/node_modules/.bin/playwright" install chromium --only-shell
+npm run build
+PLAYWRIGHT_BROWSERS_PATH="$verification_root/browsers" \
+ISSUE_PILOT_PLAYWRIGHT_MODULE="$verification_root/tools/node_modules/playwright/index.mjs" \
+ISSUE_PILOT_BROWSER_ARTIFACTS="$verification_root/artifacts" \
+npm run test:browser
+```
+
+截图输出可选，仅包含本次夹具；检查完日志和截图后可删除自己创建的 `verification_root`。这些变量只配置验收工具，不能覆盖应用的生产状态路径。
+
+本地协议夹具不能替代实际厂商验收。模型、DMS/SLS、钉钉及外部 MCP 需要明确的独立测试目标、受控凭证位置、允许的只读查询与预期结果；不得自行选择生产连接，也不得用协议模拟结果声称外部系统已通过。
+
+## 真实 SLS CLI 协议验收
+
+安装与 [Containerfile](../Containerfile) 一致的 aliyun CLI 和 OpenSSL 后执行 `npm run test:sls-cli`。测试使用真实 CLI、临时 0600 凭证配置和本地 HTTPS 服务，覆盖分页、来源、后续页拒绝、证据不完整、输出预算与进程取消；不读取真实云凭证或访问云端。临时自签名证书仅由该子进程信任，精确目标的 CONNECT 代理将 SLS 的 project 子域名映射到回环地址，不修改 DNS 或关闭 TLS 校验。服务、套接字、配置和证书在测试结束时清理。
+
+普通 `npm test` 不要求外部 CLI；此验收独立运行，缺少工具直接失败。CI 从 Containerfile 读取 CLI 版本并执行该入口。它能验证 SDK／CLI 的实际协议形态，真实厂商权限、数据及网络仍需独立测试目标验收。
 
 ## 页面图维护
 

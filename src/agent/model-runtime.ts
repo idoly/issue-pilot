@@ -47,8 +47,9 @@ export function createPiModelRuntime(agentDir = getAgentDir(), credential?: { pr
   let closing: Promise<void> | undefined;
   const cleanup = async () => {
     const directory = privateDirectory;
-    privateDirectory = undefined;
     if (directory) await rm(directory, { recursive: true, force: true });
+    // Failed initialization may retry cleanup during close; ownership ends only after removal succeeds.
+    privateDirectory = undefined;
   };
   const load = () => {
     if (closing) return Promise.reject(new Error("pi_model_runtime_closed"));
@@ -74,7 +75,11 @@ export function createPiModelRuntime(agentDir = getAgentDir(), credential?: { pr
         if (credential) await modelRuntime.setRuntimeApiKey(credential.provider, credential.apiKey);
         return modelRuntime;
       } catch (error) {
-        await cleanup().catch(() => undefined);
+        try {
+          await cleanup();
+        } catch (cleanupError) {
+          throw new Error("pi_model_runtime_cleanup_failed", { cause: new AggregateError([error, cleanupError]) });
+        }
         throw error;
       }
     })();

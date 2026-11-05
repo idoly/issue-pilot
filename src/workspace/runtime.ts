@@ -38,15 +38,19 @@ export async function prepareIssueRuntimeBatch<T extends { id: string; key: stri
         await prepareRuntime(issue);
         return { issueKey: issue.key };
       } catch (error) {
-        await database
-          .update(issueWorkspaces)
-          .set({ runtimeReady: false, updatedAt: new Date() })
-          .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.runtimeReady, true)))
-          .catch(() => undefined);
+        try {
+          await database
+            .update(issueWorkspaces)
+            .set({ runtimeReady: false, updatedAt: new Date() })
+            .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.runtimeReady, true)));
+        } catch (stateError) {
+          throw new AggregateError([error, stateError], "workspace_runtime_state_failed");
+        }
         return { issueKey: issue.key, reason: errorMessage(errorDiagnostic(error)) };
       }
     },
-    { concurrency: options.concurrency ?? 1 },
+    // A fatal state write cannot release startup ownership while other preparations still write files or Git.
+    { concurrency: options.concurrency ?? 1, stopOnError: false },
   );
   return {
     prepared: outcomes.filter((row) => row.reason === undefined).map((row) => row.issueKey),

@@ -3,6 +3,7 @@ import fs, { access, chmod, readFile, rm, stat } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { CommandExecutor } from "../../src/process.ts";
 import { prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
 import { capabilityInputSchemas, capabilityToolInputSchema, parseSlsScopeConfiguration } from "../../src/capabilities/registry.ts";
@@ -283,4 +284,43 @@ test("a credential profile that cannot be removed is reported with its stable co
       }
     }
   }
+});
+
+test("a large SQL response within the result budget does not depend on the call argument limit", async () => {
+  const rows = Array.from({ length: 130_000 }, () => ({}));
+  const f = fixture([page(rows, { hasSQL: true })]);
+  const result = await readSlsLogs({ ...base, query: "* | SELECT * LIMIT 130000" }, configured, undefined, f.executor);
+  assert.equal(JSON.parse(result.content[0]!.text).records.length, rows.length);
+  assert.ok(Buffer.byteLength(result.content[0]!.text) <= issuePilotConfig.limits.capability.resultBytes);
+  assert.equal(f.calls.length, 1);
+  await assert.rejects(access(f.calls[0]!.configPath), { code: "ENOENT" });
+});
+
+test("paginated SLS enforces the exact UTF-8 result budget including metadata", async () => {
+  const rows = Array.from({ length: 100 }, () => ({}));
+  const pages = () => Array.from({ length: 30 }, () => page(rows));
+  const suffix = { message: '订单😀\n"\\', padding: "" };
+  const probe = fixture([...pages(), page([suffix])]);
+  const minimum = await readSlsLogs(base, configured, undefined, probe.executor);
+  const padding = "x".repeat(issuePilotConfig.limits.capability.resultBytes - Buffer.byteLength(minimum.content[0]!.text));
+  const within = fixture([...pages(), page([{ ...suffix, padding }])]);
+  const result = await readSlsLogs(base, configured, undefined, within.executor);
+  assert.equal(Buffer.byteLength(result.content[0]!.text), issuePilotConfig.limits.capability.resultBytes);
+  const value = JSON.parse(result.content[0]!.text);
+  assert.equal(value.records.length, 3001);
+  assert.deepEqual(value.records.at(-1), { ...suffix, padding });
+  const over = fixture([...pages(), page([{ ...suffix, padding: padding + "x" }])]);
+  await assert.rejects(readSlsLogs(base, configured, undefined, over.executor), { message: "capability_result_too_large" });
+  for (const run of [probe, within, over]) {
+    assert.equal(run.calls.length, 31);
+    await assert.rejects(access(run.calls[0]!.configPath), { code: "ENOENT" });
+  }
+});
+
+test("SLS stops before requesting another page once accumulated evidence exceeds its budget", async () => {
+  const rows = Array.from({ length: 100 }, () => ({ message: "x".repeat(5_400) }));
+  const f = fixture([page(rows), page(rows), page([])]);
+  await assert.rejects(readSlsLogs(base, configured, undefined, f.executor), { message: "capability_result_too_large" });
+  assert.equal(f.calls.length, 2);
+  await assert.rejects(access(f.calls[0]!.configPath), { code: "ENOENT" });
 });

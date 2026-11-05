@@ -1438,6 +1438,11 @@ textarea {
   outline: 2px solid var(--agent-border-accent);
   outline-offset: -2px;
 }
+.agent-transcript {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+}
 .agent-scroll {
   box-sizing: border-box;
   display: flex;
@@ -1446,10 +1451,16 @@ textarea {
   min-width: 0;
   flex-direction: column;
   overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .agent-conversation {
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
+  max-width: 960px;
   flex: 1 0 auto;
+  margin-inline: auto;
   padding: 0 8px 12px 12px;
 }
 .agent-message {
@@ -1461,6 +1472,7 @@ textarea {
   padding: 14px;
   background: var(--agent-user-message-bg);
   color: var(--agent-user-message-text);
+  border-radius: 8px;
 }
 .agent-message.assistant {
   display: grid;
@@ -1522,6 +1534,17 @@ textarea {
 .agent-thinking .markdown-body {
   color: inherit;
   font-family: inherit;
+}
+.agent-thinking > summary {
+  width: fit-content;
+  padding-block: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.agent-thinking[open] > .markdown-body {
+  margin-top: 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--agent-border-muted);
 }
 .agent-thinking .markdown-body > :first-child {
   margin-top: 0;
@@ -1731,21 +1754,14 @@ summary.agent-tool-head > svg {
   --ui-button-default-border-color: var(--agent-border-accent);
   --ui-button-default-hover-color: #fff;
   --ui-button-default-hover-bg: #484f58;
-  --ui-button-default-hover-border-color: var(--agent-border-accent);
-  position: absolute !important;
+  --ui-primary: var(--agent-border-accent);
+  position: absolute;
   z-index: 4;
   right: calc(12px + var(--ip-scrollbar-size));
-  bottom: 126px;
-  width: max-content !important;
+  bottom: 10px;
+  width: max-content;
   max-width: calc(100% - 24px - var(--ip-scrollbar-size));
-  border-color: var(--agent-border-accent) !important;
-  background: #30363d !important;
-  color: var(--agent-border-accent) !important;
   box-shadow: 0 3px 12px rgb(0 0 0 / 42%);
-}
-.agent-scroll-latest:hover {
-  background: #484f58 !important;
-  color: #fff !important;
 }
 .agent-working {
   display: flex;
@@ -1802,10 +1818,17 @@ summary.agent-tool-head > svg {
   color: var(--agent-muted);
   font-weight: 600;
 }
+.agent-dock {
+  min-width: 0;
+  max-height: 60%;
+  flex: none;
+  overflow-y: auto;
+  padding-top: 8px;
+  border-top: 1px solid #262c30;
+  background: var(--agent-bg);
+}
 .agent-composer-gutter {
   min-width: 0;
-  flex: none;
-  overflow: visible;
   padding: 0 12px;
   background: var(--agent-bg);
 }
@@ -1813,9 +1836,10 @@ summary.agent-tool-head > svg {
   display: grid;
   min-height: 36px;
   grid-template-columns: minmax(0, 1fr);
-  padding-block: 8px;
-  border-block: 1px solid var(--agent-border-muted);
-  background: var(--agent-bg);
+  padding: 8px 10px;
+  border: 1px solid var(--agent-border-muted);
+  border-radius: 8px;
+  background: #101417;
 }
 .agent-composer.thinking-minimal {
   border-color: var(--agent-thinking-minimal);
@@ -1849,9 +1873,9 @@ summary.agent-tool-head > svg {
   flex: 0 0 64px;
   overflow: hidden;
   margin: 0;
-  border: 1px solid var(--agent-border);
+  border: 1px solid var(--agent-border-muted);
   border-radius: 5px;
-  background: var(--agent-surface);
+  background: var(--agent-bg);
 }
 .agent-composer-images img {
   width: 100%;
@@ -1876,9 +1900,10 @@ summary.agent-tool-head > svg {
 }
 .agent-composer textarea {
   width: 100%;
-  height: 20px;
-  min-height: 20px;
-  overflow: hidden;
+  min-height: 2lh;
+  max-height: min(8lh, 24dvh);
+  overflow-y: auto;
+  field-sizing: content;
   resize: none;
   padding: 0;
   border: 0;
@@ -1891,13 +1916,23 @@ summary.agent-tool-head > svg {
   line-height: 20px;
   letter-spacing: 0;
   font-synthesis: none;
-  scrollbar-width: none;
 }
 .agent-composer textarea::placeholder {
   color: var(--agent-dim);
 }
-.agent-composer textarea::-webkit-resizer {
-  display: none;
+.agent-composer:focus-within {
+  outline: 1px solid var(--agent-accent);
+  outline-offset: 1px;
+}
+.agent-composer-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--agent-muted);
+  font-size: 12px;
 }
 .agent-panel-error {
   padding: 7px 14px;
@@ -1943,9 +1978,7 @@ summary.agent-tool-head > svg {
     padding-inline: 10px;
   }
   .agent-composer-gutter {
-    overflow: visible;
     padding-inline: 6px;
-    scrollbar-gutter: auto;
   }
   .agent-meta {
     gap: 8px;

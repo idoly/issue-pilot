@@ -162,13 +162,26 @@ function BashMessageEntry(props: { entry: Extract<ConversationEntry, { kind: "ba
 }
 
 function AssistantBlock(props: { issue: IssueDetail; block: Extract<ConversationEntry, { kind: "assistant" }>["blocks"][number]; streaming: boolean }) {
-  // Stream as text, not partial HTML. Only the authoritative final message runs Markdown/link sanitization.
+  const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
+  // Stream as text. Completed thinking stays available without rendering it in every transcript.
   return (
-    <div class={{ "agent-thinking": props.block.type === "thinking" }}>
-      <Show when={props.streaming} fallback={<IssueMarkdown issue={props.issue} source={props.block.value} />}>
+    <Show
+      when={props.streaming}
+      fallback={
+        <Show when={props.block.type === "thinking"} fallback={<IssueMarkdown issue={props.issue} source={props.block.value} />}>
+          <details class="agent-thinking" onToggle={(event) => setExpanded(event.currentTarget.open)}>
+            <summary>思考过程</summary>
+            <Show when={expanded()}>
+              <IssueMarkdown issue={props.issue} source={props.block.value} />
+            </Show>
+          </details>
+        </Show>
+      }
+    >
+      <div class={{ "agent-thinking": props.block.type === "thinking" }}>
         <div class="agent-streaming-block">{props.block.value}</div>
-      </Show>
-    </div>
+      </div>
+    </Show>
   );
 }
 
@@ -296,7 +309,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   let draftRecord = untrack(() => draftStore.get(props.issue.id));
   const [draft, setDraftValue] = createSignal(draftRecord.text, { ownedWrite: true });
   const [images, setImagesValue] = createSignal<AgentDraftImage[]>(draftRecord.images, { ownedWrite: true });
-  let pasteEditor = draftRecord.pasteEditor;
   const setDraft = (value: string) => {
     draftRecord.text = value;
     setDraftValue(value);
@@ -310,23 +322,24 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     draftRecord = draftStore.get(issueId);
     setDraftValue(draftRecord.text);
     setImagesValue(draftRecord.images);
-    pasteEditor = draftRecord.pasteEditor;
     setError(draftRecord.error);
     setSending(draftRecord.sending);
   };
   const [entries, setEntries] = createSignal<ConversationEntry[]>([], { ownedWrite: true });
   const [unread, setUnread] = createSignal(0, { ownedWrite: true });
+  const [atLatest, setAtLatest] = createSignal(true, { ownedWrite: true });
   const [activity, setActivity] = createSignal<AgentActivity | null>(null, { ownedWrite: true });
   const [queue, setQueue] = createSignal<{ steering: string[]; followUp: string[] }>({ steering: [], followUp: [] }, { ownedWrite: true });
   const [agent, setAgent] = createSignal({ provider: "", model: "", thinkingLevel: "" }, { ownedWrite: true });
   const [footer, setFooter] = createSignal<AgentFooterStats>(emptyFooter(), { ownedWrite: true });
   let panel: HTMLElement | undefined;
-  let transcript: HTMLDivElement | undefined;
-  let transcriptObserver: ResizeObserver | undefined;
+  let transcript!: HTMLDivElement;
+  let conversation!: HTMLDivElement;
   let editor: HTMLTextAreaElement | undefined;
+  let followLatest = true;
+  let followedTop = 0;
   let issueGeneration = 0;
   let issueRefreshId = 0;
-  let followLatest = true;
   const unreadEntryIds = new Set<string>();
   let messageUpdateFrame: number | undefined;
   let pendingMessageUpdates: Array<{ envelope: RunEvent; deltas: string[] | null }> = [];
@@ -335,8 +348,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     ({ issueId }) => loadDraft(issueId),
   );
 
-  const running = () => processing();
   const canSend = () => issueStatus() !== "resolved";
+  const canSubmit = () => canSend() && !sending() && (images().length > 0 || /\S/.test(draft()));
   const usageText = () => footerText(footer());
   const codeRoot = () => props.issue.workingDirectory ?? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`;
   const developmentRepositoriesPending = () => props.issue.environmentKey === "dev" && (!props.issue.repositories.length || props.issue.repositories.some((repository) => !repository.workingBranch));
@@ -344,41 +357,41 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     unreadEntryIds.clear();
     setUnread(0);
   };
+  const setFollowLatest = (value: boolean) => {
+    followLatest = value;
+    setAtLatest(value);
+  };
+  const keepLatest = () => {
+    if (!followLatest || props.hidden) return;
+    followedTop = Math.max(0, transcript.scrollHeight - transcript.clientHeight);
+    transcript.scrollTo({ top: followedTop, behavior: "auto" });
+  };
   const scrollLatest = () => {
-    transcript?.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
-    followLatest = true;
+    setFollowLatest(true);
+    keepLatest();
     clearUnread();
   };
-  const observeTranscript = (element: HTMLDivElement) => {
-    transcript = element;
-    transcriptObserver?.disconnect();
-    transcriptObserver = new ResizeObserver(() => {
-      if (followLatest) element.scrollTop = element.scrollHeight;
-    });
-    transcriptObserver.observe(element);
-  };
+  createEffect(
+    () => props.hidden,
+    (hidden) => {
+      if (hidden) return;
+      // Observe viewport changes and content growth, including late images and expanded details.
+      const observer = new ResizeObserver(keepLatest);
+      observer.observe(transcript);
+      observer.observe(conversation);
+      return () => observer.disconnect();
+    },
+  );
   const focusConversation = (event: MouseEvent & { currentTarget: HTMLDivElement }) => {
     const target = event.target;
     if (!(target instanceof Element) || target.closest("a, button, summary, input, textarea, select, [contenteditable='true']")) return;
-    if (window.getSelection() && !window.getSelection()!.isCollapsed) return;
+    if (window.getSelection()?.isCollapsed === false) return;
     panel?.focus({ preventScroll: true });
   };
   const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
     if (event.key !== "Enter" || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
     scrollLatest();
-  };
-  const resizeEditor = (textarea = editor) => {
-    if (!textarea) return;
-    textarea.style.height = "0px";
-    textarea.style.height = `${textarea.scrollHeight}px`;
-    queueMicrotask(() => {
-      if (followLatest && transcript) transcript.scrollTop = transcript.scrollHeight;
-    });
-  };
-  const setEditorDraft = (value: string) => {
-    setDraft(value);
-    queueMicrotask(() => resizeEditor());
   };
   const discardImages = (items: Array<{ file: File; url: string }>) => {
     for (const image of items) URL.revokeObjectURL(image.url);
@@ -390,19 +403,21 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       return current.filter((image) => image.url !== url);
     });
   const updateConversation = (update: (current: ConversationEntry[]) => ConversationEntry[]) => {
-    let addedEntryIds: string[] = [];
+    if (followLatest) {
+      setEntries(update);
+      return;
+    }
+    let added: ConversationEntry[] = [];
+    const generation = issueGeneration;
     setEntries((current) => {
-      const currentIds = new Set(current.map(({ id }) => id));
       const next = update(current);
-      addedEntryIds = next.filter(({ id }) => !currentIds.has(id)).map(({ id }) => id);
+      // Live events replace entries in place or append them. Reconnect snapshots have their own path.
+      if (next.length > current.length) added = next.slice(current.length);
       return next;
     });
     queueMicrotask(() => {
-      if (followLatest && transcript) {
-        transcript.scrollTop = transcript.scrollHeight;
-        return;
-      }
-      for (const id of addedEntryIds) unreadEntryIds.add(id);
+      if (generation !== issueGeneration || followLatest || !added.length) return;
+      for (const { id } of added) unreadEntryIds.add(id);
       setUnread(unreadEntryIds.size);
     });
   };
@@ -496,7 +511,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
       setProcessing(payload.runState ? payload.runState !== "idle" : payload.running === true);
       if (statusChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
-      if (followLatest) queueMicrotask(scrollLatest);
+      queueMicrotask(keepLatest);
     },
     onEvent: (envelope, generation) => {
       append(envelope);
@@ -507,7 +522,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const connect = (issueId: string, resetForIssue = false) => {
     if (resetForIssue) {
       // A new Issue always opens at its latest message, whatever the previous transcript's scroll was.
-      followLatest = true;
+      setFollowLatest(true);
+      followedTop = 0;
       discardMessageUpdates();
       setEntries([]);
       setFooter(emptyFooter());
@@ -523,18 +539,19 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     streamController.connect(issueId);
   };
   const submit = async () => {
+    const issueId = props.issue.id;
     const record = draftRecord;
-    const editorText = draft();
-    const pendingImages = [...images()];
-    const message = pasteEditor.expand(editorText).trim() || (pendingImages.length ? "请分析这些图片。" : "");
-    if (!message || sending() || !canSend()) return;
+    if (record.sending || !canSend() || !draftStore.isCurrent(issueId, record)) return;
+    const editorText = record.text;
+    const pendingImages = record.images;
+    const message = record.pasteEditor.expand(editorText).trim() || (pendingImages.length ? "请分析这些图片。" : "");
+    if (!message) return;
     if (message.length > issuePilotConfig.limits.agentMessageChars) {
       const failureMessage = `消息共 ${message.length.toLocaleString()} 字符，超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
       record.error = failureMessage;
       setError(failureMessage);
       return;
     }
-    const issueId = props.issue.id;
     const submitGeneration = issueGeneration;
     const submittedEditor = record.pasteEditor;
     record.text = "";
@@ -543,7 +560,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     record.sending = true;
     // The next draft gets its own paste editor; the submitted one returns only if this send fails.
     record.pasteEditor = new PasteEditorModel();
-    pasteEditor = record.pasteEditor;
     setDraftValue("");
     setImagesValue([]);
     setSending(true);
@@ -591,17 +607,14 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (submitCurrent()) {
         setDraftValue(record.text);
         setImagesValue(record.images);
-        pasteEditor = record.pasteEditor;
         setError(failureMessage);
       }
     } finally {
       record.sending = false;
       if (submitCurrent()) {
         setSending(false);
-        // The textarea was disabled while sending; restore its height and caret for the next message.
         queueMicrotask(() => {
-          resizeEditor();
-          editor?.focus();
+          if (submitCurrent()) editor?.focus({ preventScroll: true });
         });
       }
       // A remounted panel for this Issue reloads the record's outcome.
@@ -609,7 +622,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     }
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {
-    setEditorDraft(edit.value);
+    setDraft(edit.value);
     queueMicrotask(() => {
       textarea.focus();
       textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd);
@@ -635,7 +648,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       }
       setImages([...current, ...accepted.map((file) => ({ file, url: URL.createObjectURL(file) }))]);
     }
-    const edit = pasteEditor.insert(draft(), textarea.selectionStart ?? draft().length, textarea.selectionEnd ?? draft().length, clipboard?.getData("text/plain") ?? "");
+    const edit = draftRecord.pasteEditor.insert(draft(), textarea.selectionStart ?? draft().length, textarea.selectionEnd ?? draft().length, clipboard?.getData("text/plain") ?? "");
     if (!edit) return;
     event.preventDefault();
     applyEditorResult(textarea, edit);
@@ -644,9 +657,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const textarea = event.currentTarget;
     const start = textarea.selectionStart ?? textarea.value.length;
     const end = textarea.selectionEnd ?? textarea.value.length;
-    const edit = pasteEditor.reconcile(textarea.value, start, end);
+    const edit = draftRecord.pasteEditor.reconcile(textarea.value, start, end);
     if (edit.value === textarea.value && edit.selectionStart === start && edit.selectionEnd === end) {
-      setEditorDraft(edit.value);
+      setDraft(edit.value);
       return;
     }
     applyEditorResult(textarea, edit);
@@ -656,11 +669,11 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const start = textarea.selectionStart ?? 0;
     const end = textarea.selectionEnd ?? start;
     if (start === end) {
-      const cursor = pasteEditor.snapCursor(draft(), start, "nearest");
+      const cursor = draftRecord.pasteEditor.snapCursor(draft(), start, "nearest");
       if (cursor !== start) textarea.setSelectionRange(cursor, cursor);
       return;
     }
-    const selection = pasteEditor.expandSelection(draft(), start, end);
+    const selection = draftRecord.pasteEditor.expandSelection(draft(), start, end);
     if (selection.start !== start || selection.end !== end) textarea.setSelectionRange(selection.start, selection.end);
   };
   const handleEditorKeyDown = (event: KeyboardEvent & { currentTarget: HTMLTextAreaElement }) => {
@@ -669,7 +682,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const start = textarea.selectionStart ?? 0;
     const end = textarea.selectionEnd ?? start;
     if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !event.shiftKey && start === end) {
-      const cursor = pasteEditor.snapCursor(draft(), start, event.key === "ArrowLeft" ? "backward" : "forward");
+      const cursor = draftRecord.pasteEditor.snapCursor(draft(), start, event.key === "ArrowLeft" ? "backward" : "forward");
       if (cursor !== start) {
         event.preventDefault();
         textarea.setSelectionRange(cursor, cursor);
@@ -677,7 +690,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       return;
     }
     if (event.key === "Backspace" || event.key === "Delete") {
-      const edit = pasteEditor.delete(draft(), start, end, event.key === "Backspace" ? "backward" : "forward");
+      const edit = draftRecord.pasteEditor.delete(draft(), start, end, event.key === "Backspace" ? "backward" : "forward");
       if (edit) {
         event.preventDefault();
         applyEditorResult(textarea, edit);
@@ -703,31 +716,46 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   );
   onCleanup(() => {
     issueGeneration += 1;
-    transcriptObserver?.disconnect();
     discardMessageUpdates();
     streamController.dispose();
   });
 
   return (
     <section ref={panel} class="agent-panel" aria-label={`${props.issue.id} Agent 会话`} tabindex={0} hidden={props.hidden} onKeyDown={handlePanelKeyDown}>
-      <div
-        ref={observeTranscript}
-        class="agent-scroll ip-scrollbar ip-scrollbar-dark"
-        onClick={focusConversation}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 32;
-          if (followLatest) clearUnread();
-        }}
-      >
-        <div class="agent-conversation" role="log" aria-live="polite">
-          <For each={entries()} keyed={(entry) => entry.id}>
-            {(entry) => <ConversationItem issue={props.issue} entry={entry()} />}
-          </For>
-          <Show when={!entries().length && connected()}>
-            <div class="agent-empty">还没有对话</div>
-          </Show>
+      <div class="agent-transcript">
+        <div
+          ref={transcript}
+          class="agent-scroll ip-scrollbar ip-scrollbar-dark"
+          onClick={focusConversation}
+          onScroll={(event) => {
+            const { clientHeight, scrollHeight, scrollTop } = event.currentTarget;
+            if (!clientHeight) return;
+            const nearLatest = scrollHeight - clientHeight - scrollTop < 32;
+            // A queued programmatic scroll can arrive after resize but before the ResizeObserver.
+            if (followLatest && !nearLatest && followedTop > 0 && Math.abs(scrollTop - followedTop) < 1) return;
+            setFollowLatest(nearLatest);
+            if (nearLatest) {
+              followedTop = scrollTop;
+              clearUnread();
+            }
+          }}
+        >
+          <div ref={conversation} class="agent-conversation" role="log" aria-live="polite">
+            <For each={entries()} keyed={(entry) => entry.id}>
+              {(entry) => <ConversationItem issue={props.issue} entry={entry()} />}
+            </For>
+            <Show when={!entries().length && connected()}>
+              <div class="agent-empty">还没有对话</div>
+            </Show>
+          </div>
         </div>
+        <Show when={!atLatest()}>
+          <Button class="agent-scroll-latest" shape="round" size="small" icon={<ArrowDown size={14} />} onClick={scrollLatest}>
+            {unread() > 0 ? `${unread()} 条新消息` : "回到最新"}
+          </Button>
+        </Show>
+      </div>
+      <div class="agent-dock ip-scrollbar ip-scrollbar-dark">
         <Show when={queue().steering.length || queue().followUp.length}>
           <div class="agent-queue">
             <For each={queue().steering}>
@@ -746,7 +774,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
             </For>
           </div>
         </Show>
-        <Show when={running() || activity()}>
+        <Show when={processing() || activity()}>
           <div class={`agent-working ${activity()?.tone ?? "info"}`} role="status">
             <i />
             {activity()?.text ?? "处理中…"}
@@ -770,8 +798,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
             </Show>
             <textarea
               ref={editor}
-              rows={1}
+              rows={2}
               aria-label="发送给 Agent"
+              placeholder={canSend() ? "补充消息或粘贴图片…" : "工单已解决，重开后可发送"}
               value={draft()}
               disabled={sending() || !canSend()}
               onInput={handleEditorInput}
@@ -779,6 +808,12 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
               onSelect={protectPasteSelection}
               onKeyDown={handleEditorKeyDown}
             />
+            <div class="agent-composer-actions">
+              <span>Enter 发送 · Shift+Enter 换行</span>
+              <Button type="primary" size="small" aria-label="发送消息" loading={sending()} disabled={!canSubmit()} onClick={() => void submit()}>
+                {sending() ? "发送中" : "发送"}
+              </Button>
+            </div>
           </div>
         </div>
         <Show when={error()}>
@@ -799,11 +834,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
           </div>
         </footer>
       </div>
-      <Show when={unread() > 0}>
-        <Button class="agent-scroll-latest" shape="round" size="small" icon={<ArrowDown size={14} />} onClick={scrollLatest}>
-          {unread()} 条新消息
-        </Button>
-      </Show>
     </section>
   );
 }

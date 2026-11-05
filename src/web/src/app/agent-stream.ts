@@ -127,7 +127,8 @@ export class AgentStreamController {
           });
         }
       } catch {
-        this.callbacks.onError("agent_event_protocol_error");
+        // Skipping a frame leaves both replay and live projections incomplete; recover from persisted events.
+        recover("agent_event_protocol_error");
       }
     });
     source.addEventListener("error", () => recover());

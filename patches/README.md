@@ -27,10 +27,13 @@
 | 约束 | 目的与边界 |
 | --- | --- |
 | Zod 4.6.7 | MCP／DBHub 使用正式 v4，SRT 使用公开 v3，按实际 API 验证 |
-| Fastify Static 的 glob 14.0.3 | 定向修复取消问题及 minimatch 依赖；覆盖预计算路由、特殊文件名和 dotfile 排除 |
-| DOMPurify、seroval 及 plugins | 按 package.json 与配套 Solid 版本维护清洗／序列化 |
+| DOMPurify | Monaco 固定的清洗器版本与应用不同；覆盖为应用版本，避免浏览器构建带入旧副本 |
 
 Forge／Azure 安全修复由正式依赖提供，不叠加旧回补；Pi 内部 undici 约束不重复覆盖。审计不通过修改版本报告、屏蔽公告或降级父依赖凑通过，无公告不等于业务安全。
+
+Fastify Static 10.1.10 已正式依赖 glob 14，因此移除了应用的 glob 强制覆盖；锁文件继续固定 14.0.3。保留预计算路由、特殊文件名和 dotfile 排除回归，不再维护上游已支持的版本替换。
+
+配套的 `solid-js` 和 `@solidjs/web` 已各自固定 seroval／seroval-plugins 1.7.0；移除重复的应用覆盖后，重新解析的锁文件保持字节一致。两个包仍是 Solid 的传递依赖。
 
 ## 升级与退出
 

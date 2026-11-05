@@ -1,13 +1,65 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import fs, { access, chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
 import type { Model } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { createPiModelRuntime, PiAgentModelCatalog, type PiModelRuntime } from "../../src/agent/model-runtime.ts";
+import { errorChain } from "../../src/diagnostics.ts";
+
+for (const cleanupFails of [false, true]) {
+  test(`model initialization retains its private directory until cleanup succeeds (initial cleanup failure: ${cleanupFails})`, async (context) => {
+    const agentDir = await mkdtemp(join(tmpdir(), "issue-pilot-runtime-cleanup-"));
+    const primary = new Error("fixture_model_initialization_failed");
+    const cleanup = Object.assign(new Error("fixture_private_directory_cleanup_failed"), { code: "EACCES" });
+    const runtime = createPiModelRuntime(agentDir);
+    const remove = fs.rm;
+    const makeTemporary = fs.mkdtemp;
+    let directory: string | undefined;
+    let removals = 0;
+    context.mock.method(fs, "mkdtemp", async (prefix: string) => {
+      directory = await makeTemporary(prefix);
+      return directory;
+    });
+    context.mock.method(ModelRuntime, "create", async () => {
+      throw primary;
+    });
+    context.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+      if (args[0] === directory) {
+        removals++;
+        if (cleanupFails && removals === 1) throw cleanup;
+      }
+      return remove(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(runtime.load(), (error) => {
+        if (!cleanupFails) assert.equal(error, primary);
+        else {
+          assert.ok(errorChain(error).includes(primary));
+          assert.ok(errorChain(error).includes(cleanup));
+        }
+        return true;
+      });
+      assert.ok(directory);
+      if (cleanupFails) await access(directory);
+      await Promise.all([runtime.close(), runtime.close()]);
+      assert.equal(removals, cleanupFails ? 2 : 1);
+      await assert.rejects(access(directory), { code: "ENOENT" });
+      await assert.rejects(runtime.load(), /pi_model_runtime_closed/);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      await runtime.close();
+      if (directory) await remove(directory, { recursive: true, force: true });
+      await remove(agentDir, { recursive: true, force: true });
+    }
+  });
+}
 
 function model(provider: string, id: string): Model<"openai-responses"> {
   return {
