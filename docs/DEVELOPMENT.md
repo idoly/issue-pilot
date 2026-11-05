@@ -55,7 +55,22 @@ node --experimental-strip-types --test --test-concurrency=2 tests/http/issue-api
 
 新增行为测试沿用临时根注入模式，避免把上述替代 controller 的成功误当成 Agent 执行成功。手工验证真实能力则按[首张工单路径](DEPLOYMENT.md#首次本地运行)在独立安装中进行。
 
-## 验证
+## 验证入口与边界
+
+以下命令均在仓库根运行。普通检查与独立验收的前置条件不同，不能将 `npm test` 的通过推及所有入口；精确命令以 [package.json](../package.json) 为准。
+
+| 入口 | 前置条件与作用 | 不代表什么／副作用 |
+| --- | --- | --- |
+| `npm run typecheck` | 已安装项目依赖；检查后端与 Web TypeScript | 不执行业务或生成 Web 产物 |
+| `npm test` | Node、项目依赖与所测能力需要的本地工具；后端测试后再运行 jsdom 测试 | 后端失败时不会继续前端；不自动运行 browser／SLS CLI 验收；SSH 缺默认 sshd 可 skip |
+| `npm run build` | 项目依赖；生成 `src/web/dist` | 不启动 API，不验证真实模型；不要在 live dist 原地构建 |
+| `npm run test:ssh` | Linux、rootless Podman、Git／SSH 与 SRT 依赖 | 构建固定名的本地夹具镜像并启动临时容器，不是生产 SSH 验收；镜像会留作缓存 |
+| `npm run test:browser` | 先生成生产 Web 构建，再准备独立 Playwright、Chromium 和系统库 | 真实 HTTP／SSE 和浏览器，但替代 Agent／模型；不会更新文档展示图 |
+| `npm run test:sls-cli` | 实际 aliyun CLI 与 OpenSSL；本地 HTTPS／CONNECT 夹具 | 不读取真实云凭证、不访问真实 SLS，不替代厂商授权验收 |
+
+CI 声明了上述独立验收步骤，具体工具安装见 [ci.yml](../.github/workflows/ci.yml)；必须看对应 Actions 的实际结果，不能因步骤存在就断言已通过。工具不存在、浏览器未安装或 rootless namespace 不可用时，先补齐环境并重新验证，不将跳过或启动失败记作通过。
+
+### 常规检查
 
 ```bash
 npm run typecheck
@@ -96,7 +111,7 @@ Solid 2 使用 compute／callback 形式的 createEffect；callback 只返回清
 
 Markdown 在链接授权解析后清洗 HTML；文件预览同时检查声明和实际字节。Monaco 保存需处理 SHA-256、换行、撤销、自动保存及导航拦截，关闭释放 editor/model。CodeBrowser 动态加载，大型上游 chunk 提醒不通过抬阈值或随意拆分掩盖。
 
-Markdown 解析依赖 marked 18.1.3 的混合围栏、转义链接和未闭合强调符扫描修复。升级时保留页面解析、链接授权及清洗回归；上游解析器修复不替代应用的 DOMPurify 和链接策略。
+Markdown 解析使用锁文件中的 marked；升级时保留混合围栏、转义链接、未闭合强调符、页面解析、链接授权及清洗回归，见 [Markdown.test.tsx](../src/web/src/ui/Markdown.test.tsx) 和[浏览器验收](../tests/browser/acceptance.mjs)。上游解析器修复不替代应用的 DOMPurify 和链接策略。
 
 CodeBrowser／Monaco 按需加载。图标使用主题的明确字段，JSON 使用固定 Monaco 版本提供的 tokenizer，并通过公开 languages API 注册高亮和括号配置；不引入已禁用的 JSON 语言服务及 Worker。升级 Monaco 时复查该 tokenizer 导出及浏览器验收。
 
@@ -104,7 +119,9 @@ CodeBrowser／Monaco 按需加载。图标使用主题的明确字段，JSON 使
 
 `tests/browser/acceptance.mjs` 启动临时 SQLite、Issue 根、Git worktree 和真实 HTTP/SSE 服务，再用生产构建与 Chromium 检查高亮、查找、粘贴、保存、CRLF、撤销／重做、差异、冲突、导航、Agent 草稿及选区。会话场景还覆盖 40 条实时历史、浏览历史时的未读提示和滚动位置、长草稿、键盘展开思考内容、点击发送及焦点恢复。Agent 执行器和模型目录使用测试实现，不发起远程模型请求。脚本最后关闭浏览器／API 并删除其临时状态；输出浏览器版本、源码基线／diff 哈希、视口、场景及加载资源。
 
-CI 同时执行 SSH 夹具和真实浏览器验收；本机结果不代表远程 Actions 已运行。Playwright 是独立验收工具，不加入应用依赖。Linux 需要浏览器系统库和中文字体（如 `fonts-noto-cjk`）；CI 显式安装这些依赖。本地示例：
+Playwright 是独立验收工具，不加入应用依赖。以下 Bash 示例只在**自己的独立开发 checkout**执行：脚本固定读取仓库的 `src/web/dist`，不要对正在提供服务的目录执行构建。Linux 先准备浏览器系统库和中文字体（如 `fonts-noto-cjk`）；`install --only-shell` 只下载浏览器，不会安装这些系统包，CI 的安装方式见 [ci.yml](../.github/workflows/ci.yml)。工具安装需要网络，既不修改应用依赖，也不修改全局 Pi 配置。
+
+逐步执行，任一步失败先停止，不继续使用缺失或旧构建做验收：
 
 ```bash
 verification_root=$(mktemp -d)
@@ -117,7 +134,15 @@ ISSUE_PILOT_BROWSER_ARTIFACTS="$verification_root/artifacts" \
 npm run test:browser
 ```
 
-截图输出可选，仅包含本次夹具；检查完日志和截图后可删除自己创建的 `verification_root`。这些变量只配置验收工具，不能覆盖应用的生产状态路径。
+截图输出可选：设置 `ISSUE_PILOT_BROWSER_ARTIFACTS` 时输出 `application.png`、`code-1280.png`，失败时尝试保存 `failure.png`；它们仅包含本次夹具，不是 README 展示图。浏览器模块变量指向已安装工具的 `index.mjs`，浏览器路径须与下载时一致；不设置模块变量则尝试普通 `playwright` 包解析。
+
+成功日志含浏览器版本、源码 commit、受检源文件 diff 哈希、视口、场景和资源，不应仅凭生成图片判断通过。验收脚本始终尝试关闭浏览器／API 并删除临时业务 state，但不会删除外部工具与截图目录；检查完日志和图片后，在同一 Shell 确认 `verification_root` 是本次 `mktemp` 的路径，再执行：
+
+```bash
+rm -rf -- "$verification_root"
+```
+
+这些环境变量只配置验收工具，不能覆盖应用的生产状态路径。
 
 本地协议夹具不能替代实际厂商验收。模型、DMS/SLS、钉钉及外部 MCP 需要明确的独立测试目标、受控凭证位置、允许的只读查询与预期结果；不得自行选择生产连接，也不得用协议模拟结果声称外部系统已通过。
 
@@ -125,11 +150,13 @@ npm run test:browser
 
 安装与 [Containerfile](../Containerfile) 一致的 aliyun CLI 和 OpenSSL 后执行 `npm run test:sls-cli`。测试使用真实 CLI、临时 0600 凭证配置和本地 HTTPS 服务，覆盖分页、来源、后续页拒绝、证据不完整、输出预算与进程取消；不读取真实云凭证或访问云端。临时自签名证书仅由该子进程信任，精确目标的 CONNECT 代理将 SLS 的 project 子域名映射到回环地址，不修改 DNS 或关闭 TLS 校验。服务、套接字、配置和证书在测试结束时清理。
 
-普通 `npm test` 不要求外部 CLI；此验收独立运行，缺少工具直接失败。CI 从 Containerfile 读取 CLI 版本并执行该入口。它能验证 SDK／CLI 的实际协议形态，真实厂商权限、数据及网络仍需独立测试目标验收。
+普通 `npm test` 不要求外部 CLI；此验收独立运行，缺少工具直接失败。CI 从 Containerfile 读取 CLI 版本并执行该入口。它验证应用调用真实 CLI 的协议形态，真实厂商权限、数据及网络仍需独立测试目标验收。诊断输出包含本次 CLI 实际版本；`test:sls-cli` 本身不强制安装版本，因此与生产一致性还需核对 Containerfile，不能只看测试通过。
 
 ## 页面图维护
 
-[页面图](images/README.md) 用当前源码的独立应用、演示 SQLite／JSONL、临时本地 Git 和替代 Agent controller 生成，不读真实业务、不调用模型或外部查询。记录 sourceCommit、Web tree、浏览器版本、视口和 SHA-256；不要把旧图说成当前验收。
+[页面图](images/README.md) 是按 manifest 标明源码版本留存的展示材料，不随文本指南同步而自动更新。重新捕获时使用当前源码的独立应用、演示 SQLite／JSONL、临时本地 Git 和替代 Agent controller，不读真实业务、不调用模型或外部查询。记录 sourceCommit、Web tree、浏览器版本、视口和 SHA-256；只有实际重拍并校验后才更新图片与 manifest，不把旧图说成当前验收。
+
+仓库没有四张展示图的独立生成脚本；`test:browser` 是固定场景的交互验收，不负责生成运营首页、工单、代码浏览器和参数页的完整展示组。若仅更新文字，保留原图和捕获记录，明确引用版本。
 
 可在临时工具目录安装 Playwright，不增加应用依赖、不修改全局 Pi 设置。中文字体在临时 fontconfig 中引用，不能分发系统字体。检查截图文本、状态、加载完成、无页面异常和横向溢出，结束关闭浏览器／服务器并删除临时安装。
 

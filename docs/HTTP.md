@@ -62,6 +62,16 @@ HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不�
 
 `resetSession: true` 的组合编辑在 scope／工单预约内先重检 developer 权限、未解决状态和当前会话，再保存字段／附件并执行重置。已解决或未绑定会话的预检拒绝发生在保存前；会话在预检后变化、丢失或重置事务失败等情况，统一返回 `500 issue_saved_session_reset_failed`，明确表示字段／附件已保存而重置未成功。此时先重读详情和会话列表，只重试独立重置，不要重复上传附件；独立重置接口要求 `expectedSessionId`。其他失败也应按实际错误与当前状态判断，不为所有接口承诺原子回滚。实现见 [工单路由](../src/http/issue-routes.ts)，回归见 [session-reset.test.ts](../tests/http/session-reset.test.ts)，操作见[使用指南](USAGE.md#重置会话)。
 
+### 钉钉导入
+
+`GET /api/dingtalk/source` 返回当前用户、记录 URL 偏好和所选连接是否可用；这只是配置检查，不证明上游可连接或具有记录权限。
+
+`POST /api/dingtalk/import` 使用 JSON，必填 `url`、`serviceKey`、`workMode`、`priority`，可选 `assigneeSubject`、`startAgent`，其他字段拒绝。HTTP 的 `startAgent` 只有显式 `true` 才启动，省略为不启动；页面显式选择启动，MCP 的默认值另见[协议](CONFIGURATION.md#入站工单-mcp)。
+
+正常返回 `200`，body 含 `user`、`status: "created" | "existing"`、`issueKey` 和可选 `assignee`；`created` 证明本次导入完成，`existing` 表示返回已有工单，均不能作为 Agent 成功的证明。来源及手工同名匹配规则集中在[配置指南](CONFIGURATION.md#服务-mcp-与钉钉)，先核对返回编号、服务和环境，不能仅凭标题判断创建了新工单。
+
+单次请求在开始时创建 `mcpExecutionMs` 超时信号，供本次导入共享，客户端断开也会发出取消信号；到期是请求取消，不保证在该毫秒数内结束排队、上游处理和失败清理。普通超时／取消返回 `408 dingtalk_request_cancelled_or_timed_out`（若连接已断则无法接收）。响应流或暂存文件清理失败时不会降格成 408，而是记录内部 `dingtalk_attachment_cleanup_failed` 并返回 500，公开 body 可能为 `internal_error` 或匹配到的附件清理码，不保证透传内部码。失败或响应不明时先查询是否已有工单，不因超时自动认定数据未写入。实现和回归见 [dingtalk-routes.ts](../src/http/dingtalk-routes.ts)、[dingtalk.test.ts](../tests/http/dingtalk.test.ts)。
+
 ### 最小只读检查
 
 下列 Bash 命令在已启动的**本地独立演示安装**上执行；subject 替换为自己的活跃用户，不要直接对不明实例发送写请求。这里只检查身份和目录，不调用模型、不创建工单：
@@ -81,6 +91,8 @@ curl --fail-with-body -sS -H "X-Issue-Pilot-Subject: $SUBJECT" "$BASE_URL/api/ca
 工单创建 201、消息发送 202、retry 202 只确认对应阶段完成，不证明模型请求、工具或修复成功。客户端在受理后读取详情的 `agentRunning`、`workspace.status`、`status` 并观察对话；失败时同时保留错误码和工单编号。页面关闭和 SSE 断连不取消 Engine 工作；服务重启也不是重试或撤销机制。
 
 `GET /api/issues/:key/agent-stream` 返回 `text/event-stream`。顺序为持久对话／当前轮次回放 → `event: snapshot_ready` → live 事件及 heartbeat；snapshot 含 `running`、`runState`、`issueStatus`、模型与 footer。普通数据帧为 `id:` 加 `data:` JSON，named events 另有 `event:` 字段。断开后重新连接会重放，不是按 `Last-Event-ID` 增量续传；客户端须按持久 entry ID／事件 ID 去重，并以快照替换统计。慢连接超预算会断开，不应承诺所有瞬时事件永久可取。网关关闭缓冲并保留长连接，详见 [sse.ts](../src/http/sse.ts) 与 [Web 投影](../src/web/src/app/agent-stream.ts)。
+
+当前 Web 收到无法解析或已校验字段非法的消息／快照时，会作废连接并重新回放，而不是跳过坏帧继续累加；旧连接的迟到事件被 generation 检查拒绝。这里只描述客户端已实现的检查，不等于对每个 Pi 事件做完整 Schema 验证。行为回归见 [agent-stream.test.ts](../src/web/src/app/agent-stream.test.ts)。
 
 历史会话用 `GET /api/issues/:key/sessions` 发现 sessionId，再调用 `GET /api/issues/:key/sessions/:sessionId?offset=0`，每页固定 50 个事件，返回 `{ events, nextOffset }`；offset 为非负整数，`nextOffset=null` 到末尾。不要与入站 MCP 的 `{ items, total, offset, nextOffset }` 分页或 Source 的专用分页混用。
 

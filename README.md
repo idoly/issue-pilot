@@ -20,7 +20,7 @@ Issue Pilot 是一个基于 [Pi Coding Agent](https://www.npmjs.com/package/@ear
 
 ## 界面
 
-以下为当前源码在独立演示环境中的截图，人员、工单和调查结论均为虚构，不包含真实业务数据。
+以下为独立演示环境中留存的界面截图，人员、工单和调查结论均为虚构，不包含真实业务数据。截图对应 [manifest](docs/images/manifest.json) 记录的源码版本，并非每次文档更新都会重新捕获；当前交互以[使用指南](docs/USAGE.md)和实际页面为准。
 
 ### 运营首页
 
@@ -46,7 +46,7 @@ Issue Pilot 是一个基于 [Pi Coding Agent](https://www.npmjs.com/package/@ear
 
 ![运行参数配置](docs/images/parameters.jpg)
 
-截图版本、生成方式和校验值见[页面图说明](docs/images/README.md)。
+截图版本、生成方式和校验值见[页面图说明](docs/images/README.md)。可重复的当前代码浏览器／会话验收见[开发指南](docs/DEVELOPMENT.md#可重复的真实浏览器验收)，验收截图与这里的展示图不是同一组产物。
 
 ## 运行与配置
 

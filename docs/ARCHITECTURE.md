@@ -87,9 +87,9 @@ SQLite rollback 不恢复文件或 Git；owner 协调 prepare、rollback、final
 
 [production.ts](../src/http/production.ts) 使用统一脱敏诊断。关闭先停止接收、结束 SSE，允许在途请求完成，有界关闭卡住连接，并等待 Engine／协议／数据库／租约释放。不能仅停监听端口就宣称所有写入已结束。
 
-运行视图准备失败时须先写回 `runtimeReady=false`，才能报告该工单受阻并继续启动；写回失败属于启动失败，保留准备与数据库两个原因。批次及每张工单的并行准备全部结束后才返回，防止启动回滚或后续生命周期操作与遗留 Git／文件操作重叠。
+运行视图准备失败时须先写回 `runtimeReady=false`，才能报告该工单受阻并继续启动；写回失败属于启动失败，保留准备与数据库两个原因。批次及每张工单的并行准备全部结束后才返回，防止启动回滚或后续生命周期操作与遗留 Git／文件操作重叠。对应 owner 为 [runtime.ts](../src/workspace/runtime.ts)、[project.ts](../src/workspace/project.ts)，回归为 [runtime.test.ts](../tests/workspace/runtime.test.ts)、[read-only.test.ts](../tests/workspace/read-only.test.ts)。
 
-启动回滚和正常退出共用幂等清理顺序：停止维护、关闭 Engine、等待配置队列、关闭模型运行时、数据库，最后释放租约；每个 owner 都会被尝试关闭。组装或监听失败同时遇到清理失败时聚合报告，不能丢弃次级错误。
+启动回滚和正常退出共用幂等清理顺序：停止维护、关闭 Engine、等待配置队列、关闭模型运行时、数据库，最后释放租约；每个 owner 都会被尝试关闭。组装或监听失败同时遇到清理失败时聚合报告，不能丢弃次级错误。此顺序表示清理尝试及错误保留，不保证文件系统故障后已完成全部释放；恢复边界见[运维手册](RUNBOOK.md#启动与清理失败的处理边界)，回归见 [api-startup.test.ts](../tests/http/api-startup.test.ts)。
 
 ## Web 与事件投影
 
@@ -101,9 +101,9 @@ SSE 顺序为持久／当前回放、snapshot_ready、live 与 heartbeat。历�
 
 会话使用不可变归约和 Solid keyed For，块按 contentIndex 保持身份；流式不解析 Markdown，工具详情惰性挂载。CodeBrowser 按需加载，独立释放 editor／model，维护撤销、冲突与导航状态。统计采样和排序优化不代替实际操作前重新检查。
 
-实时归约保留既有条目 ID 和顺序，只原位更新或追加；未读计数只处理追加部分，完整快照仍独立替换。滚动仅跟随可见且停在末尾的会话，观察内容与视口尺寸，晚加载图片和展开详情也能正确跟随。输入区不随历史滚动；已完成的思考内容在展开时才渲染 Markdown。
+实时归约保留既有条目 ID 和顺序，只原位更新或追加；未读计数只处理追加部分，完整快照仍独立替换。可见且停在末尾时跟随新内容，浏览历史或隐藏会话时不强制拉到底部；输入区独立于历史滚动，完成的思考内容按需展开。用户操作见[使用指南](USAGE.md#阅读与补充)，owner 为 [AgentPanel.tsx](../src/web/src/app/AgentPanel.tsx)。
 
-Web 构建保留代码浏览器和 Monaco 的按需入口。JSON 仅加载上游 tokenizer 和本地编辑配置，避免禁用的语言服务重新注册整套编辑器功能；图标主题通过明确字段导入，未使用的主题变体由构建移除。对应真实浏览器验收入口见[开发指南](DEVELOPMENT.md#可重复的真实浏览器验收)。
+代码浏览器、Monaco 和按需工具详情不承担业务授权；编辑器构建与升级约定集中在[开发指南](DEVELOPMENT.md#web-与浏览器)，真实布局、交互和 SSE 验收见[浏览器验收](DEVELOPMENT.md#可重复的真实浏览器验收)。
 
 ## 安全与持久边界
 

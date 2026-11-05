@@ -118,6 +118,20 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 
 静态检查通过只能证明对应文件／配置可见；health、路由测试、真实模型／SSH／sandbox／外部查询分别验证并分别记录。启动、关闭和错误映射依据为 [api.ts](../src/http/api.ts)，租约依据为 [state-lease.ts](../src/workspace/state-lease.ts)，模型目录依据为 [model-runtime.ts](../src/agent/model-runtime.ts)。
 
+## 启动与清理失败的处理边界
+
+以下是内部诊断／日志中的阶段码，不是每项都原样出现在 HTTP body。启动失败时尚无可用 API，先保存完整的脱敏原因链，再判断是否已经释放资源；不要只根据最外层错误或一次 health 失败做恢复决定。
+
+| 阶段／诊断 | 已确认行为与下一步 |
+| --- | --- |
+| `workspace_runtime_state_failed` | 运行视图准备失败且 readiness 写回也失败；等待同批准备全部结束后令启动失败。检查 SQLite 可写性、空间／权限和原始准备原因，不直接将 `runtimeReady` 改回 true |
+| `api_startup_cleanup_failed` | 组装失败同时清理失败；各已初始化 owner 都会尝试关闭。核对进程／子进程、DB 和租约现场，不能认定失败返回即已安全释放 |
+| `api_listen_cleanup_failed` | 监听失败后关闭也失败；同时检查端口占用和清理原因，信号处理器会移除，不自动换端口或启动第二实例 |
+| `pi_model_runtime_cleanup_failed` | 模型运行时初始化及私有临时目录清理同时失败；目录所有权保留给后续 close 尝试。检查临时文件系统，不尝试切换 Key、重发模型请求或宽泛清理 `/tmp` |
+| `dingtalk_attachment_cleanup_failed` | 下载响应或暂存清理未完成，可能同时发生取消／超时；服务端按失败记录，不把它当作安全取消。先核对导入结果、暂存路径与日志，不循环导入或删除未知目录 |
+
+启动／监听回滚与正常退出共用清理顺序，细节与代码证据见[架构](ARCHITECTURE.md#启动与关闭)。模型临时目录属于凭证敏感状态，钉钉下载可能携带私密业务文件；检查与恢复不应把目录内容、签名 URL 或完整上游错误复制到公开日志。单元／本地协议回归入口见[开发指南](DEVELOPMENT.md#验证入口与边界)，不能替代故障实例的一致性检查。
+
 ## 常见故障
 
 | 类别 | 处理 |
@@ -133,7 +147,9 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 | 查询限流／不完整 | 遵守来源、只读和预算，已发送 SQL 不自动重放 |
 | rollback/finalize 失败 | 保存现场与所有原因，停止重复 mutation |
 
-代理 DNS 返回 198.18.0.0/15 不等于必然失败；以真实 SSH 握手和严格 known_hosts 校验判断，不能关闭主机验证。SSE 检查 replay/snapshot/live、代理缓冲与 generation。远端推送成功但本地 upstream 写入失败先查远端，不重复推送。
+代理 DNS 返回 198.18.0.0/15 不等于必然失败；以真实 SSH 握手和严格 known_hosts 校验判断，不能关闭主机验证。远端推送成功但本地 upstream 写入失败先查远端，不重复推送。
+
+SSE 频繁重连时先检查浏览器的 `agent_event_connection_failed`／`agent_event_protocol_error`、代理缓冲与超时，以及 replay → snapshot_ready → live 的顺序。协议错误会触发整轮回放，旧连接迟到帧应被 generation 拒绝；不能通过忽略坏帧或累加旧 footer 来“修复”页面。浏览历史时不自动跟随新内容是正常交互，使用「回到最新」或新消息按钮；刷新页面不取消服务端任务。依据见 [HTTP SSE 约定](HTTP.md#异步执行sse-与分页)及 [AgentPanel](../src/web/src/app/AgentPanel.tsx)。
 
 ## 恢复与回退
 

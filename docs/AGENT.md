@@ -42,7 +42,7 @@ include／remove 改变工具范围后，本轮结束关闭会话，下一轮按
 
 仅接受 Complete；SQL 分析按 LIMIT／ORDER BY 返回一页，普通查询 offset 分页，后页失败整次失败。已知错误映射稳定码，未知 CLI 文本隐藏。凭证清理失败优先报告 sls_credential_cleanup_failed，同时保留原查询／取消原因。
 
-分页按每页序列化大小累积保守上界，仅接近预算时精确复核历史记录，避免每页重复处理全部结果。最终响应仍按完整 JSON 的 UTF-8 字节数校验，包含查询元数据；任何一页或累积结果超限即失败，不继续请求下一页。SQL 大结果逐项收集，不受 JavaScript 调用参数数量限制。
+分页期间累计结果仍受预算限制，不是每页成功就向用户交付部分成功。单次 CLI stdout 和最终完整 JSON 都有 UTF-8 字节预算，后者还包含来源／查询元数据；任何一页、累积记录或最终结果超限整次失败，不自动重放。普通分页按记录数推进 offset、返回 newest_first；SQL 分析保留查询顺序和 LIMIT，不承诺额外分页。实现见 [sls-cli.ts](../src/capabilities/sls-cli.ts)，边界回归见 [sls.test.ts](../tests/capabilities/sls.test.ts)，真实 CLI 的本地协议验收见[开发指南](DEVELOPMENT.md#真实-sls-cli-协议验收)。
 
 ### 外部数据库与敏感结果
 
@@ -64,7 +64,7 @@ Codemode off 为直接调用，on 为直接工具与编排并存，only 主要�
 
 模型组由 SQLite 的 owner／共享规则选择，Operator 认证不会混入请求。资源使用运行用户全局 Pi 目录，工单扩展不加载；资源检查不执行扩展。只读轮次结束关闭会话，下轮重新准备快照并恢复对话，开发空闲会话可复用。
 
-模型运行时只在私有临时目录删除成功后放弃该目录的所有权。初始化与清理同时失败时保留两个原因，随后 `close()` 仍尝试清理；并发关闭共用同一个 Promise，关闭后不再接受加载。持久文件系统故障仍需 Operator 处理，不自动重试模型请求或切换凭证。
+模型运行时只在私有临时目录删除成功后放弃该目录的所有权。初始化与清理同时失败时保留两个原因，随后 `close()` 仍尝试清理；并发关闭共用同一个 Promise，关闭后不再接受加载。持久文件系统故障仍需 Operator 处理，不自动重试模型请求或切换凭证。依据：[model-runtime.ts](../src/agent/model-runtime.ts)、[初始化与清理失败回归](../tests/agent/model-runtime.test.ts)；遇到此类错误先按[运维清理故障](RUNBOOK.md#启动与清理失败的处理边界)检查，不手工删除不明临时目录。
 
 ## 消息接收与恢复
 
