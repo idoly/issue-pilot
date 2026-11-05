@@ -151,7 +151,7 @@ export function EndpointConfiguration() {
                 </Show>
                 <details class="endpoint-tools">
                   <summary>可用工具（{endpoint.tools.length}）</summary>
-                  <div class="endpoint-tool-list">
+                  <div class="endpoint-tool-list ip-scrollbar" role="region" aria-label="工具列表" tabindex={0}>
                     <For each={endpoint.tools}>
                       {(tool) => (
                         <div class="endpoint-tool">

@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
@@ -65,7 +66,7 @@ try {
   await prepareIssueRuntime(root, issue.key, [{ name: "application", repositoryPath: checkout }], "write");
   const origin = await app.listen({ host: "127.0.0.1", port: 0 });
   assert.equal((await fetch(`${origin}/health`)).status, 200);
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ["--hide-scrollbars"] });
   page = await browser.newPage({ viewport: { width: 1680, height: 1050 }, permissions: ["clipboard-read", "clipboard-write"] });
   page.setDefaultTimeout(15000);
   const failures = [];
@@ -252,6 +253,17 @@ try {
   if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) {
     await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, "code-1280.png"), fullPage: true });
   }
+  for (let index = 0; index < 20; index += 1) {
+    const suffix = String(index).padStart(2, "0");
+    const email = `member-${suffix}@example.test`;
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/users",
+      headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+      payload: { subject: email, name: `Scroll fixture member ${suffix}`, email, role: "product" },
+    });
+    assert.equal(response.statusCode, 201, response.body);
+  }
   await page.getByRole("radio", { name: "配置", exact: true }).click();
   const settingsTabs = page.getByRole("tablist", { name: "配置分类" });
   await settingsTabs.getByRole("tab", { name: "仓库", exact: true }).click();
@@ -259,9 +271,19 @@ try {
   const list = repositories.getByRole("region", { name: "仓库列表" });
   const add = repositories.getByRole("button", { name: "登记仓库" });
   const group = repositories.getByRole("combobox", { name: "仓库分组" });
+  const assertSubtleScrollbar = async (area) => {
+    const style = await area.evaluate((node) => {
+      const { scrollbarWidth, scrollbarColor, scrollbarGutter } = getComputedStyle(node);
+      return { scrollbarWidth, scrollbarColor, scrollbarGutter };
+    });
+    assert.equal(style.scrollbarWidth, "thin");
+    assert.match(style.scrollbarColor, / rgba\(0, 0, 0, 0\)$/);
+    assert.equal(style.scrollbarGutter, "auto");
+  };
   const scrollToEnd = async (area) => {
     const tabsTop = (await settingsTabs.boundingBox()).y;
-    assert.ok(await area.evaluate((node) => node.scrollHeight > node.clientHeight));
+    assert.ok(await area.evaluate((node) => getComputedStyle(node).overflowY === "auto" && node.scrollHeight > node.clientHeight));
+    await assertSubtleScrollbar(area);
     await area.press("End");
     await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await area.elementHandle());
     assert.equal((await settingsTabs.boundingBox()).y, tabsTop);
@@ -282,6 +304,7 @@ try {
   await selectGroup("mall");
   await list.getByText(mallRepository, { exact: true }).waitFor();
   assert.equal(await list.getByText(mdmRepositories[0], { exact: true }).count(), 0);
+  assert.ok(await list.evaluate((node) => node.scrollHeight === node.clientHeight && node.offsetWidth === node.clientWidth));
   await selectGroup("全部");
 
   const settingsViewport = { width: 520, height: 540 };
@@ -291,16 +314,65 @@ try {
     const box = await control.boundingBox();
     assert.ok(box.x >= 0 && box.x + box.width <= settingsViewport.width);
   }
-  for (const [tab, ready] of [
-    ["用户", () => page.getByRole("region", { name: "人员管理" }).waitFor()],
-    ["服务", () => page.getByRole("tablist", { name: "服务列表" }).getByRole("tab", { name: "grouped", exact: true }).click()],
-    ["端点", () => page.locator(".endpoint-tools > summary").click()],
-    ["参数", () => page.getByRole("button", { name: "保存参数" }).waitFor()],
-  ]) {
-    await settingsTabs.getByRole("tab", { name: tab, exact: true }).click();
-    await ready();
-    await scrollToEnd(page.getByRole("tabpanel", { name: tab, exact: true }));
-  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await settingsTabs.getByRole("tab", { name: "用户", exact: true }).click();
+  const usersPanel = page.getByRole("tabpanel", { name: "用户", exact: true });
+  const people = usersPanel.getByRole("region", { name: "人员列表" });
+  const credentials = usersPanel.getByRole("region", { name: "我的凭证" });
+  const searchPeople = usersPanel.getByRole("textbox", { name: "搜索人员" });
+  const addPerson = usersPanel.getByRole("button", { name: "添加人员" });
+  const tableHeading = people.getByRole("columnheader", { name: "成员" });
+  await people.getByText("Scroll fixture member 19", { exact: true }).waitFor();
+  const fixedControls = [credentials, searchPeople, addPerson, tableHeading];
+  const fixedPositions = await Promise.all(fixedControls.map((control) => control.boundingBox()));
+  await scrollToEnd(people);
+  assert.deepEqual(await Promise.all(fixedControls.map((control) => control.boundingBox())), fixedPositions);
+  assert.ok(await usersPanel.evaluate((node) => node.scrollHeight === node.clientHeight));
+  await searchPeople.fill("member 19");
+  assert.equal(await people.getByText("Scroll fixture member 00", { exact: true }).count(), 0);
+  assert.ok(await people.evaluate((node) => node.scrollHeight === node.clientHeight && node.offsetWidth === node.clientWidth));
+  await searchPeople.clear();
+  await page.setViewportSize(settingsViewport);
+  await people.scrollIntoViewIfNeeded();
+  await scrollToEnd(people);
+
+  const endpointsViewport = { width: 1280, height: 1100 };
+  await page.setViewportSize(endpointsViewport);
+  await settingsTabs.getByRole("tab", { name: "端点", exact: true }).click();
+  const endpointsPanel = page.getByRole("tabpanel", { name: "端点", exact: true });
+  const toolsToggle = endpointsPanel.locator(".endpoint-tools > summary");
+  const tools = endpointsPanel.getByRole("region", { name: "工具列表" });
+  const copyConfig = endpointsPanel.getByRole("button", { name: "复制配置" });
+  await toolsToggle.waitFor();
+  await tools.waitFor({ state: "hidden" });
+  const copyPosition = await copyConfig.boundingBox();
+  await toolsToggle.press("Enter");
+  await tools.waitFor();
+  const togglePosition = await toolsToggle.boundingBox();
+  await scrollToEnd(tools);
+  assert.deepEqual(await copyConfig.boundingBox(), copyPosition);
+  assert.deepEqual(await toolsToggle.boundingBox(), togglePosition);
+  assert.ok(await endpointsPanel.evaluate((node) => node.scrollHeight === node.clientHeight));
+  await toolsToggle.press("Enter");
+  await tools.waitFor({ state: "hidden" });
+
+  await page.setViewportSize(settingsViewport);
+  await toolsToggle.click();
+  await tools.scrollIntoViewIfNeeded();
+  const endpointsScrollTop = await endpointsPanel.evaluate((node) => node.scrollTop);
+  await scrollToEnd(tools);
+  assert.equal(await endpointsPanel.evaluate((node) => node.scrollTop), endpointsScrollTop);
+  await toolsToggle.click();
+  await tools.waitFor({ state: "hidden" });
+
+  await settingsTabs.getByRole("tab", { name: "参数", exact: true }).click();
+  await page.getByRole("button", { name: "保存参数" }).waitFor();
+  await scrollToEnd(page.getByRole("tabpanel", { name: "参数", exact: true }));
+  await settingsTabs.getByRole("tab", { name: "服务", exact: true }).click();
+  const serviceTabsList = page.getByRole("tablist", { name: "服务列表" });
+  await serviceTabsList.getByRole("tab", { name: "grouped", exact: true }).click();
+  await scrollToEnd(page.getByRole("tabpanel", { name: "服务", exact: true }));
+  await assertSubtleScrollbar(serviceTabsList);
   for (let index = 1; index <= 6; index += 1) await createIssue(app, "browser", "dev", `Home scroll fixture ${index}`);
   engine.running.clear();
   const homeViewports = [
@@ -310,32 +382,49 @@ try {
   await page.getByRole("radio", { name: "首页", exact: true }).click();
   const home = page.getByRole("main");
   await home.getByText("Home scroll fixture 1", { exact: true }).waitFor();
+  const assertHiddenScrollbar = async (area) => {
+    assert.equal(await area.evaluate((node) => getComputedStyle(node).scrollbarWidth), "none");
+  };
+  const resetHomeScroll = () => home.evaluate((node) => node.scrollTo({ top: 0, behavior: "instant" }));
   for (const viewport of homeViewports) {
     await page.setViewportSize(viewport);
     const box = await home.boundingBox();
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Home bounds ${box.x}+${box.width} exceed viewport ${viewport.width}`);
     assert.ok(await home.evaluate((node) => node.scrollHeight > node.clientHeight && node.scrollWidth === node.clientWidth));
+    await assertHiddenScrollbar(home);
     const header = page.getByRole("banner");
     const headerPosition = await header.boundingBox();
-    await home.press("Home");
-    await page.waitForFunction((node) => node.scrollTop === 0, await home.elementHandle());
+    await resetHomeScroll();
+    await home.press("End");
+    await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await home.elementHandle());
+    assert.deepEqual(await header.boundingBox(), headerPosition);
     if (viewport.width === homeViewports[0].width) {
+      await resetHomeScroll();
       const activity = home.getByRole("list", { name: "待处理工单" });
       assert.ok(await activity.evaluate((node) => node.scrollHeight > node.clientHeight));
+      await assertHiddenScrollbar(activity);
       await activity.press("End");
       await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await activity.elementHandle());
       assert.equal(await home.evaluate((node) => node.scrollTop), 0);
     }
-    await home.press("End");
-    await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await home.elementHandle());
-    assert.deepEqual(await header.boundingBox(), headerPosition);
   }
   await home.getByRole("tab", { name: "团队", exact: true }).click();
   const assigneeTable = home.getByRole("region", { name: "处理人统计", exact: true });
   assert.ok(await assigneeTable.evaluate((node) => node.scrollWidth > node.clientWidth));
+  await assertHiddenScrollbar(assigneeTable);
   await assigneeTable.press("ArrowRight");
   await page.waitForFunction((node) => node.scrollLeft > 0, await assigneeTable.elementHandle());
   assert.equal(await home.evaluate((node) => node.scrollLeft), 0);
+  await home.getByRole("tab", { name: "分布", exact: true }).click();
+  const distribution = home.getByRole("region", { name: "工单分布", exact: true });
+  await assertHiddenScrollbar(distribution);
+  await distribution.press("ArrowRight");
+  await page.waitForFunction((node) => node.scrollLeft > 0, await distribution.elementHandle());
+  await resetHomeScroll();
+  const homeBounds = await home.boundingBox();
+  await page.mouse.move(homeBounds.x + 8, homeBounds.y + 48);
+  await page.mouse.wheel(0, 240);
+  await page.waitForFunction((node) => node.scrollTop > 0, await home.elementHandle());
   const unexpected = failures.filter((failure) => !/^Failed to load resource: the server responded with a status of 409/.test(failure));
   assert.deepEqual(unexpected, []);
   const inspection = openDatabase(databaseFile);
@@ -353,7 +442,7 @@ try {
         chromium: browser.version(),
         revision,
         sourceDiffSha256: createHash("sha256").update(sourceDiff).digest("hex"),
-        viewports: [{ width: 1680, height: 1050 }, { width: 1280, height: 800 }, settingsViewport, ...homeViewports],
+        viewports: [{ width: 1680, height: 1050 }, { width: 1280, height: 800 }, settingsViewport, endpointsViewport, ...homeViewports],
         issue: issue.key,
         checks: [
           "real HTTP and SQLite",
@@ -379,8 +468,9 @@ try {
           "click sends through HTTP and returns focus to composer",
           "1280px editor layout",
           "repository namespace filter and fixed toolbar",
-          "keyboard scrolling in all five settings panels",
-          "keyboard scrolling on home and in activity list; narrow team table horizontal scrolling",
+          "independent personnel list and expanded endpoint tool list scrolling on desktop and narrow screens",
+          "thin transparent scrollbars and keyboard scrolling in settings",
+          "hidden home scrollbars with wheel, keyboard, independent activity and narrow team table scrolling",
           "health and database integrity",
         ],
         resources,

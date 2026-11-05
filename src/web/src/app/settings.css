@@ -1,4 +1,17 @@
+.users-settings-panel {
+  display: grid;
+  /* Keep the list usable even when the outer panel must scroll on a short screen. */
+  grid-template: auto auto minmax(min(9rem, 30dvh), max-content) / minmax(0, 1fr);
+  align-content: start;
+}
+.users-settings-panel > .personal-credentials {
+  grid-row: 1;
+  margin-bottom: 0;
+}
 .settings-members {
+  display: grid;
+  grid-row: 2 / span 2;
+  grid-template-rows: subgrid;
   margin-top: 24px;
 }
 .personal-credential-summary {
@@ -52,9 +65,22 @@
   flex: 0 0 16px;
   accent-color: #176b5b;
 }
-.settings-table-scroll {
-  overflow-x: auto;
-  scrollbar-gutter: stable;
+.settings-view .ip-scrollbar {
+  --ip-scrollbar-track: transparent;
+  --ip-scrollbar-thumb: #bec7c2;
+  --ip-scrollbar-size: 8px;
+  scrollbar-gutter: auto;
+}
+.settings-table-scroll,
+.endpoint-tool-list {
+  overflow: auto;
+}
+.endpoint-tool-list {
+  max-block-size: min(22rem, 34dvh);
+}
+.settings-table-scroll:focus-visible,
+.endpoint-tool-list:focus-visible {
+  outline-offset: -2px;
 }
 .repository-settings-panel {
   display: flex;
@@ -80,10 +106,9 @@
 }
 .repository-management .settings-table-scroll {
   min-height: 0;
-  overflow: auto;
   overflow-anchor: none;
 }
-.repository-management .settings-table th {
+.settings-table-scroll .settings-table th {
   position: sticky;
   z-index: 1;
   top: 0;
@@ -94,10 +119,6 @@
 }
 .ui-modal-body::-webkit-scrollbar {
   width: 10px;
-}
-.service-repositories {
-  overflow-x: auto;
-  scrollbar-width: auto;
 }
 .settings-table {
   width: 100%;

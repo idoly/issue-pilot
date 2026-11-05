@@ -127,34 +127,36 @@ export function UserManagement() {
   };
   return (
     <section class="user-management-card settings-members" aria-label="人员管理">
-      <header class="user-management-header">
-        <strong>人员</strong>
-        <Show when={currentUser()?.role === "developer"}>
-          <Button type="primary" size="small" disabled={saving()} onClick={() => edit()}>
-            添加人员
-          </Button>
-        </Show>
-      </header>
-      <div class="settings-list-toolbar">
-        <Input aria-label="搜索人员" value={query()} placeholder="搜索姓名或邮箱" onInput={(event) => setQuery(event.currentTarget.value)} />
-        <label>
-          <input type="checkbox" checked={includeInactive()} onChange={(event) => setIncludeInactive(event.currentTarget.checked)} />
-          显示停用人员
-        </label>
-      </div>
-      <Show when={error()}>
-        <div class="user-management-error" role="alert">
-          {error()}
-          <Button
-            size="small"
-            onClick={() => {
-              void refresh(generation);
-            }}
-          >
-            重试
-          </Button>
+      <div>
+        <header class="user-management-header">
+          <strong>人员</strong>
+          <Show when={currentUser()?.role === "developer"}>
+            <Button type="primary" size="small" disabled={saving()} onClick={() => edit()}>
+              添加人员
+            </Button>
+          </Show>
+        </header>
+        <div class="settings-list-toolbar">
+          <Input aria-label="搜索人员" value={query()} placeholder="搜索姓名或邮箱" onInput={(event) => setQuery(event.currentTarget.value)} />
+          <label>
+            <input type="checkbox" checked={includeInactive()} onChange={(event) => setIncludeInactive(event.currentTarget.checked)} />
+            显示停用人员
+          </label>
         </div>
-      </Show>
+        <Show when={error()}>
+          <div class="user-management-error" role="alert">
+            {error()}
+            <Button
+              size="small"
+              onClick={() => {
+                void refresh(generation);
+              }}
+            >
+              重试
+            </Button>
+          </div>
+        </Show>
+      </div>
       <Show
         when={!loading()}
         fallback={
@@ -163,7 +165,7 @@ export function UserManagement() {
           </div>
         }
       >
-        <div class="settings-table-scroll">
+        <div class="settings-table-scroll ip-scrollbar" role="region" aria-label="人员列表" tabindex={0}>
           <table class="settings-table users-management-table">
             <thead>
               <tr>

@@ -50,7 +50,7 @@ export function SettingsView() {
         </For>
       </nav>
       <Show when={visitedPanels().includes("users")}>
-        <div class="settings-panel ip-scrollbar" id="settings-panel-users" role="tabpanel" aria-labelledby="settings-tab-users" tabindex={0} hidden={selectedPanel() !== "users"}>
+        <div class="settings-panel users-settings-panel ip-scrollbar" id="settings-panel-users" role="tabpanel" aria-labelledby="settings-tab-users" tabindex={0} hidden={selectedPanel() !== "users"}>
           <PersonalCredentials />
           <UserManagement />
         </div>

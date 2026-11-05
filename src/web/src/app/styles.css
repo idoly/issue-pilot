@@ -2232,11 +2232,21 @@ summary.agent-tool-head > svg {
 }
 .overview-view {
   height: 100%;
+  overflow-y: auto;
   padding: 24px clamp(16px, 3vw, 42px) 40px;
   background: #f4f6f5;
 }
+.overview-view,
+.overview-view :is(.dashboard-attention-list, .compact-scroll, .distribution-grid) {
+  scrollbar-width: none;
+}
+.overview-view::-webkit-scrollbar,
+.overview-view :is(.dashboard-attention-list, .compact-scroll, .distribution-grid)::-webkit-scrollbar {
+  display: none;
+}
 .overview-view:focus-visible,
 .dashboard-attention-list:focus-visible,
+.distribution-grid:focus-visible,
 .assignee-table:focus-visible {
   outline-offset: -2px;
 }
@@ -2725,7 +2735,6 @@ summary.agent-tool-head > svg {
 .compact-scroll {
   max-height: 220px;
   overflow-y: auto;
-  scrollbar-gutter: stable;
 }
 .assignee-table {
   display: grid;
@@ -3480,7 +3489,6 @@ summary.agent-tool-head > svg {
     display: flex;
     overflow-x: auto;
     scroll-snap-type: x proximity;
-    scrollbar-width: thin;
   }
   .distribution-grid > .statistics-section {
     min-width: min(560px, calc(100vw - 56px));
