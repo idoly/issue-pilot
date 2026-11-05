@@ -87,7 +87,7 @@ export function Dashboard(props: {
               <div class="dashboard-section-heading">
                 <h2 title="异常和执行中优先，其余按最近更新排序">团队工单动态</h2>
               </div>
-              <div class="dashboard-attention-list" role="list">
+              <div class="dashboard-attention-list ip-scrollbar" role="list" aria-label="待处理工单" tabindex={0}>
                 <For each={focusIssues()} keyed={(row) => row.id} fallback={<div class="dashboard-empty">当前没有未解决工单</div>}>
                   {(issue) => {
                     const state = () => executionState(issue());

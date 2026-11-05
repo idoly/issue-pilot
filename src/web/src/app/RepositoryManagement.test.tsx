@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Person } from "../data/client";
@@ -44,4 +44,48 @@ it("shows repository usage and developer controls while retaining the full addre
   expect([...panel.querySelectorAll("th")].map((node) => node.textContent)).toEqual(["名称", "地址", "使用服务", ""]);
   expect(within(panel).getByRole("button", { name: "登记仓库" })).toBeTruthy();
   expect(within(panel).getByRole("button", { name: "编辑" })).toBeTruthy();
+});
+
+it("defaults to all and filters by GitLab's top-level namespace without using service bindings", async () => {
+  state.user = () => ({ ...alice, role: "product" });
+  state.load.mockResolvedValue(
+    [
+      ["Mall front", "git@example.test:digital-biz-projects/xhgj-mall/fronts/mall-front.git"],
+      ["Mall server", "https://example.test/digital-biz-projects/XHGJ-MALL/servers/mall-server.git"],
+      ["MDM docking", "ssh://git@example.test:2222/digital-biz-projects/mdm/docking-servers/mdm-docking.git"],
+      ["Other namespace", "git@example.test:digital-ai-projects/mdm/app.git"],
+      ["Other repository", "git@example.test:digital-biz-projects/crm.git"],
+    ].map(([name, url]) => ({ ...repository, id: name, name, url, services: [{ key: "crm", name: "crm" }] })),
+  );
+  render(() => <RepositoryManagement />);
+  const list = await screen.findByRole("region", { name: "仓库列表" });
+  const filter = screen.getByRole("combobox", { name: "仓库分组" });
+  const choose = async (name: string) => {
+    fireEvent.click(filter);
+    fireEvent.click(await screen.findByRole("option", { name }));
+    await waitFor(() => expect(filter.textContent).toBe(name));
+  };
+  await within(list).findByText("Mall front");
+  expect(filter.textContent).toBe("全部");
+  expect(list.tabIndex).toBe(0);
+  expect(within(list).getAllByRole("row")).toHaveLength(6);
+  expect(screen.queryByRole("button", { name: "登记仓库" })).toBeNull();
+  fireEvent.click(filter);
+  expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["全部", "oms", "srm", "mall", "mdm", "crm", "iqs", "mpm", "其他"]);
+  fireEvent.click(screen.getByRole("option", { name: "mall" }));
+  await waitFor(() => expect(filter.textContent).toBe("mall"));
+  expect(within(list).getAllByRole("row")).toHaveLength(3);
+  expect(within(list).getByText("Mall front")).toBeTruthy();
+  expect(within(list).getByText("Mall server")).toBeTruthy();
+  await choose("mdm");
+  expect(within(list).getAllByRole("row")).toHaveLength(2);
+  expect(within(list).getByText("MDM docking")).toBeTruthy();
+  await choose("crm");
+  expect(within(list).getByText("此分组暂无仓库")).toBeTruthy();
+  await choose("其他");
+  expect(within(list).getByText("Other namespace")).toBeTruthy();
+  expect(within(list).getByText("Other repository")).toBeTruthy();
+  await choose("全部");
+  expect(within(list).getAllByRole("row")).toHaveLength(6);
+  expect(state.load).toHaveBeenCalledOnce();
 });

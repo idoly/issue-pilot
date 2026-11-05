@@ -27,6 +27,9 @@ try {
   const databaseFile = path.join(root, "issues.db");
   app = await buildApi({ stateRoot: root, databaseFile, engine, events, modelCatalog, logger: false, webRoot: path.resolve("src/web/dist") });
   await createService(app, "browser", ["dev"]);
+  const mdmRepositories = Array.from({ length: 24 }, (_, index) => `git@example.test:digital-biz-projects/mdm/servers/repository-${index}.git`);
+  const mallRepository = "https://example.test/digital-biz-projects/xhgj-mall/fronts/mall.git";
+  await createService(app, "grouped", ["dev", "test"], [...mdmRepositories, mallRepository]);
   const created = await createIssue(app, "browser", "dev", "Browser acceptance fixture");
   const database = openDatabase(databaseFile);
   let issue;
@@ -249,6 +252,90 @@ try {
   if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) {
     await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, "code-1280.png"), fullPage: true });
   }
+  await page.getByRole("radio", { name: "配置", exact: true }).click();
+  const settingsTabs = page.getByRole("tablist", { name: "配置分类" });
+  await settingsTabs.getByRole("tab", { name: "仓库", exact: true }).click();
+  const repositories = page.getByRole("region", { name: "仓库管理" });
+  const list = repositories.getByRole("region", { name: "仓库列表" });
+  const add = repositories.getByRole("button", { name: "登记仓库" });
+  const group = repositories.getByRole("combobox", { name: "仓库分组" });
+  const scrollToEnd = async (area) => {
+    const tabsTop = (await settingsTabs.boundingBox()).y;
+    assert.ok(await area.evaluate((node) => node.scrollHeight > node.clientHeight));
+    await area.press("End");
+    await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await area.elementHandle());
+    assert.equal((await settingsTabs.boundingBox()).y, tabsTop);
+  };
+  const selectGroup = async (name) => {
+    await group.click();
+    await page.getByRole("listbox", { name: "仓库分组" }).getByRole("option", { name, exact: true }).click();
+  };
+  await list.getByText(mallRepository, { exact: true }).waitFor();
+  assert.equal(await group.innerText(), "全部");
+  const addPosition = await add.boundingBox();
+  await scrollToEnd(list);
+  assert.deepEqual(await add.boundingBox(), addPosition);
+  await selectGroup("mdm");
+  await list.getByText(mdmRepositories[0], { exact: true }).waitFor();
+  assert.equal(await list.getByText(mallRepository, { exact: true }).count(), 0);
+  await page.waitForFunction((node) => node.scrollTop === 0, await list.elementHandle());
+  await selectGroup("mall");
+  await list.getByText(mallRepository, { exact: true }).waitFor();
+  assert.equal(await list.getByText(mdmRepositories[0], { exact: true }).count(), 0);
+  await selectGroup("全部");
+
+  const settingsViewport = { width: 520, height: 540 };
+  await page.setViewportSize(settingsViewport);
+  await scrollToEnd(list);
+  for (const control of [group, add]) {
+    const box = await control.boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= settingsViewport.width);
+  }
+  for (const [tab, ready] of [
+    ["用户", () => page.getByRole("region", { name: "人员管理" }).waitFor()],
+    ["服务", () => page.getByRole("tablist", { name: "服务列表" }).getByRole("tab", { name: "grouped", exact: true }).click()],
+    ["端点", () => page.locator(".endpoint-tools > summary").click()],
+    ["参数", () => page.getByRole("button", { name: "保存参数" }).waitFor()],
+  ]) {
+    await settingsTabs.getByRole("tab", { name: tab, exact: true }).click();
+    await ready();
+    await scrollToEnd(page.getByRole("tabpanel", { name: tab, exact: true }));
+  }
+  for (let index = 1; index <= 6; index += 1) await createIssue(app, "browser", "dev", `Home scroll fixture ${index}`);
+  engine.running.clear();
+  const homeViewports = [
+    { width: 1220, height: 540 },
+    { width: 390, height: 570 },
+  ];
+  await page.getByRole("radio", { name: "首页", exact: true }).click();
+  const home = page.getByRole("main");
+  await home.getByText("Home scroll fixture 1", { exact: true }).waitFor();
+  for (const viewport of homeViewports) {
+    await page.setViewportSize(viewport);
+    const box = await home.boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Home bounds ${box.x}+${box.width} exceed viewport ${viewport.width}`);
+    assert.ok(await home.evaluate((node) => node.scrollHeight > node.clientHeight && node.scrollWidth === node.clientWidth));
+    const header = page.getByRole("banner");
+    const headerPosition = await header.boundingBox();
+    await home.press("Home");
+    await page.waitForFunction((node) => node.scrollTop === 0, await home.elementHandle());
+    if (viewport.width === homeViewports[0].width) {
+      const activity = home.getByRole("list", { name: "待处理工单" });
+      assert.ok(await activity.evaluate((node) => node.scrollHeight > node.clientHeight));
+      await activity.press("End");
+      await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await activity.elementHandle());
+      assert.equal(await home.evaluate((node) => node.scrollTop), 0);
+    }
+    await home.press("End");
+    await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await home.elementHandle());
+    assert.deepEqual(await header.boundingBox(), headerPosition);
+  }
+  await home.getByRole("tab", { name: "团队", exact: true }).click();
+  const assigneeTable = home.getByRole("region", { name: "处理人统计", exact: true });
+  assert.ok(await assigneeTable.evaluate((node) => node.scrollWidth > node.clientWidth));
+  await assigneeTable.press("ArrowRight");
+  await page.waitForFunction((node) => node.scrollLeft > 0, await assigneeTable.elementHandle());
+  assert.equal(await home.evaluate((node) => node.scrollLeft), 0);
   const unexpected = failures.filter((failure) => !/^Failed to load resource: the server responded with a status of 409/.test(failure));
   assert.deepEqual(unexpected, []);
   const inspection = openDatabase(databaseFile);
@@ -266,7 +353,7 @@ try {
         chromium: browser.version(),
         revision,
         sourceDiffSha256: createHash("sha256").update(sourceDiff).digest("hex"),
-        viewports: [{ width: 1680, height: 1050 }, page.viewportSize()],
+        viewports: [{ width: 1680, height: 1050 }, { width: 1280, height: 800 }, settingsViewport, ...homeViewports],
         issue: issue.key,
         checks: [
           "real HTTP and SQLite",
@@ -291,6 +378,9 @@ try {
           "long draft and accessible send control at 1280px",
           "click sends through HTTP and returns focus to composer",
           "1280px editor layout",
+          "repository namespace filter and fixed toolbar",
+          "keyboard scrolling in all five settings panels",
+          "keyboard scrolling on home and in activity list; narrow team table horizontal scrolling",
           "health and database integrity",
         ],
         resources,

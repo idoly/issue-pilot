@@ -38,6 +38,8 @@ export function SettingsView() {
             <button
               type="button"
               role="tab"
+              id={`settings-tab-${panel.key}`}
+              aria-controls={visitedPanels().includes(panel.key) ? `settings-panel-${panel.key}` : undefined}
               aria-selected={selectedPanel() === panel.key ? "true" : "false"}
               class={selectedPanel() === panel.key ? "selected" : ""}
               onClick={() => selectPanel(panel.key)}
@@ -48,18 +50,18 @@ export function SettingsView() {
         </For>
       </nav>
       <Show when={visitedPanels().includes("users")}>
-        <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "users"}>
+        <div class="settings-panel ip-scrollbar" id="settings-panel-users" role="tabpanel" aria-labelledby="settings-tab-users" tabindex={0} hidden={selectedPanel() !== "users"}>
           <PersonalCredentials />
           <UserManagement />
         </div>
       </Show>
       <Show when={visitedPanels().includes("endpoints")}>
-        <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "endpoints"}>
+        <div class="settings-panel ip-scrollbar" id="settings-panel-endpoints" role="tabpanel" aria-labelledby="settings-tab-endpoints" tabindex={0} hidden={selectedPanel() !== "endpoints"}>
           <EndpointConfiguration />
         </div>
       </Show>
       <Show when={visitedPanels().includes("repositories")}>
-        <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "repositories"}>
+        <div class="settings-panel repository-settings-panel" id="settings-panel-repositories" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden={selectedPanel() !== "repositories"}>
           <RepositoryManagement
             onSelectService={(key) => {
               setServiceKey(key);
@@ -69,12 +71,12 @@ export function SettingsView() {
         </div>
       </Show>
       <Show when={visitedPanels().includes("parameters")}>
-        <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "parameters"}>
+        <div class="settings-panel ip-scrollbar" id="settings-panel-parameters" role="tabpanel" aria-labelledby="settings-tab-parameters" tabindex={0} hidden={selectedPanel() !== "parameters"}>
           <ApplicationParametersView />
         </div>
       </Show>
       <Show when={visitedPanels().includes("services")}>
-        <div class="settings-panel" role="tabpanel" hidden={selectedPanel() !== "services"}>
+        <div class="settings-panel ip-scrollbar" id="settings-panel-services" role="tabpanel" aria-labelledby="settings-tab-services" tabindex={0} hidden={selectedPanel() !== "services"}>
           <ConfigurationView selectedServiceKey={serviceKey()} onSelectService={(key) => setServiceKey(key)} />
         </div>
       </Show>

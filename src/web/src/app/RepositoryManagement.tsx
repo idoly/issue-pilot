@@ -1,8 +1,26 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { Button, Input, Modal, Skeleton } from "../ui";
+import { Button, Input, Modal, Select, Skeleton } from "../ui";
 import { deleteRepository, loadRepositories, registerRepository, updateRepository, type ManagedRepository } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { settingsError } from "./settings-error";
+
+const allRepositories = "all";
+const otherRepositories = "other";
+const repositoryGroups = new Map([
+  ["oms", "oms"],
+  ["srm", "srm"],
+  ["xhgj-mall", "mall"],
+  ["mdm", "mdm"],
+  ["crm", "crm"],
+  ["iqs", "iqs"],
+  ["mpm", "mpm"],
+]);
+const groupOptions = [{ value: allRepositories, label: "全部" }, ...Array.from(repositoryGroups.values(), (value) => ({ value, label: value })), { value: otherRepositories, label: "其他" }];
+const namespacePath = /^(?:(?:https|ssh):\/\/[^/]+\/|[\w.-]+@[\w.-]+:\/?)digital-biz-projects\/([^/]+)\/[^/]/i;
+function repositoryGroup(url: string) {
+  const namespace = namespacePath.exec(url)?.[1];
+  return (namespace && repositoryGroups.get(namespace.toLowerCase())) || otherRepositories;
+}
 
 const addressPrefix = (url: string) => url.slice(0, Math.max(url.lastIndexOf("/"), url.includes("://") ? -1 : url.indexOf(":")) + 1);
 const repositoryName = (url: string) =>
@@ -14,7 +32,16 @@ const repositoryName = (url: string) =>
 export function RepositoryManagement(props: { onSelectService?: (key: string) => void } = {}) {
   const { currentUser, refreshConfiguration, refreshCatalog } = useApplicationResources();
   const [rows, setRows] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
+  const [group, setGroup] = createSignal(allRepositories, { ownedWrite: true });
   const sortedRows = createMemo(() => [...rows()].sort((left, right) => addressPrefix(left.url).localeCompare(addressPrefix(right.url)) || left.url.localeCompare(right.url)));
+  const visibleRows = createMemo(() => {
+    const selected = group();
+    return selected === allRepositories ? sortedRows() : sortedRows().filter((row) => repositoryGroup(row.url) === selected);
+  });
+  let list: HTMLDivElement | undefined;
+  createEffect(group, () => {
+    if (list) list.scrollTop = 0;
+  });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   // A load failure hides the table; an action or shared-refresh failure keeps the loaded rows visible.
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
@@ -64,6 +91,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
       setSaving(false);
       setActionError("");
       setRows([]);
+      setGroup(allRepositories);
       if (identity.split(":")[0]) void load();
       else setLoading(false);
     },
@@ -134,11 +162,14 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     <section class="user-management-card repository-management" aria-label="仓库管理">
       <header class="user-management-header">
         <strong>仓库</strong>
-        <Show when={canEdit()}>
-          <Button size="small" type="primary" disabled={saving()} onClick={() => edit()}>
-            登记仓库
-          </Button>
-        </Show>
+        <div class="repository-toolbar">
+          <Select aria-label="仓库分组" value={group()} options={groupOptions} onChange={setGroup} />
+          <Show when={canEdit()}>
+            <Button size="small" type="primary" disabled={saving()} onClick={() => edit()}>
+              登记仓库
+            </Button>
+          </Show>
+        </div>
       </header>
       <Show when={error()}>
         <div class="user-management-error" role="alert">
@@ -162,7 +193,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
         }
       >
         <Show when={!loadError()}>
-          <div class="settings-table-scroll">
+          <div ref={list} class="settings-table-scroll ip-scrollbar" role="region" aria-label="仓库列表" tabindex={0}>
             <table class="settings-table">
               <thead>
                 <tr>
@@ -174,10 +205,10 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
               </thead>
               <tbody>
                 <For
-                  each={sortedRows()}
+                  each={visibleRows()}
                   fallback={
                     <tr>
-                      <td colspan={4}>暂无仓库</td>
+                      <td colspan={4}>{group() === allRepositories ? "暂无仓库" : "此分组暂无仓库"}</td>
                     </tr>
                   }
                 >

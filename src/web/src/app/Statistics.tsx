@@ -233,7 +233,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             <h2 id="assignee-summary-title">个人处理情况</h2>
             <span>最近 {periodDays()} 天</span>
           </div>
-          <div class="assignee-table compact-scroll">
+          <div class="assignee-table compact-scroll ip-scrollbar" role="region" aria-label="处理人统计" tabindex={0}>
             <div class="assignee-head">
               <span>处理人</span>
               <span>完成</span>

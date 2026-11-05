@@ -56,12 +56,42 @@
   overflow-x: auto;
   scrollbar-gutter: stable;
 }
-.settings-view,
+.repository-settings-panel {
+  display: flex;
+  flex-direction: column;
+}
+.repository-management {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+.repository-management > :not(.settings-table-scroll) {
+  flex-shrink: 0;
+}
+.repository-management .repository-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.repository-toolbar > .ui-select {
+  width: 108px;
+}
+.repository-management .settings-table-scroll {
+  min-height: 0;
+  overflow: auto;
+  overflow-anchor: none;
+}
+.repository-management .settings-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+}
 .ui-modal-body {
   scrollbar-gutter: stable;
   scrollbar-width: auto;
 }
-.settings-view::-webkit-scrollbar,
 .ui-modal-body::-webkit-scrollbar {
   width: 10px;
 }
@@ -391,18 +421,16 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .service-tabs-inner {
-    display: flex;
-    justify-content: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
     padding-block: 8px;
   }
   .service-tab-list {
-    width: auto;
-    max-width: calc(100% - 148px);
+    width: 100%;
   }
   .service-tab-actions {
-    position: absolute;
-    right: 0;
+    justify-self: end;
     gap: 4px;
   }
   .service-tab-actions .ui-button {
