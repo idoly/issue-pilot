@@ -185,7 +185,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
         </section>
       </div>
       <div class="insight-panel" role="tabpanel" hidden={view() !== "distribution"}>
-        <div class="distribution-grid">
+        <div class="distribution-grid" role="region" aria-label="工单分布" tabindex={0}>
           <section class="statistics-section">
             <div class="statistics-title">
               <h2>服务工单量</h2>
@@ -233,7 +233,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             <h2 id="assignee-summary-title">个人处理情况</h2>
             <span>最近 {periodDays()} 天</span>
           </div>
-          <div class="assignee-table compact-scroll ip-scrollbar" role="region" aria-label="处理人统计" tabindex={0}>
+          <div class="assignee-table compact-scroll" role="region" aria-label="处理人统计" tabindex={0}>
             <div class="assignee-head">
               <span>处理人</span>
               <span>完成</span>
