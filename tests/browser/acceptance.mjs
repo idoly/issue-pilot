@@ -224,7 +224,7 @@ try {
     const composer = getComputedStyle(element.closest(".agent-composer"));
     return { outline: composer.outlineStyle, borderWidth: composer.borderTopWidth, borderColor: composer.borderTopColor, inputOutline: getComputedStyle(element).outlineStyle };
   });
-  assert.deepEqual(composerFocus, { outline: "none", borderWidth: "1px", borderColor: "rgb(138, 190, 183)", inputOutline: "none" });
+  assert.deepEqual(composerFocus, { outline: "none", borderWidth: "2px", borderColor: "rgb(138, 190, 183)", inputOutline: "none" });
   await page.getByRole("radio", { name: "首页", exact: true }).click();
   await page.getByRole("radio", { name: "工单", exact: true }).click();
   await draft.waitFor();
@@ -256,7 +256,14 @@ try {
       model: "fixture",
       timestamp: Date.now(),
       stopReason: "stop",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: {
+        input: 8_000,
+        output: 960,
+        cacheRead: 8_000,
+        cacheWrite: 1_040,
+        totalTokens: 18_000,
+        cost: { input: 1, output: 1, cacheRead: 2, cacheWrite: 1.767, total: 5.767, totalFromProvider: false },
+      },
     },
   });
   await page.getByText("Second paragraph 订单", { exact: true }).waitFor();
@@ -277,6 +284,24 @@ try {
   assert.match(selected, /Browser SSE evidence/);
   assert.match(selected, /Second paragraph 订单/);
   await page.evaluate(() => window.getSelection().removeAllRanges());
+  const usageGroup = page.getByRole("group", { name: "会话用量", exact: true });
+  await usageGroup.getByText("$5.767 (估算)", { exact: true }).waitFor();
+  assert.equal(await usageGroup.getByText("CH46.9%", { exact: true }).getAttribute("title"), "最近一次主模型请求的缓存命中率");
+  for (const width of [1680, 1200, 980, 520, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await usageGroup.evaluate((element) => {
+      const footer = element.closest("footer").getBoundingClientRect();
+      return [...element.children].map((metric) => {
+        const bounds = metric.getBoundingClientRect();
+        return { text: metric.textContent, visible: bounds.left >= footer.left && bounds.right <= footer.right && metric.scrollWidth <= metric.clientWidth };
+      });
+    });
+    assert.ok(layout.length === 7 && layout.every((metric) => metric.visible), `Usage metrics are clipped at ${width}px: ${JSON.stringify(layout)}`);
+  }
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  await page.locator(".agent-scroll").evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
   const reasoning = page.getByText("Browser reasoning evidence", { exact: true });
   await reasoning.waitFor();
   assert.equal(await message.locator(".agent-thinking details, .agent-thinking summary").count(), 0);
@@ -845,6 +870,7 @@ try {
           "inline and side-by-side diff",
           "read-only diff copy on localhost and HTTP preserves tabs, NBSP, CRLF and the selection",
           "workbench columns remain visible between responsive breakpoints",
+          "usage metrics wrap without truncating cost or context on desktop and narrow screens",
           "file switch",
           "conflict preserves disk and draft",
           "dirty navigation guard",

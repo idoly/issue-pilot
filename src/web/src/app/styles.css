@@ -1830,8 +1830,8 @@ summary.agent-tool-head > svg {
   display: grid;
   min-height: 36px;
   grid-template-columns: minmax(0, 1fr);
-  padding: 8px 10px;
-  border: 1px solid var(--agent-border-muted);
+  padding: 7px 9px;
+  border: 2px solid var(--agent-border-muted);
   border-radius: 8px;
   background: #101417;
 }
@@ -1939,26 +1939,61 @@ summary.agent-tool-head > svg {
   min-height: 48px;
   padding: 5px 12px 7px;
   background: var(--agent-bg);
-  color: var(--agent-dim);
+  color: #8f9993;
   font: 12px / 1.5 var(--agent-code-font);
 }
 .agent-meta-primary,
 .agent-meta-secondary {
   display: flex;
   min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  align-items: baseline;
 }
-.agent-meta-primary > span,
-.agent-meta-secondary > span {
+.agent-meta-primary > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.agent-meta b {
-  font-weight: 400;
+.agent-meta-secondary {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-top: 2px;
+}
+.agent-meta-usage {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 340px;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: #c2cbc6;
+}
+.agent-meta-metric {
+  white-space: nowrap;
+}
+.agent-meta-metric.cache,
+.agent-meta-metric.context {
+  color: var(--agent-accent);
+}
+.agent-meta-metric.cost {
+  color: #d7ba7d;
+}
+.agent-meta-model {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: baseline;
+  gap: 6px;
+}
+.agent-meta-model b {
+  overflow: hidden;
+  color: var(--agent-text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-meta-thinking {
+  flex: none;
 }
 @media (max-width: 520px) {
   .agent-conversation {

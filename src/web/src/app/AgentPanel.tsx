@@ -290,20 +290,29 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
 
 const costSourceLabels: Record<AgentCostSource, string> = { provider: "供应商报告", estimated: "估算", unknown: "来源未标明", mixed: "混合来源" };
 
-function footerText(footer: AgentFooterStats): string {
+function footerMetrics(footer: AgentFooterStats) {
   const contextPercent = footer.contextPercent === null ? "?" : `${footer.contextPercent.toFixed(1)}%`;
-  const context = footer.contextWindow > 0 ? `${contextPercent}/${formatTokens(footer.contextWindow)}${footer.autoCompact ? " (auto)" : ""}` : "";
   return [
-    footer.input ? `↑${formatTokens(footer.input)}` : "",
-    footer.output ? `↓${formatTokens(footer.output)}` : "",
-    footer.cacheRead ? `R${formatTokens(footer.cacheRead)}` : "",
-    footer.cacheWrite ? `W${formatTokens(footer.cacheWrite)}` : "",
-    footer.latestCacheHitRate !== null && (footer.cacheRead > 0 || footer.cacheWrite > 0) ? `CH${footer.latestCacheHitRate.toFixed(1)}%` : "",
-    footer.cost ? `$${footer.cost.toFixed(3)}${footer.costSource === null ? "" : ` (${costSourceLabels[footer.costSource]})`}` : "",
-    context,
-  ]
-    .filter(Boolean)
-    .join(" ");
+    { text: footer.input ? `↑${formatTokens(footer.input)}` : "", title: "输入 Token（会话累计）", tone: "tokens" },
+    { text: footer.output ? `↓${formatTokens(footer.output)}` : "", title: "输出 Token（会话累计）", tone: "tokens" },
+    { text: footer.cacheRead ? `R${formatTokens(footer.cacheRead)}` : "", title: "缓存读取 Token（会话累计）", tone: "cache" },
+    { text: footer.cacheWrite ? `W${formatTokens(footer.cacheWrite)}` : "", title: "缓存写入 Token（会话累计）", tone: "cache" },
+    {
+      text: footer.latestCacheHitRate !== null && (footer.cacheRead > 0 || footer.cacheWrite > 0) ? `CH${footer.latestCacheHitRate.toFixed(1)}%` : "",
+      title: "最近一次主模型请求的缓存命中率",
+      tone: "cache",
+    },
+    {
+      text: footer.cost ? `$${footer.cost.toFixed(3)}${footer.costSource === null ? "" : ` (${costSourceLabels[footer.costSource]})`}` : "",
+      title: "会话累计费用；记录来源不等于最终账单",
+      tone: "cost",
+    },
+    {
+      text: footer.contextWindow > 0 ? `上下文 ${contextPercent}/${formatTokens(footer.contextWindow)}${footer.autoCompact ? " (auto)" : ""}` : "",
+      title: `当前上下文占用 / 模型上下文上限；自动压缩${footer.autoCompact ? "已开启" : "已关闭"}`,
+      tone: "context",
+    },
+  ].filter((metric) => metric.text);
 }
 
 export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<IssueDetail>; drafts?: AgentDraftStore }) {
@@ -361,7 +370,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const canSend = () => issueStatus() !== "resolved";
   const canInterrupt = () => processing() || props.issue.agentRunning === true;
   const canSubmit = () => canSend() && !sending() && (images().length > 0 || /\S/.test(draft()));
-  const usageText = () => footerText(footer());
+  const usageMetrics = () => footerMetrics(footer());
   const codeRoot = () => props.issue.workingDirectory ?? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`;
   const developmentRepositoriesPending = () => props.issue.environmentKey === "dev" && (!props.issue.repositories.length || props.issue.repositories.some((repository) => !repository.workingBranch));
   const clearUnread = () => {
@@ -865,13 +874,27 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         </Show>
         <footer class="agent-meta">
           <div class="agent-meta-primary">
-            <span title={`代码目录：${codeRoot()}`}>{codeRoot()}</span>
+            <span title={`工作目录：${codeRoot()}`}>{codeRoot()}</span>
           </div>
           <div class="agent-meta-secondary">
-            <span>{usageText()}</span>
-            <span>
-              <b>{agent().model || "no-model"}</b>
-              {agent().thinkingLevel ? ` • ${agent().thinkingLevel}` : ""}
+            <div class="agent-meta-usage" role="group" aria-label="会话用量">
+              <For each={usageMetrics()}>
+                {(metric) => (
+                  <>
+                    <span class={`agent-meta-metric ${metric.tone}`} title={metric.title}>
+                      {metric.text}
+                    </span>{" "}
+                  </>
+                )}
+              </For>
+            </div>
+            <span class="agent-meta-model">
+              <b title={`模型：${agent().model || "no-model"}`}>{agent().model || "no-model"}</b>
+              <Show when={agent().thinkingLevel}>
+                <span class="agent-meta-thinking" title="思考级别">
+                  · {agent().thinkingLevel}
+                </span>
+              </Show>
             </span>
           </div>
         </footer>

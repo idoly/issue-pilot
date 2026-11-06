@@ -649,7 +649,7 @@ describe("Agent conversation state", () => {
       running: false,
       issueStatus: "pending",
     });
-    await waitFor(() => expect(screen.getByText("↑100 ↓10 R900 CH90.0% $0.100 (来源未标明) 10.0%/10k (auto)")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("group", { name: "会话用量" }).textContent?.trim()).toBe("↑100 ↓10 R900 CH90.0% $0.100 (来源未标明) 上下文 10.0%/10k (auto)"));
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(editor, { target: { value: "draft survives usage updates" } });
     for (const [index, kind] of ["cache_warm", "native_auxiliary"].entries())
@@ -672,7 +672,7 @@ describe("Agent conversation state", () => {
           `auxiliary-${index}`,
         ),
       );
-    await waitFor(() => expect(screen.getByText("↑100 ↓10 R1.1k CH90.0% $0.140 (来源未标明) 10.0%/10k (auto)")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("group", { name: "会话用量" }).textContent?.trim()).toBe("↑100 ↓10 R1.1k CH90.0% $0.140 (来源未标明) 上下文 10.0%/10k (auto)"));
     expect(editor.value).toBe("draft survives usage updates");
     expect(EventSourceMock.instances).toHaveLength(1);
     view.unmount();
@@ -868,7 +868,7 @@ describe("Agent conversation state", () => {
     fireEvent.scroll(transcript);
     source.emit("message", event({ type: "issue_user", message: "Arrived after scrolling" }, "message-unread"));
     await waitFor(() => expect(screen.getByRole("button", { name: "1 条新消息" })).toBeTruthy());
-    expect(screen.getByText("↑11M ↓1.3M R498M CH95.0% $385.206 (来源未标明) 32.9%/272k (auto)")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "会话用量" }).textContent?.trim()).toBe("↑11M ↓1.3M R498M CH95.0% $385.206 (来源未标明) 上下文 32.9%/272k (auto)");
     expect(screen.getByText("model")).toBeTruthy();
     const composer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(composer, { target: { value: "draft survives replay" } });
