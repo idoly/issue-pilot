@@ -505,6 +505,13 @@
       "when": 1793900000000,
       "tag": "0071_repository_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1793980800000,
+      "tag": "0072_sls_scope_identity",
+      "breakpoints": true
     }
   ]
 }

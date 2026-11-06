@@ -69,6 +69,13 @@ export function selectAgentMessage(manager: SessionManager, scope: AgentMessageS
   return pending[0];
 }
 
+/** Keep visible inputs, but never replay explicitly cancelled queued work on retry. */
+export function cancelPendingAgentMessages(manager: SessionManager): void {
+  for (const message of pendingAgentMessages(manager)) {
+    manager.appendCustomEntry(deliveryType, { version: 1, entryId: message.id, state: "rejected", reason: "cancelled" });
+  }
+}
+
 /** A started marker is conservative: a crash immediately afterwards must not replay the input. */
 export function startAgentMessage(manager: SessionManager, id: string, scope: AgentMessageScope): void {
   const pending = selectAgentMessage(manager, scope, id);

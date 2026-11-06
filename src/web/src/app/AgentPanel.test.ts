@@ -41,6 +41,67 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("Agent conversation state", () => {
+  it("Escape cancels the visible active Issue once without clearing its draft; ignores composition, modifiers and hidden panels", async () => {
+    const issue = {
+      id: "ISSUE-20260810-099",
+      title: "Cancel",
+      description: "",
+      priority: "p1",
+      type: "defect_fix",
+      status: "open",
+      assignee: null,
+      assigneeSubject: null,
+      service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(),
+      repositories: [],
+      attachments: [],
+      comments: [],
+      environmentKey: "dev",
+      agentRunning: true,
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    let resolve!: (response: Response) => void;
+    const fetchRequest = vi.spyOn(globalThis, "fetch").mockReturnValue(
+      new Promise<Response>((done) => {
+        resolve = done;
+      }),
+    );
+    const [hidden, setHidden] = createSignal(false);
+    const view = render(() =>
+      AgentPanel({
+        issue,
+        get hidden() {
+          return hidden();
+        },
+        onRefresh: async () => issue,
+        drafts: new AgentDraftStore(),
+      }),
+    );
+    try {
+      const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+      fireEvent.input(editor, { target: { value: "keep this unsent draft" } });
+      fireEvent.keyDown(editor, { key: "Escape", isComposing: true });
+      fireEvent.keyDown(editor, { key: "Escape", ctrlKey: true });
+      fireEvent.keyDown(editor, { key: "Escape", repeat: true });
+      expect(fetchRequest).not.toHaveBeenCalled();
+      fireEvent.keyDown(editor, { key: "Escape" });
+      fireEvent.keyDown(editor, { key: "Escape" });
+      expect(fetchRequest).toHaveBeenCalledOnce();
+      expect(fetchRequest.mock.calls[0]?.[0]).toBe(`/api/issues/${issue.id}/abort`);
+      expect(fetchRequest.mock.calls[0]?.[1]?.method).toBe("POST");
+      expect(editor.value).toBe("keep this unsent draft");
+      resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      await new Promise((done) => setTimeout(done, 0));
+      setHidden(true);
+      await waitFor(() => expect(view.container.querySelector(".agent-panel")?.hasAttribute("hidden")).toBe(true));
+      fireEvent.keyDown(editor, { key: "Escape" });
+      expect(fetchRequest).toHaveBeenCalledOnce();
+    } finally {
+      resolve(new Response(null, { status: 200 }));
+      view.unmount();
+      fetchRequest.mockRestore();
+    }
+  });
   it("bounds large tool output before storing it in UI state without changing the source result", () => {
     const source = `${"a".repeat(30_000)}${"b".repeat(30_000)}`;
     const entries = applyAgentEvent([], event({ type: "tool_execution_end", toolCallId: "call-large", toolName: "sls", result: { content: [{ type: "text", text: source }] }, isError: false }));

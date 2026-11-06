@@ -38,6 +38,8 @@ include／remove 改变工具范围后，本轮结束关闭会话，下一轮按
 
 ### SLS
 
+查询参数必须显式指定 region、project、logstore，按部署配置中的完整组合授权；没有自定义目标名，也不接受旧 `target` 参数。结果保留实际地域、Project 和日志库来源，不回传目标别名。
+
 固定 aliyun sls GetLogsV2，使用 0600 临时配置、HTTPS 和禁用自动重试，不修改宿主 profile。执行预算来自运行参数，取消／超时终止进程组并清理凭证。
 
 仅接受 Complete；SQL 分析按 LIMIT／ORDER BY 返回一页，普通查询 offset 分页，后页失败整次失败。已知错误映射稳定码，未知 CLI 文本隐藏。凭证清理失败优先报告 sls_credential_cleanup_failed，同时保留原查询／取消原因。

@@ -75,6 +75,13 @@ export class TestAgentController {
     this.enqueued.push(issueId);
   }
 
+  async abort(issueId: string, authorize?: () => Promise<unknown>): Promise<void> {
+    await authorize?.();
+    if (this.reservations.has(issueId)) throw new Error("issue_already_running");
+    this.running.delete(issueId);
+    this.queued.delete(issueId);
+  }
+
   async closeSession(issueId: string): Promise<void> {
     this.closedSessions.push(issueId);
     await this.closeSessionHook?.(issueId);

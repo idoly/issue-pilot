@@ -142,7 +142,7 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
       if (analysis || page.length < limits.sls.pageResults) break;
     }
     const metadata = {
-      ...(query.target ? { target: query.target } : {}),
+      region: configured.region,
       project: configured.project,
       logstore: query.logstore,
       from: query.from,

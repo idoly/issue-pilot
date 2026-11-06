@@ -60,7 +60,7 @@ export interface ManagedPiSession {
   readonly session: AgentSession;
   readonly streaming: boolean;
   setGitIdentity(identity: GitCommitIdentity): void;
-  prompt(message: string, images?: ImageContent[], command?: string): Promise<void>;
+  prompt(message: string, images?: ImageContent[], command?: string, signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -553,18 +553,25 @@ export class PiSessionRuntime {
         setGitIdentity: (identity) => {
           identityEnvironment = gitIdentityEnvironment(identity);
         },
-        prompt: async (message, images = [], command) => {
+        prompt: async (message, images = [], command, signal) => {
+          signal?.throwIfAborted();
           modelResponseFailed = false;
           if (command) await session.sendCustomMessage({ customType: "issue-context", content: message, display: false }, { triggerTurn: false });
           const idle = new Promise<never>((_resolve, reject) => {
             rejectIdle = reject;
           });
+          const abort = () => {
+            void session.abort().catch((error: unknown) => rejectIdle?.(error instanceof Error ? error : new Error("agent_abort_failed")));
+          };
+          signal?.throwIfAborted();
+          signal?.addEventListener("abort", abort, { once: true });
           watchdog.start();
           try {
             await Promise.race([session.prompt(command ?? message, images.length ? { images } : undefined), idle]);
             // Pi resolves after its retry policy settles, including terminal model errors.
             if (modelResponseFailed) throw new Error("model_response_failed");
           } finally {
+            signal?.removeEventListener("abort", abort);
             rejectIdle = undefined;
             watchdog.stop();
           }

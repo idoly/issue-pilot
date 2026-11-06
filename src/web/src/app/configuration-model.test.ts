@@ -15,11 +15,11 @@ describe("capability deployment serialization", () => {
     expect(serialized.dms?.databases[0]?.instanceAlias).toBe("ORDERS-PROD");
     expect(JSON.stringify(serialized)).not.toMatch(/accessKeyId|accessKeySecret|authorization|password/);
   });
-  it("preserves named SLS targets when serializing a deployment", () => {
+  it("preserves exact SLS scopes without target names when serializing a deployment", () => {
     const value = structuredClone(draft);
     value.sls!.targets = [
-      { name: "primary", region: "cn-test", project: "orders-test", logstores: ["application"] },
-      { name: "gateway", region: "cn-other", project: "gateway-prod", logstores: ["requests"] },
+      { region: "cn-test", project: "orders-test", logstores: ["application"] },
+      { region: "cn-other", project: "gateway-prod", logstores: ["requests"] },
     ];
     expect(serializeCapabilityDraft(value).sls?.targets).toEqual(value.sls!.targets);
   });

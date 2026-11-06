@@ -145,7 +145,7 @@ export interface SlsScope {
   region: string;
   project: string;
   logstores: string[];
-  targets?: Array<{ name: string; region: string; project: string; logstores: string[] }>;
+  targets?: Array<{ region: string; project: string; logstores: string[] }>;
 }
 
 export interface CapabilityConfiguration {

@@ -19,7 +19,7 @@ import { createWorkspaceTool } from "./workspace-tool.ts";
 import { openVerifiedAttachmentFile } from "../http/attachment-store.ts";
 import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { KeyedSerialQueue } from "../serial.ts";
-import { appendQueuedAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage, type AgentMessageScope } from "./message-delivery.ts";
+import { cancelPendingAgentMessages, appendQueuedAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage, type AgentMessageScope } from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, assertSessionFileComplete, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
@@ -43,6 +43,7 @@ export interface AgentController {
   isRunning(issueId: string): boolean;
   getRunState(issueId: string): AgentRunState;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
+  abort?(issueId: string, authorize?: () => Promise<unknown>): Promise<void>;
   setMaxConcurrentIssues?(maxConcurrentIssues: number): void;
   close?(): Promise<void>;
 }
@@ -53,6 +54,10 @@ export class AgentEngine implements AgentController {
   private readonly sessionQueue = new KeyedSerialQueue();
   private readonly runCounts = new Map<string, number>();
   private readonly executingIssues = new Set<string>();
+  private readonly rounds = new Map<string, Set<AbortController>>();
+  private readonly executingSignals = new Map<string, AbortSignal>();
+  private readonly aborts = new Map<string, Promise<void>>();
+  private readonly cancellationErrors = new Map<string, unknown[]>();
   private readonly reservations = new Set<string>();
   private readonly idleWaiters = new Set<() => void>();
   private readonly projectManager: IssueProjectManager;
@@ -115,7 +120,7 @@ export class AgentEngine implements AgentController {
     this.assertOpen();
     const reserved = [...new Set(issueIds)].sort();
     const reservedSet = new Set(reserved);
-    if (reserved.some((issueId) => this.isRunning(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
+    if (reserved.some((issueId) => this.isRunning(issueId) || this.reservations.has(issueId) || this.aborts.has(issueId))) throw new Error("issue_already_running");
     for (const issueId of reserved) this.reservations.add(issueId);
     let active = true;
     const assertReserved = (issueId: string) => {
@@ -157,6 +162,7 @@ export class AgentEngine implements AgentController {
       // Reauthorize after admission waits, before changing the session or persisting input.
       const prepareAdmission = async () => {
         await authorize?.();
+        this.assertNotReserved(issueId);
         if (gitIdentity && !this.personalSessions.has(issueId)) this.sessions.get(issueId)?.setGitIdentity(gitIdentity);
       };
       const managed = this.sessions.get(issueId);
@@ -175,6 +181,7 @@ export class AgentEngine implements AgentController {
       if (managed.streaming) {
         await this.steerQueue.run(issueId, async () => {
           await authorize?.();
+          this.assertNotReserved(issueId);
           // Earlier messages still queued for a later round keep their order; never steer past them.
           if (this.sessions.get(issueId) !== managed || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
@@ -214,6 +221,61 @@ export class AgentEngine implements AgentController {
     }
   }
 
+  /** Cancellation bypasses the round queue, then waits for serialized cleanup before accepting new work. */
+  async abort(issueId: string, authorize?: () => Promise<unknown>): Promise<void> {
+    this.assertOpen();
+    await authorize?.();
+    const existing = this.aborts.get(issueId);
+    if (existing) return existing;
+    this.assertNotReserved(issueId);
+    const failures: unknown[] = [];
+    this.cancellationErrors.set(issueId, failures);
+    const stopping = this.abortIssue(issueId, failures);
+    this.aborts.set(issueId, stopping);
+    try {
+      await stopping;
+    } finally {
+      this.aborts.delete(issueId);
+      this.cancellationErrors.delete(issueId);
+      this.notifyIdle();
+    }
+  }
+
+  private async abortIssue(issueId: string, failures: unknown[]): Promise<void> {
+    for (const round of this.rounds.get(issueId) ?? []) round.abort();
+    // Admission checks the stopping flag after its waits. Drain it before cancelling durable inputs.
+    await this.steerQueue.run(issueId, async () => undefined);
+    await this.sessionQueue.run(issueId, async () => undefined);
+    const managed = this.sessions.get(issueId);
+    try {
+      managed?.session.clearQueue();
+      await managed?.session.abort();
+    } catch (error) {
+      failures.push(error);
+    }
+    await this.issueQueue.run(issueId, async () => undefined);
+    try {
+      await this.sessionQueue.run(issueId, async () => {
+        const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
+        if (!issue) throw new Error("issue_not_found");
+        const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issueId)).limit(1);
+        if (binding) {
+          const manager = await this.sessionManagerLocked(issue, issueRoot(this.stateRoot, issue.key));
+          cancelPendingAgentMessages(manager);
+        }
+      });
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length) throw new AggregateError(failures, "agent_abort_failed");
+  }
+
+  private roundSignal(issueId: string): AbortSignal | undefined {
+    const signal = this.executingSignals.get(issueId);
+    signal?.throwIfAborted();
+    return signal;
+  }
+
   async close(): Promise<void> {
     this.closePromise ??= this.closeLocked();
     return this.closePromise;
@@ -243,7 +305,7 @@ export class AgentEngine implements AgentController {
   }
 
   private assertNotReserved(issueId: string): void {
-    if (this.reservations.has(issueId)) throw new Error("issue_already_running");
+    if (this.reservations.has(issueId) || this.aborts.has(issueId)) throw new Error("issue_already_running");
   }
 
   private publishRunState(issueId: string, previous: AgentRunState): void {
@@ -269,22 +331,38 @@ export class AgentEngine implements AgentController {
   }
 
   private async waitForIdle(): Promise<void> {
-    if (!this.runCounts.size && !this.reservations.size) return;
+    if (!this.runCounts.size && !this.reservations.size && !this.aborts.size) return;
     await new Promise<void>((resolve) => {
       this.idleWaiters.add(resolve);
     });
   }
 
   private notifyIdle(): void {
-    if (this.runCounts.size || this.reservations.size) return;
+    if (this.runCounts.size || this.reservations.size || this.aborts.size) return;
     for (const resolve of this.idleWaiters) resolve();
     this.idleWaiters.clear();
   }
 
-  private async acquireSlot(): Promise<() => void> {
+  private async acquireSlot(signal: AbortSignal): Promise<(() => void) | undefined> {
+    if (signal.aborted) return undefined;
     // A resolved waiter already owns the slot counted by grantSlots.
     if (this.activeSlots < this.maxConcurrentIssues) this.activeSlots++;
-    else await new Promise<void>((resolve) => this.slotWaiters.push(resolve));
+    else {
+      const acquired = await new Promise<boolean>((resolve) => {
+        const grant = () => {
+          signal.removeEventListener("abort", cancel);
+          resolve(true);
+        };
+        const cancel = () => {
+          const index = this.slotWaiters.indexOf(grant);
+          if (index >= 0) this.slotWaiters.splice(index, 1);
+          resolve(false);
+        };
+        this.slotWaiters.push(grant);
+        signal.addEventListener("abort", cancel, { once: true });
+      });
+      if (!acquired) return undefined;
+    }
     return () => {
       this.activeSlots--;
       this.grantSlots();
@@ -299,15 +377,48 @@ export class AgentEngine implements AgentController {
   }
 
   private schedule(issueId: string, operation: () => Promise<void>): void {
+    const controller = new AbortController();
+    const rounds = this.rounds.get(issueId) ?? new Set<AbortController>();
+    this.rounds.set(issueId, rounds);
+    rounds.add(controller);
+    if (this.aborts.has(issueId)) controller.abort();
     this.beginActivity(issueId);
-    void this.issueQueue.run(issueId, async () => {
-      const release = await this.acquireSlot();
+    const round = this.issueQueue.run(issueId, async () => {
+      const release = await this.acquireSlot(controller.signal);
+      if (!release) {
+        rounds.delete(controller);
+        if (!rounds.size) this.rounds.delete(issueId);
+        this.endActivity(issueId);
+        return;
+      }
+      this.executingSignals.set(issueId, controller.signal);
       const previous = this.getRunState(issueId);
       this.executingIssues.add(issueId);
       this.publishRunState(issueId, previous);
       try {
+        controller.signal.throwIfAborted();
         await operation();
       } catch (error) {
+        if (controller.signal.aborted) {
+          // Cancellation is not a successful conclusion or a failed workspace; preserve the session.
+          if (error !== controller.signal.reason) this.reportError(error);
+          try {
+            const managed = this.sessions.get(issueId);
+            if (managed && this.scopeChangedSessions.has(managed)) await this.stopSession(issueId, managed);
+            await this.database.transaction(async (transaction) => {
+              await transaction
+                .update(issues)
+                .set({ status: "open", updatedAt: new Date() })
+                .where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
+              await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
+            });
+            this.publishStatus(issueId, "cancelled");
+          } catch (stateError) {
+            this.cancellationErrors.get(issueId)?.push(stateError);
+            this.reportError(stateError);
+          }
+          return;
+        }
         const cleanupFailures: unknown[] = [];
         try {
           await this.stopSession(issueId);
@@ -342,10 +453,14 @@ export class AgentEngine implements AgentController {
       } finally {
         // Keep execution and failure cleanup in the same per-Issue serialized round.
         this.executingIssues.delete(issueId);
+        this.executingSignals.delete(issueId);
+        rounds.delete(controller);
+        if (!rounds.size) this.rounds.delete(issueId);
         this.endActivity(issueId, "running");
         release();
       }
     });
+    void round.catch((error: unknown) => this.reportError(error));
   }
 
   private async run(issueId: string, latestMessage?: string, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
@@ -415,7 +530,9 @@ export class AgentEngine implements AgentController {
     }
 
     const workDirectory = await prepareIssueWorkDirectory(this.stateRoot, issue.key);
+    this.roundSignal(issue.id);
     const project = await this.projectManager.prepare(issue, environmentKind, personalGit?.env);
+    this.roundSignal(issue.id);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
     await chmod(workDirectory, 0o700);
     const attachmentPath = workDirectory;
@@ -475,6 +592,7 @@ export class AgentEngine implements AgentController {
     });
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
       const manager = reusableManager ?? (await this.sessionManagerLocked(issue, workDirectory));
+      this.roundSignal(issue.id);
       const hadMessages = manager.buildSessionContext().messages.length > 0;
       const managed = await this.piRuntime.start({
         runtime: agentConfiguration.runtime,
@@ -507,6 +625,7 @@ export class AgentEngine implements AgentController {
         });
       return { managed, hadMessages };
     });
+    this.roundSignal(issue.id);
     await this.markRunning(issue.id, project.runtimeReady);
     if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
     if (messageEntryId) await this.startQueuedMessage(issue, managed, messageEntryId);
@@ -530,7 +649,8 @@ export class AgentEngine implements AgentController {
           relatedRoot: project.runtimeRoot,
           ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}),
         });
-    await managed.prompt(prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined);
+    await managed.prompt(prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined, this.roundSignal(issue.id));
+    this.roundSignal(issue.id);
     // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
     if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
     if (sharedRepositories || this.scopeChangedSessions.has(managed)) await this.stopSession(issue.id, managed);
@@ -657,10 +777,12 @@ export class AgentEngine implements AgentController {
       message = selected.message;
       images = selected.images;
     }
+    this.roundSignal(issueId);
     await this.markRunning(issueId);
     if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
     if (messageEntryId && scope) await this.startQueuedMessage({ id: issueId, ...scope }, managed, messageEntryId);
-    await managed.prompt(promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined);
+    await managed.prompt(promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined, this.roundSignal(issueId));
+    this.roundSignal(issueId);
     // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
     if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
     if (this.scopeChangedSessions.has(managed)) await this.stopSession(issueId, managed);
@@ -733,7 +855,7 @@ export class AgentEngine implements AgentController {
     if (failures.length > 1) throw new AggregateError(failures, "agent_session_close_failed");
   }
 
-  private publishStatus(issueId: string, status: "complete" | "error"): void {
+  private publishStatus(issueId: string, status: "complete" | "error" | "cancelled"): void {
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_status", status } });
   }
 }

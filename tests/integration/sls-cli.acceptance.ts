@@ -15,7 +15,7 @@ import { localCommandExecutor, type CommandExecutor } from "../../src/process.ts
 
 const exec = promisify(execFile);
 const configured = { region: "cn-hangzhou", project: "fixture", logstores: ["logs"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-const query = { logstore: "logs", from: 1_700_000_000, to: 1_700_000_300 };
+const query = { region: configured.region, project: configured.project, logstore: "logs", from: 1_700_000_000, to: 1_700_000_300 };
 const page = (data: unknown[], progress = "Complete") => ({ meta: { hasSQL: false, progress }, data });
 
 test("real aliyun CLI uses isolated HTTPS, pagination, diagnostics, budgets and cancellation", { timeout: 60_000 }, async (context) => {

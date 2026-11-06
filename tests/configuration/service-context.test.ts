@@ -3,6 +3,31 @@ import { test } from "node:test";
 import { deploymentContext } from "../../src/configuration/service-context.ts";
 import type { StoredDeploymentConfig } from "../../src/domain/contracts.ts";
 
+test("SLS target headings are always SLS while environment and exact query parameters remain visible", () => {
+  for (const environment of [
+    { key: "prod", name: "正式" },
+    { key: "test", name: "测试" },
+  ]) {
+    const configuration: StoredDeploymentConfig = {
+      sls: {
+        region: "cn-hangzhou",
+        project: "orders-project",
+        logstores: ["orders"],
+        targets: [
+          { region: "cn-hangzhou", project: "orders-project", logstores: ["orders"] },
+          { region: "cn-shanghai", project: "gateway-project", logstores: ["gateway"] },
+        ],
+      },
+    };
+    const context = deploymentContext(environment, configuration, []);
+    assert.equal(context.match(/^#### SLS$/gm)?.length, 2);
+    assert.doesNotMatch(context, /SLS ·|target-1/);
+    assert.ok(context.includes(`### ${environment.name}环境`));
+    for (const value of ["cn-hangzhou", "cn-shanghai", "orders-project", "gateway-project", "orders", "gateway"]) assert.ok(context.includes(`<code>${value}</code>`), value);
+    assert.ok(configuration.sls!.targets!.every((scope) => !("name" in scope)));
+  }
+});
+
 test("generated descriptions include exact capability parameters without secrets, internal access identifiers or repeated branches", () => {
   const configuration: StoredDeploymentConfig = {
     redis: { host: "redis.prod.internal", port: 6379, username: "reader", database: 7, password: "private-redis-password" },
@@ -10,7 +35,10 @@ test("generated descriptions include exact capability parameters without secrets
     dms: {
       url: "https://dms.example.test/sse",
       authorization: "private-dms-token",
-      databases: [{ instanceAlias: "prod-instance", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" }],
+      databases: [
+        { instanceAlias: "prod-instance", schemaName: "orders", instanceId: "instance-1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" },
+        { instanceAlias: "other-instance", schemaName: "gateway", instanceId: "instance-2", instanceHost: "db2.example.test", instancePort: "3306", databaseId: "43" },
+      ],
     },
     sls: { accessKeyId: "private-sls-id", accessKeySecret: "private-sls-secret", region: "cn-hangzhou", project: "prod-project", logstores: ["orders-api", "gateway"] },
     mcpServices: ["docs"],
@@ -24,6 +52,8 @@ test("generated descriptions include exact capability parameters without secrets
   assert.doesNotMatch(context, /DatabaseId|InstanceId|db.example.test/);
   assert.doesNotMatch(context, /prod-namespace|PROD_GROUP|redis.prod.internal|private-query-token/);
   assert.match(context, /#### SLS\n\n\| \| \|/);
+  assert.equal(context.match(/^#### DMS$/gm)?.length, 2);
+  assert.doesNotMatch(context, /DMS ·|数据库 [12]/);
   assert.match(context, /<code>orders-api<\/code><br><code>gateway<\/code>/);
   assert.doesNotMatch(context, /用户.*&quot;&quot;/);
   const displayed = deploymentContext({ key: "prod", name: "正式" }, configuration, []);

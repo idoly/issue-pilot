@@ -8,12 +8,10 @@ const limits = issuePilotConfig.limits.capability.sls;
 const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function selectTarget(input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">): CapabilityConfig<"sls"> {
-  if (!configured.targets) {
-    if (input.target !== undefined) throw new Error("sls_target_not_granted");
-    return configured;
-  }
-  const target = configured.targets.find((target) => target.name === input.target);
-  if (!target) throw new Error("sls_target_not_granted");
+  const scopes = (configured.targets ?? [configured]).filter((scope) => scope.region === input.region && scope.project === input.project);
+  if (!scopes.length) throw new Error("sls_scope_not_granted");
+  const target = scopes.find((scope) => scope.logstores.includes("*") || scope.logstores.includes(input.logstore));
+  if (!target) throw new Error("sls_logstore_not_granted");
   return { ...configured, ...target };
 }
 
@@ -30,7 +28,7 @@ export function prepareSlsQuery(input: CapabilityInputs["sls"], configured: Capa
   const query = traceId || input.query?.trim() || "*";
   if (query.includes("\0")) throw new Error("invalid_sls_query");
   if (!SLS_LOGSTORE.test(input.logstore) || (!configured.logstores.includes("*") && !configured.logstores.includes(input.logstore))) throw new Error("sls_logstore_not_granted");
-  return { from, to, query, logstore: input.logstore, trace: Boolean(traceId), ...(input.target ? { target: input.target } : {}) };
+  return { from, to, query, region: configured.region, project: configured.project, logstore: input.logstore, trace: Boolean(traceId) };
 }
 export type SlsQuery = ReturnType<typeof prepareSlsQuery>;
 

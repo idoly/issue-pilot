@@ -10,7 +10,7 @@ type AgentWireEvent =
   | { type: "session_reset" }
   | { type: "issue_run_state"; state: AgentRunState }
   | { type: "issue_user"; message: string; images?: ImageContent[] }
-  | { type: "issue_status"; status: "complete" | "error" };
+  | { type: "issue_status"; status: "complete" | "error" | "cancelled" };
 
 export interface RunEvent {
   id: string;

@@ -49,8 +49,8 @@ test("mutating one DMS tool schema does not change base rules or a later tool in
   }
 });
 
-test("SLS query limits remain isolated across single-target and named-target tool schemas", () => {
-  for (const configured of [config.sls!, { ...config.sls!, targets: [{ name: "primary", region: "cn-test", project: "orders", logstores: ["application"] }] }]) {
+test("SLS query limits remain isolated across single-scope and multi-scope tool schemas", () => {
+  for (const configured of [config.sls!, { ...config.sls!, targets: [{ region: "cn-test", project: "orders", logstores: ["application"] }] }]) {
     const first = capabilityToolInputSchema("sls", configured);
     const variants = Reflect.get(first, "anyOf") as object[] | undefined;
     const properties = Reflect.get(variants?.[0] ?? first, "properties") as Record<string, object>;
@@ -59,7 +59,7 @@ test("SLS query limits remain isolated across single-target and named-target too
     try {
       Reflect.set(query, "maxLength", 1);
       const second = compile(capabilityToolInputSchema("sls", configured));
-      assert.equal(second.check({ logstore: "application", query: "order_id:123", ...(configured.targets ? { target: "primary" } : {}) }), true);
+      assert.equal(second.check({ region: "cn-test", project: "orders", logstore: "application", query: "order_id:123" }), true);
     } finally {
       Reflect.set(query, "maxLength", maximum);
     }
@@ -98,7 +98,9 @@ test("multi-target tool parameters keep an object root so strict OpenAI-compatib
 test("rejects retired adapters and undeclared targets before invoking external systems", async () => {
   const [tool] = createCapabilityTools(context, config);
   for (const input of [
-    { service: "orders", capability: "sls", logstore: "unconfigured" },
+    { service: "orders", capability: "sls", region: "cn-test", project: "orders", logstore: "unconfigured" },
+    { service: "orders", capability: "sls", region: "cn-test", project: "orders", logstore: "application", target: "primary" },
+    { service: "orders", capability: "sls", logstore: "application" },
     { service: "other", capability: "dms", schema: "orders", script: "SELECT 1" },
     { service: "orders", capability: "dms", schema: "unknown", script: "SELECT 1" },
     { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", databaseId: "different" },
@@ -195,7 +197,10 @@ test("a missing credential for one capability does not block another capability 
     {},
     { serviceScopes: [{ environmentKey: "prod", serviceKey: "orders", serviceName: "Orders", config, credentialErrors: { sls: "personal_sls_credentials_incomplete" } }] },
   );
-  await assert.rejects(call(tools[0]!, { service: "orders", capability: "sls", logstore: "application", query: "*", from: 0, to: 1 }), /personal_sls_credentials_incomplete/);
+  await assert.rejects(
+    call(tools[0]!, { service: "orders", capability: "sls", region: "cn-test", project: "orders", logstore: "application", query: "*", from: 0, to: 1 }),
+    /personal_sls_credentials_incomplete/,
+  );
   // DMS is not rejected by the SLS credential error; it proceeds to SQL validation.
   await assert.rejects(call(tools[0]!, { service: "orders", capability: "dms", schema: "orders", script: "DELETE FROM orders" }), (error: unknown) => {
     assert.ok(error instanceof Error);

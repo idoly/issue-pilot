@@ -887,7 +887,7 @@ describe("issue pilot workspace", () => {
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
     expect(savedService?.repositories[0]).toEqual({ alias: "repository-updated-repository", url: "git@example.test:team/updated.git" });
     expect(savedService?.deployments[1]?.repositoryBranches).toEqual([{ repositoryAlias: "repository-updated-repository", baseBranch: "release/test" }]);
-    expect(savedService?.deployments[1]?.sls).toEqual({ region: "cn-test", project: "srm-updated", logstores: ["srm"] });
+    expect(savedService?.deployments[1]?.sls).toEqual({ region: "cn-test", project: "srm-updated", logstores: ["srm"], targets: [{ region: "cn-test", project: "srm-updated", logstores: ["srm"] }] });
     expect(savedService?.deployments[1]?.dms).toBeUndefined();
     expect(JSON.stringify(savedService)).not.toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
@@ -1097,12 +1097,12 @@ describe("issue pilot workspace", () => {
     expect(vi.mocked(client.loadApplicationEndpoints).mock.calls.length).toBe(requests);
   });
 
-  test("edits wildcard logstores without showing or changing internal SLS target names", async () => {
+  test("edits wildcard logstores and saves only actual SLS scope fields", async () => {
     const client = await import("../data/client");
     const configuration = structuredClone(await client.loadConfig());
     const deployment = configuration.services[0]!.deployments[0]!;
-    const primary = { name: "primary", region: "cn-test", project: "srm-test", logstores: ["srm"] };
-    const secondary = { name: "gateway", region: "cn-other", project: "gateway-prod", logstores: ["requests"] };
+    const primary = { region: "cn-test", project: "srm-test", logstores: ["srm"] };
+    const secondary = { region: "cn-other", project: "gateway-prod", logstores: ["requests"] };
     deployment.sls = { ...deployment.sls!, targets: [primary, secondary] };
     vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
     vi.mocked(client.updateService).mockClear();
@@ -1133,10 +1133,10 @@ describe("issue pilot workspace", () => {
     const configuration = structuredClone(await client.loadConfig());
     const deployment = configuration.services[0]!.deployments[0]!;
     const database = { instanceAlias: "SRM", schemaName: "srm", instanceId: "i1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" };
-    const target = { name: "primary", region: "cn-test", project: "srm-test", logstores: ["srm"] };
+    const target = { region: "cn-test", project: "srm-test", logstores: ["srm"] };
     deployment.capabilities.push("dms");
     deployment.dms = { databases: [database, { ...database, instanceAlias: "OTHER", schemaName: "other", databaseId: "43" }] };
-    deployment.sls = { ...deployment.sls!, targets: [target, { ...target, name: "gateway", project: "gateway-test" }] };
+    deployment.sls = { ...deployment.sls!, targets: [target, { ...target, project: "gateway-test" }] };
     vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
     vi.mocked(client.updateService).mockClear();
     vi.mocked(client.resolveDmsScope).mockClear();
@@ -1174,7 +1174,7 @@ describe("issue pilot workspace", () => {
     const client = await import("../data/client");
     const configuration = structuredClone(await client.loadConfig());
     const deployment = configuration.services[0]!.deployments[0]!;
-    deployment.sls = { ...deployment.sls!, targets: [{ name: "primary", region: "cn-test", project: "srm-test", logstores: ["srm"] }] };
+    deployment.sls = { ...deployment.sls!, targets: [{ region: "cn-test", project: "srm-test", logstores: ["srm"] }] };
     vi.mocked(client.loadConfig).mockResolvedValueOnce(configuration);
     vi.mocked(client.updateService).mockClear();
     render(() => <App initialView="configuration" />);
@@ -1189,6 +1189,21 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     expect((await within(dialog).findByRole("alert")).textContent).toContain("请填写全部 SLS 日志目标");
     expect(client.updateService).not.toHaveBeenCalled();
+    for (const [field, value] of [
+      ["region", "cn-other"],
+      ["project", "gateway-test"],
+      ["logstores", "gateway"],
+    ]) {
+      await fireEvent.input(within(group).getByLabelText(`sls ${field} 2-2`), { target: { value } });
+    }
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(client.updateService).toHaveBeenCalledOnce());
+    const targets = vi.mocked(client.updateService).mock.calls[0]![1].deployments[1]!.sls!.targets!;
+    expect(targets).toEqual([
+      { region: "cn-test", project: "srm-test", logstores: ["srm"] },
+      { region: "cn-other", project: "gateway-test", logstores: ["gateway"] },
+    ]);
+    expect(targets.every((scope) => !("name" in scope))).toBe(true);
   });
 
   test("shows the upstream DMS rate limit while resolving a database", async () => {

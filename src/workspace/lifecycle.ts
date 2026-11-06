@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -82,6 +84,7 @@ class WorkspaceRefusal extends Error {
   }
 }
 
+export class IssueDeletionRefusal extends WorkspaceRefusal {}
 export class WorkspaceReleaseRefusal extends WorkspaceRefusal {}
 export class WorkspaceRestoreRefusal extends WorkspaceRefusal {}
 export class WorkspaceConversionRefusal extends WorkspaceRefusal {}
@@ -628,6 +631,74 @@ export class WorkspaceLifecycleManager {
       .returning();
     if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
     return reopened;
+  }
+
+  /** Destructive API operation, distinct from workspace release. Unknown/dirty Git state is never forced. */
+  async deleteIssue(issueId: string, authorize: () => Promise<unknown>): Promise<void> {
+    return this.withIssueReservation(
+      issueId,
+      async (reservation) => {
+        const { issue } = await this.issueRow(issueId);
+        const [reference] = await this.database.select({ id: issueRelations.issueId }).from(issueRelations).where(eq(issueRelations.relatedIssueId, issueId)).limit(1);
+        if (reference) throw new IssueDeletionRefusal("issue_is_related_context");
+        const root = issueRoot(this.stateRoot, issue.key);
+        if (!(await pathExists(root))) throw new IssueDeletionRefusal("workspace_missing");
+        if (!(await lstat(root)).isDirectory() || (await realpath(root)) !== root) throw new IssueDeletionRefusal("workspace_path_outside_issue_root");
+        const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issueId));
+        const state = classifyRepositoryState(repositories);
+        if (repositories.length && state === "invalid") throw new IssueDeletionRefusal("development_repository_state_invalid");
+        const active = repositories.filter((repository) => repository.localPath !== null);
+        await assertManagedIssueWorkspaceLayout(
+          root,
+          active.map((repository) => repository.localPath!),
+        );
+        for (const repository of active) {
+          await this.worktrees.assertClean(repository.url, repository.localPath!, repository.workingBranch!);
+        }
+        await reservation.closeSession(issueId);
+        const stagingRoot = path.join(this.stateRoot, "control", "deletions");
+        await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
+        if ((await realpath(stagingRoot)) !== stagingRoot) throw new IssueDeletionRefusal("workspace_path_outside_issue_root");
+        const staged = path.join(stagingRoot, `${issue.key.toLowerCase()}-${randomUUID()}`);
+        const commit = async () => {
+          await rename(root, staged);
+          try {
+            await this.database.transaction(async (transaction) => {
+              await transaction.delete(issues).where(eq(issues.id, issueId));
+            });
+          } catch (error) {
+            try {
+              await rename(staged, root);
+            } catch (rollbackError) {
+              throw new AggregateError([error, rollbackError], "issue_delete_rollback_failed");
+            }
+            throw error;
+          }
+        };
+        if (active.length) {
+          const names = issueRepositoryWorkspaceNames(repositories);
+          await this.worktrees.removeBatch({
+            issueKey: issue.key,
+            mode: developmentWorktreeMode(issue.type),
+            worktrees: active.map((repository) => ({ workspaceName: names.get(repository.url)!, url: repository.url, workingBranch: repository.workingBranch!, workspacePath: repository.localPath! })),
+            finalize: commit,
+          });
+        } else await commit();
+        // After DB commit, do not restore a partly removed root or pretend the delete fully succeeded.
+        // Failed cleanup remains explicitly staged for operator inspection; never scan/adopt it on startup.
+        try {
+          await rm(staged, { recursive: true });
+        } catch (error) {
+          throw new Error("issue_delete_cleanup_failed", { cause: error });
+        }
+      },
+      (error) => {
+        if (error instanceof IssueDeletionRefusal) throw error;
+        if (error instanceof Error && ["issue_already_running", "workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new IssueDeletionRefusal(error.message);
+        throw error;
+      },
+      authorize,
+    );
   }
 
   private async releaseLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<MeasuredWorkspaceRelease> {

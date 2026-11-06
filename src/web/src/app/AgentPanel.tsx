@@ -3,7 +3,18 @@ import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Sw
 import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
-import { ISSUE_STATUSES, agentStreamUrl, sendAgentMessage, mergeAgentCostSource, type AgentCostSource, type AgentFooterStats, type IssueDetail, type IssueStatus, type RunEvent } from "../data/client";
+import {
+  ISSUE_STATUSES,
+  agentStreamUrl,
+  abortAgent,
+  sendAgentMessage,
+  mergeAgentCostSource,
+  type AgentCostSource,
+  type AgentFooterStats,
+  type IssueDetail,
+  type IssueStatus,
+  type RunEvent,
+} from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { IssueMarkdown, resolveIssueFileLink } from "./IssueMarkdown";
 import {
@@ -382,7 +393,33 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     if (window.getSelection()?.isCollapsed === false) return;
     panel?.focus({ preventScroll: true });
   };
+  let aborting = false;
   const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
+    if (event.key === "Escape") {
+      if (props.hidden || event.defaultPrevented || event.isComposing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (!processing() && !props.issue.agentRunning) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (aborting) return;
+      aborting = true;
+      const key = props.issue.id;
+      const generation = issueGeneration;
+      const record = draftRecord;
+      void abortAgent(key)
+        .then(async () => {
+          if (generation === issueGeneration && draftStore.isCurrent(key, record)) await props.onRefresh(key);
+        })
+        .catch((failure: unknown) => {
+          if (generation === issueGeneration && draftStore.isCurrent(key, record)) {
+            record.error = failure instanceof Error ? failure.message : "agent_abort_failed";
+            setError(record.error);
+          }
+        })
+        .finally(() => {
+          aborting = false;
+        });
+      return;
+    }
     if (event.key !== "Enter" || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
     scrollLatest();

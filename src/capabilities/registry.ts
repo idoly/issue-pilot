@@ -77,9 +77,10 @@ export function parseSlsScopeConfiguration(value: unknown): SlsScope {
       ? undefined
       : (Array.isArray(input.targets) ? input.targets : fail("invalid_sls_scope")).map((value) => {
           const target = inputRecord(value);
-          return { name: requiredText(target.name, "sls_target", 100), ...parseSlsTargetScope(target) };
+          if ("name" in target) fail("invalid_sls_scope");
+          return parseSlsTargetScope(target);
         });
-  if (targets && (!targets.length || new Set(targets.map((target) => target.name)).size !== targets.length)) fail("invalid_sls_scope");
+  if (targets && !targets.length) fail("invalid_sls_scope");
   return { ...scope, ...(targets ? { targets } : {}) };
 }
 
@@ -102,7 +103,12 @@ const dmsQueryProperties = {
 };
 export const capabilityInputSchemas = {
   dms: obj({ schema: str({ minLength: 1, maxLength: 255, description: "Exact configured schema for the selected deployment." }), ...dmsQueryProperties, export: opt(dmsExportSchema) }),
-  sls: obj({ target: opt(str({ minLength: 1, maxLength: 100 })), logstore: str({ maxLength: 63, pattern: SLS_LOGSTORE.source }), ...slsQueryProperties }),
+  sls: obj({
+    region: str({ minLength: 1, maxLength: 63, pattern: SLS_REGION.source }),
+    project: str({ minLength: 3, maxLength: 63, pattern: SLS_PROJECT.source }),
+    logstore: str({ maxLength: 63, pattern: SLS_LOGSTORE.source }),
+    ...slsQueryProperties,
+  }),
 } as const;
 export type CapabilityInputs = { [Key in keyof typeof capabilityInputSchemas]: Static<(typeof capabilityInputSchemas)[Key]> };
 export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, configuration: CapabilityConfig<Key>, options: { exportEnabled?: boolean } = {}): Schema {
@@ -112,9 +118,9 @@ export function capabilityToolInputSchema<Key extends CapabilityName>(key: Key, 
       stores.includes("*")
         ? str({ maxLength: 63, pattern: SLS_LOGSTORE.source, description: "Any exact logstore name in this configured project. Specify one logstore, never *." })
         : oneOf(stores, { description: "Exact logstore configured for the selected deployment." });
-    const schema = configured.targets
-      ? union(configured.targets.map((target) => obj({ target: lit(target.name), logstore: logstoreSchema(target.logstores), ...slsQueryProperties })))
-      : obj({ logstore: logstoreSchema(configured.logstores), ...slsQueryProperties });
+    const schema = union(
+      (configured.targets ?? [configured]).map(({ region, project, logstores }) => obj({ region: lit(region), project: lit(project), logstore: logstoreSchema(logstores), ...slsQueryProperties })),
+    );
     return structuredClone(schema);
   }
   return structuredClone(

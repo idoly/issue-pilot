@@ -41,9 +41,9 @@ export function deploymentContext(
   const value = projectCapabilityConfiguration(configuration);
   if (value.dms) {
     const databases = value.dms.databases;
-    for (const [index, database] of databases.entries()) {
+    for (const database of databases) {
       sections.push(
-        section(databases.length > 1 ? `DMS · 数据库 ${index + 1}` : "DMS", [
+        section("DMS", [
           ["alias", database.instanceAlias],
           ["schema", database.schemaName],
         ]),
@@ -55,7 +55,7 @@ export function deploymentContext(
     if (v.targets)
       for (const target of v.targets)
         sections.push(
-          section(`SLS · ${target.name}`, [
+          section("SLS", [
             ["region", target.region],
             ["project", target.project],
             ["logstores", target.logstores],

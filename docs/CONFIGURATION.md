@@ -140,7 +140,7 @@ SRT 在每个新代理请求／CONNECT 时检查当前模式；不关闭 Pi 会�
 
 DMS 保存 alias／schema 意图，不相信客户端的 instanceId、host、port 或 databaseId；实际解析按当前操作／查询 owner 的所选凭证完成。
 
-SLS 保存 region、project、logstores／targets，`*` 可表示 Project 下日志库，但查询仍指定具体名称。能力按实际部署目标开放，不按环境名称硬编码禁用；调查保持本环境，开发显式选择 prod/test。
+SLS 保存 region、project、logstores／targets，`*` 可表示 Project 下日志库，但查询仍指定具体名称。SLS 查询范围只保存 region、project、logstores，不保存自定义目标名。`service_query` 必须显式提交 region、project 和具体 logstore，服务端校验完整组合，不接受旧 `target` 名称参数。多个范围可使用相同 region／project 并授权不同日志库。服务描述中标题统一为 `SLS`，环境由上级章节区分；DMS 各数据库标题统一为 `DMS`，保留真实实例 alias 与 schema。0072 迁移直接删除现有部署 `sls.targets[].name` 并推进受影响服务的 revision，不转换旧工具参数或改写历史对话。能力按实际部署目标开放，不按环境名称硬编码禁用；调查保持本环境，开发显式选择 prod/test。
 
 ## 服务 MCP 与钉钉
 

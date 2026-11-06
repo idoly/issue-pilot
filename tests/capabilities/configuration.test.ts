@@ -16,11 +16,14 @@ test("validates DMS connection credentials independently from query targets", ()
   for (const authorization of ["", "token", "Bearer token with spaces"]) assert.throws(() => parseDmsConnectionConfiguration({ ...connection, authorization }), /invalid_dms_authorization/);
 });
 
-test("validates SLS credentials and uses the same target rules for single and named scopes", () => {
+test("validates SLS credentials and exact scopes without accepting custom target names", () => {
   const credentials = { accessKeyId: "key", accessKeySecret: "secret" };
   const scope = { region: "cn-test", project: "orders-test", logstores: ["application"] };
   assert.deepEqual(parseSlsConnectionConfiguration(credentials), credentials);
   assert.deepEqual(parseSlsScopeConfiguration(scope), scope);
+  const targets = [scope, { ...scope, logstores: ["gateway"] }];
+  assert.deepEqual(parseSlsScopeConfiguration({ ...scope, targets }), { ...scope, targets });
+  assert.throws(() => parseSlsScopeConfiguration({ ...scope, targets: [{ name: "prod", ...scope }] }), /invalid_sls_scope/);
   for (const invalid of [
     { ...scope, logstores: [] },
     { ...scope, project: "INVALID" },
@@ -28,6 +31,6 @@ test("validates SLS credentials and uses the same target rules for single and na
     { ...scope, logstores: ["bad/store"] },
   ]) {
     assert.throws(() => parseSlsScopeConfiguration(invalid), /invalid_sls_scope/);
-    assert.throws(() => parseSlsScopeConfiguration({ ...scope, targets: [{ name: "invalid", ...invalid }] }), /invalid_sls_scope/);
+    assert.throws(() => parseSlsScopeConfiguration({ ...scope, targets: [invalid] }), /invalid_sls_scope/);
   }
 });

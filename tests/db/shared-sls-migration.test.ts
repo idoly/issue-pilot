@@ -52,13 +52,15 @@ for (const conflict of [false, true])
       const after = (await db.client.execute("SELECT * FROM service_deployments ORDER BY id")).rows;
       after.forEach((row, index) => {
         const { accessKeyId: _id, accessKeySecret: _secret, ...scope } = configs[index]!.sls;
-        assert.deepEqual(JSON.parse(String(row.config)), { ...configs[index], sls: scope });
+        // 0072 removes custom target names after 0064 consolidated the shared credentials.
+        const targets = scope.targets.map(({ name: _name, ...target }) => target);
+        assert.deepEqual(JSON.parse(String(row.config)), { ...configs[index], sls: { ...scope, targets } });
         assert.equal(row.created_at, 1);
-        assert.equal(row.updated_at, 2);
+        assert.ok(Number(row.updated_at) >= 2);
       });
       assert.deepEqual(
         (await db.client.execute("SELECT revision FROM services ORDER BY id")).rows.map((row) => row.revision),
-        [1, 1],
+        [2, 2],
       );
       await run();
       assert.deepEqual((await db.client.execute("SELECT * FROM service_deployments ORDER BY id")).rows, after);

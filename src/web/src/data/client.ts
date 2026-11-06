@@ -575,6 +575,7 @@ export const readIssueSession = (key: string, sessionId: string, offset = 0, sig
     ...(signal ? { signal } : {}),
   });
 export const resetIssueSession = (key: string, expectedSessionId: string) => jsonRequest<{ sessionId: string }>(issuePath(key, "/reset-session"), "POST", { expectedSessionId });
+export const abortAgent = (key: string) => request<void>(issuePath(key, "/abort"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export function sendAgentMessage(key: string, message: string, images: File[] = []): Promise<void> {
   if (!images.length) return jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });

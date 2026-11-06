@@ -28,7 +28,7 @@ import {
 } from "../db/schema.ts";
 import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
-import { WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
+import { IssueDeletionRefusal, WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import {
   finalizeQuarantinedAttachments,
@@ -45,7 +45,7 @@ import {
 } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { ensureCurrentSubject, authorizeWorkMode, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
@@ -88,6 +88,23 @@ export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"]
 
 export function registerIssueRoutes(context: ApiRouteContext) {
   const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive, events } = context;
+
+  app.delete<{ Params: { key: string } }>("/api/issues/:key", async (request, reply) => {
+    await requireAdmin(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    await runScopeExclusive(async () => {
+      try {
+        await workspaces.deleteIssue(issue.id, async () => {
+          await requireAdmin(database, request);
+          await requireIssue(database, issue.key);
+        });
+      } catch (error) {
+        if (error instanceof IssueDeletionRefusal) throwRefusal(error);
+        throw error;
+      }
+    });
+    return reply.code(204).send();
+  });
   const findEnvironmentByKind = async (kind: EnvironmentKind) => (await database.db.select().from(environments).where(eq(environments.kind, kind)).limit(1))[0];
   const findServiceDeployment = async (key: string, environmentId: string) =>
     (

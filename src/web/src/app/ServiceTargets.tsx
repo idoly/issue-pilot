@@ -2,7 +2,7 @@ import { createSignal, For, untrack } from "solid-js";
 import { Button, Input, Select } from "../ui";
 import { DBHUB_DATABASES, type DbHubTarget } from "../../../domain/contracts";
 
-type SlsTarget = { name: string; region: string; project: string; logstores: string[] };
+type SlsTarget = { region: string; project: string; logstores: string[] };
 
 function focusNewTarget(root: HTMLElement | undefined) {
   requestAnimationFrame(() => {
@@ -116,9 +116,7 @@ export function SlsTargetsEditor(props: { value: SlsTarget[]; deploymentIndex: n
     );
   };
   const add = () => {
-    let number = 1;
-    while (targets().some((value) => value.name === `target-${number}`)) number++;
-    emit([...targets(), { name: `target-${number}`, region: "", project: "", logstores: "" }]);
+    emit([...targets(), { region: "", project: "", logstores: "" }]);
     focusNewTarget(root);
   };
   const labels = { region: "地域（region）", project: "项目（project）", logstores: "日志库（logstore，* 表示全部）" };

@@ -102,6 +102,22 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     return reply.send(result);
   });
 
+  app.post<{ Params: { key: string } }>("/api/issues/:key/abort", async (request, reply) => {
+    await requireCurrentUser(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    if (!engine.abort) throw new ApiError(501, "agent_abort_unavailable");
+    try {
+      await engine.abort(issue.id, async () => {
+        await requireCurrentUser(database, request);
+        await requireIssue(database, issue.key);
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
+      throw error;
+    }
+    return reply.send({ ok: true });
+  });
+
   app.post<{ Params: { key: string } }>("/api/issues/:key/retry", async (request, reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);

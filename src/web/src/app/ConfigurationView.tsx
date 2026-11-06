@@ -51,12 +51,11 @@ function serviceSaveErrorMessage(error: unknown): string {
     invalid_dbhub_database: "请填写 DBHub 数据库",
     invalid_dbhub_target: "DBHub 主机或端口无效",
     duplicate_dbhub_target: "同一环境的 DBHub 目标不能重复",
-    invalid_sls_scope: "SLS 目标无效：region 和 project 只能使用小写字母、数字和连字符，logstore 使用字母、数字、下划线或连字符，目标名称不能重复",
+    invalid_sls_scope: "SLS 查询范围无效：region 和 project 只能使用小写字母、数字和连字符，logstore 使用字母、数字、下划线或连字符",
     invalid_sls_region: "请填写 SLS region",
     invalid_sls_project: "请填写 SLS project",
     invalid_sls_logstores: "请至少填写一个 SLS logstore",
     invalid_sls_logstore: "SLS logstore 无效",
-    invalid_sls_target: "请填写 SLS 目标名称",
     credential_required: "该能力必须配置凭据",
     credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
     invalid_credential_replacement: "请填写完整的新凭据",
@@ -132,9 +131,8 @@ function deploymentValidationError(deployment: ServiceDeploymentDraft): string {
   }
   if (deployment.capabilities.includes("sls")) {
     // Every target is saved, not only the first one mirrored at the top level.
-    const targets = deployment.sls?.targets ?? (deployment.sls ? [{ name: deployment.environmentKey, ...deployment.sls }] : []);
-    if (!targets.length || targets.some((target) => !target.name.trim() || !target.region.trim() || !target.project.trim() || !target.logstores.length))
-      return "请填写全部 SLS 日志目标的名称、region、project 和 logstore";
+    const targets = deployment.sls?.targets ?? (deployment.sls ? [deployment.sls] : []);
+    if (!targets.length || targets.some((target) => !target.region.trim() || !target.project.trim() || !target.logstores.length)) return "请填写全部 SLS 日志目标的 region、project 和 logstore";
   }
   return "";
 }
@@ -481,7 +479,6 @@ function ServiceDeploymentEditorRow(props: {
                     value={
                       slsDraft().targets ?? [
                         {
-                          name: initialDeployment.environmentKey,
                           region: slsDraft().region,
                           project: slsDraft().project,
                           logstores: slsDraft()
@@ -493,7 +490,7 @@ function ServiceDeploymentEditorRow(props: {
                     }
                     onChange={(targets) =>
                       updateSls({
-                        targets: targets.length === 1 && !initialDeployment.sls?.targets && targets[0]?.name === initialDeployment.environmentKey ? undefined : targets,
+                        targets,
                         region: targets[0]?.region ?? "",
                         project: targets[0]?.project ?? "",
                         logstores: targets[0]?.logstores.join(", ") ?? "",

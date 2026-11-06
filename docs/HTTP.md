@@ -30,6 +30,8 @@ HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不�
 | `POST /api/issues` | `201` 工单摘要；保存并安排入队，不等待模型完成 |
 | `PATCH /api/issues/:key` | `200` 摘要；保存元信息／附件，未解决且未请求 reset 时安排一轮元数据反馈 |
 | `POST /api/issues/:key/agent-messages` | `202`，空响应体；输入已受理，不返回模型结果 |
+| `POST /api/issues/:key/abort` | 活跃用户可调用；`200 {"ok":true}` 表示当前轮次／排队取消与收尾完成，保留对话，不撤销已完成操作；预约冲突为 409 |
+| `DELETE /api/issues/:key` | 管理员专用，`204` 表示工单数据库关联记录和工单根已清理；页面无删除入口，重复删除为 404 |
 | `POST /api/issues/:key/retry` | `202 {"ok":true}`，未解决且空闲时继续处理；运行／预约冲突为 409 |
 | `PATCH /api/issues/:key/status` | `200` 摘要，body 只选择 `{"status":"resolved"}` 或 `{"status":"open"}`；转换条件见[状态](USAGE.md#状态与完成条件) |
 | `POST /api/issues/:key/comments` | `201` 评论；body 为 `{"body":"人工备注"}`，**不发送给 Agent**，与 agent-messages 不同 |
@@ -65,6 +67,14 @@ HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不�
 编辑虽使用 PATCH，元信息仍按**完整表单**解析：必须传 `title` 和 `priority`；省略 `description`、`assigneeSubject`、`ccSubjects` 会分别变为空、未分配、空列表，不是全部保留。`removedAttachmentIds` 指定移除原件，未指定移除的原附件保留。不能用普通编辑变更 `serviceKey`、`environmentKey`、`type`、`workMode` 或 `relatedIssueKeys`；范围与关联走专用接口。
 
 `resetSession: true` 的组合编辑在 scope／工单预约内先重检 developer 权限、未解决状态和当前会话，再保存字段／附件并执行重置。已解决或未绑定会话的预检拒绝发生在保存前；会话在预检后变化、丢失或重置事务失败等情况，统一返回 `500 issue_saved_session_reset_failed`，明确表示字段／附件已保存而重置未成功。此时先重读详情和会话列表，只重试独立重置，不要重复上传附件；独立重置接口要求 `expectedSessionId`。其他失败也应按实际错误与当前状态判断，不为所有接口承诺原子回滚。实现见 [工单路由](../src/http/issue-routes.ts)，回归见 [session-reset.test.ts](../tests/http/session-reset.test.ts)，操作见[使用指南](USAGE.md#重置会话)。
+
+### 工单删除
+
+`DELETE /api/issues/:key` 是不可逆删除，不是 workspace 回收。要求活跃管理员，等待 scope／生命周期／inspection 队列后再次授权，并预约工单；运行中或排队时返回 `409 issue_already_running`，应先调用 abort 并等待完成。被其他工单作为关联上下文引用时返回 `409 issue_is_related_context`，先通过关联接口移除引用。异常路径、缺失根或 dirty 开发 worktree 会拒绝删除，不支持 force。
+
+删除关闭空闲会话，通过 Git owner 移除干净的登记 worktree，然后将整个工单根移入 `control/deletions/<key>-<uuid>`，以事务删除 Issue 及级联的附件元数据、会话绑定、评论、关联、抄送／置顶、仓库和 Workspace 记录。数据库失败先恢复根，再由 Git owner 回滚 worktree。提交成功后删除暂存根，附件原件、JSONL、工作文件和工单私有 Git 都将永久移除；共享 Git 缓存、共享快照、已发布分支和其他工单不在删除范围。
+
+文件系统与 SQLite 不存在跨介质原子提交。进程崩溃、回滚或提交后清理失败须按[运维手册](RUNBOOK.md#工单删除失败边界)检查；500 或连接中断不表示数据一定未删除。提交后清理失败不会恢复已部分删除的目录，也不会把失败静默报告为成功。
 
 ### 范围转换
 

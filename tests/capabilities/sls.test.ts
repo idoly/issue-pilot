@@ -10,7 +10,7 @@ import { capabilityInputSchemas, capabilityToolInputSchema, parseSlsScopeConfigu
 import { compile } from "@earendil-works/pi-schema";
 
 const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
-const base = { logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600 };
+const base = { region: configured.region, project: configured.project, logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600 };
 function fixture(pages: unknown[]) {
   const calls: Array<{ args: string[]; body: Record<string, unknown>; configPath: string }> = [];
   const executor: CommandExecutor = {
@@ -82,44 +82,73 @@ test("target wildcard schemas and execution keep independent logstore permission
     ...parseSlsScopeConfiguration({
       ...configured,
       targets: [
-        { name: "any", region: "cn-other", project: "other-project", logstores: ["*"] },
-        { name: "restricted", region: configured.region, project: configured.project, logstores: ["application_log"] },
+        { region: "cn-other", project: "other-project", logstores: ["*"] },
+        { region: configured.region, project: configured.project, logstores: ["application_log"] },
       ],
     }),
   };
   const schema = compile(capabilityToolInputSchema("sls", config));
-  assert.equal(schema.check({ ...base, target: "any", logstore: "new_store" }), true);
-  assert.equal(schema.check({ ...base, target: "restricted", logstore: "new_store" }), false);
-  assert.equal(schema.check({ ...base, target: "any", logstore: "*" }), false);
+  assert.equal(schema.check({ ...base, region: "cn-other", project: "other-project", logstore: "new_store" }), true);
+  assert.equal(schema.check({ ...base, logstore: "new_store" }), false);
+  assert.equal(schema.check({ ...base, region: "cn-other", project: "other-project", logstore: "*" }), false);
+  assert.equal(schema.check({ ...base, target: "any" }), false);
   const f = fixture([page([])]);
-  await readSlsLogs({ ...base, target: "any", logstore: "new_store" }, config, undefined, f.executor);
+  await readSlsLogs({ ...base, region: "cn-other", project: "other-project", logstore: "new_store" }, config, undefined, f.executor);
   assert.equal(f.calls[0]!.args[f.calls[0]!.args.indexOf("--project") + 1], "other-project");
-  await assert.rejects(readSlsLogs({ ...base, target: "restricted", logstore: "new_store" }, config, undefined, f.executor), /sls_logstore_not_granted/);
-  await assert.rejects(readSlsLogs({ ...base, target: "unknown", logstore: "new_store" }, config, undefined, f.executor), /sls_target_not_granted/);
+  await assert.rejects(readSlsLogs({ ...base, logstore: "new_store" }, config, undefined, f.executor), /sls_logstore_not_granted/);
+  await assert.rejects(readSlsLogs({ ...base, project: "unknown", logstore: "new_store" }, config, undefined, f.executor), /sls_scope_not_granted/);
+  await assert.rejects(readSlsLogs({ ...base, region: "cn-other", logstore: "new_store" }, config, undefined, f.executor), /sls_scope_not_granted/);
   assert.equal(f.calls.length, 1);
 });
 
-test("named SLS targets retain exact project and logstore selection", async () => {
+test("SLS scopes retain exact region, project and logstore selection without custom names", async () => {
   const config = {
     ...configured,
     targets: [
-      { name: "first", region: "cn-test", project: "srm-test", logstores: ["application_log"] },
-      { name: "second", region: "cn-other", project: "other-project", logstores: ["gateway"] },
+      { region: "cn-test", project: "srm-test", logstores: ["application_log"] },
+      { region: "cn-other", project: "other-project", logstores: ["gateway"] },
     ],
   };
   const f = fixture([page([{ message: "second target" }])]);
-  const result = await readSlsLogs({ ...base, target: "second", logstore: "gateway" }, config, undefined, f.executor);
+  const result = await readSlsLogs({ ...base, region: "cn-other", project: "other-project", logstore: "gateway" }, config, undefined, f.executor);
   assert.equal(f.calls[0]!.args[f.calls[0]!.args.indexOf("--project") + 1], "other-project");
-  assert.equal(JSON.parse(result.content[0]!.text).query.target, "second");
-  await assert.rejects(readSlsLogs({ ...base, target: "second" }, config, undefined, f.executor), /sls_logstore_not_granted/);
-  await assert.rejects(readSlsLogs(base, config, undefined, f.executor), /sls_target_not_granted/);
+  const source = JSON.parse(result.content[0]!.text).query;
+  assert.equal(source.region, "cn-other");
+  assert.equal(source.project, "other-project");
+  assert.equal(source.logstore, "gateway");
+  assert.equal("target" in source, false);
+  await assert.rejects(readSlsLogs({ ...base, region: "cn-other", project: "other-project" }, config, undefined, f.executor), /sls_logstore_not_granted/);
+  await assert.rejects(readSlsLogs({ ...base, region: "cn-other" }, config, undefined, f.executor), /sls_scope_not_granted/);
   assert.equal(f.calls.length, 1);
 });
 
+test("multiple logstore grants in one region/project remain usable without combining different source tuples", async () => {
+  const config = {
+    ...configured,
+    targets: [
+      { region: configured.region, project: configured.project, logstores: ["application_log"] },
+      { region: configured.region, project: configured.project, logstores: ["gateway"] },
+      { region: "cn-other", project: "other-project", logstores: ["application_log"] },
+    ],
+  };
+  const schema = compile(capabilityToolInputSchema("sls", config));
+  assert.equal(schema.check({ ...base, logstore: "gateway" }), true);
+  const f = fixture([page([])]);
+  await readSlsLogs({ ...base, logstore: "gateway" }, config, undefined, f.executor);
+  assert.equal(f.calls.length, 1);
+  assert.equal(schema.check({ ...base, region: "cn-other" }), false);
+  assert.equal(schema.check({ ...base, project: "other-project" }), false);
+  await assert.rejects(readSlsLogs({ ...base, region: "cn-other" }, config, undefined, f.executor), /sls_scope_not_granted/);
+  await assert.rejects(readSlsLogs({ ...base, project: "other-project" }, config, undefined, f.executor), /sls_scope_not_granted/);
+  assert.equal(f.calls.length, 1);
+  const { region: _region, project: _project, ...withoutSource } = base;
+  assert.equal(schema.check(withoutSource), false);
+});
+
 test("SLS retains exact source selection, time bounds and trace semantics before starting a command", async () => {
-  const trace = prepareSlsQuery({ logstore: base.logstore, trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab" }, configured);
+  const trace = prepareSlsQuery({ region: base.region, project: base.project, logstore: base.logstore, trace_id: "8ea38737-7d1e-40bb-8fff-69e71bc985ab" }, configured);
   assert.equal(trace.to - trace.from, 24 * 60 * 60);
-  assert.throws(() => prepareSlsQuery({ logstore: base.logstore, from: base.from }, configured), /invalid_sls_time_range/);
+  assert.throws(() => prepareSlsQuery({ region: base.region, project: base.project, logstore: base.logstore, from: base.from }, configured), /invalid_sls_time_range/);
   assert.throws(() => prepareSlsQuery({ ...base, logstore: "other" }, configured), /sls_logstore_not_granted/);
   assert.throws(() => prepareSlsQuery({ ...base, trace_id: trace.query, query: "other" }, configured), /invalid_sls_query/);
   const f = fixture([]);
