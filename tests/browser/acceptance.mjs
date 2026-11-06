@@ -229,6 +229,15 @@ try {
   await page.getByRole("radio", { name: "工单", exact: true }).click();
   await draft.waitFor();
   assert.equal(await draft.inputValue(), "unsent browser draft");
+  for (const width of [960, 980, 1020, 1180, 1200, 1260]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await page.evaluate(() => ({
+      contentWidth: document.querySelector(".app-content").scrollWidth,
+      detailRight: document.querySelector(".issue-workspace").getBoundingClientRect().right,
+    }));
+    assert.ok(layout.contentWidth <= width && layout.detailRight <= width, `Issue actions are clipped at ${width}px: ${JSON.stringify(layout)}`);
+  }
+  await page.setViewportSize({ width: 1680, height: 1050 });
   await page.getByText("还没有对话", { exact: true }).waitFor();
   const publish = (event) => events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event });
   publish({
@@ -476,7 +485,7 @@ try {
     );
     const actionBounds = await serviceActions.boundingBox();
     assert.ok(tabBounds.x >= 0 && actionBounds.x + actionBounds.width <= width);
-    if (width > 700) assert.ok(tabBounds.x + tabBounds.width + 8 <= actionBounds.x);
+    if (width > 700) assert.ok(Math.round(actionBounds.x - tabBounds.x - tabBounds.width) >= 8, JSON.stringify({ width, tabBounds, actionBounds }));
     else assert.ok(tabBounds.y + tabBounds.height + 4 <= actionBounds.y);
     assert.equal(await serviceTabs.evaluate((element) => element.scrollWidth > element.clientWidth), true);
     const lastService = serviceTabs.getByRole("tab", { name: "demo-namespace-19-servers", exact: true });
@@ -835,6 +844,7 @@ try {
           "undo/redo",
           "inline and side-by-side diff",
           "read-only diff copy on localhost and HTTP preserves tabs, NBSP, CRLF and the selection",
+          "workbench columns remain visible between responsive breakpoints",
           "file switch",
           "conflict preserves disk and draft",
           "dirty navigation guard",

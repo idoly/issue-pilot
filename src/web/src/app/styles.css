@@ -196,7 +196,7 @@ textarea {
   --detail-panel-width: clamp(380px, 28vw, 420px);
   position: relative;
   display: grid;
-  grid-template-columns: var(--queue-panel-width) minmax(560px, 1fr) var(--detail-panel-width);
+  grid-template-columns: var(--queue-panel-width) minmax(0, 1fr) var(--detail-panel-width);
   grid-template-rows: minmax(0, 1fr);
   height: calc(100dvh - 52px);
   min-height: 0;
@@ -1393,7 +1393,7 @@ textarea {
   --agent-accent: #8abeb7;
   --agent-border-accent: #00d7ff;
   --agent-border-muted: #505050;
-  --agent-error: #cc6666;
+  --agent-error: #e08080;
   --agent-warning: #ffff00;
   --agent-muted: #808080;
   --agent-dim: #808080;
@@ -1401,14 +1401,14 @@ textarea {
   --agent-user-message-text: #d4d4d4;
   --agent-custom-message-bg: #2d2838;
   --agent-custom-message-text: #d4d4d4;
-  --agent-custom-message-label: #9575cd;
+  --agent-custom-message-label: #b7a1df;
   --agent-tool-pending-bg: #282832;
   --agent-tool-success-bg: #283228;
   --agent-tool-error-bg: #3c2828;
   --agent-tool-title: #d4d4d4;
   --agent-tool-output: var(--agent-text);
   --agent-tool-diff-added: #b5bd68;
-  --agent-tool-diff-removed: #cc6666;
+  --agent-tool-diff-removed: var(--agent-error);
   --agent-tool-diff-context: var(--agent-text);
   --agent-thinking-text: #808080;
   --agent-thinking-minimal: #6e6e6e;
@@ -1437,6 +1437,9 @@ textarea {
 .agent-panel:focus-visible {
   outline: 2px solid var(--agent-border-accent);
   outline-offset: -2px;
+}
+.agent-panel :is(button, a, [tabindex]):focus-visible {
+  outline-color: var(--agent-accent);
 }
 .agent-transcript {
   position: relative;
@@ -1555,6 +1558,8 @@ textarea {
   object-position: left center;
 }
 .agent-tool {
+  --agent-muted: #a0a6a3;
+  --agent-dim: var(--agent-muted);
   margin: 18px 0 0;
   padding: 14px;
   background: var(--agent-tool-pending-bg);
@@ -3428,7 +3433,7 @@ summary.agent-tool-head > svg {
   .app-content {
     --queue-panel-width: 260px;
     --detail-panel-width: 320px;
-    grid-template-columns: var(--queue-panel-width) minmax(440px, 1fr) var(--detail-panel-width);
+    grid-template-columns: var(--queue-panel-width) minmax(0, 1fr) var(--detail-panel-width);
   }
   .app-content.source-expanded {
     display: block;
