@@ -30,7 +30,7 @@ import {
 } from "../../src/db/schema.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
-import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -88,6 +88,7 @@ test("atomically switches development repository sets across preparation and fin
       .insert(issues)
       .values({ key: "ISSUE-20260810-103", title: "Remove repositories", type: "defect_fix", serviceId: service!.id, environmentId: dev!.id, reporterSubject: "tester" })
       .returning();
+    await claimIssueRoot(stateRoot, issue!.key);
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
 
     const engine = new AgentEngine(database.db, stateRoot);
@@ -251,6 +252,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
         { key: "ISSUE-20260810-102", title: "Fix dev", type: "defect_fix", serviceId: service!.id, environmentId: dev.id, reporterSubject: "tester" },
       ])
       .returning();
+    await claimIssueRoot(stateRoot, devIssue!.key);
     await database.db.insert(issueWorkspaces).values([{ issueId: prodIssue!.id }, { issueId: devIssue!.id }]);
 
     const engine = new AgentEngine(database.db, stateRoot);

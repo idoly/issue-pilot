@@ -290,6 +290,8 @@ for (const [code, status] of [
   ["agent_message_outcome_unknown", 409],
   ["agent_session_file_incomplete", 500],
   ["agent_session_file_missing", 500],
+  ["issue_root_missing", 500],
+  ["invalid_issue_root", 500],
 ] as const)
   test(`classifies ${code} without resubmitting the message`, async () => {
     const fixture = await createApiFixture();

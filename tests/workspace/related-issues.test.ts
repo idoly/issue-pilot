@@ -23,7 +23,7 @@ import {
   subjects,
 } from "../../src/db/schema.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
-import { issueRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 const git = async (args: string[]) => (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
@@ -84,7 +84,7 @@ test("related Issues expose their complete current working directory and convers
       .returning();
     await database.db.insert(issueWorkspaces).values([{ issueId: development!.id }, { issueId: relatedProduction!.id }, { issueId: production!.id }]);
 
-    await mkdir(issueRoot(root, relatedProduction!.key), { recursive: true });
+    for (const issue of [development!, relatedProduction!, production!]) await claimIssueRoot(root, issue.key);
     const projects = new IssueProjectManager(database.db, root);
     const preparedDevelopment = await projects.prepare(development!, "dev");
     const developmentRepository = preparedDevelopment.repositories[0]!.workspacePath;

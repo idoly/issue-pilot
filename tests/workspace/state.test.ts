@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, pathExists, pruneState, repositoriesRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import {
+  assertIssueRoot,
+  claimIssueRoot,
+  issueRoot,
+  assertManagedIssueWorkspaceLayout,
+  classifyRepositoryState,
+  pathExists,
+  pruneState,
+  repositoriesRoot,
+  sharedCheckoutsRoot,
+} from "../../src/workspace/state.ts";
 
 const exec = promisify(execFile);
 
@@ -184,5 +194,53 @@ test("preserves changed shared checkouts and generated runtimes as evidence", as
     assert.equal(await readFile(path.join(issueRuntime, "manifest.json"), "utf8"), "preserve runtime evidence\n");
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("durable Issue root validation rejects redirected and non-directory roots without changing their targets", async () => {
+  const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-root-validation-"));
+  const key = "ISSUE-20261107-801";
+  const root = issueRoot(state, key),
+    target = path.join(state, "evidence");
+  try {
+    await assert.rejects(assertIssueRoot(state, key), { message: "issue_root_missing" });
+    await claimIssueRoot(state, key);
+    assert.equal(await assertIssueRoot(state, key), root);
+    await rm(root, { recursive: true });
+    await writeFile(root, "preserve file");
+    await assert.rejects(assertIssueRoot(state, key), { message: "invalid_issue_root" });
+    assert.equal(await readFile(root, "utf8"), "preserve file");
+    await rm(root);
+    await mkdir(target, { mode: 0o750 });
+    await writeFile(path.join(target, "evidence.txt"), "preserve target");
+    const mode = (await stat(target)).mode;
+    await symlink(target, root);
+    await assert.rejects(assertIssueRoot(state, key), { message: "invalid_issue_root" });
+    await rm(root);
+    await rmdir(path.dirname(root));
+    await mkdir(path.join(target, path.basename(root)));
+    await symlink(target, path.dirname(root));
+    await assert.rejects(assertIssueRoot(state, key), { message: "invalid_issue_root" });
+    assert.equal((await stat(target)).mode, mode);
+    assert.equal(await readFile(path.join(target, "evidence.txt"), "utf8"), "preserve target");
+  } finally {
+    await rm(state, { recursive: true, force: true });
+  }
+});
+
+test("durable Issue root validation preserves filesystem errors other than missing state", async (context) => {
+  try {
+    for (const code of ["EACCES", "EIO", "ENOTDIR"]) {
+      const failure = Object.assign(new Error("fixture filesystem failure"), { code });
+      context.mock.method(fs, "lstat", async () => {
+        throw failure;
+      });
+      syncBuiltinESMExports();
+      await assert.rejects(assertIssueRoot("/unused-fixture", "ISSUE-20261107-801"), (error) => error === failure);
+      context.mock.restoreAll();
+    }
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
   }
 });

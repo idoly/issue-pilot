@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, link, lstat, mkdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import pMap from "p-map";
@@ -8,7 +8,7 @@ import { issueWorkspaces } from "../db/schema.ts";
 import { errorMessage } from "../domain/contracts.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
 import { repositoryStorePath } from "./git.ts";
-import { issueRoot, sharedCheckoutsRoot } from "./state.ts";
+import { assertIssueRoot, issueRoot, sharedCheckoutsRoot } from "./state.ts";
 
 export interface IssueRuntimeRepository {
   name: string;
@@ -135,9 +135,7 @@ export async function prepareIssueRuntime(
   access: IssueRuntimeAccess,
   relatedIssues: RelatedIssueRuntime[] = [],
 ): Promise<string> {
-  const root = issueRoot(stateRoot, issueKey);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  if (!(await lstat(root)).isDirectory() || (await realpath(root)) !== root) throw new Error("invalid_issue_runtime_root");
+  const root = await assertIssueRoot(stateRoot, issueKey);
   await chmod(root, 0o700);
   const desired: Array<{ name: string; kind: "link" | "file"; content: string }> = [],
     names = new Set<string>();

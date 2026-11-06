@@ -5,7 +5,7 @@ import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, test } from "node:test";
@@ -42,7 +42,7 @@ import {
 } from "../../src/workspace/lifecycle.ts";
 import { IssueProjectManager, prepareDevelopmentIssueRuntimes } from "../../src/workspace/project.ts";
 import { IssueScopeTransitionManager, ScopeTransitionRefusal } from "../../src/workspace/scope-transition.ts";
-import { classifyRepositoryState, gitRoot, issueRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, classifyRepositoryState, gitRoot, issueRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -1006,7 +1006,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       .set({ status: "resolved", resolvedAt: new Date(0) })
       .where(eq(issues.id, issue!.id));
     for (const repository of restoredRows) await worktrees.remove(repository.url, repository.localPath!);
-    await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
+    const preservedRoot = path.join(root, "preserved-issue-root");
+    await rename(issueRoot(root, issue!.key), preservedRoot);
     await database.db.update(issueWorkspaces).set({ status: "running" }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_busy");
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
@@ -1039,7 +1040,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       return reconstructed;
     };
 
-    // Operator repair: rebuild the runtime and worktrees from the recorded branches, then release normally.
+    // Restore the exact durable root before rebuilding generated runtime and worktrees.
+    await rename(preservedRoot, issueRoot(root, issue!.key));
     await reconstruct();
     assert.equal((await lifecycle.releaseIssue(issue!.id)).alreadyReleased, false);
 
@@ -1156,6 +1158,7 @@ test("converts a ready test analysis to a development defect while preserving Is
 
     const worktrees = new WorktreeManager(root);
     const projects = new IssueProjectManager(database.db, root, worktrees);
+    await claimIssueRoot(root, issue!.key);
     const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!);
     const sessionRoot = issueRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "analysis.jsonl");
@@ -1324,6 +1327,7 @@ test("migrates ready development scopes while preserving retained changes and ro
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
     const projects = new IssueProjectManager(database.db, root);
+    await claimIssueRoot(root, issue!.key);
     await projects.prepare(issue!, "dev");
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, issue!.id));
 

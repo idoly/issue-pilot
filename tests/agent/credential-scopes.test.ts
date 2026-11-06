@@ -22,6 +22,7 @@ import {
   subjects,
   userCredentials,
 } from "../../src/db/schema.ts";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +68,7 @@ test("a missing DMS credential group does not discard the SLS credentials of the
       .insert(issues)
       .values({ key: "ISSUE-20261103-201", title: "Credentials", type: "smart_analysis", serviceId: service!.id, environmentId: prod!.id, reporterSubject: "tester" })
       .returning();
+    await claimIssueRoot(stateRoot, issue!.key);
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
 
     const starts: Array<Pick<StartPiSessionOptions, "serviceScopes">> = [];

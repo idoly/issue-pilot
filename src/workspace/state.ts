@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, readdir, rmdir } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, realpath, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -55,6 +55,17 @@ export function issueRoot(stateRoot: string, issueKey: string): string {
 /** Old layout is inspected only by migration tools and guards against unmigrated state. */
 export function legacyIssueRoot(stateRoot: string, issueKey: string): string {
   return path.resolve(stateRoot, "issues", issueSegment(issueKey));
+}
+
+/** Only Issue creation claims the durable root; generated views must not hide its loss. */
+export async function assertIssueRoot(stateRoot: string, issueKey: string): Promise<string> {
+  const root = issueRoot(stateRoot, issueKey);
+  const metadata = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") throw new Error("issue_root_missing", { cause: error });
+    throw error;
+  });
+  if (!metadata.isDirectory() || (await realpath(root)) !== root) throw new Error("invalid_issue_root");
+  return root;
 }
 
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {

@@ -9,7 +9,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issues as issueRecords, issueWorkspaces, serviceDeployments, services } from "../../src/db/schema.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch } from "../../src/workspace/runtime.ts";
-import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 import { errorChain } from "../../src/diagnostics.ts";
 
 function deferred() {
@@ -176,6 +176,7 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     await mkdir(checkout, { recursive: true });
     await writeFile(path.join(checkout, "README.md"), "shared checkout\n", "utf8");
 
+    await claimIssueRoot(root, readOnlyIssue);
     const readOnlyRuntime = await prepareIssueRuntime(root, readOnlyIssue, [{ name: "orders", repositoryPath: checkout }], "read");
     assert.equal(readOnlyRuntime, issueRoot(root, readOnlyIssue));
     assert.equal((await lstat(path.join(readOnlyRuntime, "orders"))).isSymbolicLink(), true);
@@ -213,5 +214,25 @@ test("prepares the same issue runtime shape for read-only checkouts and writable
     await assert.rejects(prepareIssueRuntime(root, writableIssue, [{ name: "outside", repositoryPath: checkout }], "write"), /repository_workspace_outside_issue_root/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("missing durable Issue roots are not recreated by generated runtime recovery", async () => {
+  const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-missing-runtime-root-"));
+  const key = "ISSUE-20261107-901";
+  const root = issueRoot(state, key);
+  try {
+    for (const access of ["read", "write"] as const) {
+      await assert.rejects(prepareIssueRuntime(state, key, [], access), { message: "issue_root_missing" });
+      await assert.rejects(lstat(root), { code: "ENOENT" });
+    }
+    await claimIssueRoot(state, key);
+    await writeFile(path.join(root, "notes.txt"), "durable evidence");
+    await prepareIssueRuntime(state, key, [], "read");
+    await rm(path.join(root, ".issue-runtime.json"));
+    await prepareIssueRuntime(state, key, [], "read");
+    assert.equal(await readFile(path.join(root, "notes.txt"), "utf8"), "durable evidence");
+  } finally {
+    await rm(state, { recursive: true, force: true });
   }
 });

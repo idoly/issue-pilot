@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { AgentEngine } from "../../src/agent/engine.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -56,6 +57,7 @@ test("owners with a personal model group use it entirely; everyone else uses the
       .insert(issues)
       .values({ key: "ISSUE-20261102-001", title: "Keys", type: "defect_fix", serviceId: service!.id, environmentId: production!.id, reporterSubject: "product" })
       .returning();
+    await claimIssueRoot(stateRoot, issue!.key);
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
 
     const engine = new AgentEngine(database.db, stateRoot);

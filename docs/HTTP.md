@@ -171,6 +171,7 @@ curl --fail-with-body -sS -H "X-Issue-Pilot-Subject: $SUBJECT" "$BASE_URL/api/ca
 | 409 `issue_already_running`、`configuration_changed`、`source_file_changed` | 核对当前活动、版本或文件，重新读取并让人处理冲突 |
 | 413 `payload_too_large`／`agent_image_limit_exceeded` | 按具体通道缩减请求；不假设所有上传共用限额 |
 | 415 `unsupported_media_type` | 检查 Content-Type 与请求编码 |
+| 500 `issue_root_missing`／`invalid_issue_root` | 工单目录缺失或异常；消息未接收，保留草稿，联系维护者按[工单根恢复契约](STORAGE.md#工单根缺失与恢复)检查，不循环重发 |
 | 500 `internal_error` 或专用 operational code | 由维护者查看脱敏日志；rollback/finalize 等错误先保留现场，不循环 mutation |
 
 配置并非所有写接口都使用 revision：有版本检查的端点需携带读取到的 `expectedRevision`；不要对全体 API 自动加同一并发规则。参数 PUT 的 overrides 是完整覆盖快照，详见[运行参数](CONFIGURATION.md#运行参数)。

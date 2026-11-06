@@ -582,6 +582,8 @@ describe("Agent conversation state", () => {
     ["resolved_issue_cannot_run_agent", 409, "工单已解决，请先重开后再发送。"],
     ["agent_session_file_incomplete", 500, "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。"],
     ["agent_session_file_missing", 500, "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。"],
+    ["issue_root_missing", 500, "工单目录缺失，消息未接收。请保留草稿并联系管理员恢复原目录。"],
+    ["invalid_issue_root", 500, "工单目录异常，消息未接收。请保留草稿并联系管理员检查目录。"],
   ] as const)
     it(`keeps the draft and pasted image after ${code}`, async () => {
       const issue = {

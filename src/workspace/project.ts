@@ -12,7 +12,7 @@ import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from 
 import type { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareIssueRuntime, prepareIssueRuntimeBatch, type RelatedIssueRuntime, type RuntimePreparationResult } from "./runtime.ts";
-import { assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueRoot, pathExists } from "./state.ts";
+import { assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueRoot, pathExists } from "./state.ts";
 
 interface PreparedIssueRepository {
   name: string;
@@ -261,6 +261,7 @@ export class IssueProjectManager {
   }
 
   async hydrateReadOnlyRuntime(issue: ProjectIssue, preparations?: ReadOnlyDeploymentPreparationCache, repositoryRows?: IssueRepository[], databaseQueue?: SerialQueue): Promise<string> {
+    await assertIssueRoot(this.stateRoot, issue.key);
     const existingRepositoryRows = repositoryRows ?? (await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)));
     if (existingRepositoryRows.length && classifyRepositoryState(existingRepositoryRows) !== "read_only") throw new Error("readonly_repository_state_invalid");
 
@@ -484,6 +485,7 @@ export class IssueProjectManager {
 
   async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, gitEnvironment?: Record<string, string>): Promise<PreparedIssueProject> {
     if (gitEnvironment) return this.worktrees.withGitEnvironment(gitEnvironment, () => this.prepare(issue, environmentKind));
+    await assertIssueRoot(this.stateRoot, issue.key);
     const [{ repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
       loadIssueDeployments(this.database, issue),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),

@@ -1,7 +1,7 @@
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs, { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -27,7 +27,7 @@ import {
 import { IssueProjectManager, prepareReadOnlyIssueRuntimes } from "../../src/workspace/project.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { errorChain } from "../../src/diagnostics.ts";
-import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +70,7 @@ for (const repositoryFails of [false, true]) {
           })),
         )
         .returning();
+      await claimIssueRoot(root, issue!.key);
       await database.db.insert(issueWorkspaces).values([issue!, related!].map(({ id }) => ({ issueId: id })));
       await database.db.insert(issueRelations).values({ issueId: issue!.id, relatedIssueId: related!.id });
       const relatedRoot = issueRoot(root, related!.key);
@@ -209,6 +210,8 @@ test("hydrates current read-only issue runtimes from deployment branches", async
         { ...issueValues, key: "ISSUE-20260810-202", title: "Inspect the same production deployment" },
       ])
       .returning();
+    await claimIssueRoot(root, issue!.key);
+    await claimIssueRoot(root, secondIssue!.key);
     await database.db.insert(issueWorkspaces).values([
       { issueId: issue!.id, status: "ready", runtimeReady: false },
       { issueId: secondIssue!.id, status: "ready", runtimeReady: false },
@@ -307,6 +310,29 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     assert.equal(preserved!.workingBranch, "unexpected-branch");
   } finally {
     await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("missing durable Issue roots stop project preparation before database or Git operations", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-project-root-"));
+  const unexpected = () => {
+    throw new Error("must_not_touch_database_or_git");
+  };
+  const database = { select: unexpected, transaction: unexpected };
+  const worktrees = new WorktreeManager(root);
+  worktrees.prepare = unexpected;
+  worktrees.prepareShared = unexpected;
+  const projects = new IssueProjectManager(database as never, root, worktrees);
+  const issue = { id: "fixture", key: "ISSUE-20261107-802", type: "smart_analysis" as const, serviceId: "fixture", environmentId: "fixture" };
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      for (const environment of ["prod", "test", "dev"] as const) await assert.rejects(projects.prepare(issue, environment), { message: "issue_root_missing" });
+      await assert.rejects(projects.hydrateReadOnlyRuntime(issue), { message: "issue_root_missing" });
+    }
+    await assert.rejects(lstat(issueRoot(root, issue.key)), { code: "ENOENT" });
+    await assert.rejects(lstat(path.join(root, "git")), { code: "ENOENT" });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

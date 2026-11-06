@@ -29,6 +29,7 @@ test("SDK output collisions preserve a temporary file owned by another operation
 
 test("separate store instances share destination serialization and queued cancellation", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-instances-"));
+  await claimIssueRoot(root, "ISSUE-20261022-001");
   const first = new IssueWorkFileStore(root, "ISSUE-20261022-001");
   const second = new IssueWorkFileStore(root, "issue-20261022-001");
   let release!: () => void;
@@ -86,6 +87,7 @@ test("separate store instances share destination serialization and queued cancel
 test("query results are ordinary working files with direct download links", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-")),
     store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
+  await claimIssueRoot(root, "ISSUE-20261022-001");
   try {
     const file = await store.generate("report.json", async (append) => {
       await append('{"rows":1}');
@@ -107,6 +109,7 @@ test("query results are ordinary working files with direct download links", asyn
 test("failed or cancelled generation retains the old file and removes temporary files", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-failure-")),
     store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
+  await claimIssueRoot(root, "ISSUE-20261022-001");
   try {
     await store.generate("report.json", async (append) => {
       await append("old");
@@ -140,6 +143,7 @@ test("failed or cancelled generation retains the old file and removes temporary 
 test("file-name and replacement validation precedes a producer and never follows destination links", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-policy-")),
     store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
+  await claimIssueRoot(root, "ISSUE-20261022-001");
   try {
     let calls = 0;
     for (const name of ["../escape", "/absolute", ".git", ".session-private.jsonl", "a".repeat(256)])
@@ -168,6 +172,7 @@ test("file-name and replacement validation precedes a producer and never follows
 test("a cleanup failure preserves the generation error and releases the queue for retry", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-cleanup-")),
     store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
+  await claimIssueRoot(root, "ISSUE-20261022-001");
   try {
     await store.generate("report.json", async (append) => {
       await append("old");
@@ -208,6 +213,7 @@ test("a cleanup failure preserves the generation error and releases the queue fo
 test("same-name generation serializes and queued cancellation never starts its producer", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-queue-")),
     store = new IssueWorkFileStore(root, "ISSUE-20261022-001");
+  await claimIssueRoot(root, "ISSUE-20261022-001");
   let release!: () => void;
   try {
     let entered!: () => void;
@@ -265,6 +271,7 @@ for (const phase of ["before-open", "after-validation"] as const)
     const openDirectory = fs.open,
       resolve = fs.realpath;
     try {
+      await claimIssueRoot(root, key);
       const work = await prepareIssueWorkDirectory(root, key),
         folder = path.join(work, "nested"),
         outside = path.join(root, "outside");
@@ -327,6 +334,7 @@ test("listing waits for pending metadata before closing its directory after a fa
   let observed: Promise<unknown> | undefined;
   const failure = new Error("fixture_metadata_failed");
   try {
+    await claimIssueRoot(root, key);
     const work = await prepareIssueWorkDirectory(root, key);
     await writeFile(path.join(work, "failed.txt"), "failed");
     await writeFile(path.join(work, "waiting.txt"), "waiting");
@@ -377,6 +385,7 @@ test("listing waits for pending metadata before closing its directory after a fa
 test("a replaced parent directory cannot redirect a validated download to an outside file", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-parent-race-"));
   try {
+    await claimIssueRoot(root, key);
     const work = await prepareIssueWorkDirectory(root, key),
       outside = path.join(root, "outside");
     await mkdir(path.join(work, "nested"));
@@ -414,6 +423,7 @@ test("a replaced parent directory cannot redirect a validated download to an out
 test("a rejected download closes its opened descriptor", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-descriptor-check-"));
   try {
+    await claimIssueRoot(root, key);
     const work = await prepareIssueWorkDirectory(root, key);
     await writeFile(path.join(work, "evidence.txt"), "inside");
     const resolve = fs.realpath;
@@ -446,6 +456,7 @@ for (const operation of ["listing", "download"] as const)
       resolve = fs.realpath;
     let descriptor: number | undefined;
     try {
+      await claimIssueRoot(root, key);
       const work = await prepareIssueWorkDirectory(root, key),
         file = path.join(work, "evidence.txt");
       await writeFile(file, "preserved evidence");
@@ -499,6 +510,7 @@ test("listing reports a close failure after successful directory reads", async (
   const cleanup = new Error("fixture_directory_close_failed");
   const open = fs.open;
   try {
+    await claimIssueRoot(root, key);
     const work = await prepareIssueWorkDirectory(root, key);
     context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
       const handle = await open(...args);
@@ -523,6 +535,7 @@ test("listing reports a close failure after successful directory reads", async (
 test("lists and downloads working files without following paths outside the Issue or Git controls", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-working-files-"));
   try {
+    await claimIssueRoot(root, key);
     const work = await prepareIssueWorkDirectory(root, key);
     assert.equal(work, issueRoot(root, key));
     await mkdir(path.join(work, "nested"));
@@ -573,5 +586,30 @@ test("lists and downloads working files without following paths outside the Issu
     await assert.rejects(openIssueWorkFile(root, key, "nested"), /issue_file_not_regular/);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("missing durable Issue roots are not recreated for exports", async () => {
+  const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-missing-export-root-"));
+  const store = new IssueWorkFileStore(state, key);
+  let produced = false;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(
+        store.generate("evidence.txt", async () => {
+          produced = true;
+        }),
+        { message: "issue_root_missing" },
+      );
+      await assert.rejects(stat(store.directory), { code: "ENOENT" });
+    }
+    assert.equal(produced, false);
+    await claimIssueRoot(state, key);
+    await store.generate("evidence.txt", async (append) => {
+      await append("complete");
+    });
+    assert.equal(await readFile(path.join(store.directory, "evidence.txt"), "utf8"), "complete");
+  } finally {
+    await rm(state, { recursive: true, force: true });
   }
 });

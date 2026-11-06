@@ -198,6 +198,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "source_create_cleanup_failed",
         "source_path_cleanup_failed",
         "workspace_runtime_restore_failed",
+        "issue_root_missing",
+        "invalid_issue_root",
         "issue_workspace_missing",
         "issue_workspace_not_found",
         "issue_service_not_found",

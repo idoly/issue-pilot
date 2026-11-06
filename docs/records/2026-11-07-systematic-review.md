@@ -36,6 +36,19 @@
 
 ## 尚未确认的事项
 
-- [work-files](../../src/workspace/work-files.ts)、[Engine](../../src/agent/engine.ts) 和运行视图准备的部分路径会先创建缺失工单根，而开发释放／重开拒绝缺根。已绑定会话丢失时仍拒绝替换绑定；是否统一为所有入口都拒绝重建根，需要先明确恢复契约和受影响夹具。本轮保留现场与现行行为，不猜测恢复目录。
+- 缺失工单根的策略已在下述后续整改中统一，不再作为未确认项。
 - 真实模型、DMS／SLS 云权限、钉钉及各 DBHub 驱动未做厂商集成验收；本地协议通过不代表远端权限或数据正确。
 - 安装策略阻止了 DBHub／Pi 传递依赖的五个安装脚本；未放宽全局策略或宣称所有原生驱动可用。现有 Biome 配置弃用提示和 Monaco 大 chunk 提示保留，不以升级依赖或提高告警阈值掩盖。
+
+
+## 后续整改：持久工单根（基线 `85ee1ee`）
+
+P2：[工作文件准备](../../src/workspace/work-files.ts)、[Engine](../../src/agent/engine.ts) 和[运行视图](../../src/workspace/runtime.ts) 曾递归创建缺失根。已登记根被外移或丢失后，准备／导出可能成功创建空目录，掩盖持久文件缺失；缓存中的流式会话还可能绕过目录准备。旧实现的四项回归已复现失败。
+
+统一由 [state.assertIssueRoot](../../src/workspace/state.ts) 检查，只有创建工单认领根；缺失／非法根拒绝，底层权限与 I/O 错误保留。项目准备在 Git 操作前检查；Engine 在消息受理、缓存 manager 返回及排队输入开始前检查。会话绑定和剩余文件不变，恢复精确原目录后可继续，根存在时生成 manifest 仍可重建。HTTP 对新增稳定码返回 500，页面保留文字和粘贴图片并显示恢复提示。未引入新持久结构或迁移；开发生命周期的既有 `workspace_missing` 拒绝契约保留。主要恢复说明在[存储](../STORAGE.md#工单根缺失与恢复)。
+
+取舍：不再以空目录让受阻工单看似可用；需要维护者确认并恢复持久根。检查发生在应用操作边界，不承诺持续监控或消除外部文件系统变更的所有竞争。旧夹具补齐显式认领，生命周期缺根测试改为保留并恢复原根，不以重建空根模拟数据恢复。新增覆盖见[根校验](../../tests/workspace/state.test.ts)、[项目准备](../../tests/workspace/read-only.test.ts)、[导出](../../tests/workspace/work-files.test.ts)、[会话受理](../../tests/agent/message-admission.test.ts)、[HTTP](../../tests/http/issue-api.test.ts)及[页面](../../src/web/src/app/AgentPanel.test.ts)。
+
+本次后续验证：后端串行全量 **802 项通过、0 跳过**，Web 单 worker **366 项通过**；TypeScript、生产构建、Biome format／lint、`git diff --check` 通过，生产依赖审计为 0 项漏洞，`pip check` 通过。首轮全量的四项旧夹具缺根失败已补齐前置条件，随后全量重跑通过。Markdown 不在 Biome 范围，另检查改动文档的相对链接、锚点与代码围栏。本轮未重跑真实浏览器、SSH 容器或 SLS CLI 独立验收；这些前轮结果不计为本轮通过。已有 Biome 弃用提示和 Monaco 大 chunk 提示保留。
+
+真实厂商验收仍未执行：当前 mall/test 未配置 DMS、SLS 或数据库查询目标；其他服务有测试目标，但尚未明确本轮服务／环境、身份与查询范围。未自行选择生产连接、读取历史密钥或将本地协议验证记作云端通过。

@@ -373,3 +373,48 @@ test("refuses an appended session whose validated prefix was rewritten in place"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+for (const cached of [false, true])
+  test(`missing durable Issue roots reject admission without changing bindings (cached: ${cached})`, async () => {
+    const { root, database, issue } = await fixture();
+    const engine = new AgentEngine(database.db, root);
+    const internal = engine as unknown as { run(): Promise<void>; sessions: Map<string, unknown> };
+    internal.run = async () => {};
+    const directory = issueRoot(root, issue.key),
+      preserved = path.join(root, "preserved-issue");
+    let steered = false;
+    try {
+      await engine.send(issue.id, "accepted before loss");
+      const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id));
+      assert.ok(binding);
+      const original = await readFile(binding.sessionFile);
+      if (cached)
+        internal.sessions.set(issue.id, {
+          streaming: true,
+          session: {
+            sessionManager: SessionManager.open(binding.sessionFile),
+            getSteeringMessages: () => [],
+            steer: async () => {
+              steered = true;
+            },
+          },
+        });
+      await rename(directory, preserved);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await assert.rejects(engine.send(issue.id, "must not recreate durable state"), { message: "issue_root_missing" });
+        await assert.rejects(stat(directory), { code: "ENOENT" });
+      }
+      assert.equal(steered, false);
+      assert.deepEqual((await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)))[0], binding);
+      assert.deepEqual(await readFile(path.join(preserved, path.basename(binding.sessionFile))), original);
+      internal.sessions.clear();
+      await rename(preserved, directory);
+      await engine.send(issue.id, "accepted after exact root restored");
+      assert.equal(sessionTranscript(SessionManager.open(binding.sessionFile), issue.id).length, 2);
+    } finally {
+      internal.sessions.clear();
+      await engine.close();
+      await database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });

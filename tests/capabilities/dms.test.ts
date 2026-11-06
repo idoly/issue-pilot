@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import { test } from "node:test";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -79,6 +80,7 @@ function fixtureSession(overrides: Partial<DmsMcpSession> = {}) {
 
 test("persists complete DMS results to a work file and returns an export summary", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-"));
+  await claimIssueRoot(root, "ISSUE-20261016-004");
   const store = new IssueWorkFileStore(root, "ISSUE-20261016-004");
   const session = fixtureSession({
     async listTools() {
@@ -121,6 +123,7 @@ test("persists complete DMS results to a work file and returns an export summary
 
 test("preserves an earlier DMS output when closing the protocol session fails", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-close-"));
+  await claimIssueRoot(root, "ISSUE-20261018-996");
   const store = new IssueWorkFileStore(root, "ISSUE-20261018-996");
   let closes = 0;
   const fixture = fixtureSession({
@@ -148,6 +151,7 @@ for (const output of [false, true])
   for (const phase of ["discovery", "query", "close", "discovery-and-close", "query-and-close"] as const)
     test(`retains DMS ${phase} failures during ${output ? "export" : "query"}`, async () => {
       const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-errors-"));
+      await claimIssueRoot(root, "ISSUE-20261020-991");
       const store = new IssueWorkFileStore(root, "ISSUE-20261020-991");
       const primary = new Error("dms_mcp_tool_failed"),
         cleanup = new Error("private fixture cleanup detail");
@@ -197,6 +201,7 @@ for (const output of [false, true])
   for (const cancellation of ["caller", "deadline"] as const)
     test(`retains DMS ${cancellation} cancellation when ${output ? "export" : "query"} and close fail`, async (context) => {
       const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-cancel-close-"));
+      await claimIssueRoot(root, "ISSUE-20261020-992");
       const store = new IssueWorkFileStore(root, "ISSUE-20261020-992");
       const controller = new AbortController(),
         reason = cancellation === "caller" ? new Error("caller_cancelled") : new DOMException("query expired", "TimeoutError"),
@@ -753,6 +758,7 @@ for (const phase of ["discovery", "execute"] as const)
 
 test("distinguishes export failure from SQL failure and preserves the previous work file", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-"));
+  await claimIssueRoot(root, "ISSUE-20261021-997");
   const store = new IssueWorkFileStore(root, "ISSUE-20261021-997");
   const fixture = fixtureSession({
     async listTools() {
@@ -784,6 +790,7 @@ test("distinguishes export failure from SQL failure and preserves the previous w
 
 test("an export destination conflict preserves evidence and closes DMS after one SQL dispatch", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-conflict-"));
+  await claimIssueRoot(root, "ISSUE-20261021-996");
   const store = new IssueWorkFileStore(root, "ISSUE-20261021-996");
   const fixture = fixtureSession({
     async listTools() {
@@ -942,6 +949,7 @@ test("handles MCP errors, unbounded SQL and results, and abort", async () => {
   assert.equal(unbounded.closes(), 1);
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-large-"));
   try {
+    await claimIssueRoot(root, "ISSUE-20261016-005");
     const store = new IssueWorkFileStore(root, "ISSUE-20261016-005");
     const exported = await queryDms({ schema: "orders", script: "SELECT value FROM large_values", export: { fileName: "large.json" } }, configured, undefined, unbounded.connect, store);
     assert.equal(JSON.parse(exported.content[0]!.text).export.fileName, "large.json");

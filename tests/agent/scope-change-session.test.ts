@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { AgentEngine } from "../../src/agent/engine.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -64,6 +65,7 @@ test("a workspace scope change retires the live session so removed service MCP t
       .insert(issues)
       .values({ key: "ISSUE-20261103-001", title: "Scope change", type: "defect_fix", serviceId: orders.id, environmentId: dev.id, reporterSubject: "tester" })
       .returning();
+    await claimIssueRoot(stateRoot, issue!.key);
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id });
     await database.db.insert(issueServiceScopes).values({ issueId: issue!.id, serviceId: billing.id });
 

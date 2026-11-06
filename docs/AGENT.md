@@ -56,6 +56,8 @@ DBHub 是部署所属 MCP，不是 service_query 的原生适配器，其真实�
 
 Pi 负责发现、注册、连接、资源和 shutdown。应用保留配置权、同源／不重定向、输入／结果预算、取消与发送前检查。连接过期报告当前失败，下次显式调用重新连接，不自动重放；readOnlyHint 只是说明。
 
+DMS 和 SLS 均通过 Codemode 的 `tools.service_query` 调用，由 `capability: "dms"`／`"sls"` 区分，不另注册独立 DMS 工具。可用参数按全局能力开关和当前会话授权来源中的部署目标生成；缺少凭证在执行时拒绝。DMS 的串行／间隔指引限制批次编排方式，不表示从 Codemode 排除 DMS。依据：[service-query-tool.ts](../src/agent/service-query-tool.ts)、[context.ts](../src/agent/context.ts)。
+
 Codemode off 为直接调用，on 为直接工具与编排并存，only 主要经编排发现工具。on／only 不预载全部 schema。进程级 FIFO 同时运行一个脚本，等待容量 32、默认 120 秒；等待取消或超时不执行。脚本内部并行不替代工单／仓库队列，也不绕过 DMS 指引。
 
 ## 文件、资源和模型

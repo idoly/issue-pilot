@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, readdir, realpath, rename, stat, unlink, type FileHandle } from "node:fs/promises";
+import { link, lstat, open, readdir, realpath, rename, stat, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { KeyedSerialQueue } from "../serial.ts";
-import { legacyIssueRoot, issueRoot } from "./state.ts";
+import { assertIssueRoot, legacyIssueRoot, issueRoot } from "./state.ts";
 
 export interface IssueWorkFile {
   name: string;
@@ -46,10 +46,7 @@ export async function prepareIssueWorkDirectory(stateRoot: string, issueKey: str
     throw error;
   });
   if (oldEntries.length) throw new Error("issue_layout_migration_required");
-  const root = issueRoot(stateRoot, issueKey);
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  if (!(await lstat(root)).isDirectory() || (await realpath(root)) !== root) throw new Error("invalid_issue_work_directory");
-  return root;
+  return assertIssueRoot(stateRoot, issueKey);
 }
 
 async function resolveWorkPath(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess): Promise<string> {

@@ -45,6 +45,14 @@
 
 state 为 0700、DB／JSONL 为 0600、附件为 0400。统一 issueRoot 是 cwd；管理文件可列名但不能普通原始下载。node_modules、venv、Web 构建和恢复点位于模型工作根之外，工单内自己的依赖缓存另行分类。
 
+### 工单根缺失与恢复
+
+`workspaces/<issue-key>` 是持久边界，由创建工单的 `claimIssueRoot` 独占认领。运行视图准备、工作文件导出和 Agent 消息受理要求根已存在且为真实目录，根自身或祖先被符号链接重定向时拒绝操作。缺根报 `issue_root_missing`，非法根报 `invalid_issue_root`；权限、I/O 或非目录祖先错误保留原始错误含义，不伪装成缺失。
+
+缺根时不补建空目录、不替换会话绑定，也不从共享分支恢复工单历史。根存在时仍可重建 `.issue-runtime.json`、只读代码链接等生成内容。Agent 对缓存会话的受理及排队输入开始执行也检查根；这是操作边界检查，不是对外部文件变更的持续监控。
+
+保留剩余目录、会话绑定和私有 Git，按[异常恢复](RUNBOOK.md#恢复与回退)确认原根来源及匹配关系后再恢复；不要以 `mkdir` 或重新发送消息代替恢复。当前数据库检查点不能恢复这些文件。依据：[路径 owner](../src/workspace/state.ts)、[项目准备](../src/workspace/project.ts)、[根校验回归](../tests/workspace/state.test.ts)、[消息受理回归](../tests/agent/message-admission.test.ts)。
+
 ## 文件写入与发布
 
 ### 原始附件

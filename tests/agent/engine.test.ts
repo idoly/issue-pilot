@@ -2,15 +2,24 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, before, test } from "node:test";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 
 import { applicationParameterBounds } from "../../src/configuration/parameters.ts";
 import { AgentEngine, type AgentReservation } from "../../src/agent/engine.ts";
 import { repositoryPreparationMode } from "../../src/workspace/project.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
-// Never the checkout's real .issue-pilot state; these engines run fake sessions only.
-const unusedStateRoot = join(tmpdir(), `issue-pilot-engine-unused-${process.pid}`);
+// Fake sessions still require the durable roots claimed by Issue creation.
+let unusedStateRoot: string;
+const fixtureIssueKey = "ISSUE-20261107-001";
+before(async () => {
+  unusedStateRoot = await mkdtemp(join(tmpdir(), "issue-pilot-engine-unused-"));
+  for (const key of [fixtureIssueKey, "ISSUE-20261103-001", "ISSUE-20261103-002", "ISSUE-20261103-003"]) await claimIssueRoot(unusedStateRoot, key);
+});
+after(async () => {
+  await rm(unusedStateRoot, { recursive: true, force: true });
+});
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -246,7 +255,7 @@ test("retains an accepted message without dispatching it after the Issue becomes
   let prompted = 0;
   let workspaceUpdates = 0;
   const published: RunEvent[] = [];
-  const issueSelect = { from: () => ({ where: () => ({ limit: async () => [{ status }] }) }) };
+  const issueSelect = { from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status }] }) }) };
   const transaction = {
     update: (_table: unknown) => ({
       set: () => ({
@@ -306,8 +315,8 @@ test("serializes streaming messages and records only accepted steering", async (
   const firstGate = new Promise<void>((resolve) => {
     releaseFirst = resolve;
   });
-  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
-  const engine = new AgentEngine(database as never);
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
+  const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown> };
   let call = 0;
   internal.sessions.set("issue-1", {
@@ -505,7 +514,8 @@ test("a round whose session was stopped by another failure path is not finalized
 
 test("queues a waiting steering message when the preceding turn becomes idle", { timeout: 5_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-steer-idle-"));
-  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
+  await claimIssueRoot(root, fixtureIssueKey);
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
   const engine = new AgentEngine(database as never, root);
   const internal = engine as unknown as {
     sessions: Map<string, unknown>;
@@ -573,9 +583,10 @@ test("queues a waiting steering message when the preceding turn becomes idle", {
 
 test("does not record or replay an uncertain steer after failed-round cleanup replaces its session", { timeout: 5_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-steer-replaced-"));
+  await claimIssueRoot(root, fixtureIssueKey);
   const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
   const database = {
-    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }),
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }),
     transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction),
   };
   const engine = new AgentEngine(database as never, root);
@@ -680,7 +691,7 @@ test("does not record or replay an uncertain steer after failed-round cleanup re
 test("isolates publisher failures after recording a streaming message", async () => {
   const reported: unknown[] = [];
   let recorded = 0;
-  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
   const engine = new AgentEngine(
     database as never,
     unusedStateRoot,
@@ -713,8 +724,8 @@ test("isolates publisher failures after recording a streaming message", async ()
 
 test("closes a streaming session when an accepted steer cannot be recorded", async () => {
   let stopped = false;
-  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "in_progress" }] }) }) }) };
-  const engine = new AgentEngine(database as never);
+  const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
+  const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown> };
   internal.sessions.set("issue-1", {
     streaming: true,
@@ -791,6 +802,7 @@ test("finishes failed run cleanup before starting queued work", { timeout: 5_000
 
 test("reopens a session for a queued message after the preceding round failed", { timeout: 5_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-queued-"));
+  await claimIssueRoot(root, fixtureIssueKey);
   let started!: () => void, fail!: () => void, stopping!: () => void, release!: () => void;
   const prompting = new Promise<void>((resolve) => {
       started = resolve;
@@ -806,7 +818,7 @@ test("reopens a session for a queued message after the preceding round failed", 
     });
   const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
   const database = {
-    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ status: "pending" }] }) }) }),
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "pending" }] }) }) }),
     transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction),
   };
   const engine = new AgentEngine(database as never, root),

@@ -635,6 +635,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       else if (failureMessage === "agent_message_outcome_unknown") failureMessage = "会话已切换，无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。";
       else if (failureMessage === "agent_session_file_incomplete") failureMessage = "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。";
       else if (failureMessage === "agent_session_file_missing") failureMessage = "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。";
+      else if (failureMessage === "issue_root_missing") failureMessage = "工单目录缺失，消息未接收。请保留草稿并联系管理员恢复原目录。";
+      else if (failureMessage === "invalid_issue_root") failureMessage = "工单目录异常，消息未接收。请保留草稿并联系管理员检查目录。";
       else if (failureMessage === "issue_already_running") failureMessage = "工单正在被其他操作处理，请稍后重试。";
       else if (failureMessage === "resolved_issue_cannot_run_agent") {
         failureMessage = "工单已解决，请先重开后再发送。";

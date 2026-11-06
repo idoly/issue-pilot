@@ -220,7 +220,7 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 | user_git_ssh_credentials_required | owner 缺个人 SSH 私钥；由该用户配置，不改用宿主或其他人的 Key |
 | 配置冲突 | 保留草稿，重新读取 revision 或等待活动结束 |
 | 源码冲突／Git 漂移 | 保留 refs、索引及未提交内容，不 reset、远端回退或猜测改绑定 |
-| 开发工单根缺失 | 拒绝回收／重开，先保留剩余本地 Git 和目录证据，再制定恢复计划；DB 检查点不能补回缺失文件，不把共享分支当完整历史 |
+| issue_root_missing／invalid_issue_root／开发 workspace_missing | 停止反复重试，核对登记根是否缺失、变成文件或被符号链接重定向，保留剩余目录、会话绑定与本地 Git。准备／导出／消息受理不补建空根，开发回收／重开也拒绝缺根；恢复契约见[工单根缺失与恢复](STORAGE.md#工单根缺失与恢复)，DB 检查点不能补回文件 |
 | 会话缺失／不完整 | 保存原文件和绑定，在副本中检查 |
 | 受理结果不明 | 看对话／交付记录／文件，不自动重发 |
 | 查询限流／不完整 | 遵守来源、只读和预算，已发送 SQL 不自动重放 |

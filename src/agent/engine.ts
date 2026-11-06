@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, unlink } from "node:fs/promises";
+import { chmod, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { and, eq, inArray, ne } from "drizzle-orm";
@@ -163,6 +163,7 @@ export class AgentEngine implements AgentController {
       const prepareAdmission = async () => {
         await authorize?.();
         this.assertNotReserved(issueId);
+        await prepareIssueWorkDirectory(this.stateRoot, issue.key);
         if (gitIdentity && !this.personalSessions.has(issueId)) this.sessions.get(issueId)?.setGitIdentity(gitIdentity);
       };
       const managed = this.sessions.get(issueId);
@@ -182,6 +183,7 @@ export class AgentEngine implements AgentController {
         await this.steerQueue.run(issueId, async () => {
           await authorize?.();
           this.assertNotReserved(issueId);
+          await prepareIssueWorkDirectory(this.stateRoot, issue.key);
           // Earlier messages still queued for a later round keep their order; never steer past them.
           if (this.sessions.get(issueId) !== managed || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
@@ -684,10 +686,9 @@ export class AgentEngine implements AgentController {
   }
 
   private async sessionManagerLocked(issue: { id: string; key: string }, workDirectory: string): Promise<SessionManager> {
+    const sessionDirectory = await prepareIssueWorkDirectory(this.stateRoot, issue.key);
     const active = this.sessions.get(issue.id)?.session.sessionManager;
     if (active) return active;
-    const sessionDirectory = issueRoot(this.stateRoot, issue.key);
-    await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
     const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
     const existingFile = binding && (await pathExists(binding.sessionFile));
@@ -753,9 +754,10 @@ export class AgentEngine implements AgentController {
     return entryId;
   }
 
-  private async startQueuedMessage(issue: AgentMessageScope & { id: string }, managed: ManagedPiSession, entryId: string): Promise<void> {
+  private async startQueuedMessage(issue: AgentMessageScope & { id: string; key: string }, managed: ManagedPiSession, entryId: string): Promise<void> {
     await this.sessionQueue.run(issue.id, async () => {
       if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
+      await prepareIssueWorkDirectory(this.stateRoot, issue.key);
       startAgentMessage(managed.session.sessionManager, entryId, issue);
       const next = pendingAgentMessages(managed.session.sessionManager)[0];
       if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, undefined, next.images, next.id));
@@ -763,7 +765,7 @@ export class AgentEngine implements AgentController {
   }
 
   private async promptExisting(issueId: string, managed: ManagedPiSession, message: string, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
-    let scope: AgentMessageScope | undefined;
+    let scope: (AgentMessageScope & { key: string }) | undefined;
     if (messageEntryId) {
       const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
       if (!issue) throw new Error("issue_not_found");

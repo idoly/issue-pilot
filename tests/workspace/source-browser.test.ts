@@ -13,7 +13,7 @@ import { environments, issueRepositories, issues, issueWorkspaces, serviceDeploy
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { repositoryStorePath } from "../../src/workspace/git.ts";
-import { issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 test("browses only registered Issue repository content", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-source-browser-"));
@@ -295,6 +295,7 @@ test("browses only registered Issue repository content", async () => {
       workspaceName: "application",
     });
     await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });
+    await claimIssueRoot(root, readOnlyIssue!.key);
     await prepareIssueRuntime(root, readOnlyIssue!.key, [{ name: "application", repositoryPath: readOnlyRepository }], "read");
     const snapshot = await browser.file(readOnlyIssue!, "application", "README.md");
     await assert.rejects(browser.writeFile(readOnlyIssue!, "application", "README.md", "changed\n", snapshot.sha256), /source_read_only/);
