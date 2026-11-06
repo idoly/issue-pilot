@@ -1474,6 +1474,7 @@ textarea {
 }
 .agent-message.assistant {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   margin-top: 18px;
   padding: 0 14px;
@@ -1503,7 +1504,8 @@ textarea {
   --focus-outlineColor: #1f6feb;
   color-scheme: dark;
   min-width: 0;
-  max-width: none;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   background-color: transparent;
   font-family: var(--agent-font);
   font-size: var(--agent-font-size);

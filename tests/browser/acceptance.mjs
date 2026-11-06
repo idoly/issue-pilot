@@ -254,6 +254,52 @@ try {
     await mkdir(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, { recursive: true });
     await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, "application.png"), fullPage: true });
   }
+  // Keep this tall fixture after the history scenarios so its reflow does not change their scroll baseline.
+  publish({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            `Long paragraph evidence ${"采购单核实结论与生产证据。".repeat(100)}`,
+            `Long identifier evidence \`${"order_trace_".repeat(120)}\``,
+            `| 时间 | 核实结果 |\n| --- | --- |\n| 11 月 5 日 13:40 | ${"生产接口返回关联采购单状态与核实结果。".repeat(50)} |`,
+            `| ${Array.from({ length: 48 }, (_, index) => `列${index}`).join(" | ")} |\n| ${Array(48).fill("---").join(" | ")} |\n| ${Array(48).fill("证据").join(" | ")} |`,
+          ].join("\n\n"),
+        },
+      ],
+      api: "openai-completions",
+      provider: "fixture",
+      model: "fixture",
+      timestamp: Date.now(),
+      stopReason: "stop",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    },
+  });
+  const overflowMessage = page.locator(".agent-message.assistant").filter({ hasText: "Long paragraph evidence" });
+  await overflowMessage.waitFor();
+  for (const width of [1280, 1680, 1920]) {
+    await page.setViewportSize({ width, height: 1050 });
+    const layout = await overflowMessage.evaluate((element) => {
+      const scroll = element.closest(".agent-scroll");
+      const body = element.querySelector(".markdown-body");
+      const bounds = body.getBoundingClientRect();
+      const paragraph = [...body.querySelectorAll("p")].find((p) => p.textContent.startsWith("Long paragraph evidence"));
+      const identifier = [...body.querySelectorAll("p")].find((p) => p.textContent.startsWith("Long identifier evidence"));
+      const wideTable = body.querySelectorAll("table")[1];
+      return {
+        bodyFits: bounds.right <= scroll.getBoundingClientRect().right,
+        noMessageOverflow: element.scrollWidth <= element.clientWidth + 1,
+        paragraphWraps: paragraph.offsetHeight > parseFloat(getComputedStyle(paragraph).lineHeight) * 2,
+        identifierFits: identifier.scrollWidth <= identifier.clientWidth + 1,
+        tableFits: wideTable.getBoundingClientRect().right <= bounds.right + 1,
+        tableScrolls: wideTable.scrollWidth > wideTable.clientWidth && getComputedStyle(wideTable).overflowX === "auto",
+      };
+    });
+    assert.ok(Object.values(layout).every(Boolean), `Markdown overflow at ${width}px: ${JSON.stringify(layout)}`);
+  }
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.getByRole("button", { name: "浏览工单代码", exact: true }).click();
   await page.getByRole("button", { name: "文件", exact: true }).click();
@@ -725,6 +771,7 @@ try {
           "cross-paragraph selection",
           "thinking rendered inline without disclosure controls",
           "full-width conversation on a wide viewport",
+          "long paragraphs and identifiers wrap without message overflow; wide tables scroll locally at 1280/1680/1920px",
           "300 repositories scroll in a focusable region on desktop and mobile",
           "long repository names and URLs stay on one line with full titles",
           "service labels do not split across lines",
