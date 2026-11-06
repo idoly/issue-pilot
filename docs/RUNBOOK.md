@@ -202,6 +202,7 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 | 模型／SSH／DMS／SLS 凭证 | 核对 owner 和所选完整组，失败不切 Key |
 | 工单网站访问失败 | 先核对 `networkMode`；白名单模式检查目标域名、端口及跳转目标，再检查运行主机的 DNS、路由、代理、TLS 和网站登录状态，见[网络模式](CONFIGURATION.md#工单网络访问) |
 | personal_git_fetch_failed | 先区分 DNS、TCP、SSH 主机校验、Key、仓库权限和分支；统一错误码不证明 Key 错误 |
+| couldn't find remote ref | 核对失败仓库对应服务／环境的 `repositoryBranches[].baseBranch`，用 `git ls-remote --heads` 只读确认远端，再确认实际业务基线并通过服务配置修正；不自动替换成远端默认分支。保存配置不会立即恢复已受阻的运行视图，按发布流程重启后核对 `runtimeReady` 和源码接口 |
 | personal_git_ssh_url_required | developer owner 的远程地址必须使用 SSH；HTTPS 即使公开可读也不被该路径接受，核对服务登记的 URL |
 | user_git_ssh_credentials_required | owner 缺个人 SSH 私钥；由该用户配置，不改用宿主或其他人的 Key |
 | 配置冲突 | 保留草稿，重新读取 revision 或等待活动结束 |

@@ -11,8 +11,8 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const project = fileURLToPath(new URL("../../", import.meta.url));
 const probe = fileURLToPath(new URL("../helpers/zod-security-probe.mjs", import.meta.url));
-const patchFiles = ["@earendil-works+pi-coding-agent+1.5.0.patch", "zod+4.6.7.patch"];
-const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent"];
+const patchFiles = ["@earendil-works+pi-coding-agent+1.5.0.patch", "zod+4.6.7.patch", "monaco-editor+0.57.0.patch"];
+const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent", "monaco-editor"];
 
 async function patchedPaths(): Promise<string[]> {
   const files = await Promise.all(patchFiles.map((name) => readFile(path.join(project, "patches", name), "utf8")));
@@ -117,6 +117,41 @@ test("refuses Zod version drift and patch-context drift rather than silently app
     await writeFile(runtime, modified);
     await assert.rejects(exec(process.execPath, [install], { cwd: root }), /dependency_patch_does_not_apply:zod/);
     assert.deepEqual(await hashes(project), original);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validates the Monaco build patch and permits production installations without the editor dependency", { timeout: 30_000 }, async () => {
+  const original = await hashes(project);
+  const { root } = await fixture();
+  try {
+    const install = path.join(root, "scripts/apply-pi-sdk-patch.mjs");
+    await exec(process.execPath, [install], { cwd: root });
+    await exec("git", ["apply", "--reverse", "patches/monaco-editor+0.57.0.patch"], { cwd: root });
+    const first = await exec(process.execPath, [install], { cwd: root });
+    assert.match(first.stdout, /Verified dependency patch: monaco-editor@0\.57\.0/);
+    const installed = await hashes(root);
+    await exec(process.execPath, [install], { cwd: root });
+    assert.deepEqual(await hashes(root), installed);
+
+    const runtime = (await patchedPaths()).find((file) => file.startsWith("node_modules/monaco-editor/"))!;
+    const contents = await readFile(path.join(root, runtime), "utf8");
+    assert.ok(contents.includes("clipboardData"));
+    await writeFile(path.join(root, runtime), contents.replace("clipboardData", "incompatibleClipboardData"));
+    await assert.rejects(exec(process.execPath, [install], { cwd: root }), /dependency_patch_does_not_apply:monaco-editor/);
+    await writeFile(path.join(root, runtime), contents);
+
+    const metadata = path.join(root, "node_modules/monaco-editor/package.json");
+    const packageContents = await readFile(metadata, "utf8");
+    await writeFile(metadata, JSON.stringify({ ...JSON.parse(packageContents), version: "0.58.0" }));
+    await assert.rejects(exec(process.execPath, [install], { cwd: root }), /dependency_patch_version_mismatch:monaco-editor/);
+    await writeFile(metadata, packageContents);
+
+    await rm(path.join(root, "node_modules/monaco-editor"), { recursive: true });
+    const production = await exec(process.execPath, [install], { cwd: root });
+    assert.match(production.stdout, /Skipped build-only dependency patch: monaco-editor \(not installed\)/);
+    assert.deepEqual(await hashes(project), original, "patch probes must not modify shared dependencies");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

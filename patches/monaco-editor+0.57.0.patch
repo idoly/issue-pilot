@@ -1,0 +1,16 @@
+diff --git a/node_modules/monaco-editor/esm/vs/editor/browser/widget/diffEditor/components/diffEditorViewZones/copySelection.js b/node_modules/monaco-editor/esm/vs/editor/browser/widget/diffEditor/components/diffEditorViewZones/copySelection.js
+--- a/node_modules/monaco-editor/esm/vs/editor/browser/widget/diffEditor/components/diffEditorViewZones/copySelection.js
++++ b/node_modules/monaco-editor/esm/vs/editor/browser/widget/diffEditor/components/diffEditorViewZones/copySelection.js
+@@ -39,7 +39,11 @@
+             Range.fromPositions(adjustedEnd, adjustedStart) :
+             Range.fromPositions(adjustedStart, adjustedEnd);
+         const selectedText = originalModel.getValueInRange(range);
+-        clipboardService.writeText(selectedText);
++        if (e.clipboardData) {
++            e.clipboardData.setData('text/plain', selectedText);
++        } else {
++            clipboardService.writeText(selectedText);
++        }
+     }));
+     return viewZoneDisposable;
+ }

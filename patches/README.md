@@ -28,6 +28,16 @@
 
 [安全测试](../tests/agent/zod-security.test.ts) 在独立目录比较六种入口、正常／超限／异步数据、真实 MCP 往返和拒绝后重试、SRT 配置，并验证幂等、版本／上下文漂移及共享安装 hash。上游 v3 提供等价保护后应移除补丁。
 
+## Monaco 行内差异复制
+
+文件：[monaco-editor+0.57.0.patch](monaco-editor+0.57.0.patch)。
+
+固定 Monaco 0.57.0 的行内删除代码在原生 `copy` 事件中已取得原文模型的选区，却再次调用异步剪贴板服务。在缺少 Clipboard API 的 HTTP 页面中，服务回退到 textarea／`execCommand('copy')`，可能形成嵌套复制失败，并将 CRLF 转成 LF。
+
+补丁直接把该模型选区写入当前事件的 `clipboardData`；无事件剪贴板数据时保留上游回退。它不改变 diff 只读、选区计算或菜单，不增加按钮，也不需要异步剪贴板写入权限。浏览器回归见 [acceptance.mjs](../tests/browser/acceptance.mjs)；补丁安装、幂等、版本／上下文漂移及生产缺包检查见 [zod-security.test.ts](../tests/agent/zod-security.test.ts)。
+
+Monaco 是构建依赖：存在时严格校验并应用补丁，仅在未安装该包的生产依赖目录中跳过。已构建的 Web 产物必须来自修补后的独立安装；不在 live `node_modules` 上实验。上游提供等价的同步事件复制后移除补丁。
+
 ## 版本覆盖
 
 | 约束 | 目的与边界 |

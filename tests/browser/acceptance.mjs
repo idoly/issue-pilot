@@ -47,9 +47,12 @@ try {
   engine.running.clear();
   const url = "https://example.test/browser.git";
   const source = path.join(root, "seed");
+  const copyBefore = '\texport const original = "订单\u00a0value";\r\n  export const stable = true;\r\n';
+  const copyAfter = '\texport const modified = "订单\u00a0value";\r\n  export const stable = false;\r\n';
   await exec("git", ["init", "-b", "main", source]);
   await writeFile(path.join(source, "sample.json"), '{\r\n  "message": "original 订单",\r\n  "enabled": true\r\n}\r\n');
   await writeFile(path.join(source, "notes.ts"), "export const ready = true;\n");
+  await writeFile(path.join(source, "copy-whitespace.ts"), copyBefore);
   await exec("git", ["-C", source, "add", "."]);
   await exec("git", ["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Initial fixture"]);
   const commit = (await exec("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
@@ -59,6 +62,7 @@ try {
   const checkout = path.join(issueRoot(root, issue.key), "application");
   const branch = "browser-fixture";
   await exec("git", ["--git-dir", store, "worktree", "add", "-b", branch, checkout, "main"]);
+  await writeFile(path.join(checkout, "copy-whitespace.ts"), copyAfter);
   const seedDatabase = openDatabase(databaseFile);
   try {
     await seedDatabase.db
@@ -71,7 +75,7 @@ try {
   await prepareIssueRuntime(root, issue.key, [{ name: "application", repositoryPath: checkout }], "write");
   const origin = await app.listen({ host: "127.0.0.1", port: 0 });
   assert.equal((await fetch(`${origin}/health`)).status, 200);
-  browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ["--hide-scrollbars"] });
+  browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--host-resolver-rules=MAP issue-pilot.test 127.0.0.1", "--no-proxy-server"] });
   page = await browser.newPage({ viewport: { width: 1680, height: 1050 }, permissions: ["clipboard-read", "clipboard-write"] });
   page.setDefaultTimeout(15000);
   const failures = [];
@@ -120,6 +124,75 @@ try {
   await page.getByRole("button", { name: "并排", exact: true }).click();
   await page.getByRole("button", { name: "行内", exact: true }).click();
   await page.getByRole("button", { name: "关闭差异", exact: true }).click();
+  const verifyDiffCopy = async (copyPage, secure) => {
+    assert.equal(await copyPage.evaluate(() => isSecureContext), secure);
+    assert.equal(await copyPage.evaluate(() => typeof navigator.clipboard), secure ? "object" : "undefined");
+    await copyPage.getByRole("button", { name: "查看差异 copy-whitespace.ts", exact: true }).click();
+    await copyPage.locator(".source-diff-summary .added").filter({ hasText: "+2" }).waitFor();
+    const copy = async (label, expected, perform) => {
+      // A trusted localhost page reads the real clipboard after copying from the HTTP page.
+      await page.bringToFront();
+      await page.evaluate(() => navigator.clipboard.writeText("copy sentinel"));
+      await copyPage.bringToFront();
+      await perform();
+      await page.bringToFront();
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected, `${secure ? "localhost" : "HTTP"} ${label}`);
+    };
+    await copyPage.locator(".source-editor").hover();
+    await copyPage.getByRole("button", { name: "并排", exact: true }).click();
+    for (const [side, expected] of [
+      ["original", copyBefore],
+      ["modified", copyAfter],
+    ]) {
+      await copy(side, expected, async () => {
+        const input = copyPage.locator(`.monaco-diff-editor .editor.${side} textarea.inputarea`);
+        await input.press("Control+a");
+        await input.press("Control+c");
+      });
+    }
+    await copyPage.locator(".source-editor").hover();
+    await copyPage.getByRole("button", { name: "行内", exact: true }).click();
+    const deletedLines = copyPage.locator(".line-delete-selectable .view-line");
+    await deletedLines.first().waitFor();
+    for (const method of ["keyboard", "copy event"]) {
+      await copy(`inline deletion ${method}`, copyBefore.slice(0, -2), async () => {
+        const endpoints = await deletedLines.evaluateAll((lines) => {
+          const endpoint = (element, atEnd) => {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            let text = walker.nextNode();
+            if (atEnd) while (walker.nextNode()) text = walker.currentNode;
+            const caret = document.createRange();
+            caret.setStart(text, atEnd ? text.length : 0);
+            caret.collapse(true);
+            const box = caret.getBoundingClientRect();
+            return { x: box.x + (atEnd ? -0.3 : 0.3), y: box.y + box.height / 2 };
+          };
+          return { start: endpoint(lines[0], false), end: endpoint(lines.at(-1), true) };
+        });
+        await copyPage.mouse.move(endpoints.start.x, endpoints.start.y);
+        await copyPage.mouse.down();
+        await copyPage.mouse.move(endpoints.end.x, endpoints.end.y, { steps: 10 });
+        await copyPage.mouse.up();
+        const selected = await copyPage.evaluate(() => window.getSelection()?.toString());
+        assert.match(selected, /original/);
+        if (method === "keyboard") await copyPage.keyboard.press("Control+c");
+        else assert.equal(await copyPage.evaluate(() => document.execCommand("copy")), true);
+        assert.equal(await copyPage.evaluate(() => window.getSelection()?.toString()), selected, "copy preserves the native selection");
+      });
+    }
+    await copyPage.getByRole("button", { name: "关闭差异", exact: true }).click();
+  };
+  await verifyDiffCopy(page, true);
+  const httpPage = await browser.newPage({ viewport: { width: 1680, height: 1050 } });
+  try {
+    await httpPage.goto(`${origin.replace("127.0.0.1", "issue-pilot.test")}/?issue=${issue.key}`);
+    await httpPage.getByRole("button", { name: "浏览工单代码", exact: true }).click();
+    await httpPage.getByRole("button", { name: "变更", exact: true }).click();
+    await verifyDiffCopy(httpPage, false);
+  } finally {
+    await httpPage.close();
+  }
+  assert.equal(await readFile(path.join(checkout, "copy-whitespace.ts"), "utf8"), copyAfter);
   await page.getByRole("button", { name: "文件", exact: true }).click();
   await page.getByRole("button", { name: "notes.ts", exact: true }).click();
   await page.getByRole("textbox", { name: "代码内容 notes.ts", exact: true }).waitFor();
@@ -761,6 +834,7 @@ try {
           "clipboard paste",
           "undo/redo",
           "inline and side-by-side diff",
+          "read-only diff copy on localhost and HTTP preserves tabs, NBSP, CRLF and the selection",
           "file switch",
           "conflict preserves disk and draft",
           "dirty navigation guard",
