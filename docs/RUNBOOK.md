@@ -77,9 +77,11 @@ PRAGMA foreign_key_check;
 - 未登记目录、quarantine、异常临时文件和清理阶段记录。
 
 ```bash
-GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C <path> rev-parse HEAD
-GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C <path> branch --show-current
-GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C <path> \
+# 替换为已确认归属的仓库绝对路径；这些命令只检查，不修复 Git 状态。
+REPOSITORY_PATH='/absolute/path/to/confirmed/worktree'
+GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$REPOSITORY_PATH" rev-parse HEAD
+GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$REPOSITORY_PATH" branch --show-current
+GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$REPOSITORY_PATH" \
   status --porcelain --untracked-files=all --ignored=matching
 ```
 
@@ -138,7 +140,10 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 | --- | --- |
 | 身份／权限 | 核对活跃用户、角色、isAdmin 和网关，不换身份兜底 |
 | 模型／SSH／DMS／SLS 凭证 | 核对 owner 和所选完整组，失败不切 Key |
+| 工单网站访问失败 | 先核对 `networkMode`；白名单模式检查目标域名、端口及跳转目标，再检查运行主机的 DNS、路由、代理、TLS 和网站登录状态，见[网络模式](CONFIGURATION.md#工单网络访问) |
 | personal_git_fetch_failed | 先区分 DNS、TCP、SSH 主机校验、Key、仓库权限和分支；统一错误码不证明 Key 错误 |
+| personal_git_ssh_url_required | developer owner 的远程地址必须使用 SSH；HTTPS 即使公开可读也不被该路径接受，核对服务登记的 URL |
+| user_git_ssh_credentials_required | owner 缺个人 SSH 私钥；由该用户配置，不改用宿主或其他人的 Key |
 | 配置冲突 | 保留草稿，重新读取 revision 或等待活动结束 |
 | 源码冲突／Git 漂移 | 保留 refs、索引及未提交内容，不 reset、远端回退或猜测改绑定 |
 | 开发工单根缺失 | 拒绝回收／重开，从匹配备份或明确恢复计划处理，不把共享分支当完整历史 |
@@ -150,6 +155,15 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 代理 DNS 返回 198.18.0.0/15 不等于必然失败；以真实 SSH 握手和严格 known_hosts 校验判断，不能关闭主机验证。远端推送成功但本地 upstream 写入失败先查远端，不重复推送。
 
 SSE 频繁重连时先检查浏览器的 `agent_event_connection_failed`／`agent_event_protocol_error`、代理缓冲与超时，以及 replay → snapshot_ready → live 的顺序。协议错误会触发整轮回放，旧连接迟到帧应被 generation 拒绝；不能通过忽略坏帧或累加旧 footer 来“修复”页面。浏览历史时不自动跟随新内容是正常交互，使用「回到最新」或新消息按钮；刷新页面不取消服务端任务。依据见 [HTTP SSE 约定](HTTP.md#异步执行sse-与分页)及 [AgentPanel](../src/web/src/app/AgentPanel.tsx)。
+
+### 排队、慢页面与旧采样
+
+1. 先看 `runState`：`queued` 尚未取得名额，`running` 还包括准备和收尾。`maxConcurrentIssues` 不是队列容量；增加它之前先区分仓库、模型和工具耗时，不把所有慢请求归因于名额不足。
+2. 模型持续有输出时，`modelResponseIdleMs` 不构成总时长截止；工具执行也暂停这个计时器。DMS／SLS／MCP 各用自己的预算，`capabilityConnectionMs` 当前仅作用于 SLS CLI 建连，详见[参数作用范围](CONFIGURATION.md#运行参数)。
+3. 首页工单摘要按周期拉取，资源统计另有缓存。核对 `sampledAt`，需要新采样再调用一次 `GET /api/workspaces/stats?refresh=true`；不要连续强制刷新，因为每次可能排入新的磁盘扫描。缓存和计量口径见[容量统计](STORAGE.md#容量统计)。
+4. 工单侧栏只展示当前处理人的队列；没显示不等于数据被删除。源码变更列表更新不代表打开的文本已重读；保存失败后的处理见[使用指南](USAGE.md#检查文件与代码)。
+
+本项目没有从这些检查推导出的吞吐量或最大工单数保证。若持续变慢，在独立数据副本中分别测量列表查询／传输、SSE 回放、磁盘采样和仓库准备；保留输入规模及测量条件，不在业务实例上无界压测。
 
 ## 恢复与回退
 

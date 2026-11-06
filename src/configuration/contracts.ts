@@ -72,6 +72,8 @@ export interface ServiceConfigurationInput {
   >;
 }
 
+export type AgentNetworkMode = "open" | "allowlist";
+
 /** Operational parameters that apply without restart. Durations are milliseconds and sizes are bytes. */
 export interface ApplicationParameters {
   maxConcurrentIssues: number;
@@ -85,6 +87,7 @@ export interface ApplicationParameters {
   dmsExecutionMs: number;
   slsExecutionMs: number;
   dingtalkAttachmentHosts: readonly string[];
+  networkMode: AgentNetworkMode;
   networkAllowedDomains: readonly string[];
 }
 export type ApplicationParameterKey = keyof ApplicationParameters;

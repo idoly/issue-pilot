@@ -88,7 +88,9 @@ Codemode off 为直接调用，on 为直接工具与编排并存，only 主要�
 
 缺失、不完整或损坏 JSONL 保留原文件和绑定，不截断或新建替代。打开时检查记录完整性和首条会话头，校验前缀可缓存，追加后仅解析新增部分。
 
-响应超时只累计等待模型输出，不累计工具时间。关闭等待排队、活动与预约，依次尝试 abort／shutdown／dispose，操作与清理错误独立保留。
+`modelResponseIdleMs` 检测连续无模型更新的等待：`message_update` 重置计时，工具执行期间暂停。因此持续有输出的长轮次不受这个总时长上限约束；它不是整轮截止时间。依据：[AgentResponseWatchdog](../src/agent/pi-session.ts)。
+
+关闭先等待排队、活动与预约排空，再对会话尝试 abort／shutdown／dispose，操作与清理错误独立保留。Engine 没有独立的排空截止时间；`http.shutdownGraceMs` 仅强制关闭卡住的 HTTP 连接，不会在该时间后自动撤销全部排队模型工作。停机前应减少新请求并等待队列，平台强杀仍可能产生中断状态，恢复见[运维](RUNBOOK.md#按风险发布与重启)。
 
 ## 页面投影与费用
 
@@ -104,7 +106,7 @@ Codemode off 为直接调用，on 为直接工具与编排并存，only 主要�
 
 SRT 使用 Linux user／PID／mount／network namespace 与 seccomp，宿主只读、当前 Issue 根可持久写、相关 Issue 只读，数据库和私有配置隐藏。Git 指针、管理文件和跨目录硬链接有额外检查。
 
-网络通过代理／proxychains，默认关闭 Unix socket 旁路与嵌套 namespace，拒绝宿主控制地址及 API／Web 端口；允许域名不解除这些拒绝。危险 loader 环境拒绝，隔离能力不足时失败。
+网络通过代理／proxychains，支持全局 `open`／`allowlist` 模式，默认 `open`；模式、生效时点及部署影响见[工单网络访问](CONFIGURATION.md#工单网络访问)。开放模式不按网站读写操作过滤。Unix socket 旁路与嵌套 namespace 仍关闭，既有宿主控制地址及 API／Web 端口拒绝继续生效。危险 loader 环境拒绝，隔离能力不足时失败。
 
 私有 Git 索引／分支／新对象可写，共享对象及 config／hooks／alternates／指针只读。临时个人 SSH 身份只向 native 工具开放，不向 stdio MCP 传递，严格校验 known_hosts。
 

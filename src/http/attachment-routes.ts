@@ -4,6 +4,7 @@ import { create as contentDisposition } from "content-disposition";
 import { and, eq } from "drizzle-orm";
 
 import { issueAttachments } from "../db/schema.ts";
+import { errorCode, stableErrorReason } from "../diagnostics.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { openVerifiedAttachmentStream } from "./attachment-store.ts";
 import { ApiError } from "./input.ts";
@@ -47,6 +48,8 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
       cleanup();
       if (controller.signal.aborted) {
         reply.hijack();
+        // A disconnected client cannot receive an error, but failed descriptor cleanup still needs diagnosis.
+        if (error !== controller.signal.reason) request.log.error({ code: errorCode(error), reason: stableErrorReason(error, "attachment_download_failed") }, "attachment_download_failed");
         return reply;
       }
       throw error;

@@ -9,6 +9,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContex
 import { ModelRuntime, SessionManager, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { hostMcpPid } from "../helpers/mcp-process.ts";
 import { createPrivateSessionManager, PiSessionRuntime, type ManagedPiSession, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
+import { applicationParameters, installApplicationParameters } from "../../src/configuration/parameters.ts";
 
 async function fixture(env: Record<string, string> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-native-mcp-"));
@@ -252,6 +253,83 @@ test("SDK call cancellation leaves the shared connection usable and errors omit 
     await f.close();
   }
 });
+
+for (const mode of ["off", "on"] as const)
+  test(`existing MCP tools and resources use updated request budgets with codemode ${mode}`, async () => {
+    const f = await fixture({ MCP_FIXTURE_RESOURCES: "1", MCP_FIXTURE_DELAY_MS: "1200" });
+    const originalParameters = applicationParameters();
+    const setBudget = (mcpExecutionMs: number) => installApplicationParameters({ ...originalParameters, mcpExecutionMs });
+    f.options.context.codemode = mode;
+    let managed: ManagedPiSession | undefined;
+    try {
+      setBudget(1000);
+      f.faux.setResponses([fauxAssistantMessage("MCP connection ready.")]);
+      managed = await f.runtime.start(f.options);
+      await ready(managed);
+      await managed.prompt("Inspect the connected MCP tools.");
+      const context = managed.session.extensionRunner.createToolContext("timeouts", undefined);
+      let calls = 0;
+      const call = async (name: string, input: Record<string, unknown> = {}): Promise<{ isError: boolean; result: unknown }> => {
+        if (mode === "off") return context.executeTool(name, input);
+        // Codemode itself is model-only: exercise the model tool pipeline, not recursive executeTool.
+        const toolCallId = `timeout-${++calls}`;
+        let outcome: { isError: boolean; content: unknown } | undefined;
+        f.faux.setResponses([
+          fauxAssistantMessage(fauxToolCall("codemode", { code: `return await tools.${name}(${JSON.stringify(input)});` }, { id: toolCallId }), { stopReason: "toolUse" }),
+          (transcript) => {
+            const result = transcript.messages.find((message) => message.role === "toolResult" && message.toolCallId === toolCallId);
+            assert.ok(result?.role === "toolResult");
+            outcome = result;
+            return fauxAssistantMessage("Tool result observed.");
+          },
+        ]);
+        await managed!.prompt("Invoke the MCP tool.");
+        assert.ok(outcome);
+        return { isError: outcome.isError, result: outcome };
+      };
+      const originalPid = Number(await file(f.root, "pid"));
+      const originalHostPid = await hostMcpPid(path.join(f.root, "pid"));
+
+      // Raising the budget must override the shorter timeout captured when these tools were registered.
+      setBudget(3000);
+      for (const result of [await call("mcp__local__slow"), await call("read_mcp_resource", { server: "local", uri: "fixture://slow" })]) assert.equal(result.isError, false, JSON.stringify(result));
+
+      setBudget(1000);
+      for (const [name, input] of [
+        ["mcp__local__slow", {}],
+        ["read_mcp_resource", { server: "local", uri: "fixture://slow" }],
+      ] as const) {
+        const result = await call(name, input);
+        assert.equal(result.isError, true, JSON.stringify(result));
+        assert.match(JSON.stringify(result), /timed out after 1000ms/);
+      }
+      assert.equal(await file(f.root, "slow"), "2", "a timed-out tool is not replayed");
+
+      // A parameter change after dispatch does not replace the request's original budget.
+      setBudget(3000);
+      await rm(path.join(f.root, "slow"));
+      const inFlight = call("mcp__local__slow");
+      assert.equal(await file(f.root, "slow"), "3");
+      setBudget(1000);
+      assert.equal((await inFlight).isError, false);
+      assert.equal(await file(f.root, "slow"), "3");
+      assert.equal(data(await context.executeTool("mcp__local__counter", {})).pid, originalPid, "budget updates and timeout cancellation keep the connection usable");
+
+      // A fresh connection in the same session also reads the current value, without replaying the failed call.
+      assert.equal((await call("mcp__local__die")).isError, true);
+      setBudget(3000);
+      assert.equal((await call("mcp__local__slow")).isError, false);
+      assert.notEqual(await hostMcpPid(path.join(f.root, "pid")), originalHostPid);
+      assert.equal(await file(f.root, "slow"), "1");
+    } finally {
+      try {
+        await managed?.stop();
+      } finally {
+        installApplicationParameters(originalParameters);
+        await f.close();
+      }
+    }
+  });
 
 test("SDK shutdown closes a stdio server whose initialization is pending", async () => {
   const f = await fixture({ MCP_FIXTURE_HANG: "1" });

@@ -51,7 +51,9 @@ Pi 会话显式使用临时 agentDirectory，注入模型不能替代资源隔�
 node --experimental-strip-types --test --test-concurrency=2 tests/http/issue-api.test.ts tests/http/application-mcp-create.test.ts
 ```
 
-[HTTP fixture](../tests/http/fixture.ts) 通过 `buildApi({ stateRoot, databaseFile, engine, modelCatalog })` 创建临时数据库和根目录，注入替代 Agent／模型目录，使用 Fastify `inject` 调用真实路由，最后关闭并清理。它验证 HTTP／MCP 与存储契约，不监听真实部署端口，也不调用真实模型或远程 Git；不能据此声称模型、SSH、SRT 或网关集成通过。实际 Engine 的排队、输入持久化和失败恢复另见 `tests/agent/engine.test.ts`、`message-admission.test.ts`、`message-recovery.test.ts`。
+[HTTP fixture](../tests/http/fixture.ts) 通过 `buildApi({ stateRoot, databaseFile, engine, modelCatalog })` 创建临时数据库和根目录，注入替代 Agent／模型目录。HTTP 测试使用 Fastify `inject`；MCP 创建测试还会监听 `127.0.0.1` 的随机端口，由真实 MCP SDK 发请求，最后关闭并清理。二者都会使用临时 Unix socket 取得 state 租约，受限执行器必须允许本地套接字。它们验证路由／协议与存储契约，不调用真实模型或远程 Git；不能据此声称模型、SSH、SRT 或网关集成通过。实际 Engine 的排队、输入持久化和失败恢复另见 `tests/agent/engine.test.ts`、`message-admission.test.ts`、`message-recovery.test.ts`。
+
+Node test 若只显示文件级 `test failed`，可对**同一临时夹具测试**加 `--test-isolation=none --test-reporter=tap` 查看原因；例如 `listen EPERM .../control/project-tools.sock` 表示执行环境禁止租约 socket，不是业务断言失败。应在允许本地套接字的隔离环境重跑，不能关闭应用租约校验或改用真实 state。
 
 新增行为测试沿用临时根注入模式，避免把上述替代 controller 的成功误当成 Agent 执行成功。手工验证真实能力则按[首张工单路径](DEPLOYMENT.md#首次本地运行)在独立安装中进行。
 
@@ -118,6 +120,8 @@ CodeBrowser／Monaco 按需加载。图标使用主题的明确字段，JSON 使
 ## 可重复的真实浏览器验收
 
 `tests/browser/acceptance.mjs` 启动临时 SQLite、Issue 根、Git worktree 和真实 HTTP/SSE 服务，再用生产构建与 Chromium 检查高亮、查找、粘贴、保存、CRLF、撤销／重做、差异、冲突、导航、Agent 草稿及选区。会话场景还覆盖 40 条实时历史、浏览历史时的未读提示和滚动位置、长草稿、直接展示思考内容、宽屏会话宽度、点击发送及焦点恢复；另以 300 条仓库检查桌面／窄屏列表滚动、长名称／地址截断及服务名不拆行，并检查输入区聚焦时没有重复描边，以及服务 Tab 直接切换、圆角与白底选中态、居中与内容收缩、无竖向滚动条、与详情卡片对齐及窄屏操作区布局。Agent 执行器和模型目录使用测试实现，不发起远程模型请求。脚本最后关闭浏览器／API 并删除其临时状态；输出浏览器版本、源码基线／diff 哈希、视口、场景及加载资源。
+
+参数页还通过真实 HTTP 保存 `open`／`allowlist` 网络模式，验证开放模式隐藏名单后仍保留已保存内容。网络访问本身由本地 SRT 协议夹具覆盖，不用浏览器页面保存成功代替出口验收。
 
 Playwright 是独立验收工具，不加入应用依赖。以下 Bash 示例只在**自己的独立开发 checkout**执行：脚本固定读取仓库的 `src/web/dist`，不要对正在提供服务的目录执行构建。Linux 先准备浏览器系统库和中文字体（如 `fonts-noto-cjk`）；`install --only-shell` 只下载浏览器，不会安装这些系统包，CI 的安装方式见 [ci.yml](../.github/workflows/ci.yml)。工具安装需要网络，既不修改应用依赖，也不修改全局 Pi 配置。
 

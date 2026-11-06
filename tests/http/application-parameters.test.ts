@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createApiFixture, createIssue, createService } from "./fixture.ts";
-import { applicationParameterDefaults } from "../../src/configuration/parameters.ts";
+import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
+import { applicationParameterDefaults, applicationParameters } from "../../src/configuration/parameters.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { buildApi } from "../../src/http/api.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 
@@ -17,6 +18,7 @@ test("applies saved application parameters without reserving Issues or closing s
     assert.equal(initial.revision, 0);
     assert.deepEqual(initial.overrides, {});
     assert.deepEqual(initial.values, applicationParameterDefaults);
+    assert.equal(initial.values.networkMode, "open");
     assert.equal(initial.bounds.numbers.maxConcurrentIssues.maximum, 64);
     assert.equal(initial.bounds.listEntries, 100);
 
@@ -31,6 +33,7 @@ test("applies saved application parameters without reserving Issues or closing s
       workspaceMaintenanceIntervalMs: 60_000,
       mcpExecutionMs: 30_000,
       dingtalkAttachmentHosts: ["files.example.test"],
+      networkMode: "allowlist",
       networkAllowedDomains: ["registry.example.test", "*.example.test:443"],
     };
     const saved = await put({ expectedRevision: 0, overrides });
@@ -60,6 +63,7 @@ test("applies saved application parameters without reserving Issues or closing s
       { expectedRevision: 1, overrides: { dingtalkAttachmentHosts: ["not a host"] } },
       { expectedRevision: 1, overrides: { networkAllowedDomains: ["not a host"] } },
       { expectedRevision: 1, overrides: { networkAllowedDomains: ["a.test", "a.test"] } },
+      ...["all", "OPEN", "", null, false, 1, []].map((networkMode) => ({ expectedRevision: 1, overrides: { networkMode } })),
       { expectedRevision: 1, overrides: { unknownParameter: 1 } },
       { expectedRevision: 1, overrides: { maxConcurrentIssues: "4" } },
       { overrides: {} },
@@ -82,6 +86,30 @@ test("applies saved application parameters without reserving Issues or closing s
     assert.equal((await put({ expectedRevision: 2, overrides: { maxConcurrentIssues: 5 } }, developer)).statusCode, 403);
     assert.deepEqual((await get()).values, applicationParameterDefaults);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("restores the saved network mode on startup and clears it back to the project default", async () => {
+  const f = await createApiFixture();
+  let restarted: Awaited<ReturnType<typeof buildApi>> | undefined;
+  try {
+    const saved = await f.app.inject({ method: "PUT", url: "/api/config/parameters", headers, payload: { expectedRevision: 0, overrides: { networkMode: "allowlist" } } });
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(applicationParameters().networkMode, "allowlist");
+    await f.stop();
+    restarted = await buildApi({ stateRoot: f.root, databaseFile: f.databaseFile, engine: f.engine, modelCatalog, logger: false });
+    const state = (await restarted.inject({ method: "GET", url: "/api/config/parameters" })).json();
+    assert.equal(state.revision, 1);
+    assert.deepEqual(state.overrides, { networkMode: "allowlist" });
+    assert.equal(state.values.networkMode, "allowlist");
+    assert.equal(applicationParameters().networkMode, "allowlist");
+    const cleared = await restarted.inject({ method: "PUT", url: "/api/config/parameters", headers, payload: { expectedRevision: 1, overrides: {} } });
+    assert.equal(cleared.statusCode, 200, cleared.body);
+    assert.equal(cleared.json().values.networkMode, "open");
+    assert.equal(applicationParameters().networkMode, "open");
+  } finally {
+    await restarted?.close();
     await f.cleanup();
   }
 });

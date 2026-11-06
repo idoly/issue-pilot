@@ -2,14 +2,156 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Fastify from "fastify";
 import { eq } from "drizzle-orm";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { AgentEngine } from "../../src/agent/engine.ts";
+import { sessionTranscript } from "../../src/agent/events.ts";
+import type { GitCommitIdentity, ManagedPiSession } from "../../src/agent/pi-session.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { issues, issueWorkspaces, subjects } from "../../src/db/schema.ts";
+import { agentSessions, issues, issueWorkspaces, subjects } from "../../src/db/schema.ts";
 import { ApiError } from "../../src/http/input.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
+import type { KeyedSerialQueue } from "../../src/serial.ts";
 import { WorkspaceLifecycleManager } from "../../src/workspace/lifecycle.ts";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
+
+for (const mode of ["queued", "steering", "steering-to-queued"] as const)
+  for (const explicit of [false, true])
+    test(`${mode} messages reauthorize the ${explicit ? "explicit" : "default"} sender after admission waits`, { timeout: 5_000 }, async (context) => {
+      const f = await createApiFixture();
+      const database = openDatabase(f.databaseFile);
+      const engine = new AgentEngine(database.db, f.root);
+      const internal = engine as unknown as {
+        sessionQueue: KeyedSerialQueue;
+        steerQueue: KeyedSerialQueue;
+        sessions: Map<string, ManagedPiSession>;
+        run(issueId: string, message?: string): Promise<void>;
+      };
+      const dispatched: Array<string | undefined> = [];
+      const steered: string[] = [];
+      const identities: GitCommitIdentity[] = [];
+      const manager = SessionManager.inMemory(f.root);
+      internal.run = async (_issueId, message) => {
+        dispatched.push(message);
+      };
+      context.mock.method(f.engine, "send", (...args: Parameters<AgentEngine["send"]>) => engine.send(...args));
+      let release!: () => void, entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const waiting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let pending: Promise<unknown> | undefined;
+      let blocker: Promise<void> | undefined;
+      try {
+        await createService(f.app, "MessageIdentity");
+        const issue = await createIssue(f.app, "messageidentity");
+        const issueId = f.engine.enqueued.at(-1)!;
+        f.engine.running.clear();
+        const sender = "message-sender@example.test";
+        // The sender owns no Issues and is also the deterministic default identity before deactivation.
+        await database.db.insert(subjects).values({ subject: sender, role: "product", createdAt: new Date(0) });
+        if (mode !== "queued") {
+          let streaming = true;
+          internal.sessions.set(issueId, {
+            get streaming() {
+              return streaming;
+            },
+            session: {
+              sessionManager: manager,
+              getSteeringMessages: () => [],
+              async steer(message: string) {
+                steered.push(message);
+              },
+            },
+            setGitIdentity(identity: GitCommitIdentity) {
+              identities.push(identity);
+            },
+            async prompt(message: string) {
+              dispatched.push(message);
+            },
+            async stop() {},
+          } as unknown as ManagedPiSession);
+          if (mode === "steering-to-queued") {
+            const steer = internal.steerQueue.run.bind(internal.steerQueue);
+            context.mock.method(internal.steerQueue, "run", <T>(key: string, operation: () => Promise<T>) =>
+              steer(key, async () => {
+                // The round ends after send chooses steering, before it acquires that queue.
+                streaming = false;
+                return operation();
+              }),
+            );
+          }
+        }
+        const queue = mode === "steering" ? internal.steerQueue : internal.sessionQueue;
+        blocker = queue.run(issueId, () => gate);
+        const run = queue.run.bind(queue);
+        context.mock.method(queue, "run", <T>(key: string, operation: () => Promise<T>) => {
+          entered();
+          return run(key, operation);
+        });
+        const response = f.app
+          .inject({
+            method: "POST",
+            url: `/api/issues/${issue.id}/agent-messages`,
+            ...(explicit ? { headers: { "x-issue-pilot-subject": sender } } : {}),
+            payload: { message: "must not be accepted after deactivation" },
+          })
+          .then((value) => value);
+        pending = response;
+        await waiting;
+        const disabled = await f.app.inject({
+          method: "PATCH",
+          url: `/api/users/${sender}`,
+          headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+          payload: { active: false },
+        });
+        assert.equal(disabled.statusCode, 200, disabled.body);
+        release();
+        const denied = await response;
+        assert.equal(denied.statusCode, 400, denied.body);
+        assert.equal(denied.json().error, "invalid_current_subject");
+        assert.deepEqual(dispatched, []);
+        assert.deepEqual(steered, []);
+        assert.deepEqual(identities, []);
+        assert.deepEqual(sessionTranscript(manager, issueId), []);
+        assert.deepEqual(await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issueId)), []);
+        assert.equal(engine.isRunning(issueId), false);
+
+        // The rejected input must not appear again when another valid sender continues the Issue.
+        const accepted = await f.app.inject({
+          method: "POST",
+          url: `/api/issues/${issue.id}/agent-messages`,
+          headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+          payload: { message: "accepted continuation" },
+        });
+        assert.equal(accepted.statusCode, 202, accepted.body);
+        await engine.close();
+        const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issueId));
+        const transcript = sessionTranscript(mode === "queued" ? SessionManager.open(binding!.sessionFile) : manager, issueId);
+        assert.deepEqual(
+          transcript.map(({ event }) => event),
+          [{ type: "issue_user", message: "accepted continuation" }],
+        );
+        if (mode === "queued") assert.deepEqual(dispatched, ["accepted continuation"]);
+        else if (mode === "steering") {
+          assert.equal(steered.length, 1);
+          assert.match(steered[0]!, /accepted continuation/);
+        } else {
+          assert.equal(dispatched.length, 1);
+          assert.match(dispatched[0]!, /accepted continuation/);
+        }
+      } finally {
+        release();
+        await blocker;
+        await pending;
+        await engine.close();
+        database.close();
+        await f.cleanup();
+      }
+    });
 
 for (const kind of ["source", "status", "related", "release"] as const)
   test(`rejects unknown and inactive identities for ${kind} mutations`, async () => {

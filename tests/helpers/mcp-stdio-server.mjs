@@ -15,6 +15,7 @@ if (process.env.MCP_FIXTURE_HANG) {
 } else {
   const server = new Server({ name: "stdio-fixture", version: "1" }, { capabilities: { tools: {}, ...(process.env.MCP_FIXTURE_RESOURCES ? { resources: {} } : {}) } });
   let count = 0,
+    slowCalls = 0,
     changed = false,
     removed = false,
     rootsChecked = false;
@@ -44,15 +45,35 @@ if (process.env.MCP_FIXTURE_HANG) {
       size = Number(process.env.MCP_FIXTURE_PAGE_SIZE ?? tools.length);
     return { tools: tools.slice(offset, offset + size), ...(offset + size < tools.length ? { nextCursor: String(offset + size) } : {}) };
   });
+  const delay = (signal) => {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const aborted = () => {
+        clearTimeout(timer);
+        reject(new Error(secret));
+      };
+      const timer = setTimeout(
+        () => {
+          signal.removeEventListener("abort", aborted);
+          resolve();
+        },
+        Number(process.env.MCP_FIXTURE_DELAY_MS ?? 30_000),
+      );
+      signal.addEventListener("abort", aborted, { once: true });
+    });
+  };
   if (process.env.MCP_FIXTURE_RESOURCES) {
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [{ uri: "fixture://evidence", name: "Evidence", mimeType: "text/plain" }] }));
-    server.setRequestHandler(ReadResourceRequestSchema, async (request) => ({
-      contents: [
-        request.params.uri.endsWith(".bin")
-          ? { uri: request.params.uri, mimeType: "application/octet-stream", blob: Buffer.from([0, 255, 1, 2]).toString("base64") }
-          : { uri: request.params.uri, mimeType: "text/plain", text: "resource evidence" },
-      ],
-    }));
+    server.setRequestHandler(ReadResourceRequestSchema, async (request, context) => {
+      if (request.params.uri === "fixture://slow") await delay(context.signal);
+      return {
+        contents: [
+          request.params.uri.endsWith(".bin")
+            ? { uri: request.params.uri, mimeType: "application/octet-stream", blob: Buffer.from([0, 255, 1, 2]).toString("base64") }
+            : { uri: request.params.uri, mimeType: "text/plain", text: "resource evidence" },
+        ],
+      };
+    });
   }
   server.setRequestHandler(CallToolRequestSchema, async (request, context) => {
     if (request.params.name === "fail") throw new Error(secret);
@@ -67,19 +88,8 @@ if (process.env.MCP_FIXTURE_HANG) {
       await server.sendToolListChanged();
     }
     if (request.params.name === "slow") {
-      if (process.env.MCP_FIXTURE_SLOW_FILE) await writeFile(process.env.MCP_FIXTURE_SLOW_FILE, "1");
-      context.signal.throwIfAborted();
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, 30_000);
-        context.signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(new Error(secret));
-          },
-          { once: true },
-        );
-      });
+      if (process.env.MCP_FIXTURE_SLOW_FILE) await writeFile(process.env.MCP_FIXTURE_SLOW_FILE, String(++slowCalls));
+      await delay(context.signal);
     }
     const data = { pid: process.pid, count: ++count, cwd: process.cwd(), inherited: Boolean(process.env.MCP_PARENT_SECRET) };
     return { content: [{ type: "text", text: JSON.stringify(data).padEnd(Number(process.env.MCP_FIXTURE_RESULT_BYTES ?? 0), "x") }], structuredContent: data };

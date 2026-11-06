@@ -31,7 +31,10 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
         config: {
           ...(configuration.transport === "stdio" ? configuration.stdio! : { url: configuration.url, headers: { Authorization: configuration.authorization } }),
           exposure,
-          timeout: applicationParameters().mcpExecutionMs / 1000,
+          // Pi reads this when a request begins; changing parameters does not replace the connection.
+          get timeout() {
+            return applicationParameters().mcpExecutionMs / 1000;
+          },
           description: configuration.name,
         },
       })),

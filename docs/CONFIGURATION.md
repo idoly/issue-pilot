@@ -4,19 +4,47 @@
 
 ## 配置分层
 
-| 来源 | 内容 |
-| --- | --- |
-| SQLite | 用户、凭证、仓库、服务部署、MCP、模型、偏好及运行参数覆盖 |
-| 根配置 | 路径、监听、bootstrap 用户、区域、硬预算与运行参数默认值 |
-| Operator Pi 目录 | 模型定义、settings、指令、skills、prompts、extensions |
+| 来源 | 内容与优先级 | 生效方式 |
+| --- | --- | --- |
+| SQLite | 用户、凭证、仓库、服务部署、MCP、模型、偏好；参数覆盖优先于根配置默认值 | 页面／API 保存；会话、预约和热参数各有自己的生效边界，见下文 |
+| [根配置](../issue-pilot.config.ts) | 路径、监听、bootstrap 用户、区域、硬预算与参数默认值 | API 重启；Web 使用到的配置还需重新构建，Vite 开发进程需重启 |
+| Operator Pi 目录 | 模型定义、settings、指令、skills、prompts、extensions；SQLite 允许的 runtime.settings 覆盖 Pi settings 基线 | 模型目录读取时离线刷新；资源和 settings 在会话准备时加载，不保证改文件即更新已打开会话 |
 
 业务设置由页面／API 持久化，不从 YAML 或历史私有字段填补缺失值。state 路径相对于源码根解析，没有 state／database 环境变量覆盖。Operator auth.json／models.json 的密钥或 headers 不能成为模型请求的 fallback。
 
 配置页面分类为用户、仓库、服务、端点、参数。根配置不是所有值的运行时来源；参数页只开放明确支持热更新的项目，不代表端口、时区和硬上限也可热改。
 
+`state.directory` 相对源码根，`state.databaseFile` 相对 state root；更改 Shell 工作目录不会获得新数据库。应用不加载 `.env` 来覆盖这些字段。路径解析见 [config.ts](../src/config.ts)。`bootstrapUser` 仅在用户表为空时插入；默认环境名称会在启动时按根配置同步，现有用户不会随 bootstrap 修改而更新，见 [bootstrap.ts](../src/db/bootstrap.ts)。
+
+### Operator 模型目录
+
+运行用户的 Pi `getAgentDir()` 默认指向 `~/.pi/agent`；SDK 的 `PI_CODING_AGENT_DIR` 可改该目录，**不改变应用 state root**。主机 supervisor 或容器必须给运行进程提供相同目录和读取权限，不能以另一个 Shell 的配置代替。
+
+[models.json 示例](../examples/models.json) 是无密钥的目录模板。将 `baseUrl`、模型 `id`、`api`、输入能力、上下文及输出上限替换为供应商实际支持的值，再合并到运行用户的 `models.json.providers`；不要覆盖已有配置。示例的 `.invalid` 地址不能执行模型请求，目录被接受也不证明上游协议、权限或费用正确。示例省略费用字段，不作为计价依据。完整格式以本次 `npm ci` 安装的 `node_modules/@earendil-works/pi-coding-agent/docs/models-configuration.md` 为准。
+
+完成安装和目录准备后，在仓库根用 Bash 执行以下**离线目录检查**。它只输出目录路径和候选标识，不启动 API、不写业务数据库、不调用模型；Pi 的临时目录由 `close()` 清理：
+
+```bash
+node --experimental-strip-types --input-type=module <<'NODE'
+import { getAgentDir } from '@earendil-works/pi-coding-agent';
+import { PiAgentModelCatalog } from './src/agent/model-runtime.ts';
+const catalog = new PiAgentModelCatalog();
+try {
+  console.log('Pi directory:', getAgentDir());
+  const models = await catalog.list();
+  if (!models.length) throw new Error('global_agent_model_unavailable');
+  console.log(models.map(({ provider, id }) => ({ provider, id })));
+} finally {
+  await catalog.close();
+}
+NODE
+```
+
+首次空库从按 provider／id 排序的候选中选第一项，thinking 优先 `medium`，否则取模型支持的第一项，Codemode 初始为 `on`；不是自动选择“最适合”的模型。启动后由管理员核对并保存共享模型与 Key。已有全局配置时启动不会重新选型，模型被移除后需显式修正选择。依据：[模型目录](../src/agent/model-runtime.ts)、[全局初始化](../src/configuration/agent.ts)、[离线目录回归](../tests/agent/model-runtime.test.ts)。
+
 ## 身份与权限
 
-`X-Issue-Pilot-Subject` 选择活跃用户，**不是认证**。可信网关必须认证并绑定该头。调用身份校验时，无显式头会按 `createdAt`、`subject` 升序选择第一名活跃用户，并在该请求内固定选择；等待后该用户失活则拒绝，不换账号。这不是固定的全局登录账号。部分目录／详情 GET 不调用身份校验，因此错误 subject 头也不能作为这些接口拒绝访问的保证；认证边界必须在网关，详见 [HTTP 身份边界](HTTP.md#身份与访问边界)。
+`X-Issue-Pilot-Subject` 选择活跃用户，**不是认证**。可信网关必须认证并绑定该头。调用身份校验时，无显式头会按 `createdAt`、`subject` 升序选择第一名活跃用户，并在该请求内固定选择；再次校验发现该用户失活则拒绝，不换账号。这不是固定的全局登录账号。部分目录／详情 GET 不调用身份校验，因此错误 subject 头也不能作为这些接口拒绝访问的保证；认证边界及消息受理的重检时点见 [HTTP 身份边界](HTTP.md#身份与访问边界)。
 
 | 身份条件 | 主要用途 |
 | --- | --- |
@@ -24,7 +52,7 @@
 | developer | 开发处理方式、仓库／服务／用户维护及约定的私有配置读取 |
 | isAdmin | 全局模型、共享凭证、全局 MCP 管理及运行参数写入 |
 
-product／test／developer 是业务角色，isAdmin 独立。用户维护保护活跃用户、开发者、管理员，以及至少一名活跃开发管理用户。队列等待后重新授权，不能把页面隐藏按钮当权限边界。提交作者使用预约内重新读取的人员资料。
+product／test／developer 是业务角色，isAdmin 独立。用户维护保护活跃用户、开发者、管理员，以及至少一名活跃开发管理用户。配置、Source、生命周期及消息受理路径在相关队列后重新授权；不能把页面隐藏按钮当权限边界。提交作者使用预约内重新读取的人员资料。
 
 ## 凭证与 owner
 
@@ -33,7 +61,7 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 | 组 | 选择规则 |
 | --- | --- |
 | 模型 | 任何角色 owner 有个人组时整组替换共享 provider／model／thinking／Codemode／Key；没有个人组才用共享组 |
-| Git | developer owner 使用本人 SSH 私钥，严格 known_hosts，不回退 Operator 或其他用户身份 |
+| Git | developer owner 的远程仓库必须用 SSH URL 和本人私钥（HTTPS 也会拒绝）；严格 known_hosts，不回退 Operator 或其他用户身份 |
 | DMS | prod/test 选择 owner 的完整 URL／Authorization；没有个人组才用应用共享组 |
 | SLS | prod/test 选择 owner 的完整 AccessKey ID／Secret；没有个人组才用应用共享组 |
 
@@ -58,14 +86,16 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 | 参数 | 默认值 | 生效边界 |
 | --- | --- | --- |
 | maxConcurrentIssues | 10 | 调高放行排队，调低不终止已有轮次 |
-| modelResponseIdleMs | 300 秒 | 下一次响应计时，工具执行时间不累计 |
+| modelResponseIdleMs | 300 秒 | 连续无模型更新的等待；收到更新重置，工具执行期间暂停，下一次启动计时器使用新值 |
 | workspaceRetentionMs | 7 天 | 后续维护／采样 |
 | workspaceHighWaterBytes／workspaceTargetBytes | 20／16 GiB | 后续压力回收，非零高水位须大于目标 |
 | workspaceMaintenanceIntervalMs | 15 分钟 | 保存后重新计时，0 停止周期维护 |
-| capabilityConnectionMs | 10 秒 | 后续连接 |
-| mcpExecutionMs／dmsExecutionMs／slsExecutionMs | 120／120／30 秒 | 后续调用 |
+| capabilityConnectionMs | 10 秒 | 仅后续 SLS CLI 的 `--connect-timeout`，向上取整到秒；不控制 DMS 或 MCP 连接 |
+| mcpExecutionMs | 120 秒 | 后续 MCP 调用在开始时取值，含已有 Pi 会话中的服务工具／资源读取；在途调用保留原预算 |
+| dmsExecutionMs／slsExecutionMs | 120／30 秒 | 后续原生查询 |
 | dingtalkAttachmentHosts | 根配置中的 HTTPS 主机列表 | 后续导入 |
-| networkAllowedDomains | 根配置中的基础域名列表 | 沙箱获取／网络配置同步，不替代宿主拒绝规则 |
+| networkMode | `open` | 全局工单网络模式；后续新代理连接读取当前值，已有连接不中断 |
+| networkAllowedDomains | 根配置中的基础域名列表 | `allowlist` 模式限制访问范围；沙箱获取／网络配置同步，不替代宿主拒绝规则 |
 
 高水位 0 关闭按占用触发的回收，不关闭其他释放检查。字段范围来自 API bounds：并发 1–64、列表最多 100 项且去重，非零维护周期至少一分钟。默认值在代码中仍有必要；没有覆盖时跟随默认值。
 
@@ -73,7 +103,24 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 
 保存先持久化再更新进程快照，通知并发、维护和网络 owner；不预约全部工单、不关闭会话。已有调用继续使用已取得的预算，不能把“无需重启”理解成撤销所有在途操作。网络同步失败时数据库仍为权威，下次获取沙箱重试同步。
 
+服务 MCP 通过应用配置 getter 和[固定 SDK 补丁](../patches/README.md#服务-mcp-调用预算)在每次新工具／资源请求开始时读取当前预算，调高或调低不要求重建会话，也不追溯改变在途请求。保存参数不重放失败的工具调用；`capabilityConnectionMs` 不影响这条路径。原问题和回归见[审查记录](records/2026-11-06-documentation-audit.md#p2服务-mcp-会话保留旧调用超时)。
+
 workspace.taskConcurrency 仍是代码设置，控制后台准备／检查／测量的批次并发，不是 Agent 并发；端口、state 路径、时区、SSE 和文件等硬预算也不在参数页。
+
+### 工单网络访问
+
+管理员在“配置 → 参数 → 工单网络访问”选择模式，作用于所有工单的本地工具和 stdio MCP 的 SRT 出站代理：
+
+- `open`（开放网络，默认）：允许访问业务网站和 API，不按 HTTP 方法区分读取、提交或删除；网站登录、账号权限及实际操作由目标系统和当前任务决定。
+- `allowlist`（域名白名单）：沿用 `networkAllowedDomains` 基础名单及全局 Agent runtime 的追加名单，例如 `gitlab.xhgjdev.com:443`。条目没有端口时匹配任意端口；当前 SRT 不接受允许名单中的裸 `*`，需要开放访问时使用模式选项。
+
+模式持久化在现有 SQLite `application_settings.parameters` JSON 中，不新增表或迁移。旧数据库没有 `networkMode` 覆盖时使用根默认 `open`，因此部署此版本后会扩大原有域名访问范围；需要保持原限制的安装应通过管理员参数保存 `networkMode: "allowlist"`。开放模式隐藏名单输入并保留其内容，切回后继续使用，不自动清空。
+
+SRT 在每个新代理请求／CONNECT 时检查当前模式；不关闭 Pi 会话，也不追溯切断已建立的 TCP 隧道或 HTTP keep-alive 连接。开放模式使用 SRT 的公开网络决策回调，不关闭网络 namespace，不增加另一层协议执行器。它不解除既有宿主控制地址／应用端口拒绝或文件隔离；自动放行还排除未显式允许的回环、本机、链路本地及云元数据地址。明确允许／拒绝名单的优先级保持 SRT 原有语义。
+
+该模式提供现有 HTTP／SOCKS 代理支持的出站能力，不保证 UDP、ICMP 或任意网络栈可用。DNS 解析和路由必须由运行主机提供；使用上游代理时，远端解析及目标隔离还取决于上游代理，不能把本机的 DNS 地址校验当作远端代理的保证。受信应用代码、远端 MCP 服务和模型请求本来就有各自的网络与权限边界，不由此选项重新授权。
+
+这项设置不会自动配置网站凭证、创建浏览器或保存登录态，也没有 GitLab 专用 API 或“只读连接”。会话可使用已有命令和库访问已获授权的网站；交互验证码、单点登录及浏览器依赖仍需相应工具。实现见 [issue-sandbox.ts](../src/agent/issue-sandbox.ts)，参数校验见 [parameters.ts](../src/configuration/parameters.ts)。
 
 ## 服务和查询目标
 
@@ -128,7 +175,9 @@ Pi settings 为基线，SQLite runtime.settings 只覆盖契约允许项，省�
 | attachment_read | 校验原件，文本分页或返回下载元数据 |
 | work_files／work_file_read | 工作文件访问，管理文件只列名称 |
 
-Base64 附件不带 data 前缀，默认最多 20 个、单个 20 MiB；入站 MCP 在内存解码，不能与 HTTP 流式上传混同。HTTP 附件不设业务总量／数量上限，由部署控制传输容量。
+Base64 附件不带 data 前缀，默认最多 20 个，单个及解码后合计均不超过 20 MiB。`/mcp` 整个 JSON 请求（含 Base64 和元数据）最多 32 MiB，框架在 JSON 解析前检查，超限返回 `413 payload_too_large`。附件组在任何解码前预检总量，超限工具结果为 `isError: true`、`mcp_attachments_too_large`，不会创建工单或安排 Agent；单件超限为 `mcp_attachment_too_large`。
+
+这些是入站 MCP 的内存预算，HTTP 流式附件仍不设业务总量／数量上限，由部署控制传输容量。较大的附件批次应使用页面／HTTP 创建流程，不能在请求结果不明时拆成多次 MCP 工单创建；先核对是否已创建。
 
 文本读取默认整文件预算 64 MiB，每页响应 1 MiB、最多 100 项／1,000 行；超 readBytes 返回 inline=false、read_budget_exceeded 和下载路径，二进制只返回元数据。具体 schema 与限额见 [server.ts](../src/mcp/server.ts) 和根配置。响应不明先查询，不盲目重发。
 

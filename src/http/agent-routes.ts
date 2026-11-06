@@ -264,7 +264,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const { message, images } = await readAgentMessage(request);
     const person = await requireCurrentUser(database, request);
     try {
-      await engine.send(issue.id, message, personGitIdentity(person), images);
+      await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request));
     } catch (error) {
       if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown"].includes(error.message)) throw new ApiError(409, error.message);
       throw error;

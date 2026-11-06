@@ -36,6 +36,7 @@ test("moves the saved Agent concurrency into validated parameters without losing
     assert.deepEqual(JSON.parse(String(rows[0]!.dingtalk_fields)), { title: "序号" });
 
     assert.equal((await loadApplicationParameterState(db.db)).values.maxConcurrentIssues, 7);
+    assert.equal((await loadApplicationParameterState(db.db)).values.networkMode, "open");
     await db.db.update(applicationSettings).set({ maxConcurrentIssues: null }).where(eq(applicationSettings.id, 1));
     assert.equal((await loadApplicationParameterState(db.db)).values.maxConcurrentIssues, 7);
     assert.equal((await db.client.execute("PRAGMA integrity_check")).rows[0]!.integrity_check, "ok");

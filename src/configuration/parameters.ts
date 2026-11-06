@@ -66,6 +66,9 @@ export function parseApplicationParameterOverrides(value: unknown): ApplicationP
       const { minimum, maximum } = applicationParameterBounds.numbers[key as NumericApplicationParameterKey];
       if (!Number.isSafeInteger(entry) || (entry as number) < minimum || (entry as number) > maximum) throw invalid(key);
       overrides[key] = entry;
+    } else if (key === "networkMode") {
+      if (entry !== "open" && entry !== "allowlist") throw invalid(key);
+      overrides[key] = entry;
     } else if ((listKeys as readonly string[]).includes(key)) overrides[key] = parseList(key as (typeof listKeys)[number], entry);
     else throw invalid(key);
   }

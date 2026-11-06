@@ -39,7 +39,7 @@ export interface AgentReservation {
 
 export interface AgentController {
   enqueue(issueId: string, message?: string): void;
-  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[]): Promise<void>;
+  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[], authorize?: () => Promise<unknown>): Promise<void>;
   isRunning(issueId: string): boolean;
   getRunState(issueId: string): AgentRunState;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
@@ -139,7 +139,7 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = []): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>): Promise<void> {
     this.assertOpen();
     this.assertNotReserved(issueId);
     this.beginActivity(issueId);
@@ -153,23 +153,34 @@ export class AgentEngine implements AgentController {
       if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
       const userMessage = message;
       const messageIssue = { id: issueId, key: issue.key, serviceId: issue.serviceId, environmentId: issue.environmentId };
+      // The sender may own no Issues, so their deactivation need not reserve this Issue.
+      // Reauthorize after admission waits, before changing the session or persisting input.
+      const prepareAdmission = async () => {
+        await authorize?.();
+        if (gitIdentity && !this.personalSessions.has(issueId)) this.sessions.get(issueId)?.setGitIdentity(gitIdentity);
+      };
       const managed = this.sessions.get(issueId);
       if (!managed) {
-        await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, gitIdentity, images, entryId));
+        await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, gitIdentity, images, entryId), prepareAdmission);
         return;
       }
       const scheduleMessage = () =>
-        this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) =>
-          this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
+        this.scheduleUserMessage(
+          messageIssue,
+          userMessage,
+          images,
+          (entryId) => (this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId)),
+          prepareAdmission,
         );
-      if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
       if (managed.streaming) {
         await this.steerQueue.run(issueId, async () => {
+          await authorize?.();
           // Earlier messages still queued for a later round keep their order; never steer past them.
           if (this.sessions.get(issueId) !== managed || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
             return;
           }
+          if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
           const steered = userMessage.startsWith("/") ? userMessage : promptWithRuntimeTime(userMessage);
           const queuedBefore = managed.session.getSteeringMessages().length;
           await managed.session.steer(steered, images);
@@ -590,8 +601,15 @@ export class AgentEngine implements AgentController {
     return manager;
   }
 
-  private async scheduleUserMessage(issue: AgentMessageScope & { id: string; key: string }, message: string, images: ImageContent[], operation: (entryId: string) => Promise<void>): Promise<void> {
+  private async scheduleUserMessage(
+    issue: AgentMessageScope & { id: string; key: string },
+    message: string,
+    images: ImageContent[],
+    operation: (entryId: string) => Promise<void>,
+    prepareAdmission: () => Promise<void>,
+  ): Promise<void> {
     await this.sessionQueue.run(issue.id, async () => {
+      await prepareAdmission();
       const current = this.sessions.get(issue.id)?.session.sessionManager;
       const manager = current ?? (await this.sessionManagerLocked(issue, await prepareIssueWorkDirectory(this.stateRoot, issue.key)));
       let entryId: string;

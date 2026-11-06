@@ -66,8 +66,9 @@ export class TestAgentController {
     }
   }
 
-  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = []): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>): Promise<void> {
     if (this.reservations.has(issueId)) throw new Error("issue_already_running");
+    await authorize?.();
     this.messages.push(message);
     this.gitIdentities.push(gitIdentity);
     this.images.push(images);

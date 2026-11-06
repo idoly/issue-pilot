@@ -69,6 +69,7 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
   const target = await resolveWorkPath(stateRoot, issueKey, relative, access);
   if (!(await lstat(target)).isDirectory()) throw new Error("issue_file_not_directory");
   const directory = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const failures: unknown[] = [];
   try {
     const pinned = `/proc/self/fd/${directory.fd}`;
     if ((await realpath(pinned)) !== target) throw new Error("invalid_issue_file_path");
@@ -109,8 +110,14 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
       return result.value;
     });
     return files.sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name));
+  } catch (error) {
+    failures.push(error);
+    throw error;
   } finally {
-    await directory.close();
+    await directory.close().catch((error) => {
+      if (failures.length) throw new AggregateError([...failures, error], "work_file_read_cleanup_failed");
+      throw error;
+    });
   }
 }
 
@@ -132,7 +139,11 @@ export async function openIssueWorkFile(stateRoot: string, issueKey: string, rel
     if (!metadata.isFile()) throw new Error("issue_file_not_regular");
     return { handle, size: metadata.size, fileName: path.basename(target) };
   } catch (error) {
-    await handle.close();
+    try {
+      await handle.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "work_file_read_cleanup_failed");
+    }
     throw error;
   }
 }

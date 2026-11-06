@@ -436,6 +436,90 @@ test("a rejected download closes its opened descriptor", async (context) => {
   }
 });
 
+for (const operation of ["listing", "download"] as const)
+  test(`${operation} preserves its read failure when closing the descriptor also fails`, async (context) => {
+    const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-read-cleanup-"));
+    const primary = new Error(`fixture_${operation}_read_failed`),
+      cleanup = new Error("fixture_close_failed");
+    const open = fs.open,
+      readDirectory = fs.readdir,
+      resolve = fs.realpath;
+    let descriptor: number | undefined;
+    try {
+      const work = await prepareIssueWorkDirectory(root, key),
+        file = path.join(work, "evidence.txt");
+      await writeFile(file, "preserved evidence");
+      context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        const handle = await open(...args);
+        if (args[0] === (operation === "listing" ? work : file)) {
+          descriptor = handle.fd;
+          const close = handle.close.bind(handle);
+          context.mock.method(handle, "close", async () => {
+            await close();
+            throw cleanup;
+          });
+        }
+        return handle;
+      });
+      if (operation === "listing")
+        context.mock.method(fs, "readdir", async (...args: Parameters<typeof fs.readdir>) => {
+          if (String(args[0]) === `/proc/self/fd/${descriptor}`) throw primary;
+          return readDirectory(...args);
+        });
+      else
+        context.mock.method(fs, "realpath", async (...args: Parameters<typeof fs.realpath>) => {
+          if (String(args[0]) === `/proc/self/fd/${descriptor}`) throw primary;
+          return resolve(...args);
+        });
+      syncBuiltinESMExports();
+      await assert.rejects(operation === "listing" ? listIssueWorkFiles(root, key) : openIssueWorkFile(root, key, "evidence.txt"), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.message, "work_file_read_cleanup_failed");
+        assert.deepEqual(error.errors, [primary, cleanup]);
+        return true;
+      });
+      assert.ok(descriptor !== undefined);
+      await assert.rejects(fs.stat(`/proc/self/fd/${descriptor}`), { code: "ENOENT" });
+      assert.equal(await readFile(file, "utf8"), "preserved evidence");
+
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      const opened = await openIssueWorkFile(root, key, "evidence.txt");
+      await opened.handle.close();
+      assert.equal((await listIssueWorkFiles(root, key)).length, 1);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+test("listing reports a close failure after successful directory reads", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-list-close-"));
+  const cleanup = new Error("fixture_directory_close_failed");
+  const open = fs.open;
+  try {
+    const work = await prepareIssueWorkDirectory(root, key);
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (args[0] === work) {
+        const close = handle.close.bind(handle);
+        context.mock.method(handle, "close", async () => {
+          await close();
+          throw cleanup;
+        });
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(listIssueWorkFiles(root, key), (error) => error === cleanup);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("lists and downloads working files without following paths outside the Issue or Git controls", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-working-files-"));
   try {

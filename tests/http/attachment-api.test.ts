@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import fsPromises, { chmod, readFile, readdir, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -7,8 +8,11 @@ import { Readable } from "node:stream";
 import path from "node:path";
 import { test } from "node:test";
 import { parse as parseDisposition } from "content-disposition";
+import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { openDatabase } from "../../src/db/client.ts";
+import { registerAttachmentRoutes } from "../../src/http/attachment-routes.ts";
+import type { ApiRouteContext } from "../../src/http/route-context.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createService, issuePayload, json } from "./fixture.ts";
 
@@ -29,6 +33,101 @@ function issueMultipart(boundary: string, issue: Record<string, unknown>, fileNa
     ].join("\r\n"),
   );
 }
+
+for (const closeFails of [false, true])
+  test(`cancelled attachment downloads retain cleanup diagnostics without sending a response (close fails: ${closeFails})`, async (context) => {
+    const fixture = await createApiFixture();
+    const database = openDatabase(fixture.databaseFile);
+    const open = fsPromises.open;
+    const logs: unknown[][] = [];
+    let closed = false,
+      hijacked = false;
+    try {
+      await createService(fixture.app, "CancelledDownload");
+      const boundary = "cancelled-download";
+      const created = await fixture.app.inject({
+        method: "POST",
+        url: "/api/issues",
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+        payload: issueMultipart(boundary, issuePayload("cancelleddownload"), "evidence.txt", "private evidence"),
+      });
+      assert.equal(created.statusCode, 201, created.body);
+      const issue = created.json<{ id: string }>();
+      const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` });
+      const attachment = detail.json<{ attachments: Array<{ id: string; storedFileName: string }> }>().attachments[0]!;
+      const file = path.join(issueRoot(fixture.root, issue.id), attachment.storedFileName);
+      type DownloadRequest = FastifyRequest<{ Params: { key: string; attachmentId: string } }>;
+      let download!: (request: DownloadRequest, reply: FastifyReply) => Promise<unknown>;
+      registerAttachmentRoutes({
+        app: {
+          get(_url: string, handler: typeof download) {
+            download = handler;
+          },
+        },
+        database,
+        stateRoot: fixture.root,
+      } as unknown as ApiRouteContext);
+      const raw = Object.assign(new EventEmitter(), { aborted: false });
+      const response = Object.assign(new EventEmitter(), { writableFinished: false, destroyed: false });
+      const request = {
+        params: { key: issue.id, attachmentId: attachment.id },
+        raw,
+        log: {
+          error(...args: unknown[]) {
+            logs.push(args);
+          },
+        },
+      } as unknown as DownloadRequest;
+      const reply = {
+        raw: response,
+        hijack() {
+          hijacked = true;
+          return this;
+        },
+        send() {
+          assert.fail("a cancelled download must not write a response");
+        },
+      } as unknown as FastifyReply;
+      context.mock.method(fsPromises, "open", async (...args: Parameters<typeof fsPromises.open>) => {
+        const handle = await open(...args);
+        if (args[0] === file) {
+          const read = handle.read.bind(handle),
+            close = handle.close.bind(handle);
+          context.mock.method(handle, "read", async (...args: Parameters<typeof handle.read>) => {
+            const value = await read(...args);
+            raw.aborted = true;
+            raw.emit("aborted");
+            return value;
+          });
+          context.mock.method(handle, "close", async () => {
+            await close();
+            closed = true;
+            if (closeFails) throw Object.assign(new Error(`private close diagnostic: ${file}`), { code: "EIO" });
+          });
+        }
+        return handle;
+      });
+      syncBuiltinESMExports();
+      assert.equal(await download(request, reply), reply);
+      assert.equal(closed, true);
+      assert.equal(hijacked, true);
+      assert.equal(raw.listenerCount("aborted"), 0);
+      assert.equal(response.listenerCount("close"), 0);
+      if (closeFails) {
+        assert.equal(logs.length, 1);
+        const diagnostic = JSON.stringify(logs);
+        assert.match(diagnostic, /attachment_read_cleanup_failed/);
+        assert.match(diagnostic, /EIO/);
+        assert.ok(!diagnostic.includes(file));
+        assert.ok(!diagnostic.includes("private close diagnostic"));
+      } else assert.deepEqual(logs, []);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      database.close();
+      await fixture.cleanup();
+    }
+  });
 
 for (const fileName of ["a".repeat(251) + ".txt", "界".repeat(80) + ".txt", "预算 '()*%.txt"])
   test(`preserves attachment names, filesystem limits and valid disposition (${Buffer.byteLength(fileName)} UTF-8 bytes)`, async () => {

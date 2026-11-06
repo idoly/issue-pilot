@@ -10,7 +10,13 @@
 
 为固定 SDK 1.5.0 的 Codemode／MCP 扩展增加可选 saveOutput(data, extension)，包括 read_mcp_resource。图片、二进制和截断输出交给当前 Issue 的工作文件 owner，以 0600 临时文件写入并原子公开；未提供回调保持 SDK 行为。
 
-补丁不修改 schema、发现、传输、错误、会话格式或授权，不给模型新增存储能力。上游提供等价公共接口后应移除补丁及安装条目，保留输出保存、取消与失败回归。
+这一部分不修改 schema、发现、传输、错误、会话格式或授权，不给模型新增存储能力。上游提供等价公共接口后移除对应修改，保留输出保存、取消与失败回归。
+
+## 服务 MCP 调用预算
+
+同一 Pi 补丁将注册工具时捕获的 `timeoutMs` 改为 getter，应用的 MCP 配置也提供动态 `timeout`。Pi 在每次新请求开始时读到当前值并固定到该请求；已有会话可以使用更新后的 `mcpExecutionMs`，在途调用仍遵守原预算，保存参数不重新连接或重放调用。资源读取沿用 SDK 原有的动态取值路径。
+
+该改动保留 Pi 的工具注册、连接、取消及 shutdown 所有权，不建立第二套协议执行层，也不改变 SDK 类型或依赖版本。只加外层 AbortSignal 无法解决调高预算时旧 SDK 计时器提前超时的问题。回归见 [mcp-extension.test.ts](../tests/agent/mcp-extension.test.ts)；升级 SDK 时复核此取值链，上游提供等价行为后移除该 hunk。
 
 ## Zod v3 集合上限保护
 

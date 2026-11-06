@@ -48,7 +48,7 @@ const definitions = [
       assigneeSubject: opt(nullable(str({ maxLength: 255 }), { description: "处理人 subject，省略时未分配" })),
       ccSubjects: opt(arr(str({ maxLength: 255 }), { uniqueItems: true })),
       relatedIssueKeys: opt(arr(key, { maxItems: issuePilotConfig.limits.relatedIssues, uniqueItems: true })),
-      attachments: opt(arr(attachment, { maxItems: limits.attachments, description: "创建时上传的附件；支持文本、图片和二进制文件；单个附件不超过 20 MiB" })),
+      attachments: opt(arr(attachment, { maxItems: limits.attachments, description: "创建时上传的附件；支持文本、图片和二进制文件；单个及所有附件合计不超过 20 MiB" })),
     }),
   },
   {
@@ -129,19 +129,26 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
   const api = async (url: string, payload?: Input, attachments: McpAttachment[] = []) => {
     let multipart: { payload: Buffer; headers: Record<string, string> } | undefined;
     if (attachments.length) {
-      const form = new FormData();
-      form.append("issue", JSON.stringify(payload));
+      let totalBytes = 0;
+      // Check the whole group before decoding or constructing multipart copies. byteLength may overestimate
+      // invalid Base64; the canonical round-trip check below still rejects invalid encodings.
       for (const file of attachments) {
         if (/[/\\\u0000-\u001f\u007f]/.test(file.fileName) || [".", ".."].includes(file.fileName) || Buffer.byteLength(file.fileName) > issuePilotConfig.limits.filesystemNameBytes)
           throw new Error("invalid_attachment_name");
         const mediaType = file.mediaType ?? "application/octet-stream";
         if (!/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(mediaType)) throw new Error("invalid_attachment_media_type");
-        // Base64 is 4/3 of the decoded size; reject before decoding so a huge payload is never buffered.
         if (file.contentBase64.length > Math.ceil((limits.attachmentBytes * 4) / 3) + 4) throw new Error("mcp_attachment_too_large");
+        const size = Buffer.byteLength(file.contentBase64, "base64");
+        if (size > limits.attachmentBytes) throw new Error("mcp_attachment_too_large");
+        totalBytes += size;
+        if (totalBytes > limits.attachmentTotalBytes) throw new Error("mcp_attachments_too_large");
+      }
+      const form = new FormData();
+      form.append("issue", JSON.stringify(payload));
+      for (const file of attachments) {
         const content = Buffer.from(file.contentBase64, "base64");
         if (content.toString("base64") !== file.contentBase64) throw new Error("invalid_attachment_base64");
-        if (content.length > limits.attachmentBytes) throw new Error("mcp_attachment_too_large");
-        form.append("files", new Blob([Uint8Array.from(content)], { type: mediaType }), file.fileName);
+        form.append("files", new Blob([Uint8Array.from(content)], { type: file.mediaType ?? "application/octet-stream" }), file.fileName);
       }
       const encoded = new Request("http://localhost", { method: "POST", body: form });
       multipart = { payload: Buffer.from(await encoded.arrayBuffer()), headers: { ...headers, "content-type": encoded.headers.get("content-type")! } };

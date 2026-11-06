@@ -48,6 +48,8 @@ Pi 管理模型管线、发现、注册和连接；应用继续拥有配置、�
 
 `idle` 无活动，`queued` 等待执行名额，`running` 已取得名额并包含准备与收尾。预约使用的 agentRunning 包含排队，不可只检查 running 状态。
 
+`maxConcurrentIssues` 只限制取得执行名额的轮次，不是 HTTP 请求上限，也不限制内存排队长度或每工单累计消息数。当前 Engine 未设置排队容量／等待超时；大量受理请求仍会消耗资源。提高并发不会突破同工单串行约束，也可能增加模型、Git 和本地工具负载。已解决状态、消息持久化与队列排空是独立事实，不能把并发参数当作完整的流量控制策略。行为依据：[Engine](../src/agent/engine.ts)、[并发与关闭测试](../tests/agent/engine.test.ts)。
+
 ### 核心调用链与完成边界
 
 | 任务 | 已确认调用链 | 请求返回时完成了什么 |
@@ -67,7 +69,7 @@ Pi 管理模型管线、发现、注册和连接；应用继续拥有配置、�
 | 服务／工单范围写入 | scope queue → Issue reservation |
 | 回收／重开 | lifecycle queue → inspection queue → Issue reservation |
 
-Agent 活动、集合预约、scope、生命周期、inspection 与仓库操作分别保护不同事实；仓库键包含 state root 和 URL hash。不要反转队列或合成全局 mutex。等待后重新检查身份、角色与状态，授权错误保持原 HTTP 含义。
+Agent 活动、集合预约、scope、生命周期、inspection 与仓库操作分别保护不同事实；仓库键包含 state root 和 URL hash。不要反转队列或合成全局 mutex。变更时须在相关等待后重新检查身份、角色与状态，保留授权错误的 HTTP 含义。消息受理由 HTTP 固定发送者，并将重授权回调交给 Engine 在 session／steer 队列等待后执行；用户停用只预约其拥有的工单，不能替代发送者检查。
 
 SQLite rollback 不恢复文件或 Git；owner 协调 prepare、rollback、finalize，操作错误与清理错误分别保留。后台轮次失败总是报告诊断，即使清理或状态写入也失败；诊断回调异常不阻塞之后轮次。
 
@@ -97,6 +99,8 @@ ApplicationResources 持有共享请求、编辑状态和每工单草稿。身�
 
 SSE 顺序为持久／当前回放、snapshot_ready、live 与 heartbeat。历史逐帧等待排空，临时事件有界去重，慢连接预算超限断开重放，不静默丢帧；快照复用上下文计算 footer，不跨请求缓存。
 
+`http.sseQueuedBytes` 分别限制回放期间暂存的 live 事件和发送背压队列，不是整个会话、单帧或进程总内存上限。重连需要重新读取历史；`web.agentToolOutputCharacters` 只限制工具输出的页面展示，不限制持久 JSONL。大输入、长历史和频繁重连仍需按实际负载观察，不能由这些局部预算推导总容量。
+
 浏览器收到无法解析或已校验字段非法的消息帧时，作废当前连接并重新回放；不能跳过该帧后接受不完整快照。旧连接的迟到消息和快照不会更新页面。
 
 会话使用不可变归约和 Solid keyed For，块按 contentIndex 保持身份；流式不解析 Markdown，工具详情惰性挂载。CodeBrowser 按需加载，独立释放 editor／model，维护撤销、冲突与导航状态。统计采样和排序优化不代替实际操作前重新检查。
@@ -104,6 +108,8 @@ SSE 顺序为持久／当前回放、snapshot_ready、live 与 heartbeat。历�
 实时归约保留既有条目 ID 和顺序，只原位更新或追加；未读计数只处理追加部分，完整快照仍独立替换。可见且停在末尾时跟随新内容，浏览历史或隐藏会话时不强制拉到底部；输入区独立于历史滚动，正文使用会话可用宽度，思考内容直接显示而不折叠。用户操作见[使用指南](USAGE.md#阅读与补充)，owner 为 [AgentPanel.tsx](../src/web/src/app/AgentPanel.tsx)。
 
 代码浏览器、Monaco 和按需工具详情不承担业务授权；编辑器构建与升级约定集中在[开发指南](DEVELOPMENT.md#web-与浏览器)，真实布局、交互和 SSE 验收见[浏览器验收](DEVELOPMENT.md#可重复的真实浏览器验收)。
+
+首页通过 [OverviewView](../src/web/src/app/OverviewView.tsx) 每 10 秒请求完整工单摘要；上一轮未结束时跳过定时请求，手动刷新可取代旧请求。这不是分页查询或服务端推送。资源统计单独加载且具有[采样缓存](STORAGE.md#容量统计)，不是每次首页刷新都扫描磁盘。优化列表时需同时考虑数据库查询、传输、客户端筛选和渲染，不用 SQL 参数分批测试代替容量压测。
 
 ## 安全与持久边界
 

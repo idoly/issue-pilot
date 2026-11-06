@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ApplicationParameterState, Person } from "../data/client";
+import type { ApplicationParameters, ApplicationParameterState, Person } from "../data/client";
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown,
@@ -17,7 +17,7 @@ vi.mock("../data/client", async (original) => ({
 import { ApplicationParametersView } from "./ApplicationParameters";
 
 const admin: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer", isAdmin: true };
-const defaults = {
+const defaults: ApplicationParameters = {
   maxConcurrentIssues: 10,
   modelResponseIdleMs: 300_000,
   workspaceRetentionMs: 168 * 3_600_000,
@@ -30,6 +30,7 @@ const defaults = {
   slsExecutionMs: 30_000,
   dingtalkAttachmentHosts: ["files.example.test"],
   networkAllowedDomains: ["registry.example.test"],
+  networkMode: "open",
 };
 const parameterState = (overrides: Partial<typeof defaults> = {}, revision = 0): ApplicationParameterState => ({
   revision,
@@ -65,6 +66,8 @@ test("shows defaults in their display units and saves only values that differ fr
   expect((screen.getByLabelText("磁盘高水位") as HTMLInputElement).value).toBe("20480");
   expect((screen.getByLabelText("MCP 调用超时") as HTMLInputElement).value).toBe("60");
   expect((screen.getByLabelText("钉钉附件主机") as HTMLTextAreaElement).value).toBe("files.example.test");
+  expect(screen.getByRole("combobox", { name: "工单网络访问" }).textContent).toBe("开放网络");
+  expect(screen.queryByLabelText("Agent 网络基础白名单")).toBeNull();
 
   await fireEvent.input(concurrency, { target: { value: "4" } });
   fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
@@ -78,6 +81,70 @@ test("shows defaults in their display units and saves only values that differ fr
     },
   });
   await waitFor(() => expect((screen.getByLabelText("同时运行的工单") as HTMLInputElement).value).toBe("4"));
+});
+
+const selectNetworkMode = async (label: "开放网络" | "域名白名单") => {
+  fireEvent.click(screen.getByRole("combobox", { name: "工单网络访问" }));
+  fireEvent.click(await screen.findByRole("option", { name: label }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "工单网络访问" }).textContent).toBe(label));
+};
+
+test("keeps allowlist drafts across mode switches and preserves the saved list while network access is open", async () => {
+  state.user = () => admin;
+  let persisted = parameterState({ networkMode: "allowlist", networkAllowedDomains: ["saved.example.test"] }, 2);
+  state.load.mockImplementation(async () => persisted);
+  state.save.mockImplementation(async (input: { expectedRevision: number; overrides: Partial<ApplicationParameters> }) => {
+    persisted = parameterState(input.overrides, input.expectedRevision + 1);
+    return persisted;
+  });
+  const view = render(() => <ApplicationParametersView />);
+  const domains = await screen.findByLabelText("Agent 网络基础白名单");
+  expect(domains).toHaveProperty("disabled", false);
+  await fireEvent.input(domains, { target: { value: "draft.example.test\npackages.example.test" } });
+  await selectNetworkMode("开放网络");
+  expect(screen.queryByLabelText("Agent 网络基础白名单")).toBeNull();
+  await selectNetworkMode("域名白名单");
+  expect(screen.getByLabelText("Agent 网络基础白名单")).toHaveProperty("disabled", false);
+  expect(screen.getByLabelText("Agent 网络基础白名单")).toHaveProperty("value", "draft.example.test\npackages.example.test");
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
+  expect(state.save).toHaveBeenLastCalledWith({
+    expectedRevision: 2,
+    overrides: { networkMode: "allowlist", networkAllowedDomains: ["draft.example.test", "packages.example.test"] },
+  });
+  await waitFor(() => expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", false));
+
+  await selectNetworkMode("开放网络");
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+  expect(state.save).toHaveBeenLastCalledWith({ expectedRevision: 3, overrides: { networkAllowedDomains: ["draft.example.test", "packages.example.test"] } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", false));
+  view.unmount();
+  render(() => <ApplicationParametersView />);
+  expect((await screen.findByRole("combobox", { name: "工单网络访问" })).textContent).toBe("开放网络");
+  expect(screen.queryByLabelText("Agent 网络基础白名单")).toBeNull();
+  await selectNetworkMode("域名白名单");
+  const reloaded = screen.getByLabelText("Agent 网络基础白名单");
+  expect(reloaded).toHaveProperty("disabled", false);
+  expect(reloaded).toHaveProperty("value", "draft.example.test\npackages.example.test");
+});
+
+test("reloads the current network mode and allowlist after a revision conflict", async () => {
+  state.user = () => admin;
+  state.load.mockResolvedValueOnce(parameterState({}, 1)).mockResolvedValueOnce(parameterState({ networkMode: "allowlist", networkAllowedDomains: ["current.example.test"] }, 2));
+  state.save.mockRejectedValueOnce(new Error("configuration_changed"));
+  render(() => <ApplicationParametersView />);
+  await screen.findByRole("combobox", { name: "工单网络访问" });
+  await selectNetworkMode("域名白名单");
+  await fireEvent.input(screen.getByLabelText("Agent 网络基础白名单"), { target: { value: "draft.example.test" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await screen.findByRole("alert");
+  expect(screen.getByLabelText("Agent 网络基础白名单")).toHaveProperty("value", "draft.example.test");
+  fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+  await waitFor(() => expect(screen.getByLabelText("Agent 网络基础白名单")).toHaveProperty("value", "current.example.test"));
+  expect(screen.getByRole("combobox", { name: "工单网络访问" }).textContent).toBe("域名白名单");
+  expect(screen.getByLabelText("Agent 网络基础白名单")).toHaveProperty("disabled", false);
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 test("rejects an invalid field before saving and reloads after a revision conflict", async () => {
@@ -108,4 +175,92 @@ test("hides the form from users without management access", async () => {
   expect(await screen.findByText("只有管理人员可以查看和修改运行参数。")).not.toBeNull();
   expect(screen.queryByRole("button", { name: "保存参数" })).toBeNull();
   expect(state.load).not.toHaveBeenCalled();
+});
+
+for (const outcome of ["success", "failure"] as const)
+  test(`switching administrators resets saving and ignores the previous save's ${outcome}`, async () => {
+    const [user, setUser] = createSignal<Person | null>(admin, { ownedWrite: true });
+    state.user = user;
+    state.load.mockResolvedValueOnce(parameterState({}, 1)).mockResolvedValue(parameterState({ maxConcurrentIssues: 6 }, 2));
+    let finishPrevious!: () => void;
+    state.save.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finishPrevious = outcome === "success" ? () => resolve(parameterState({ maxConcurrentIssues: 4 }, 2)) : () => reject(new Error("previous_save_failed"));
+        }),
+    );
+    render(() => <ApplicationParametersView />);
+    await screen.findByLabelText("同时运行的工单");
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
+
+    setUser({ ...admin, subject: "bob", name: "Bob" });
+    await waitFor(() => expect(screen.getByLabelText("同时运行的工单")).toHaveProperty("value", "6"));
+    expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", false);
+    let finishCurrent!: () => void;
+    state.save.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCurrent = () => resolve(parameterState({ maxConcurrentIssues: 7 }, 3));
+        }),
+    );
+    await fireEvent.input(screen.getByLabelText("同时运行的工单"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+    expect(state.save).toHaveBeenLastCalledWith({ expectedRevision: 2, overrides: { maxConcurrentIssues: 7 } });
+
+    finishPrevious();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("同时运行的工单")).toHaveProperty("value", "7");
+    expect(screen.queryByRole("alert")).toBeNull();
+    finishCurrent();
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", false));
+  });
+
+test("reloads parameters when the current user's management access changes", async () => {
+  const [user, setUser] = createSignal<Person | null>({ ...admin, isAdmin: false }, { ownedWrite: true });
+  state.user = user;
+  state.load.mockResolvedValueOnce(parameterState({ maxConcurrentIssues: 4 }, 1)).mockResolvedValueOnce(parameterState({ maxConcurrentIssues: 6 }, 2));
+  render(() => <ApplicationParametersView />);
+  expect(await screen.findByText("只有管理人员可以查看和修改运行参数。")).not.toBeNull();
+  setUser(admin);
+  await waitFor(() => expect(state.load).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByLabelText("同时运行的工单")).toHaveProperty("value", "4"));
+
+  setUser({ ...admin, isAdmin: false });
+  await screen.findByText("只有管理人员可以查看和修改运行参数。");
+  setUser(admin);
+  await waitFor(() => expect(state.load).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByLabelText("同时运行的工单")).toHaveProperty("value", "6"));
+});
+
+test("revoking management access removes the form and ignores an in-flight save failure", async () => {
+  const [user, setUser] = createSignal<Person | null>(admin, { ownedWrite: true });
+  state.user = user;
+  state.load.mockResolvedValue(parameterState({}, 1));
+  let failSave!: () => void;
+  state.save.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        failSave = () => reject(new Error("admin_required"));
+      }),
+  );
+  render(() => <ApplicationParametersView />);
+  await screen.findByLabelText("同时运行的工单");
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(1));
+  setUser({ ...admin, isAdmin: false });
+  await screen.findByText("只有管理人员可以查看和修改运行参数。");
+  expect(screen.queryByRole("region", { name: "参数表单" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "保存参数" })).toBeNull();
+  failSave();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(state.save).toHaveBeenCalledTimes(1);
+
+  setUser(admin);
+  await screen.findByLabelText("同时运行的工单");
+  expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", false);
+  expect(screen.queryByRole("alert")).toBeNull();
 });

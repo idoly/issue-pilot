@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { BlockList, isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
@@ -38,6 +39,47 @@ async function executable(name: string): Promise<string> {
   throw new Error("issue_sandbox_unavailable");
 }
 let users = 0;
+// The open-mode callback runs only after SRT's explicit deny/allow rules. SRT guards DNS
+// results, but IP-literal requests skip that guard, so keep automatic grants off host
+// control and metadata addresses too. Private business networks remain reachable.
+const automaticNetworkDeny = new BlockList();
+for (const [address, prefix] of [
+  ["0.0.0.0", 8],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["224.0.0.0", 4],
+] as const)
+  automaticNetworkDeny.addSubnet(address, prefix, "ipv4");
+for (const address of ["255.255.255.255", "100.100.100.200", "168.63.129.16", "192.0.0.192"]) automaticNetworkDeny.addAddress(address, "ipv4");
+for (const [address, prefix] of [
+  ["fe80::", 10],
+  ["ff00::", 8],
+  ["fd00:ec2::", 32],
+] as const)
+  automaticNetworkDeny.addSubnet(address, prefix, "ipv6");
+for (const address of ["::", "::1", "fd20:ce::254", "fd00:c1::a9fe:a9fe", "fd00:42::42", "fd00:a9fe:a9fe::1", "fd00:100::100:200"]) automaticNetworkDeny.addAddress(address, "ipv6");
+
+function allowOpenNetworkTarget(host: string): boolean {
+  if (applicationParameters().networkMode !== "open") return false;
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${isIP(host) === 6 ? `[${host}]` : host}`).hostname
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.$/, "")
+      .toLowerCase();
+  } catch {
+    return false;
+  }
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return false;
+  const family = isIP(hostname);
+  if (!family) return true;
+  const type = family === 6 ? "ipv6" : "ipv4";
+  if (automaticNetworkDeny.check(hostname, type)) return false;
+  const local = new BlockList();
+  for (const item of Object.values(os.networkInterfaces()).flatMap((items) => items ?? [])) local.addAddress(item.address.split("%", 1)[0]!, item.family === "IPv6" ? "ipv6" : "ipv4");
+  return !local.check(hostname, type);
+}
+
 // The proxy reads the configured allow list on each connection, so replacing it reaches running sessions too.
 function syncNetworkAllowedDomains(): void {
   const configured = SandboxManager.getConfig();
@@ -60,25 +102,28 @@ async function acquireIssueSandbox(): Promise<() => Promise<void>> {
       const dependencies = await SandboxManager.checkDependenciesAsync();
       if (dependencies.errors.length || dependencies.warnings.length) throw new Error("issue_sandbox_unavailable");
       try {
-        await SandboxManager.initialize({
-          filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
-          network: {
-            allowedDomains: [...applicationParameters().networkAllowedDomains],
-            deniedDomains: [
-              "localhost",
-              `*:${issuePilotConfig.http.port}`,
-              `*:${issuePilotConfig.web.port}`,
-              ...Object.values(os.networkInterfaces()).flatMap((items) => (items ?? []).map((item) => item.address)),
-            ],
-            allowAllUnixSockets: false,
-            tlsTerminate: undefined,
+        await SandboxManager.initialize(
+          {
+            filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
+            network: {
+              allowedDomains: [...applicationParameters().networkAllowedDomains],
+              deniedDomains: [
+                "localhost",
+                `*:${issuePilotConfig.http.port}`,
+                `*:${issuePilotConfig.web.port}`,
+                ...Object.values(os.networkInterfaces()).flatMap((items) => (items ?? []).map((item) => item.address)),
+              ],
+              allowAllUnixSockets: false,
+              tlsTerminate: undefined,
+            },
+            bwrapPath: await executable("bwrap"),
+            socatPath: await executable("socat"),
+            ripgrep: { command: await executable("rg") },
+            allowNestedUserNamespaces: false,
+            enableWeakerNestedSandbox: false,
           },
-          bwrapPath: await executable("bwrap"),
-          socatPath: await executable("socat"),
-          ripgrep: { command: await executable("rg") },
-          allowNestedUserNamespaces: false,
-          enableWeakerNestedSandbox: false,
-        });
+          async ({ host }) => allowOpenNetworkTarget(host),
+        );
       } catch (error) {
         try {
           await SandboxManager.reset();

@@ -1,11 +1,11 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
-import { Button, Input, Skeleton } from "../ui";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { Button, Input, Select, Skeleton } from "../ui";
 import { errorMessage, loadApplicationParameters, updateApplicationParameters, type ApplicationParameterKey, type ApplicationParameterState, type ApplicationParameters } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { settingsError } from "./settings-error";
 
 type NumberKey = { [Key in ApplicationParameterKey]: ApplicationParameters[Key] extends number ? Key : never }[ApplicationParameterKey];
-type ListKey = Exclude<ApplicationParameterKey, NumberKey>;
+type ListKey = { [Key in ApplicationParameterKey]: ApplicationParameters[Key] extends readonly string[] ? Key : never }[ApplicationParameterKey];
 
 // Durations are edited in the unit the field declares; sizes in MiB. The stored value is always milliseconds or bytes.
 const minute = 60_000,
@@ -25,14 +25,14 @@ const numberFields: Array<{ key: NumberKey; label: string; unit: keyof typeof un
   { key: "workspaceHighWaterBytes", label: "磁盘高水位", unit: "mib", note: "超限按占用回收，0 关闭", minimum: 0 },
   { key: "workspaceTargetBytes", label: "回收目标", unit: "mib", note: "回收到此值以下，须低于高水位", minimum: 0 },
   { key: "workspaceMaintenanceIntervalMs", label: "维护周期", unit: "minutes", note: "保存后重新计时，0 停止定期维护", minimum: 0 },
-  { key: "capabilityConnectionMs", label: "外部连接超时", unit: "seconds", note: "建立外部连接" },
+  { key: "capabilityConnectionMs", label: "SLS 连接超时", unit: "seconds", note: "SLS CLI 建连，下次查询生效" },
   { key: "mcpExecutionMs", label: "MCP 调用超时", unit: "seconds", note: "工具发现与单次调用" },
   { key: "dmsExecutionMs", label: "DMS 查询超时", unit: "seconds", note: "单次 MCP 查询" },
   { key: "slsExecutionMs", label: "SLS 查询超时", unit: "seconds", note: "单次 CLI 查询" },
 ];
 const listFields: Array<{ key: ListKey; label: string; note: string }> = [
   { key: "dingtalkAttachmentHosts", label: "钉钉附件主机", note: "每行一个 HTTPS 主机" },
-  { key: "networkAllowedDomains", label: "Agent 网络基础白名单", note: "每行一个域名，个人组可追加" },
+  { key: "networkAllowedDomains", label: "Agent 网络基础白名单", note: "每行一个域名，全局 Agent 配置可追加" },
 ];
 
 function parse(text: string, divisor: number, bounds: { minimum: number; maximum: number }): number | null {
@@ -47,6 +47,7 @@ export function ApplicationParametersView() {
   const [state, setState] = createSignal<ApplicationParameterState | null>(null, { ownedWrite: true });
   const [numbers, setNumbers] = createSignal<Partial<Record<NumberKey, string>>>({}, { ownedWrite: true });
   const [lists, setLists] = createSignal<Partial<Record<ListKey, string>>>({}, { ownedWrite: true });
+  const [networkMode, setNetworkMode] = createSignal<ApplicationParameters["networkMode"]>("open", { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
@@ -57,6 +58,7 @@ export function ApplicationParametersView() {
     setState(value);
     setNumbers(Object.fromEntries(numberFields.map((field) => [field.key, String(Math.round(value.values[field.key] / units[field.unit].divisor))])) as Partial<Record<NumberKey, string>>);
     setLists(Object.fromEntries(listFields.map((field) => [field.key, value.values[field.key].join("\n")])) as Partial<Record<ListKey, string>>);
+    setNetworkMode(value.values.networkMode);
   };
   const load = async () => {
     const owner = ++generation;
@@ -76,8 +78,9 @@ export function ApplicationParametersView() {
   };
   const save = async () => {
     const current = state();
-    if (!current || saving()) return;
+    if (!isAdmin() || !current || saving() || loading()) return;
     const overrides: Partial<ApplicationParameters> = {};
+    if (networkMode() !== current.defaults.networkMode) overrides.networkMode = networkMode();
     for (const field of numberFields) {
       const bounds = current.bounds.numbers[field.key];
       const unit = units[field.unit];
@@ -114,15 +117,21 @@ export function ApplicationParametersView() {
     }
   };
   createEffect(
-    () => currentUser()?.subject ?? "",
+    () => ({ subject: currentUser()?.subject ?? "", admin: isAdmin() }),
     (identity, previous) => {
-      if (identity === previous || !identity) return;
+      if (identity.subject === previous?.subject && identity.admin === previous?.admin) return;
       generation++;
       setState(null);
-      if (isAdmin()) void load();
+      setSaving(false);
+      setError("");
+      setConflict(false);
+      if (identity.subject && identity.admin) void load();
       else setLoading(false);
     },
   );
+  onCleanup(() => {
+    generation++;
+  });
   return (
     <section class="user-management-card parameters-card" aria-label="运行参数">
       <header class="user-management-header parameters-header">
@@ -180,23 +189,41 @@ export function ApplicationParametersView() {
                 </label>
               )}
             </For>
+            <label>
+              <span>
+                工单网络访问
+                <small>（保存后新连接生效）</small>
+              </span>
+              <Select
+                aria-label="工单网络访问"
+                value={networkMode()}
+                options={[
+                  { value: "open", label: "开放网络" },
+                  { value: "allowlist", label: "域名白名单" },
+                ]}
+                disabled={loading() || saving()}
+                onChange={setNetworkMode}
+              />
+            </label>
             <For each={listFields}>
               {(field) => (
-                <label>
-                  <span>
-                    {field.label}
-                    <small id={`parameter-note-${field.key}`}>（{field.note}）</small>
-                  </span>
-                  <textarea
-                    class="parameters-textarea"
-                    aria-label={field.label}
-                    aria-describedby={`parameter-note-${field.key}`}
-                    rows={3}
-                    value={lists()[field.key] ?? ""}
-                    disabled={loading() || saving()}
-                    onInput={(event) => setLists((current) => ({ ...current, [field.key]: event.currentTarget.value }))}
-                  />
-                </label>
+                <Show when={field.key !== "networkAllowedDomains" || networkMode() === "allowlist"}>
+                  <label>
+                    <span>
+                      {field.label}
+                      <small id={`parameter-note-${field.key}`}>（{field.note}）</small>
+                    </span>
+                    <textarea
+                      class="parameters-textarea"
+                      aria-label={field.label}
+                      aria-describedby={`parameter-note-${field.key}`}
+                      rows={3}
+                      value={lists()[field.key] ?? ""}
+                      disabled={loading() || saving()}
+                      onInput={(event) => setLists((current) => ({ ...current, [field.key]: event.currentTarget.value }))}
+                    />
+                  </label>
+                </Show>
               )}
             </For>
           </div>

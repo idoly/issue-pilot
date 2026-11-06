@@ -55,6 +55,7 @@ export const issuePilotConfig = Object.freeze({
     dmsExecutionMs: 120_000,
     slsExecutionMs: 30_000,
     dingtalkAttachmentHosts: Object.freeze(["alidocs2.oss-cn-zhangjiakou.aliyuncs.com"]),
+    networkMode: "open" as const,
     networkAllowedDomains: Object.freeze(["registry.npmjs.org", "registry.npmmirror.com", "repo.maven.apache.org", "repo1.maven.org", "github.com", "*.githubusercontent.com"]),
   }),
   defaults: Object.freeze({
@@ -69,11 +70,13 @@ export const issuePilotConfig = Object.freeze({
     codemode: Object.freeze({ queueWaitMs: 120_000, queueEntries: 32 }),
     // readBytes bounds the whole text file buffered for line paging; responseBytes bounds each returned page.
     mcpServer: Object.freeze({
-      requestBytes: Number.MAX_SAFE_INTEGER,
+      // Bound the encoded JSON before parsing; room for a full-size Base64 attachment and metadata.
+      requestBytes: 32 * 1024 * 1024,
       responseBytes: 1024 * 1024,
       readBytes: 64 * 1024 * 1024,
       // Inbound MCP is decoded in memory; the HTTP upload path streams to disk and is not bounded here.
       attachmentBytes: 20 * 1024 * 1024,
+      attachmentTotalBytes: 20 * 1024 * 1024,
       attachments: 20,
       pageItems: 100,
       textLines: 1000,

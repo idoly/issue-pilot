@@ -14,9 +14,11 @@
 
 浏览器的原生 EventSource 不发送页面选中的 subject 头；SSE 路由没有显式头时按默认活跃用户处理。生产网关需要对 SSE 同样绑定认证身份，不能只为普通 fetch 配置身份转发。实现见 [agent-routes.ts](../src/http/agent-routes.ts)。
 
+`agent-messages` 固定本次请求的发送者，在会话／引导队列等待后、受理输入或交给 Pi 前重新检查其活跃状态。等待期间失活会返回 `400 invalid_current_subject`，不改用另一个默认账号；已经受理或交付的消息不会因后续停用自动撤销。竞态修复与回归见[后端审查记录](records/2026-11-06-documentation-audit.md#p2消息等待期间停用发送者仍被受理)。
+
 ## 请求与响应
 
-HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不是 SQLite 内部 UUID。HTTP 解析编号不区分大小写；客户端建议始终使用返回的规范编号。普通 JSON 写入使用 `Content-Type: application/json`，下载接口返回文件而非 JSON。
+HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不是 SQLite 内部 UUID。工单摘要／详情的 `id` 字段也是该业务编号，创建后用响应的 `id` 继续调用；仓库等其他资源的 `id` 仍有各自含义。HTTP 解析编号不区分大小写；客户端建议始终使用返回的规范编号。普通 JSON 写入使用 `Content-Type: application/json`，下载接口返回文件而非 JSON。
 
 | 请求 | 返回与关键约定 |
 | --- | --- |
@@ -56,13 +58,36 @@ HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不�
 }
 ```
 
-`workMode` 决定环境／类型，不能额外传 `environmentKey` 或 `type`。四种映射见[业务契约](../src/domain/contracts.ts)。HTTP 创建没有 MCP 的默认 priority，调用方必须明确提供。省略／空处理人表示未分配，凭证 owner 此时为报告人。
+`workMode` 决定环境／类型，不能额外传 `environmentKey` 或 `type`。四种映射见[处理方式](USAGE.md#提交一张可处理的工单)。HTTP 创建没有 MCP 的默认 priority，调用方必须明确提供。省略／空处理人表示未分配，凭证 owner 此时为报告人；未分配工单不会进入任何人的个人处理队列。
 
 带附件时用 multipart：一个文本字段 `issue` 放完整 JSON，文件字段可使用 `files`。附件写入随创建／编辑事务完成，没有独立附件上传写接口。HTTP 上传流式落盘，没有业务文件大小／数量上限，但普通字段、传输层和代理仍有限制；不要把它理解为任意大请求都可接受。MCP Base64 和 Agent 粘贴图片各有独立预算，见[配置](CONFIGURATION.md#入站工单-mcp)。
 
 编辑虽使用 PATCH，元信息仍按**完整表单**解析：必须传 `title` 和 `priority`；省略 `description`、`assigneeSubject`、`ccSubjects` 会分别变为空、未分配、空列表，不是全部保留。`removedAttachmentIds` 指定移除原件，未指定移除的原附件保留。不能用普通编辑变更 `serviceKey`、`environmentKey`、`type`、`workMode` 或 `relatedIssueKeys`；范围与关联走专用接口。
 
 `resetSession: true` 的组合编辑在 scope／工单预约内先重检 developer 权限、未解决状态和当前会话，再保存字段／附件并执行重置。已解决或未绑定会话的预检拒绝发生在保存前；会话在预检后变化、丢失或重置事务失败等情况，统一返回 `500 issue_saved_session_reset_failed`，明确表示字段／附件已保存而重置未成功。此时先重读详情和会话列表，只重试独立重置，不要重复上传附件；独立重置接口要求 `expectedSessionId`。其他失败也应按实际错误与当前状态判断，不为所有接口承诺原子回滚。实现见 [工单路由](../src/http/issue-routes.ts)，回归见 [session-reset.test.ts](../tests/http/session-reset.test.ts)，操作见[使用指南](USAGE.md#重置会话)。
+
+### 范围转换
+
+先 `POST /api/issues/:key/scope-transition/plan`，body 为 `{ "serviceKey": "demo-service", "workMode": "test_analysis" }`（需替换实际服务），检查返回的 `action`、当前／目标范围、仓库增删及会话影响。plan 只读、不预约 Agent，也不证明后续 Git、dirty 状态或凭证检查一定通过。
+
+确认后 `POST .../scope-transition/apply`，提交同一目标和 plan 返回的 `expectedIssueUpdatedAt`、`expectedPlanHash`（取 `planHash`）。计划过期为 `409 scope_transition_plan_stale`，需重新计划；不能只替换 hash 自动确认新影响。当前支持范围见[使用指南](USAGE.md#范围解决与重开)。
+
+成功为 `200 { "issueKey": "..." }`。只读重绑定关闭会话、更新范围并将 workspace 设为 `not_created`，未解决工单安排 Agent；转开发／开发跨服务迁移先准备工作树再安排 Agent。成功均不表示模型已完成。响应不明先重读详情的范围和 `scopeTransitions`，不要盲目重复 apply。实现与回归见 [scope-transition.ts](../src/workspace/scope-transition.ts)、[lifecycle.test.ts](../tests/workspace/lifecycle.test.ts)、[issue-api.test.ts](../tests/http/issue-api.test.ts)。
+
+### 源码读取与保存
+
+Source 路由以 `/api/issues/:key/source/` 开头，仓库名／路径通过请求头传递，不是 query 参数。先 `GET .../repositories` 取 `{ name, url, branch, access }[]`；后续使用返回的 `name`，不能传 URL 或任意绝对路径。
+
+| 请求 | 输入与返回 |
+| --- | --- |
+| `GET .../tree` | `X-Issue-Pilot-Repository` 必填，`X-Issue-Pilot-Path` 可省略表示根；返回 `{ path, entries, truncated }`，截断不代表有下一页 |
+| `GET .../file` | Repository、Path 必填；返回 `{ path, content, size, sha256 }` |
+| `PUT .../file` | 同上并携带读取时的 `X-Issue-Pilot-Sha256`；`Content-Type: text/plain; charset=utf-8`，body 为完整文本，成功返回新的 SourceFile |
+| `GET .../history` | Repository 必填，Path 可选；返回 `{ commits, truncated, nextCursor }`；后续页把 cursor 的 revision／offset 放入 `X-Issue-Pilot-Revision`／`X-Issue-Pilot-Offset`，不要自行递增页码 |
+
+Source 专用参数头（如 `X-Issue-Pilot-Repository`、`X-Issue-Pilot-Path`）的值使用 `encodeURIComponent` 编码，包括中文路径；身份头和 Content-Type 按各自约定填写。服务端解码并检查路径和仓库策略。文件保存与其他 Source mutation 要求活跃身份，在 Issue 预约中再次校验；实际可写性还取决于未解决开发工单、工作区和 Git 绑定。读到 `access=write` 不是后续写入的永久许可。原子文件替换不等于 Git 提交。
+
+哈希不匹配返回 `409 source_file_changed`，只读返回 `409 source_read_only`，二进制／超预算返回对应 413；调用方先重读合并，不去掉哈希来覆盖。路径新建、删除、重命名、暂存及提交有独立接口，不能用 PUT 保存来模拟。实现、DTO 和边界回归见 [source-browser-routes.ts](../src/http/source-browser-routes.ts)、[source-contracts.ts](../src/workspace/source-contracts.ts)、[source-browser.test.ts](../tests/workspace/source-browser.test.ts)、[source-pagination.test.ts](../tests/workspace/source-pagination.test.ts)。
 
 ### 钉钉导入
 

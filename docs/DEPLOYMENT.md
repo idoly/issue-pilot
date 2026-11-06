@@ -17,7 +17,7 @@ Linux 主机或单副本容器运行 Node API，同源提供 Web、HTTP、SSE、
 1. 获取要运行的源码 revision 并记录 `git rev-parse --short HEAD`；不要把示例 registry 当作已发布安装源。
 2. 检查[根配置](../issue-pilot.config.ts)：首次空数据库会使用 `bootstrapUser` 创建活跃开发管理员。将其改为自己的演示／部署身份，不沿用仓库中的人员信息。**只有用户表为空时才创建**，修改此项不会更新已有用户；已有账号通过用户管理维护。
 3. 本机试运行将 `http.host` 和 `web.host` 设为 `127.0.0.1`，或先实施等效网络隔离。仓库默认是 `0.0.0.0`，没有登录服务；接入网络前必须准备认证网关。
-4. 为运行用户准备全局 Pi 目录（默认 `~/.pi/agent`）中的 `models.json`。应用只列出该文件 `providers` 声明的 provider 下的模型；不是安装全局 Pi 或执行 `/login` 后就自动完成。文件格式按所安装 Pi SDK 的 `docs/models.md`／`docs/models-configuration.md`；应用的选择逻辑见 [model-runtime.ts](../src/agent/model-runtime.ts)。模型目录首次没有可选项会使启动报 `global_agent_model_unavailable`。不要将密钥放进文档、命令或示例文件；实际模型 Key 在启动后由页面写入 SQLite。
+4. 为运行用户准备全局 Pi 目录中的 `models.json`，按[模型目录模板与离线检查](CONFIGURATION.md#operator-模型目录)核对实际路径及候选。首次没有可选模型会使启动报 `global_agent_model_unavailable`。安装全局 Pi 或执行 `/login` 不会完成应用配置；实际模型 Key 在启动后由页面写入 SQLite。
 5. 需要 Git/SSH 的仓库准备可信 `~/.ssh/known_hosts`，之后为工单 owner 配置个人 SSH Key。不要关闭主机校验。
 
 ### 2. 安装与启动
@@ -31,6 +31,8 @@ python3 -m venv .venv
 npm run build
 node --experimental-strip-types src/http/production.ts
 ```
+
+按行执行，任一步失败先修复，不继续启动旧产物。第一次安装可在 `npm ci` 后、启动前执行上面的离线模型目录检查。后端直接执行 TypeScript；没有 `npm start`，也不需要生成后端 `dist`。
 
 postinstall 使用 Git 校验固定补丁，不可跳过。被策略阻止的原生驱动等脚本要单独审查与验收，不因 npm 安装成功声称全部数据库驱动可用。
 
@@ -50,8 +52,8 @@ curl -fsS http://127.0.0.1:3000/api/me
 第一条应返回 `{"ok":true}`，第二条应是本次初始化的账号；它们只检查 HTTP 与用户初始化。浏览器访问 `http://127.0.0.1:3000`，按顺序完成：
 
 1. 管理员在“我的凭证”的共享 API Key 设置中选择实际可用的 provider／model／thinking／Codemode 并保存 Key；确认 provider／model 来自运行用户的模型目录。不要用 Operator 登录状态替代该步骤。
-2. 在“配置 → 仓库”登记一处可访问的仓库，再在“服务”中关联它，为 `test` 部署配置仓库真实存在的基线分支。服务不能没有仓库；调查可以不配置 DMS、SLS 或 MCP 查询目标。开发模式还需要同服务的 `prod` 和 `dev` 部署，dev 基线从 prod 推导。
-3. 如仓库使用 SSH，为实际 owner（处理人，否则报告人）配置个人 SSH Key。创建测试调查工单，写明“只读取仓库，说明一个模块的用途，不修改或提交代码”，选择刚配置的服务。
+2. 在“配置 → 仓库”登记一处可访问的仓库，再在“服务”中关联它，为 `test` 部署配置仓库真实存在的基线分支。首次账号为 developer：远程地址应使用 `ssh://git@<host>/<path>.git` 或 `git@<host>:<path>.git`，其个人 Git 路径拒绝 HTTPS 地址，包括公开仓库；不要把协议占位符原样保存。服务不能没有仓库；调查可以不配置 DMS、SLS 或 MCP 查询目标。开发模式还需要同服务的 `prod` 和 `dev` 部署，dev 基线从 prod 推导。
+3. 为实际 owner（处理人，否则报告人）配置可访问该远程仓库的个人 SSH Key，并确认运行用户的 `known_hosts` 已包含可信主机记录。创建测试调查工单，写明“只读取仓库，说明一个模块的用途，不修改或提交代码”，选择刚配置的服务。Git 协议与凭证检查见 [git-credentials.ts](../src/workspace/git-credentials.ts)。
 4. 创建返回并不代表执行完成。观察会话从排队／运行到空闲，确认有回复、源码可读且工单进入 `pending`，再确认解决成为 `resolved`。失败时读取详情的 `workspace.lastError` 并按[排障步骤](RUNBOOK.md#从启动到首张工单的定位顺序)处理，不反复创建工单。
 
 这条路径会调用真实模型并可能产生费用，也会访问所选仓库；只在自己的演示安装中执行。完成后用前台 `Ctrl+C` 请求优雅关闭，等待进程退出；工单数据保留在该安装的 state 中。不要为清理演示而删除未知或正在使用的 state。
@@ -109,10 +111,16 @@ kubectl -n issue-pilot get deployment,pod,service
 
 示例 registry 不是可直接使用的生产地址。现有绝对路径已进入绑定时，迁移路径需独立演练，不能只改 mount 或批量改 DB。
 
+该清单使用节点本地 `hostPath`，没有 PVC 或跨节点数据复制。标签应唯一定位保存这套 state 的节点；给多台节点同一标签，重新调度可能读到另一套目录或空目录。节点故障需按恢复计划迁移数据，不能靠增加副本恢复可用性。`/tmp` 的 1 GiB `emptyDir` 只限制临时卷，容器的内存限制和 state 容量是独立约束。
+
+startupProbe 每 5 秒检测一次，最多 360 次；它为监听前迁移和仓库准备留出窗口，不代表冷启动耗时承诺。Kubernetes 终止宽限为 1,800 秒；Engine 会排空内存队列，较长任务可能超出此时间而被平台终止，不能仅凭 HTTP 的 30 秒关闭宽限判断停机完成。
+
 ## 网络与上线验收
 
 网关保护源码、下载、私有配置和 MCP，限制传输和内存压力；SSE 关闭代理缓冲，设置长连接超时。HTTP 附件不设业务总量／数量上限，入站 MCP Base64 有独立限额，不能混同。
 
-参数维护网络基础列表，全局 Agent runtime 可追加精确域名／端口；SSH 和 HTTPS 分别声明，允许出口不代表业务授权。Operator 身份和模型密钥选择继续由应用隔离。
+`/mcp` 在 JSON 解析前限制单请求 32 MiB，附件解码前检查合计 20 MiB；具体错误与上传方式见[入站 MCP](CONFIGURATION.md#入站工单-mcp)。Base64、JSON 和内部 multipart 仍有多份内存开销，这些预算不是进程总内存上限。网关还需按实际客户端配置并发及速率限制；本仓库的 Kubernetes Service 不提供这些控制。本轮未做耗尽测试，不据此推导安全并发数。
+
+工单默认通过 SRT 开放网络出口；需保留域名限制的安装将 `networkMode` 设为 `allowlist`，再维护基础列表及全局 Agent runtime 的追加项，SSH 和 HTTPS 端口分别核对。旧数据库缺此字段时也使用新默认，部署前应选择所需模式，详见[工单网络访问](CONFIGURATION.md#工单网络访问)。网站账号权限仍由目标系统决定，Operator 身份和模型密钥选择继续由应用隔离。
 
 验收至少覆盖 health、页面、身份、SSE、动态 native executor、路径越界、Python/Excel、stdio MCP 与 Git/SSH。health 200 不证明模型、外部数据库、驱动或 sandbox 可用。CI、本机与真实容器结果分别报告，不互相替代。

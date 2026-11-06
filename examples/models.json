@@ -1,0 +1,18 @@
+{
+  "providers": {
+    "demo-provider": {
+      "baseUrl": "https://model-gateway.example.invalid/v1",
+      "api": "openai-responses",
+      "models": [
+        {
+          "id": "demo-model",
+          "name": "Replace with your model",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 64000,
+          "maxTokens": 8000
+        }
+      ]
+    }
+  }
+}

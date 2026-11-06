@@ -53,6 +53,8 @@ state 为 0700、DB／JSONL 为 0600、附件为 0400。统一 issueRoot 是 cwd
 
 读取要求直属工单根、regular file、精确 0400、大小和 hash 匹配。下载先有界完整校验，再从同一描述符发送；取消关闭句柄，不重新打开可变路径。Agent 准备校验原件但不声称持续监控外部修改。
 
+附件下载取消时不再向断开的连接返回错误；若取消期间关闭句柄失败，路由仍记录脱敏的 `attachment_download_failed`，包含稳定 reason（如 `attachment_read_cleanup_failed`）和 errno，不输出绝对路径或原始错误链。普通取消不记作故障。实现见 [attachment-routes.ts](../src/http/attachment-routes.ts)、[取消与清理回归](../tests/http/attachment-api.test.ts)。
+
 删除先 quarantine，rollback 恢复、commit 后 finalize；收尾失败不掩盖原错误。新原件在关闭旧会话及预约后写入，避免旧沙箱保护列表漏掉它。没有自动可编辑副本，粘贴图片属于消息。
 
 ### 普通工作文件
@@ -60,6 +62,8 @@ state 为 0700、DB／JSONL 为 0600、附件为 0400。统一 issueRoot 是 cwd
 查询导出校验路径／取消，独占临时文件，内容与协议收尾完成后再原子替换；提交前失败保留旧内容，不自动重查。路径级串行和等待取消避免同名导出互相覆盖。
 
 工作文件与 Source 使用固定目录／文件描述符、实际打开路径复核、管理名及 Git 控制路径拒绝，避免父目录变化把写入导向外部。清理只处理本次拥有的临时文件，操作与清理失败聚合。
+
+工作文件目录读取或下载打开失败后若关闭描述符也失败，owner 用 `work_file_read_cleanup_failed` 聚合两项错误，避免关闭错误覆盖读取／路径错误；仅关闭失败则保留该错误。聚合保留诊断，不表示句柄已成功释放或可自动重试。依据：[work-files.ts](../src/workspace/work-files.ts)、[故障注入回归](../tests/workspace/work-files.test.ts)。
 
 源码保存比较读取时 SHA-256，冲突返回 source_file_changed。文本、diff、历史与 MCP 读取各有独立预算；超限返回元数据或明确错误，不无界缓冲。预览预算不截断普通下载。
 
@@ -86,7 +90,9 @@ scope 先保存意图，再准备资源，同 URL 分支冲突拒绝。失败记
 
 工单 totalBytes 包含附件、会话、工作文件、缓存和私有 Git；sharedGitBytes 单独统计。它不是全盘容量或同一时刻磁盘快照。
 
-并发读取共享扫描，完成结果最多缓存 60 秒；refresh=true 重新采样并返回 sampledAt。生命周期使缓存失效，实际回收重新检查，候选大小不等于释放量。保留期、高水位、目标和周期来自热参数；taskConcurrency 是后台批次并发，不是 Agent 名额。
+普通并发读取共享在途扫描；完成结果和字节测量缓存一个维护周期，默认 15 分钟，`workspaceMaintenanceIntervalMs=0` 时为 5 秒。`GET /api/workspaces/stats?refresh=true` 绕过旧样本；若已有扫描仍在执行，会排入一次新扫描，而不是返回旧扫描结果。返回的 `sampledAt` 表示该批完成时点，扫描各目录并非原子快照，不宜用高频强制刷新轮询磁盘。
+
+生命周期／策略变更会使相关缓存失效，实际回收重新检查，候选大小不等于释放量。保留期、高水位、目标和周期来自热参数；`workspace.taskConcurrency` 是后台批次并发，不是 Agent 名额。依据：[lifecycle.ts](../src/workspace/lifecycle.ts)、[统计缓存与在途刷新回归](../tests/workspace/lifecycle.test.ts)、[HTTP 统计接口](../tests/http/workspace-statistics.test.ts)。
 
 ## 备份与精简边界
 

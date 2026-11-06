@@ -2,6 +2,8 @@
 
 Issue Pilot 是一个基于 [Pi Coding Agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 的 AI 工单协作系统。它将问题描述、对话、附件、处理结果和代码改动组织在同一张工单中，用于问题调查、文件处理与代码开发。
 
+初次运行从[安装与首张工单](docs/DEPLOYMENT.md#首次本地运行)开始；开发者可先走[无需真实模型的隔离验证](docs/DEVELOPMENT.md#无需真实模型的核心流程验证)。文档适用的源码基线见[版本说明](docs/README.md#适用范围与读者)，示例镜像地址不是发布源。
+
 ## 工作方式
 
 1. **提交问题**：选择入口服务和处理方式，说明现象、预期与验收条件，按需添加附件、处理人和关联工单。支持页面、钉钉单条记录和入站 MCP。

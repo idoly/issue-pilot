@@ -550,12 +550,36 @@ try {
   await assertHiddenScrollbar(parametersPanel);
   await scrollToEnd(parameters, false);
   assert.deepEqual(await saveParameters.boundingBox(), savePosition);
-  const lastParameter = parameters.getByRole("textbox", { name: "Agent 网络基础白名单" });
+  const networkMode = parameters.getByRole("combobox", { name: "工单网络访问" });
+  assert.equal(await networkMode.textContent(), "开放网络");
+  assert.equal(await parameters.getByRole("textbox", { name: "Agent 网络基础白名单" }).count(), 0);
+  const lastParameter = parameters.getByRole("textbox", { name: "钉钉附件主机" });
   const formBounds = await parameters.boundingBox();
   const lastParameterBounds = await lastParameter.boundingBox();
   assert.ok(lastParameterBounds.y >= formBounds.y && lastParameterBounds.y + lastParameterBounds.height <= formBounds.y + formBounds.height + 1);
   await page.setViewportSize({ width: 1280, height: 800 });
   assert.ok(await parameters.evaluate((node) => node.scrollHeight === node.clientHeight));
+
+  await networkMode.click();
+  await page.getByRole("option", { name: "域名白名单", exact: true }).click();
+  const allowedDomains = parameters.getByRole("textbox", { name: "Agent 网络基础白名单" });
+  await allowedDomains.fill("gitlab.example.test:443");
+  const saveNetworkMode = async () => {
+    const saved = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith("/api/config/parameters"));
+    await saveParameters.click();
+    const response = await saved;
+    assert.equal(response.status(), 200);
+    return response.json();
+  };
+  const restrictedNetwork = await saveNetworkMode();
+  assert.equal(restrictedNetwork.values.networkMode, "allowlist");
+  assert.deepEqual(restrictedNetwork.values.networkAllowedDomains, ["gitlab.example.test:443"]);
+  await networkMode.click();
+  await page.getByRole("option", { name: "开放网络", exact: true }).click();
+  assert.equal(await allowedDomains.count(), 0);
+  const openNetwork = await saveNetworkMode();
+  assert.equal(openNetwork.values.networkMode, "open");
+  assert.deepEqual(openNetwork.values.networkAllowedDomains, ["gitlab.example.test:443"]);
 
   await settingsTabs.getByRole("tab", { name: "服务", exact: true }).click();
   const servicesPanel = page.getByRole("tabpanel", { name: "服务", exact: true });
@@ -715,6 +739,7 @@ try {
           "unfiltered repository GET, local group filtering and manual group assignment",
           "independent personnel list and expanded endpoint tool list scrolling on desktop and narrow screens",
           "fixed endpoint panel with scrollable tools; parameter save action stays visible on narrow screens",
+          "network modes save through HTTP and preserve the hidden allowlist in open mode",
           "fixed home layout for wheel, keyboard and programmatic scrolling, with reachable activity and statistics on desktop and mobile",
           "health and database integrity",
         ],
