@@ -110,6 +110,6 @@ npm run build
 git diff --check
 ```
 
-On constrained machines use backend `--test-concurrency=2` and Vitest `--maxWorkers=1` as described in Development. Runtime, dependency, protocol security or container changes also require production dependency audit and available deployment health checks. Real-state operations require integrity/FK, file modes, Git refs/worktrees and unmanaged-directory checks from the Runbook.
+On constrained machines use backend `--test-concurrency=2` and Vitest `--maxWorkers=1` as described in Development. Runtime, dependency, protocol security or container changes also require production dependency audit and available deployment health checks. Match deployment verification to the affected state as described in the Runbook. Routine Web, documentation or backend releases without migrations or live-state repairs need health, artifact and focused behavior checks, not a full state scan. For schema/data migrations, storage/Git lifecycle changes applied to live state, or abnormal recovery, check the relevant integrity/FK, file modes, refs/worktrees and unmanaged directories; broaden only when the affected scope or observed anomalies justify it.
 
 Cover failure, retry, cancellation, repeated calls, rollback/finalize and shutdown where relevant. Keep HTTP and Web DTOs aligned and update the owning document. Inspect the final diff for unrelated work, state, generated artifacts and secrets. Report changes, checks and material gaps; do not claim tests prove all code safe or every unused path found.
