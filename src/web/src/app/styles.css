@@ -1832,7 +1832,7 @@ summary.agent-tool-head > svg {
   grid-template-columns: minmax(0, 1fr);
   padding: 7px 9px;
   border: 2px solid var(--agent-border-muted);
-  border-radius: 8px;
+  border-radius: 12px;
   background: #101417;
 }
 .agent-composer.thinking-minimal {
