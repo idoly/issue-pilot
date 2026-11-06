@@ -12,13 +12,15 @@ Linux 主机或单副本容器运行 Node API，同源提供 Web、HTTP、SSE、
 
 以下命令在 **Linux、Bash、独立安装目录的仓库根**执行，不在正在提供业务的 checkout 中安装或构建。Node 使用 [CI](../.github/workflows/ci.yml) 声明的版本；容器使用 [Containerfile](../Containerfile) 声明的版本。运行模型本地工具需要 Python/venv、Git、rg、fd/fdfind、OpenSSH client、bubblewrap、socat、proxychains4。SLS 另需 aliyun CLI；Java／Maven 等按被处理项目准备。只启动页面不代表这些工具已可用。
 
+主机 CI 与容器目前使用不同 Node 主版本，项目没有声明通用 `engines` 范围；选择对应运行方式的版本，不以“支持 TypeScript”推断其他 Node 版本可用。系统还须允许 SRT 创建非特权 namespace；依赖命令存在不等于内核／容器策略允许执行，工具验收入口见[开发验证](DEVELOPMENT.md#验证入口与边界)。
+
 ### 1. 启动前准备
 
 1. 获取要运行的源码 revision 并记录 `git rev-parse --short HEAD`；不要把示例 registry 当作已发布安装源。
 2. 检查[根配置](../issue-pilot.config.ts)：首次空数据库会使用 `bootstrapUser` 创建活跃开发管理员。将其改为自己的演示／部署身份，不沿用仓库中的人员信息。**只有用户表为空时才创建**，修改此项不会更新已有用户；已有账号通过用户管理维护。
 3. 本机试运行将 `http.host` 和 `web.host` 设为 `127.0.0.1`，或先实施等效网络隔离。仓库默认是 `0.0.0.0`，没有登录服务；接入网络前必须准备认证网关。
 4. 为运行用户准备全局 Pi 目录中的 `models.json`，按[模型目录模板与离线检查](CONFIGURATION.md#operator-模型目录)核对实际路径及候选。首次没有可选模型会使启动报 `global_agent_model_unavailable`。安装全局 Pi 或执行 `/login` 不会完成应用配置；实际模型 Key 在启动后由页面写入 SQLite。
-5. 需要 Git/SSH 的仓库准备可信 `~/.ssh/known_hosts`，之后为工单 owner 配置个人 SSH Key。不要关闭主机校验。
+5. 需要 Git/SSH 的仓库准备可信 `~/.ssh/known_hosts`，之后为工单 owner 配置个人 SSH Key。应用的个人 Git 不读取 SSH `config` 或使用 ssh-agent，实际主机、端口与无交互私钥要求见[凭证与 owner](CONFIGURATION.md#凭证与-owner)。
 
 ### 2. 安装与启动
 
@@ -80,7 +82,7 @@ systemctl --user show issue-pilot-api.service issue-pilot-web.service \
 
 ## 容器
 
-[Containerfile](../Containerfile) 以 Node 26 构建 Web 与修补后的生产依赖，使用 Maven 镜像提供 Java 8／Maven，独立构建 Git 2.56.0，安装 aliyun CLI 3.5.2、Python requirements 和 SRT 系统依赖。
+[Containerfile](../Containerfile) 构建 Web 与修补后的生产依赖，提供 Node、Java／Maven、Git、aliyun CLI、Python requirements 和 SRT 系统依赖；版本以该文件及锁文件为准。根配置随源码复制进镜像，首次用户、监听和路径须在构建前准备，不能通过未实现的环境变量覆盖。业务配置由挂载 state 中的 SQLite 保存。
 
 ```bash
 # 先替换为自己有推送权限的镜像仓库及本次源码 revision tag；push 会对外写入镜像。
@@ -119,7 +121,7 @@ startupProbe 每 5 秒检测一次，最多 360 次；它为监听前迁移和�
 
 网关保护源码、下载、私有配置和 MCP，限制传输和内存压力；SSE 关闭代理缓冲，设置长连接超时。HTTP 附件不设业务总量／数量上限，入站 MCP Base64 有独立限额，不能混同。
 
-`/mcp` 在 JSON 解析前限制单请求 32 MiB，附件解码前检查合计 20 MiB；具体错误与上传方式见[入站 MCP](CONFIGURATION.md#入站工单-mcp)。Base64、JSON 和内部 multipart 仍有多份内存开销，这些预算不是进程总内存上限。网关还需按实际客户端配置并发及速率限制；本仓库的 Kubernetes Service 不提供这些控制。本轮未做耗尽测试，不据此推导安全并发数。
+`/mcp` 在 JSON 解析前限制单请求 32 MiB，附件解码前检查合计 20 MiB；具体错误与上传方式见[入站 MCP](CONFIGURATION.md#入站工单-mcp)。Base64、JSON 和内部 multipart 仍有多份内存开销，这些预算不是进程总内存上限。网关还需按实际客户端配置并发及速率限制；本仓库的 Kubernetes Service 不提供这些控制。这些预算不能推导安全并发数，需在独立环境按实际负载验证。
 
 工单默认通过 SRT 开放网络出口；需保留域名限制的安装将 `networkMode` 设为 `allowlist`，再维护基础列表及全局 Agent runtime 的追加项，SSH 和 HTTPS 端口分别核对。旧数据库缺此字段时也使用新默认，部署前应选择所需模式，详见[工单网络访问](CONFIGURATION.md#工单网络访问)。网站账号权限仍由目标系统决定，Operator 身份和模型密钥选择继续由应用隔离。
 

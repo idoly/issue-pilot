@@ -30,7 +30,7 @@ include／remove 改变工具范围后，本轮结束关闭会话，下一轮按
 
 通过 SSE 执行，SQL 在连接前接受只读检查：拒绝写入、多语句、注释、锁定读取及已知副作用／服务器文件／动态 SQL 函数。它是防御性黑名单，不保证识别所有数据库扩展，账号本身必须只读。
 
-默认操作预算 120 秒、首次握手 12 秒；操作预算可热更新。最多两次握手，429 仅按有效 Retry-After 有界重试一次，401／403 不重试；已发送 SQL 不自动重放。
+默认操作预算 120 秒、首次握手 12 秒；操作预算可热更新。每次连接最多尝试两次握手：首次握手超时可再试一次；首轮 HTTP 429 使用有效 `Retry-After`，缺失／无效时使用 `retryDelayMs`，仅等待值不超过 `maxRetryDelayMs` 时才有界退避一次。第二次握手、退避和查询仍共享本次操作预算。401／403 不重试；工具发现或 SQL 调用阶段失败不重新握手，已发送 SQL 不自动重放。实现与回归见 [dms.ts](../src/capabilities/dms.ts)、[dms.test.ts](../tests/capabilities/dms.test.ts)。
 
 诊断只返回稳定码、阶段、耗时、sqlDispatchAttempted 和可用的 retryAfterSeconds，不含 URL／SQL／认证。发送尝试不证明已执行。取消也尝试关闭，操作与关闭都失败时聚合保留，不能被 timeout 重新分类吞掉。
 
@@ -76,7 +76,7 @@ Codemode off 为直接调用，on 为直接工具与编排并存，only 主要�
 | --- | --- |
 | issue-pilot-user | 可见输入及交付版本／原范围 |
 | delivery started | 可能交付，不保证执行完成，不自动再注入 |
-| delivery rejected | 原范围不合法，保留并拒绝恢复 |
+| delivery rejected | `scope_changed` 表示原范围不合法，`cancelled` 表示明确取消；两者都保留可见输入且不再恢复 |
 | 明确排队、无 started／rejected | 用户主动重试／继续时按序恢复 |
 | 无排队元信息 | 不推断为待办 |
 
@@ -84,11 +84,19 @@ Codemode off 为直接调用，on 为直接工具与编排并存，only 主要�
 
 错误清理与失败状态写入仍在该工单串行队列，随后报告原诊断；清理／写状态也失败则聚合。Pi retry 有界处理瞬时模型失败，最终失败保留记录、费用和文件。
 
+### 主动取消
+
+`POST /api/issues/:key/abort` 进入 [Engine.abort](../src/agent/engine.ts)：先重检调用者，标记该工单当前和排队轮次取消，等待消息接收队列、Pi abort 与轮次收尾，再将未开始的持久输入标为 `rejected/cancelled`。同工单并发取消共享正在进行的操作；收尾期间拒绝新消息／预约，取消不等待其他工单释放执行名额。
+
+成功返回表示这次取消及收尾完成，保留会话和用户输入；不是回滚已发生的文件修改或远程操作。准备过程在检查点响应取消，工具完成时间取决于取消传播，因此不能给取消请求承诺固定时长。取消或写状态失败会聚合为内部 `agent_abort_failed`；失败响应后先检查状态、对话、文件和诊断，不将失败视作从未执行，也不强改状态后重放。已取消输入在之后 retry 时不会再次注入，见 [message-delivery.ts](../src/agent/message-delivery.ts) 与[取消回归](../tests/agent/cancellation.test.ts)。页面快捷键见[阅读与补充](USAGE.md#阅读与补充)，HTTP 权限与响应见[接口](HTTP.md)。
+
 ## 重置、完整性与关闭
 
 重置要求空闲及 session ID 并发检查，在 scope／预约内创建私有 JSONL、事务切换绑定；失败仅清理新文件，旧会话通过历史只读查看。保存并重置在同一 scope／预约内先重检开发者权限、未解决状态和当前会话，再提交字段／附件，不额外排队元数据回合；提交后任何重置失败统一返回 `issue_saved_session_reset_failed`，不能误报为尚未保存的普通会话冲突。预检后仍保留重置时的文件完整性和 session ID 检查，失败不回放或覆盖旧会话。
 
-缺失、不完整或损坏 JSONL 保留原文件和绑定，不截断或新建替代。打开时检查记录完整性和首条会话头，校验前缀可缓存，追加后仅解析新增部分。
+执行、历史查看和重置不会为缺失或损坏的绑定会话新建替代。JSONL 完整性检查要求非空 regular file、完整的换行结尾、合法 JSON 记录和首条会话头；纯空白也不算有效会话。校验前缀可缓存，追加后仅解析新增部分。
+
+当前会话的 SSE 回放和入站 MCP `issue_conversation` 也在交给 Pi SDK 前执行同一检查；空白、截断和非法 JSON 返回 `agent_session_file_incomplete`，保留原字节及绑定，避免 SDK 自动补换行、重建空文件或忽略坏行。SSE 在校验期间缓冲 live 事件，回放时按 entry ID 去重。缺失绑定文件的既有读取语义不同：SSE 跳过持久回放，MCP 读取失败；两者都不创建文件。此检查不禁用 SDK 对完整旧版本会话的格式迁移，不能理解为所有历史格式读取都绝不写文件。依据：[完整性 owner](../src/agent/pi-session.ts)、[读入口回归](../tests/http/session-read-integrity.test.ts)、[回放竞态](../tests/http/runtime-api.test.ts)。
 
 `modelResponseIdleMs` 检测连续无模型更新的等待：`message_update` 重置计时，工具执行期间暂停。因此持续有输出的长轮次不受这个总时长上限约束；它不是整轮截止时间。依据：[AgentResponseWatchdog](../src/agent/pi-session.ts)。
 
@@ -97,6 +105,8 @@ Codemode off 为直接调用，on 为直接工具与编排并存，only 主要�
 ## 页面投影与费用
 
 直接投影 Pi 事件，不嵌入 TUI／PTY、不存第二份聊天库。消息按 ID、文本／思考块按 contentIndex keyed，Match 使用带参数 render callback。动画帧批量处理增量，流式为纯文本，最终才解析和清洗 Markdown。
+
+只有有效 `snapshot_ready` 回放应用完成后才判定会话就绪、清除连接错误。首次等待显示「正在加载对话…」，完成后才判断是否无对话；重连保留旧正文及已有连接错误，不能把传输连接建立等同于历史加载完成。回归见 [AgentPanel.test.ts](../src/web/src/app/AgentPanel.test.ts)、[agent-stream.test.ts](../src/web/src/app/agent-stream.test.ts)。
 
 工具详情惰性挂载，Codemode details.calls 与 SDK nestedCalls 只展示一份，后者优先；complete=false 明示不完整。输出链接仍经授权文件解析，不直接打开任意路径。
 

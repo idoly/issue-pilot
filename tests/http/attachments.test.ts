@@ -328,6 +328,77 @@ test("rejects an attachment symlink while preserving its target and evidence", a
   }
 });
 
+for (const linked of ["root", "ancestor"] as const)
+  test(`attachment verification refuses a linked ${linked} even when the original file mode and hash match`, async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-root-"));
+    try {
+      const realRoot = path.join(directory, "actual", "attachments");
+      await mkdir(realRoot, { recursive: true, mode: 0o700 });
+      const file = path.join(realRoot, "evidence.txt");
+      await writeFile(file, "original", { mode: 0o400 });
+      const alias = path.join(directory, "alias");
+      await symlink(linked === "root" ? realRoot : path.dirname(realRoot), alias);
+      const attachmentRoot = linked === "root" ? alias : path.join(alias, "attachments");
+      const selected = path.join(attachmentRoot, "evidence.txt");
+      const hash = crypto.createHash("sha256").update("original").digest("hex");
+      await assert.rejects(async () => {
+        const stream = await openVerifiedAttachmentStream(attachmentRoot, selected, 8, hash);
+        const closed = once(stream, "close");
+        stream.destroy();
+        await closed;
+      }, /insecure_issue_attachment_file/);
+      assert.equal(await readFile(file, "utf8"), "original");
+      assert.equal((await fs.lstat(file)).mode & 0o777, 0o400);
+      assert.equal(await readlink(alias), linked === "root" ? realRoot : path.dirname(realRoot));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+test("attachment verification rejects an ancestor redirected between validation and open", async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-open-race-"));
+  const openFile = fs.open;
+  let closed = false;
+  try {
+    const root = path.join(directory, "issue"),
+      outside = path.join(directory, "outside"),
+      preserved = path.join(directory, "preserved");
+    await mkdir(root);
+    await mkdir(outside);
+    const file = path.join(root, "evidence.txt");
+    await writeFile(file, "original", { mode: 0o400 });
+    await writeFile(path.join(outside, "evidence.txt"), "original", { mode: 0o400 });
+    context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+      if (args[0] === file) {
+        await rename(root, preserved);
+        await symlink(outside, root);
+      }
+      const handle = await openFile(...args),
+        close = handle.close.bind(handle);
+      context.mock.method(handle, "close", async () => {
+        await close();
+        closed = true;
+      });
+      return handle;
+    });
+    syncBuiltinESMExports();
+    const hash = crypto.createHash("sha256").update("original").digest("hex");
+    await assert.rejects(async () => {
+      const stream = await openVerifiedAttachmentStream(root, file, 8, hash);
+      const ended = once(stream, "close");
+      stream.destroy();
+      await ended;
+    }, /insecure_issue_attachment_file/);
+    assert.equal(closed, true);
+    assert.equal(await readFile(path.join(preserved, "evidence.txt"), "utf8"), "original");
+    assert.equal(await readFile(path.join(outside, "evidence.txt"), "utf8"), "original");
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("reports quarantine finalize failures without hiding retained evidence", async () => {
   const quarantined = [
     { sourcePath: "/attachments/one", temporaryPath: "/attachments/.one.deleting" },

@@ -60,13 +60,37 @@ HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不�
 }
 ```
 
-`workMode` 决定环境／类型，不能额外传 `environmentKey` 或 `type`。四种映射见[处理方式](USAGE.md#提交一张可处理的工单)。HTTP 创建没有 MCP 的默认 priority，调用方必须明确提供。省略／空处理人表示未分配，凭证 owner 此时为报告人；未分配工单不会进入任何人的个人处理队列。
+`workMode` 决定环境／类型，不能额外传 `environmentKey` 或 `type`。四种映射见[处理方式](USAGE.md#提交一张可处理的工单)。`priority` 接受 `p0`、`p1`、`p2`、`p3`；HTTP 创建没有 MCP 的默认 priority，调用方必须明确提供。省略／空处理人表示未分配，凭证 owner 此时为报告人；未分配工单不会进入任何人的个人处理队列。开发工单的创建者和 owner 都必须是活跃 developer；编辑时也不能把开发工单改派给非开发者，否则返回 `400 issue_developer_owner_required`。
 
 带附件时用 multipart：一个文本字段 `issue` 放完整 JSON，文件字段可使用 `files`。附件写入随创建／编辑事务完成，没有独立附件上传写接口。HTTP 上传流式落盘，没有业务文件大小／数量上限，但普通字段、传输层和代理仍有限制；不要把它理解为任意大请求都可接受。MCP Base64 和 Agent 粘贴图片各有独立预算，见[配置](CONFIGURATION.md#入站工单-mcp)。
 
 编辑虽使用 PATCH，元信息仍按**完整表单**解析：必须传 `title` 和 `priority`；省略 `description`、`assigneeSubject`、`ccSubjects` 会分别变为空、未分配、空列表，不是全部保留。`removedAttachmentIds` 指定移除原件，未指定移除的原附件保留。不能用普通编辑变更 `serviceKey`、`environmentKey`、`type`、`workMode` 或 `relatedIssueKeys`；范围与关联走专用接口。
 
 `resetSession: true` 的组合编辑在 scope／工单预约内先重检 developer 权限、未解决状态和当前会话，再保存字段／附件并执行重置。已解决或未绑定会话的预检拒绝发生在保存前；会话在预检后变化、丢失或重置事务失败等情况，统一返回 `500 issue_saved_session_reset_failed`，明确表示字段／附件已保存而重置未成功。此时先重读详情和会话列表，只重试独立重置，不要重复上传附件；独立重置接口要求 `expectedSessionId`。其他失败也应按实际错误与当前状态判断，不为所有接口承诺原子回滚。实现见 [工单路由](../src/http/issue-routes.ts)，回归见 [session-reset.test.ts](../tests/http/session-reset.test.ts)，操作见[使用指南](USAGE.md#重置会话)。
+
+Web 切换工单或身份后，旧保存请求的迟到失败不会清空新编辑窗口的附件选择或移除列表；切换页面也不撤销已提交的服务端写入。覆盖部分保存失败与刷新失败的回归见 [IssueReset.test.tsx](../src/web/src/app/IssueReset.test.tsx)。
+
+### 发送消息与取消
+
+纯文本使用 `POST /api/issues/:key/agent-messages`，JSON body 为 `{"message":"请核对现有证据并说明尚未验证的部分。"}`。`message` 必须是非空字符串，服务端去掉首尾空白；长度受 [limits.agentMessageChars](../issue-pilot.config.ts) 限制，超限为 `400 agent_message_too_long`。这是一次实际 Agent 请求，可能调用模型和工具；人工备注应使用 comments 接口。
+
+带图片时使用 multipart：恰好一个文本字段 `message`，每个文件字段都命名为 `images`，可重复出现；不能复用附件上传的 `issue`／`files` 字段。声明 MIME 只接受 `image/png`、`image/jpeg`、`image/gif`、`image/webp`；仍须提供文字，不能只传图片。`limits.agentImage.fileBytes` 限制单张图片原始字节，`requestBytes` 限制本次所有图片原始字节之和，`files` 限制图片数量；不是 Base64 后的 JSON 大小或持久会话总量。错误字段、MIME 或数量为 `400 invalid_agent_image`／`invalid_agent_message`，图片字节超限为 `413 agent_image_limit_exceeded`。图片写入 Pi 消息，不成为工单附件。依据：[消息路由](../src/http/agent-routes.ts)、[文本和图片回归](../tests/http/runtime-api.test.ts)。
+
+已解决工单拒绝消息（`409 resolved_issue_cannot_run_agent`）；运行中可能接纳为引导或下一轮输入，受理与恢复规则见 [Agent 消息持久化](AGENT.md#消息接收与恢复)。`409 agent_message_outcome_unknown` 表示交付结果不明，不能当作“尚未发送”自动重试。
+
+`POST /api/issues/:key/abort` 无需 body，会等待当前轮次和已排队轮次的取消收尾。它不删除已受理消息，也不撤销已经完成的工具副作用；取消后的输入不会在 retry 时自动恢复。未解决且空闲时可用 `POST .../retry` 继续，但 `workspace.retryable` 只是详情页的恢复提示，不完整表示 retry 接口的允许条件；最终以操作时的状态和预约检查为准。
+
+### 替换关联工单
+
+`PUT /api/issues/:key/related-issues` 的 JSON body 为 `{"relatedIssueKeys":["ISSUE-20260101-001"]}`，编号需替换为真实工单。这是完整替换列表；空数组清空全部关联，**省略该字段也按空数组处理**。不要把增量新增的一项当作完整列表发送。不能引用自己、重复编号或不存在的工单，数量上限见 [limits.relatedIssues](../issue-pilot.config.ts)。
+
+四种处理方式都支持关联。调用要求活跃用户、当前工单未解决、Workspace 为 `ready`／`stopped` 且内部运行视图已准备好；当前工单、原关联和新关联均参与预约，其中任何一张仍有 Agent 活动都返回 409。相同集合在上述检查通过后返回 204，不另排队；集合变化则关闭当前会话实例、保存关联、使运行视图失效并安排重新准备，204 不表示 Agent 已完成。接口没有 revision 条件；结果不明先重读详情的 `relatedIssues`，不要盲目覆盖另一位用户的变更。依据：[工单路由](../src/http/issue-routes.ts)、[关联回归](../tests/http/all-mode-relations.test.ts)、[重复更新与失败回归](../tests/http/issue-api.test.ts)。
+
+### 独立重置会话
+
+先 `GET /api/issues/:key/sessions`，从 `current: true` 的条目取得 `sessionId`；再以活跃 developer 身份 `POST /api/issues/:key/reset-session`，body 为 `{"expectedSessionId":"从当前会话列表取得的 ID"}`。成功返回 `200 {"sessionId":"新会话 ID"}`，业务状态变为 `open`，不自动启动 Agent；旧会话仍可通过历史接口读取。
+
+重置要求工单空闲且未解决。当前会话变化返回 `409 agent_session_changed`；原 ID 成功使用后再次提交也会冲突，而读取新 ID 后重置会再建一份会话。响应不明时先读会话列表，不能用最新 ID 无条件重试。重置保留代码、附件与普通工作文件；它不是工作区修复工具，不能恢复缺失 JSONL 或解决 Git 异常。依据：[resetIssueSession](../src/agent/session-reset.ts)、[会话重置回归](../tests/http/session-reset.test.ts)。
 
 ### 工单删除
 
@@ -132,6 +156,8 @@ curl --fail-with-body -sS -H "X-Issue-Pilot-Subject: $SUBJECT" "$BASE_URL/api/ca
 当前 Web 收到无法解析或已校验字段非法的消息／快照时，会作废连接并重新回放，而不是跳过坏帧继续累加；旧连接的迟到事件被 generation 检查拒绝。这里只描述客户端已实现的检查，不等于对每个 Pi 事件做完整 Schema 验证。行为回归见 [agent-stream.test.ts](../src/web/src/app/agent-stream.test.ts)。
 
 历史会话用 `GET /api/issues/:key/sessions` 发现 sessionId，再调用 `GET /api/issues/:key/sessions/:sessionId?offset=0`，每页固定 50 个事件，返回 `{ events, nextOffset }`；offset 为非负整数，`nextOffset=null` 到末尾。不要与入站 MCP 的 `{ items, total, offset, nextOffset }` 分页或 Source 的专用分页混用。
+
+当前会话文件不完整时，SSE 在发送响应头前返回 `500 agent_session_file_incomplete`；入站 MCP `issue_conversation` 返回同码的工具错误。此时不启动 Agent，也不自动修复文件；读取完整性规则与缺失文件的行为见 [Agent 完整性说明](AGENT.md#重置完整性与关闭)。
 
 ## 错误、并发与重试
 

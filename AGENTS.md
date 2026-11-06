@@ -11,7 +11,7 @@ Issue Pilot manages durable Issues, Git worktrees, attachments, outputs and Pi c
 
 The checkout's `.issue-pilot` can contain real credentials, JSONL, attachments, local branches, dirty worktrees and recovery evidence. Never use it as a test fixture. Tests inject temporary roots through `buildApi({ stateRoot, databaseFile })` or manager constructors. A manual isolated server needs an independent project copy and its own root configuration; there is no state path environment override.
 
-Before an authorized operational change, follow the Runbook, including its bounded backup retention and post-verification rotation policy. Do not accumulate a new large snapshot for every agent round or routine check. Preserve unknown paths, database-unrepresented directories, changed checkouts and dirty worktrees. Do not repair branch/path drift by guessing, reset, remote fallback or silent metadata updates.
+Before an authorized operational change, follow the Runbook's current database-only recovery policy and bounded checkpoint retention. Do not create or retain full Issue-file backups; database checkpoints do not restore attachments, sessions, working files or private Git. Do not accumulate a new large snapshot for every agent round or routine check. Preserve unknown paths, database-unrepresented directories, changed checkouts and dirty worktrees. Do not repair branch/path drift by guessing, reset, remote fallback or silent metadata updates.
 
 ## Owners
 

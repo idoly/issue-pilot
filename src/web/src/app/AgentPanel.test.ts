@@ -111,9 +111,62 @@ describe("Agent conversation state", () => {
     expect(displayedText.length).toBe(issuePilotConfig.web.agentToolOutputCharacters);
     expect(displayedText.startsWith("a".repeat(100))).toBe(true);
     expect(displayedText.endsWith("b".repeat(100))).toBe(true);
-    expect(displayedText).toContain("20,000 characters omitted from display");
+    expect(displayedText).toContain("显示已截断，保留开头和结尾");
+    expect(entries[0]?.kind === "tool" && entries[0].result?.displayTruncated).toBe(true);
     expect(boundedText(source, 40_000)).toBe(displayedText);
     expect(source).toHaveLength(60_000);
+  });
+
+  it("marks display truncation before opening a tool and clears it for a complete shorter result", async () => {
+    const issue = {
+      id: "ISSUE-20260810-001",
+      title: "Truncation",
+      description: "",
+      priority: "p1",
+      type: "defect_fix",
+      status: "pending",
+      assignee: null,
+      assigneeSubject: null,
+      service: { key: "service", name: "Service" },
+      updatedAt: new Date().toISOString(),
+      repositories: [],
+      attachments: [],
+      comments: [],
+      environmentKey: "dev",
+      workspace: { status: "ready", sourceAvailable: false },
+    } satisfies IssueDetail;
+    const original = { content: [{ type: "text" as const, text: "x".repeat(issuePilotConfig.web.agentToolOutputCharacters + 1) }] };
+    const [entries, setEntries] = createSignal(applyAgentEvent([], event({ type: "tool_execution_update", toolCallId: "bounded", toolName: "read", args: {}, partialResult: original })));
+    const view = render(() =>
+      ConversationItem({
+        issue,
+        get entry() {
+          return entries()[0]!;
+        },
+      }),
+    );
+    try {
+      const card = view.container.querySelector("details")!;
+      expect(card.open).toBe(false);
+      expect(view.container.querySelector("pre")).toBeNull();
+      expect(card.querySelector("summary")?.textContent).toContain("显示已截断");
+      expect(original.content[0].text).toHaveLength(issuePilotConfig.web.agentToolOutputCharacters + 1);
+      card.open = true;
+      fireEvent(card, new Event("toggle"));
+      await waitFor(() => expect(view.container.querySelector("pre")?.textContent).toContain("显示已截断"));
+      setEntries((current) =>
+        applyAgentEvent(
+          current,
+          event({ type: "tool_execution_end", toolCallId: "bounded", toolName: "read", result: { content: [{ type: "text", text: "Complete short result" }] }, isError: false }),
+        ),
+      );
+      await screen.findByText("Complete short result");
+      expect(view.container.querySelector("details")).toBe(card);
+      expect(card.open).toBe(true);
+      expect(card.textContent).not.toContain("显示已截断");
+    } finally {
+      view.unmount();
+    }
   });
 
   it("uses SDK tool duration when replaying a completed tool without a start event", () => {
@@ -714,13 +767,16 @@ describe("Agent conversation state", () => {
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     try {
       const source = EventSourceMock.instances[0]!;
+      expect(screen.queryByText(/Esc 中断/)).toBeNull();
       source.emit("message", event({ type: "auto_retry_end", success: false, attempt: 3 }));
       source.emit("snapshot_ready", { running: true, runState: "queued", issueStatus: "pending" });
       await screen.findByText("排队中，等待执行名额…");
+      expect(screen.getByTitle("中断当前处理并取消后续排队，保留未发送草稿").textContent).toContain("Esc 中断");
       expect(screen.queryByText("处理中…")).toBeNull();
       expect(screen.queryByText("重试失败")).toBeNull();
       source.emit("message", event({ type: "issue_run_state", state: "running" }));
       await screen.findByText("处理中…");
+      expect(screen.getByText(/Esc 中断/)).toBeTruthy();
       expect(screen.queryByText("排队中，等待执行名额…")).toBeNull();
       source.emit("message", event({ type: "issue_status", status: "complete" }));
       source.emit("message", event({ type: "issue_run_state", state: "queued" }));
@@ -728,6 +784,7 @@ describe("Agent conversation state", () => {
       source.emit("message", event({ type: "issue_run_state", state: "idle" }));
       await waitFor(() => expect(screen.queryByText("排队中，等待执行名额…")).toBeNull());
       expect(screen.queryByText("处理中…")).toBeNull();
+      expect(screen.queryByText(/Esc 中断/)).toBeNull();
     } finally {
       view.unmount();
     }
@@ -1404,6 +1461,8 @@ describe("Agent conversation state", () => {
       second.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Replayed after reconnect" }], "stop") }, "message-after"));
       expect(screen.getByText("Stable before disconnect")).toBeTruthy();
       expect(screen.queryByText("Replayed after reconnect")).toBeNull();
+      expect(screen.queryByText("正在加载对话…")).toBeNull();
+      expect(screen.queryByText("还没有对话")).toBeNull();
       second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.queryByText("Stable before disconnect")).toBeNull();
@@ -1486,5 +1545,130 @@ describe("Agent conversation state", () => {
     expect(onRefresh).toHaveBeenCalledTimes(2);
     expect(onRefresh).toHaveBeenLastCalledWith(issue.id);
     view.unmount();
+  });
+});
+
+describe("Agent conversation loading", () => {
+  const issue = {
+    id: "ISSUE-20261107-001",
+    title: "Conversation replay",
+    description: "",
+    priority: "p2",
+    type: "defect_fix",
+    status: "pending",
+    assignee: null,
+    assigneeSubject: null,
+    service: { key: "service", name: "Service" },
+    updatedAt: "2026-11-07T00:00:00Z",
+    repositories: [],
+    attachments: [],
+    comments: [],
+    environmentKey: "prod",
+    workspace: { status: "ready", sourceAvailable: false },
+  } satisfies IssueDetail;
+
+  for (const hasHistory of [false, true])
+    it(`waits for snapshot_ready before displaying ${hasHistory ? "replayed history" : "an empty conversation"}`, async () => {
+      vi.useFakeTimers();
+      EventSourceMock.instances.length = 0;
+      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      try {
+        const source = EventSourceMock.instances[0]!;
+        expect(screen.queryByText("还没有对话")).toBeNull();
+        source.emit("open");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(screen.queryByText("还没有对话")).toBeNull();
+        expect(screen.getByText("正在加载对话…")).toBeTruthy();
+        if (hasHistory) source.emit("message", event({ type: "issue_user", message: "Previously saved question" }, "saved-question"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(screen.queryByText("Previously saved question")).toBeNull();
+        expect(screen.queryByText("还没有对话")).toBeNull();
+        expect(screen.getByText("正在加载对话…")).toBeTruthy();
+        source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(screen.queryByText("正在加载对话…")).toBeNull();
+        if (hasHistory) {
+          expect(screen.getByText("Previously saved question")).toBeTruthy();
+          expect(screen.queryByText("还没有对话")).toBeNull();
+        } else expect(screen.getByText("还没有对话")).toBeTruthy();
+      } finally {
+        view.unmount();
+        vi.useRealTimers();
+      }
+    });
+
+  for (const failure of ["connection", "snapshot"])
+    it(`preserves a ${failure} failure until a reconnect supplies a valid snapshot`, async () => {
+      vi.useFakeTimers();
+      EventSourceMock.instances.length = 0;
+      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      try {
+        const first = EventSourceMock.instances[0]!;
+        first.emit("open");
+        if (failure === "connection") first.emit("error");
+        else first.emit("snapshot_ready", { runState: "invalid" });
+        await vi.advanceTimersByTimeAsync(0);
+        const diagnostic = screen.getByRole("alert").textContent;
+        expect(diagnostic).toBeTruthy();
+        expect(screen.queryByText("还没有对话")).toBeNull();
+        expect(screen.queryByText("正在加载对话…")).toBeNull();
+        first.emit("snapshot_ready", {});
+        await vi.advanceTimersByTimeAsync(issuePilotConfig.web.agentStreamReconnectMs);
+        const second = EventSourceMock.instances[1]!;
+        second.emit("open");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(screen.getByRole("alert").textContent).toBe(diagnostic);
+        expect(screen.queryByText("还没有对话")).toBeNull();
+        second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.getByText("还没有对话")).toBeTruthy();
+        expect(screen.queryByText("正在加载对话…")).toBeNull();
+      } finally {
+        view.unmount();
+        vi.useRealTimers();
+      }
+    });
+
+  it("requires the new Issue snapshot and ignores readiness from the old stream", async () => {
+    vi.useFakeTimers();
+    EventSourceMock.instances.length = 0;
+    const [current, setCurrent] = createSignal<IssueDetail>(issue);
+    const view = render(() =>
+      AgentPanel({
+        get issue() {
+          return current();
+        },
+        onRefresh: async () => current(),
+      }),
+    );
+    try {
+      const first = EventSourceMock.instances[0]!;
+      first.emit("open");
+      first.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText("还没有对话")).toBeTruthy();
+      setCurrent({ ...issue, id: "ISSUE-20261107-002" });
+      await vi.advanceTimersByTimeAsync(0);
+      const second = EventSourceMock.instances[1]!;
+      second.emit("open");
+      first.emit("open");
+      first.emit("snapshot_ready", {});
+      first.emit("error");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(first.closed).toBe(true);
+      expect(screen.queryByText("还没有对话")).toBeNull();
+      expect(screen.getByText("正在加载对话…")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+      second.emit("message", event({ type: "issue_user", message: "New Issue question" }, "new-question"));
+      second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByText("New Issue question")).toBeTruthy();
+      expect(screen.queryByText("还没有对话")).toBeNull();
+      expect(screen.queryByText("正在加载对话…")).toBeNull();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 });

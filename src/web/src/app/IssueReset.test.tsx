@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueDetail } from "../data/client";
 const state = vi.hoisted(() => ({ update: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
@@ -100,6 +101,51 @@ it("reports a completed reset separately from a failed page refresh", async () =
   expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存并重置，但刷新失败");
   expect(updated).toHaveBeenCalledOnce();
 });
+for (const change of ["identity", "issue"] as const)
+  for (const failure of ["partial save", "refresh"] as const)
+    it(`preserves the new attachment draft when an old ${failure} fails after changing ${change}`, async () => {
+      let rejectPending!: (error: Error) => void;
+      const pending = new Promise<never>((_, reject) => {
+        rejectPending = reject;
+      });
+      const updated = vi.fn(async () => {});
+      if (failure === "partial save") state.update.mockImplementationOnce(() => pending);
+      else updated.mockImplementationOnce(() => pending);
+      const attachment = { id: "existing", fileName: "existing.txt", mediaType: "text/plain", size: 3, sha256: "a".repeat(64) };
+      const [currentIssue, setIssue] = createSignal({ ...issue, attachments: [attachment] }, { ownedWrite: true });
+      const [user, setUser] = createSignal({ subject: "developer", role: "developer" }, { ownedWrite: true });
+      state.user = user;
+      render(() => <IssueWorkspace issue={currentIssue()} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+        const oldDialog = await screen.findByRole("dialog", { name: "编辑工单" });
+        fireEvent.click(within(oldDialog).getByRole("button", { name: "重置" }));
+        await waitFor(() => expect(state.update).toHaveBeenCalledOnce());
+        if (failure === "refresh") await waitFor(() => expect(updated).toHaveBeenCalledOnce());
+
+        if (change === "identity") setUser({ subject: "other-developer", role: "developer" });
+        else setIssue({ ...currentIssue(), id: "ISSUE-20261018-002" });
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
+        fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+        const currentDialog = await screen.findByRole("dialog", { name: "编辑工单" });
+        const file = new File(["new content"], "new-evidence.txt", { type: "text/plain" });
+        await fireEvent.change(within(currentDialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
+        fireEvent.click(within(currentDialog).getByRole("button", { name: "移除existing.txt" }));
+        await waitFor(() => expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull());
+
+        rejectPending(new Error(failure === "partial save" ? "issue_saved_session_reset_failed" : "old_refresh_failed"));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(within(currentDialog).getByText("new-evidence.txt")).toBeTruthy();
+        expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull();
+        expect(within(currentDialog).queryByRole("alert")).toBeNull();
+        fireEvent.click(within(currentDialog).getByRole("button", { name: "保存" }));
+        await waitFor(() => expect(state.update).toHaveBeenCalledTimes(2));
+        expect(state.update.mock.calls[1]).toEqual([currentIssue().id, expect.anything(), [attachment.id], [file], false]);
+      } finally {
+        rejectPending(new Error("test_cleanup"));
+        await pending.catch(() => undefined);
+      }
+    });
 it("does not reset after the workspace unmounts while saving", async () => {
   let finish!: () => void;
   state.update.mockImplementationOnce(

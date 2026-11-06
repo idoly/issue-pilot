@@ -179,6 +179,7 @@ export async function assertSessionFileComplete(file: string): Promise<void> {
       }
       first = false;
     }
+    if (first) throw new Error("agent_session_file_incomplete");
     validatedSessions.delete(file);
     // A rewritten file must not swap in another session's transcript under the same binding.
     if (cached && cached.dev === current.dev && cached.ino === current.ino && sessionId !== cached.sessionId) throw new Error("agent_session_file_incomplete");

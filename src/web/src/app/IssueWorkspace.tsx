@@ -249,6 +249,7 @@ export function IssueWorkspace(props: {
       await props.onUpdated();
       if (issueGeneration === generation) setEditOpen(false);
     } catch (error) {
+      if (issueGeneration !== generation) return;
       const code = errorMessage(error);
       const message = workspaceErrorMessages[code] ?? code;
       // A committed edit must not be resent with its files; the server already stored them.
@@ -256,7 +257,7 @@ export function IssueWorkspace(props: {
         setRemovedAttachmentIds([]);
         setEditAttachments([]);
       }
-      if (issueGeneration === generation) setEditError(saved ? `工单已保存${reset ? "并重置" : ""}，但刷新失败：${message}。请关闭编辑窗口后刷新页面。` : message);
+      setEditError(saved ? `工单已保存${reset ? "并重置" : ""}，但刷新失败：${message}。请关闭编辑窗口后刷新页面。` : message);
     } finally {
       if (issueGeneration === generation) {
         setEditSaving(false);

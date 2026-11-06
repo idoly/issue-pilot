@@ -325,6 +325,22 @@ test("accepts a session file with a leading UTF-8 byte order mark like Pi does",
   }
 });
 
+test("refuses a cached session replaced with whitespace and accepts its restored contents", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-session-blank-"));
+  try {
+    const file = path.join(root, ".session-blank.jsonl");
+    const original = `${JSON.stringify({ type: "session", version: 3, id: "blank", timestamp: new Date().toISOString(), cwd: root })}\n`;
+    await fs.promises.writeFile(file, original);
+    await assertSessionFileComplete(file);
+    await fs.promises.writeFile(file, " \t\n".repeat(original.length));
+    await assert.rejects(assertSessionFileComplete(file), { message: "agent_session_file_incomplete" });
+    await fs.promises.writeFile(file, original);
+    await assertSessionFileComplete(file);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("refuses a session file rewritten with a different header even when it grows", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-session-rewrite-"));
   try {

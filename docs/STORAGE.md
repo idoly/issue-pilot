@@ -51,7 +51,9 @@ state 为 0700、DB／JSONL 为 0600、附件为 0400。统一 issueRoot 是 cwd
 
 先暂存、计算 size／SHA-256，再协调工单事务和文件公开。物理名含 UUID 并遵守 UTF-8 字节预算，原名保留元数据与标准下载文件名。
 
-读取要求直属工单根、regular file、精确 0400、大小和 hash 匹配。下载先有界完整校验，再从同一描述符发送；取消关闭句柄，不重新打开可变路径。Agent 准备校验原件但不声称持续监控外部修改。
+附件 owner 要求工单根已存在、为真实目录且解析后的路径与登记路径一致；根自身或祖先的符号链接会被拒绝。创建先由工单 owner 认领空根，编辑上传不能自动重建缺失目录或改写现有目录权限。异常根应保留现场检查，不能靠重新上传修复。回归见[附件编辑](../tests/http/attachment-api.test.ts)。
+
+读取要求直属工单根、regular file、精确 0400、大小和 hash 匹配。下载打开后通过 Linux `/proc/self/fd` 复核实际路径，拒绝检查与打开之间的祖先重定向，再有界完整校验并从同一描述符发送；取消关闭句柄，不重新打开可变路径。Agent 准备校验原件但不声称持续监控外部修改。实现与边界见 [attachment-store.ts](../src/http/attachment-store.ts)、[文件校验回归](../tests/http/attachments.test.ts)。
 
 附件下载取消时不再向断开的连接返回错误；若取消期间关闭句柄失败，路由仍记录脱敏的 `attachment_download_failed`，包含稳定 reason（如 `attachment_read_cleanup_failed`）和 errno，不输出绝对路径或原始错误链。普通取消不记作故障。实现见 [attachment-routes.ts](../src/http/attachment-routes.ts)、[取消与清理回归](../tests/http/attachment-api.test.ts)。
 
@@ -96,11 +98,11 @@ scope 先保存意图，再准备资源，同 URL 分支冲突拒绝。失败记
 
 ## 备份与精简边界
 
-- **持久**：DB 文件组、会话、附件、工作文件、私有 Git 必须匹配保留。
+- **持久**：DB 文件组、会话、附件、工作文件、私有 Git 是运行事实，不能当缓存删除；完整恢复要求它们彼此匹配。
 - **有条件持久**：开发 worktree 的 dirty、untracked、ignored 内容在安全释放前不能删。
 - **可再生**：依赖缓存、构建产物与共享快照可经验证排除，但名称不能证明无价值。
 - **恢复证据**：未知目录、quarantine、异常临时文件、迁移记录先查 owner，不按垃圾删除。
 
-默认恢复点排除 node_modules、target、.maven-cache、.npm-cache、venv、__pycache__、.gradle 等可再生产物。若其中存在本地独有依赖或报告，必须明确记录取舍，不能保证远端可重新取得。
+以上是数据的持久性分类，不代表它们都纳入当前备份。当前安装仅保留数据库检查点，不创建或保留工单文件全量备份；创建时机、验证、有限轮换和恢复限制统一见[运维手册](RUNBOOK.md#当前备份策略)。数据库结构完整不能证明附件、会话、工作文件或 Git 仍在，也不能让这些文件随 DB 回退。
 
-排除共享 checkout 前验证干净、对象完整、精确 commit 和登记；保留 pin、manifest、离线重建脚本。压缩备份需先校验流和内容／元数据，恢复先解压再重建，不是只恢复 DB。完整步骤见[运维手册](RUNBOOK.md)。
+依赖／构建目录与共享 checkout 只有经 owner 检查、确认无独有成果及当前引用后才可精简。不能仅凭 node_modules、target、venv 等名称删除，也不能把共享对象／pin／私有 Git 与展开快照一起删；历史归档的重建条件见[历史完整恢复点的判定](RUNBOOK.md#历史完整恢复点的判定)。

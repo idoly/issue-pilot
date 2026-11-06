@@ -17,6 +17,7 @@ interface AgentStreamReplay {
 }
 
 interface AgentStreamCallbacks {
+  // A connection is usable only after its validated replay has been applied.
   onConnection(connected: boolean): void;
   onError(error: "" | "agent_event_connection_failed" | "agent_event_protocol_error"): void;
   onSnapshot(snapshot: AgentStreamSnapshot, replay: AgentStreamReplay, generation: number): void;
@@ -78,8 +79,6 @@ export class AgentStreamController {
     source.addEventListener("open", () => {
       if (!this.isCurrent(generation)) return;
       touch();
-      this.callbacks.onConnection(true);
-      this.callbacks.onError("");
     });
     source.addEventListener("heartbeat", () => {
       if (this.isCurrent(generation)) touch();
@@ -93,6 +92,8 @@ export class AgentStreamController {
         if ("runState" in parsed && !AGENT_RUN_STATES.includes(parsed.runState as AgentRunState)) throw new Error("agent_event_protocol_error");
         this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replayEntries, activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
+        this.callbacks.onConnection(true);
+        this.callbacks.onError("");
       } catch {
         // Without a trustworthy snapshot the stream cannot deliver live events; reconnect for a fresh replay.
         recover("agent_event_protocol_error");

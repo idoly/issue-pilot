@@ -67,6 +67,11 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
           </Show>
         </code>
         <span class="agent-tool-state">{{ running: "执行中", complete: "完成", error: "失败" }[props.entry.status]}</span>
+        <Show when={props.entry.result?.displayTruncated}>
+          <span class="agent-tool-timing" title="页面只保留输出开头和结尾，未修改会话原始记录">
+            显示已截断
+          </span>
+        </Show>
         <Show when={props.entry.durationMs !== undefined}>
           <span class="agent-tool-timing">{duration(props.entry.durationMs)}</span>
         </Show>
@@ -302,7 +307,7 @@ function footerText(footer: AgentFooterStats): string {
 }
 
 export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<IssueDetail>; drafts?: AgentDraftStore }) {
-  const [connected, setConnected] = createSignal(false, { ownedWrite: true });
+  const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [processing, setProcessing] = createSignal(false, { ownedWrite: true });
   const [issueStatus, setIssueStatus] = createSignal<IssueStatus>(
@@ -354,6 +359,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   );
 
   const canSend = () => issueStatus() !== "resolved";
+  const canInterrupt = () => processing() || props.issue.agentRunning === true;
   const canSubmit = () => canSend() && !sending() && (images().length > 0 || /\S/.test(draft()));
   const usageText = () => footerText(footer());
   const codeRoot = () => props.issue.workingDirectory ?? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`;
@@ -397,7 +403,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
     if (event.key === "Escape") {
       if (props.hidden || event.defaultPrevented || event.isComposing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (!processing() && !props.issue.agentRunning) return;
+      if (!canInterrupt()) return;
       event.preventDefault();
       event.stopPropagation();
       if (aborting) return;
@@ -523,7 +529,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       });
   };
   const streamController = new AgentStreamController(agentStreamUrl, issuePilotConfig.web.agentStreamReconnectMs, issuePilotConfig.web.agentStreamStaleMs, {
-    onConnection: setConnected,
+    onConnection: setSnapshotReady,
     onError: (streamError) => {
       if (!streamError && ["agent_event_connection_failed", "agent_event_protocol_error"].includes(error())) setError("");
       else if (streamError) setError(streamError);
@@ -560,7 +566,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       setFooter(emptyFooter());
       clearUnread();
       setError("");
-      setConnected(false);
+      setSnapshotReady(false);
       setProcessing(false);
       setActivity(null);
       setQueue({ steering: [], followUp: [] });
@@ -775,8 +781,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
             <For each={entries()} keyed={(entry) => entry.id}>
               {(entry) => <ConversationItem issue={props.issue} entry={entry()} />}
             </For>
-            <Show when={!entries().length && connected()}>
-              <div class="agent-empty">还没有对话</div>
+            <Show when={!entries().length && (snapshotReady() || !error())}>
+              <div class="agent-empty">{snapshotReady() ? "还没有对话" : "正在加载对话…"}</div>
             </Show>
           </div>
         </div>
@@ -840,7 +846,12 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
               onKeyDown={handleEditorKeyDown}
             />
             <div class="agent-composer-actions">
-              <span>Enter 发送 · Shift+Enter 换行</span>
+              <span>
+                Enter 发送 · Shift+Enter 换行
+                <Show when={canInterrupt()}>
+                  <span title="中断当前处理并取消后续排队，保留未发送草稿"> · Esc 中断</span>
+                </Show>
+              </span>
               <Button type="primary" size="small" aria-label="发送消息" loading={sending()} disabled={!canSubmit()} onClick={() => void submit()}>
                 {sending() ? "发送中" : "发送"}
               </Button>

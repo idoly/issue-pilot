@@ -140,7 +140,7 @@ for (const withSession of [false, true])
     }
   });
 
-test("counts usage in the snapshot once and deduplicates live notifications by Pi entry ID", { timeout: 5_000 }, async (context) => {
+test("counts snapshot usage once and deduplicates Pi entries appended during session validation", { timeout: 5_000 }, async (context) => {
   const events = new AgentEventBus(),
     fixture = await createApiFixture({ events });
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -176,8 +176,10 @@ test("counts usage in the snapshot once and deduplicates live notifications by P
     const subscribe = events.subscribe.bind(events);
     events.subscribe = (id, listener) => {
       const unsubscribe = subscribe(id, listener);
-      publish("already-in-snapshot", { type: "entry_appended", entry: appendUsage("cache_warm") });
-      publish("snapshot-barrier", { type: "queue_update", steering: [], followUp: [] });
+      queueMicrotask(() => {
+        publish("already-in-snapshot", { type: "entry_appended", entry: appendUsage("cache_warm") });
+        publish("snapshot-barrier", { type: "queue_update", steering: [], followUp: [] });
+      });
       return unsubscribe;
     };
     const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });

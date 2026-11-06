@@ -67,13 +67,15 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 
 个人组残缺、所选 Key 缺失或调用失败均报错。凭证不创建目标、不扩大范围；开发查询仍须明确选择 prod/test。
 
+个人 Git 使用 `ssh -F /dev/null`、`IdentityAgent=none` 和 `BatchMode=yes`：不读取运行用户的 SSH `config`，也不使用其 ssh-agent。配置仓库 URL 时写明实际主机和用户，非默认端口用 `ssh://git@git.example.test:2222/team/repo.git` 这样的 URL；仅在 `~/.ssh/config` 中定义的 Host 别名、端口或 ProxyJump 不会生效。私钥须能在无交互口令输入的情况下使用；应用没有私钥口令配置项。应用复制运行用户的 `~/.ssh/known_hosts`／`known_hosts2` 供此次连接校验，应先核验主机指纹，再配置对应记录。保存凭证不执行远程连接测试。依据：[Git 身份 owner](../src/workspace/git-credentials.ts)、[凭证保存](../src/http/user-routes.ts)、[隔离与主机校验测试](../tests/workspace/git-credentials.test.ts)。
+
 普通配置 GET 脱敏。developer 选定服务的私有编辑／说明接口仅暴露契约规定的 DBHub／MCP 值，native DMS Authorization 和 SLS Key 保持隐藏。连接密钥不进入提示词、工具输入、argv 或普通日志。授权查询结果中的业务登录 token 可在用户明确请求时附来源和时间返回，不扩大访问权限。
 
 ## 个人与共享设置
 
 “我的凭证”分 API Key、SSH、DMS、SLS。admin 打开 API Key／DMS／SLS 弹窗默认编辑共享组，取消共享勾选才编辑个人组；非 admin 不读取共享状态。SSH 仅 developer。
 
-空白保留与显式 clear 不同。切换个人／共享目标清空 Key 草稿，保存期间不可切换；关闭或换身份后旧请求不能覆盖新弹窗。
+页面中已有凭证的留空表示保留：模型弹窗省略 Key 字段，SSH／DMS／SLS 未修改时不发保存请求；DMS 地址变化仍须重填 Authorization。直接调用 API 时，空字符串不代表保留，替换组须提供有效字段，清除使用显式 `mode: "clear"`。切换个人／共享目标清空 Key 草稿，保存期间不可切换；关闭或换身份后旧请求不能覆盖新弹窗。
 
 共享完整模型组在 global_agent_configuration，个人组在 user_credentials.model_credentials，候选只来自运行用户 Pi `models.json.providers` 声明的 provider 下的模型；应用离线刷新目录，不自动联网补齐模型。空目录在首次创建全局模型配置时会阻止启动，见[首次运行](DEPLOYMENT.md#首次本地运行)。`PUT /api/config/agent` 的 apiKey 是 replace／clear，省略保留；个人 `PUT /api/me/credentials` 的 model 是完整 replace 组或 clear。更换 provider 必须提供对应 Key 或清除，不能保留跨 provider Key。
 
@@ -87,9 +89,9 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 | --- | --- | --- |
 | maxConcurrentIssues | 10 | 调高放行排队，调低不终止已有轮次 |
 | modelResponseIdleMs | 300 秒 | 连续无模型更新的等待；收到更新重置，工具执行期间暂停，下一次启动计时器使用新值 |
-| workspaceRetentionMs | 7 天 | 后续维护／采样 |
-| workspaceHighWaterBytes／workspaceTargetBytes | 20／16 GiB | 后续压力回收，非零高水位须大于目标 |
-| workspaceMaintenanceIntervalMs | 15 分钟 | 保存后重新计时，0 停止周期维护 |
+| workspaceRetentionMs | 7 天 | 从开发工单 `resolvedAt` 起算，后续维护检查是否可释放代码 |
+| workspaceHighWaterBytes／workspaceTargetBytes | 20／16 GiB | 工单根目录合计占用超高水位后尝试释放，直到达到目标或无可释放候选；非零高水位须大于目标 |
+| workspaceMaintenanceIntervalMs | 15 分钟 | 保存后重新计时，0 停止周期维护；API 启动仍执行一次维护 |
 | capabilityConnectionMs | 10 秒 | 仅后续 SLS CLI 的 `--connect-timeout`，向上取整到秒；不控制 DMS 或 MCP 连接 |
 | mcpExecutionMs | 120 秒 | 后续 MCP 调用在开始时取值，含已有 Pi 会话中的服务工具／资源读取；在途调用保留原预算 |
 | dmsExecutionMs／slsExecutionMs | 120／30 秒 | 后续原生查询 |
@@ -97,9 +99,9 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 | networkMode | `open` | 全局工单网络模式；后续新代理连接读取当前值，已有连接不中断 |
 | networkAllowedDomains | 根配置中的基础域名列表 | `allowlist` 模式限制访问范围；沙箱获取／网络配置同步，不替代宿主拒绝规则 |
 
-高水位 0 关闭按占用触发的回收，不关闭其他释放检查。字段范围来自 API bounds：并发 1–64、列表最多 100 项且去重，非零维护周期至少一分钟。默认值在代码中仍有必要；没有覆盖时跟随默认值。
+高水位 0 关闭按占用触发的回收，不关闭其他释放检查。这不是磁盘配额：维护只释放符合条件的开发代码，不删除附件、会话、工作文件或私有 Git；共享 Git 占用不计入此高水位。释放条件和容量口径见[存储说明](STORAGE.md#git-与工作区)。字段范围来自 API bounds：并发 1–64、保留期 1 小时至 365 天（不接受 0）、列表最多 100 项且拒绝重复、非零维护周期至少一分钟。没有覆盖时跟随根配置默认值。
 
-`GET /api/config/parameters` 返回 revision、overrides、values、defaults、bounds。`PUT` 要求 admin 和 `{ expectedRevision, overrides }`；overrides 是完整覆盖快照，省略项回到默认值。非法值返回 400，revision 冲突为 `configuration_changed`。页面只向 admin 展示编辑表单。
+`GET /api/config/parameters` 返回 revision、overrides、values、defaults、bounds。`PUT` 要求 admin 和 `{ expectedRevision, overrides }`；overrides 是完整覆盖快照，省略项回到默认值。例如只修改并发时，应先读取当前 overrides、合并 `maxConcurrentIssues` 后携带原 revision 保存；直接发送 `{ "maxConcurrentIssues": 3 }` 作为 overrides 会同时撤销其他覆盖，包括网络模式。`overrides: {}` 恢复所有根配置默认值。非法值返回 400，revision 冲突为 `configuration_changed`。页面只向 admin 展示编辑表单。依据：[参数路由](../src/http/configuration-routes.ts)、[覆盖、冲突和重启回归](../tests/http/application-parameters.test.ts)。
 
 保存先持久化再更新进程快照，通知并发、维护和网络 owner；不预约全部工单、不关闭会话。已有调用继续使用已取得的预算，不能把“无需重启”理解成撤销所有在途操作。网络同步失败时数据库仍为权威，下次获取沙箱重试同步。
 

@@ -37,6 +37,12 @@ npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent @earendil-works/pi-
 
 不同时间点的重授权、可变钩子后的校验和跨介质收尾不是冗余。抽象、缓存和依赖须有具体维护收益；微小性能差异不构成改写理由。
 
+### 数据库与迁移
+
+当前表定义由 [schema.ts](../src/db/schema.ts) 维护，实际升级使用已发布的 [drizzle SQL 与 journal](../drizzle)。修改 schema.ts 不会自行改变已有数据库；需要新增迁移及对应回归，不能改写已发布 SQL／journal。仓库未提供迁移生成或降级脚本，不假设存在 `db:generate`、`db:push` 或自动 down migration。
+
+正常 API 启动会迁移并执行 bootstrap，包括首次用户／环境初始化和中断状态恢复。`npm run db:migrate` 只执行结构检查与迁移，不等于完成首次业务初始化；它读取根配置确定 DB，并取得与 API 相同的 state 租约，运行中的 API 会使它拒绝执行。不要把它当作无副作用的检查命令。真实安装先按[运维策略](RUNBOOK.md#当前备份策略)准备检查点；测试应向 [migrateStateDatabase](../src/db/migrate.ts) 注入临时路径，参照 [migrate-script.test.ts](../tests/db/migrate-script.test.ts) 和 [bootstrap.test.ts](../tests/db/bootstrap.test.ts)。
+
 ## 隔离测试
 
 真实 .issue-pilot 含凭证、附件、JSONL、分支和恢复证据，不作夹具。后端通过 buildApi({ stateRoot, databaseFile }) 或 manager 注入临时根；手工服务器使用独立项目与根配置，没有 state 环境变量覆盖。

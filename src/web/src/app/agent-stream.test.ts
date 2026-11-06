@@ -47,7 +47,7 @@ describe("AgentStreamController", () => {
         expect(onSnapshot).toHaveBeenCalledTimes(1);
         second.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "bad", event: { type: "issue_run_state", state: "unknown" } }) }));
         expect(onEvent).not.toHaveBeenCalled();
-        expect(onError).toHaveBeenCalledTimes(2);
+        expect(onError.mock.calls.filter(([reason]) => reason)).toHaveLength(2);
         expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
         expect(second.closeCalls).toBe(1);
         second.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream, type ReadStream } from "node:fs";
-import { chmod, mkdir, mkdtemp, open, rename, rm, lstat, type FileHandle } from "node:fs/promises";
+import { mkdtemp, open, realpath, rename, rm, lstat, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -74,10 +74,15 @@ function validateAttachmentFile(metadata: { isFile(): boolean; mode: number; siz
   if (!metadata?.isFile() || (metadata.mode & 0o7777) !== 0o400 || (expectedSize !== undefined && metadata.size !== expectedSize)) throw new Error("insecure_issue_attachment_file");
 }
 
+async function assertAttachmentRoot(attachmentRoot: string): Promise<void> {
+  if (!(await lstat(attachmentRoot)).isDirectory() || (await realpath(attachmentRoot)) !== attachmentRoot) throw new Error("insecure_issue_attachment_file");
+}
+
 export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
   const attachmentPath = path.resolve(objectKey);
-  const metadata = await lstat(attachmentPath).catch(() => undefined);
   if (path.dirname(attachmentPath) !== attachmentRoot) throw new Error("insecure_issue_attachment_file");
+  await assertAttachmentRoot(attachmentRoot);
+  const metadata = await lstat(attachmentPath).catch(() => undefined);
   validateAttachmentFile(metadata, expectedSize);
   return attachmentPath;
 }
@@ -87,6 +92,8 @@ export async function openVerifiedAttachmentFile(attachmentRoot: string, objectK
   const file = await resolveSecureAttachmentFile(attachmentRoot, objectKey, size);
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
+    // O_NOFOLLOW protects only the last component; reject an ancestor redirected before open().
+    if ((await realpath(`/proc/self/fd/${handle.fd}`)) !== file) throw new Error("insecure_issue_attachment_file");
     validateAttachmentFile(await handle.stat(), size);
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(64 * 1024);
@@ -209,8 +216,8 @@ export interface CopiedAttachment {
 export async function copyPendingAttachments(stateRoot: string, issueKey: string, pendingAttachments: PendingAttachment[], writtenObjectKeys: string[]): Promise<CopiedAttachment[]> {
   if (!pendingAttachments.length) return [];
   const attachmentRoot = issueRoot(stateRoot, issueKey);
-  await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
-  await Promise.all([chmod(path.dirname(attachmentRoot), 0o700), chmod(attachmentRoot, 0o700)]);
+  // Creation has already claimed this root. Edits must not recreate missing state or follow a replacement link.
+  await assertAttachmentRoot(attachmentRoot);
   const copied: CopiedAttachment[] = [];
   for (const pendingAttachment of pendingAttachments) {
     const objectKey = path.join(attachmentRoot, attachmentObjectName(pendingAttachment.fileName));

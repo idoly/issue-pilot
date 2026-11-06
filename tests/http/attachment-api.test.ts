@@ -14,7 +14,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import { registerAttachmentRoutes } from "../../src/http/attachment-routes.ts";
 import type { ApiRouteContext } from "../../src/http/route-context.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
-import { createApiFixture, createService, issuePayload, json } from "./fixture.ts";
+import { createApiFixture, createIssue, createService, issueMetadataPayload, issuePayload, json } from "./fixture.ts";
 
 function issueMultipart(boundary: string, issue: Record<string, unknown>, fileName: string, content: string): Buffer {
   return Buffer.from(
@@ -33,6 +33,59 @@ function issueMultipart(boundary: string, issue: Record<string, unknown>, fileNa
     ].join("\r\n"),
   );
 }
+
+for (const state of ["missing", "symlink"] as const)
+  test(`attachment edits refuse a ${state} Issue root without writing or adopting another directory`, async () => {
+    const fixture = await createApiFixture();
+    try {
+      await createService(fixture.app, "AttachmentRoot");
+      const issue = await createIssue(fixture.app, "attachmentroot", "test", "Original metadata");
+      fixture.engine.running.clear();
+      const root = issueRoot(fixture.root, String(issue.id));
+      const preserved = path.join(fixture.root, "preserved-issue-root");
+      await fsPromises.rename(root, preserved);
+      await fsPromises.chmod(preserved, 0o750);
+      await writeFile(path.join(preserved, "evidence.txt"), "preserved evidence");
+      if (state === "symlink") await fsPromises.symlink(preserved, root);
+      const queued = fixture.engine.enqueued.length;
+      const boundary = "invalid-attachment-root";
+      const response = await fixture.app.inject({
+        method: "PATCH",
+        url: `/api/issues/${issue.id}`,
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+        payload: issueMultipart(boundary, issueMetadataPayload("Must not persist"), "new.txt", "new evidence"),
+      });
+      assert.equal(response.statusCode, 500, response.body);
+      const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).json<{ title: string; attachments: unknown[] }>();
+      assert.equal(detail.title, "Original metadata");
+      assert.deepEqual(detail.attachments, []);
+      assert.equal(fixture.engine.enqueued.length, queued);
+      assert.deepEqual(await readdir(preserved), ["evidence.txt"]);
+      assert.equal((await fsPromises.lstat(preserved)).mode & 0o777, 0o750);
+      assert.equal(await readFile(path.join(preserved, "evidence.txt"), "utf8"), "preserved evidence");
+      if (state === "missing") await assert.rejects(fsPromises.lstat(root), { code: "ENOENT" });
+      else {
+        assert.equal(await fsPromises.readlink(root), preserved);
+        await fsPromises.unlink(root);
+      }
+      // An operator restoring the original directory permits a normal retry.
+      await fsPromises.rename(preserved, root);
+      const retry = await fixture.app.inject({
+        method: "PATCH",
+        url: `/api/issues/${issue.id}`,
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+        payload: issueMultipart(boundary, issueMetadataPayload("Saved after restoration"), "new.txt", "new evidence"),
+      });
+      assert.equal(retry.statusCode, 200, retry.body);
+      const saved = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).json<{ attachments: Array<{ id: string }> }>();
+      assert.equal(saved.attachments.length, 1);
+      const download = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/attachments/${saved.attachments[0]!.id}` });
+      assert.equal(download.statusCode, 200, download.body);
+      assert.equal(download.body, "new evidence");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
 for (const closeFails of [false, true])
   test(`cancelled attachment downloads retain cleanup diagnostics without sending a response (close fails: ${closeFails})`, async (context) => {

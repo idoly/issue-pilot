@@ -14,49 +14,97 @@ systemctl --user show issue-pilot-api.service issue-pilot-web.service \
 
 通过 /api/me 核对身份，工单 agentRunning 包含排队，另检查 scope／生命周期预约。容器核对 namespace、挂载、实例数、日志和 probes。诊断只输出必要计数、key、耗时和脱敏错误，不输出密钥／SQL／完整敏感结果。
 
+## 当前备份策略
+
+当前安装仅保留数据库级恢复保障，不创建或保留工单文件全量备份。清理历史备份仍须确认归属和授权范围；本策略不授权删除在线 state、工单目录、未知证据或其他项目的备份。
+
+日常检查与纯重启不创建备份。数据库迁移或高风险数据修改前，使用 SQLite 一致性备份接口或停写后的完整 DB 文件组建立小型数据库检查点，验证 integrity_check／foreign_key_check；验收后只保留最新及上一份有效数据库检查点。在线 WAL 模式不得只复制主 DB 文件作为一致备份。
+
+数据库检查点不包含附件、会话、工作文件和私有 Git；这些文件丢失时不承诺完整恢复工单。当前代码没有定时数据库备份入口，也没有跨介质自动恢复／降级迁移命令。检查点、验证和轮换由运维操作完成；下文的历史归档说明仅用于判断已有材料的恢复能力。
+
+### 创建并验证数据库检查点
+
+以下 Bash＋Python 3 示例适用于已授权的数据库迁移或高风险数据修改。先停止请求入口，等待 Agent、预约和维护结束，停止所有写入者并确认租约释放；脚本本身不会停服。将两个绝对路径替换为已核实的数据库文件和 **state 外**的私有检查点父目录。该目录须已存在且为 0700；不要指向工单根或公共临时目录。
+
+```bash
+DATABASE_FILE='/absolute/path/to/state/issues.db' \
+CHECKPOINT_ROOT='/absolute/path/to/private-db-checkpoints' \
+python3 - <<'PY'
+import contextlib
+import os
+import pathlib
+import sqlite3
+import tempfile
+
+source = pathlib.Path(os.environ['DATABASE_FILE'])
+root = pathlib.Path(os.environ['CHECKPOINT_ROOT'])
+if not source.is_absolute() or not source.is_file() or source.is_symlink():
+    raise SystemExit('database must be an existing regular file at an absolute path')
+if not root.is_absolute() or not root.is_dir() or root.is_symlink() or root.stat().st_mode & 0o777 != 0o700:
+    raise SystemExit('checkpoint root must be an existing private 0700 directory')
+checkpoint = pathlib.Path(tempfile.mkdtemp(prefix='db-checkpoint-', dir=root))
+partial = checkpoint / 'database.sqlite.partial'
+partial.touch(mode=0o600, exist_ok=False)
+with contextlib.closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True)) as live:
+    with contextlib.closing(sqlite3.connect(partial)) as saved:
+        live.backup(saved)
+        if saved.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+            raise SystemExit('checkpoint integrity check failed; preserve partial for inspection')
+        if saved.execute('PRAGMA foreign_key_check').fetchall():
+            raise SystemExit('checkpoint foreign key check failed; preserve partial for inspection')
+partial.rename(checkpoint / 'database.sqlite')
+print(checkpoint)
+PY
+```
+
+只有最终 `database.sqlite` 表示本例完成了 DB 复制和两项检查；`.partial` 不能当作已验证检查点。记录对应代码 commit、实际根配置、原 DB 路径、时间和本次变更范围，按敏感数据保管；示例不输出业务行或凭证。检查结果不证明工单文件／Git 匹配，也不证明旧版本代码能够读取新 schema。操作验收后核对清单，只保留最新与上一份有效数据库检查点；失败材料先查明，不用宽泛目录清理代替轮换。
+
 ## 按风险发布与重启
 
 | 风险 | 恢复准备 |
 | --- | --- |
-| 纯 Web／源码／依赖，无持久契约变化 | 匹配代码、依赖、产物、supervisor；已有完整恢复点可用即可 |
-| 小型配置／数据修复 | 通过 owner/API，保留精确原始范围或小 DB 检查点 |
-| schema／布局迁移、高风险不可逆变更 | 停写后的完整一致恢复点，并在独立副本演练 |
+| 纯 Web／源码／依赖，无持久契约变化 | 保留可切回的匹配代码、依赖、产物和 supervisor 配置；不为纯重启创建数据备份 |
+| 小型配置／数据修复 | 通过 owner/API，记录精确原始范围；涉及高风险数据修改时创建数据库检查点 |
+| schema 迁移／高风险 DB 修改 | 停写后创建并验证数据库检查点，在隔离数据库中验证升级及回退条件 |
+| 布局／附件／会话／Git 变更 | 数据库检查点不能撤销文件操作；先确认 owner 的 prepare／rollback／finalize 和具体恢复计划，不承诺全量回退 |
 
 1. 独立安装完成补丁、类型、测试、构建、适用审计和聚焦验收。
 2. 纯 Web 原子切换验证过的目录，不需要停止 API，也不在使用中的 dist 原地构建。
 3. 后端／依赖更新先排空 Agent 和预约，优雅停止入口与 API，确认子进程退出、租约释放。活动检查失败必须中止后续停服／删除命令，不能继续执行 shell 下一句。
-4. 完成所需备份，整体切换匹配代码、依赖和产物，再启动。
+4. 完成风险表要求的数据库检查点或恢复准备，整体切换匹配代码、依赖和产物，再启动。
 5. 检查实际数据、文件、Git 与目录变化；无法解释的变化保留现场，不 reset／改绑定。
-6. 验收成功后轮换，保留最新和上一份有效恢复点，未查明失败现场另存。
+6. 验收成功后按[当前备份策略](#当前备份策略)轮换数据库检查点，保留未查明失败现场。
 
 冷启动会恢复中断状态、准备开发视图、按部署刷新 prod/test 快照及其 commit 基线。它不应改写开发分支／路径；区分合法准备与意外业务修改。
 
 动态 native-tool-executor／network-exec 直接读磁盘源码，即使主进程不重启也受影响，不能在 live checkout 混装依赖。纯重启或例行检查不新建大型全量备份。
 
-## 恢复点范围
+## 历史完整恢复点的判定
 
-完整恢复单位包括 DB 文件组、工单源码／私有 Git／附件／会话／工作文件、共享对象与必要 refs、控制及恢复证据，以及匹配代码、配置、工具／依赖、Web 和 supervisor。保存必要 Operator 配置，按含密钥数据保护。
+本节保留历史恢复经验，不是创建、续存或重新打包全量备份的操作要求。当前流程只创建上一节的数据库检查点。若正在审查另行提供的历史归档，先核对来源、授权和以下条件，再决定它能恢复哪些数据。
 
-恢复点放在 state 外，目录 0700、敏感文件 0600。预复制不算完整；停写后完成增量、WAL/SHM 和文件一致核对才标记可恢复。link-dest 只能在备份之间共享，不与 live 可写 inode 共享；元数据变化也需先隔离，不能批量 chmod 共享 inode。
+历史材料只有同时包含匹配的 DB 文件组、工单源码／私有 Git／附件／会话／工作文件、共享对象与必要 refs、控制及恢复证据，以及代码、配置、工具／依赖、Web 和 supervisor，才可能作为完整恢复单位。必要 Operator 配置按含密钥数据保护。
 
-默认排除可再生依赖／构建目录：node_modules、target、.maven-cache、.npm-cache、.venv/venv、__pycache__、.gradle。不能仅按名称判断：本地独有依赖、测试报告或用户成果须检查并记录取舍。
+归档来源须在 state 外，目录 0700、敏感文件 0600。仅预复制不能证明完整；须有停写后 DB 文件组和文件一致核对的记录。历史 link-dest 只能在备份之间共享，不与 live 可写 inode 共享；元数据变化也需先隔离，不能批量 chmod 共享 inode。
+
+核对归档的精确排除／保留清单。node_modules、target、.maven-cache、.npm-cache、.venv/venv、__pycache__、.gradle 可能是可再生产物，但名称本身不能证明：Git 跟踪的同名目录、软链接、本地独有依赖、测试报告和用户成果可能无法重建。没有依赖重装步骤或远端可用性依据时，不承诺能够重建运行环境。
 
 ### 排除共享快照
 
-共享展开 checkout 可以不备份，但必须：
+历史归档若排除了共享展开 checkout，须能确认：
 
 1. 核对 detached、HEAD、common dir、干净状态（包括 untracked/ignored）和登记。
-2. 确认精确 commit 所需对象完整，并在备份内保留 pin，避免之后 GC。
+2. 确认精确 commit 所需对象完整，并在备份内保留 pin，避免之后 GC；Git 对象库、工单私有 Git、分支和未提交代码不能随展开快照一起删。
 3. 保存逐路径 manifest、离线重建脚本及说明，实际演练从本地对象重建。
-4. 清理对应 worktree 登记，不留下失效指针，不用全局 prune 掩盖未知状态。
+4. 归档仅排除已验证的展开快照及对应生成的 worktree 登记；若在展开备份中清理，也不得留下失效指针或用全局 prune 掩盖未知状态。不操作在线 Git。
 
 不能只留 DB 或只有一个 ref 就称能恢复全部工单；私有 Git 新对象和未提交代码仍需匹配保留。
 
-### 压缩与轮换
+### 压缩归档的检查
 
-两份恢复点可以各存为私有 tar.gz，保留 mode、符号链接、包内硬链接、ACL/xattr 和稀疏信息。压缩先写临时文件，通过 gzip 完整性、tar 内容／元数据比较和 SHA-256 后才删除展开原目录。压缩期间失败保留原件，不把 partial 当完成备份。
+历史 tar.gz 需有 gzip 完整性、内容／元数据比较和 SHA-256 校验记录；核对 mode、符号链接、包内硬链接及必要 ACL/xattr 和稀疏信息。partial 或仅压缩成功的文件不能证明恢复点完整。
 
-恢复先校验再解压到空私有目录，不直接覆盖 live。跨包硬链接未必保留，解压空间不能按压缩体积估计。保存校验值和外部恢复索引；小检查点／历史材料可归入 recovery-notes，不冒充完整恢复点。验收新包成功后才淘汰第三旧包，保留失败证据和必要小元数据。
+经授权检查归档时，先校验再解压到空私有目录，不直接覆盖 live。跨包硬链接未必保留，解压空间不能按压缩体积估计。外部恢复索引、小检查点和历史说明不能冒充完整恢复点。当前安装不因此恢复保留两份全量归档的旧轮换规则。
 
 ## 一致性检查
 
@@ -158,7 +206,7 @@ journalctl --user -u issue-pilot-api.service -n 100 --no-pager
 | user_git_ssh_credentials_required | owner 缺个人 SSH 私钥；由该用户配置，不改用宿主或其他人的 Key |
 | 配置冲突 | 保留草稿，重新读取 revision 或等待活动结束 |
 | 源码冲突／Git 漂移 | 保留 refs、索引及未提交内容，不 reset、远端回退或猜测改绑定 |
-| 开发工单根缺失 | 拒绝回收／重开，从匹配备份或明确恢复计划处理，不把共享分支当完整历史 |
+| 开发工单根缺失 | 拒绝回收／重开，先保留剩余本地 Git 和目录证据，再制定恢复计划；DB 检查点不能补回缺失文件，不把共享分支当完整历史 |
 | 会话缺失／不完整 | 保存原文件和绑定，在副本中检查 |
 | 受理结果不明 | 看对话／交付记录／文件，不自动重发 |
 | 查询限流／不完整 | 遵守来源、只读和预算，已发送 SQL 不自动重放 |
@@ -179,6 +227,9 @@ SSE 频繁重连时先检查浏览器的 `agent_event_connection_failed`／`agen
 
 ## 恢复与回退
 
-停止所有写入者，保存故障后新增数据和未知现场；校验、解压恢复点，恢复匹配代码／依赖／DB 文件组／工单／Git，保持绝对路径、owner 和 mode；若排除共享 checkout，按包内 manifest 从 pin 重建。
+1. 停止所有写入者，记录故障后的 DB、文件、会话和 Git 变化，保留未知现场。优先通过 owner 修正精确范围；不要先覆盖 DB 再查文件是否匹配。
+2. 校验候选数据库检查点及其代码／schema 版本，在隔离环境确认可读和迁移行为。检查点回退会撤销之后的数据库变更，但附件、JSONL、工作文件和 Git 不会同时回退；逐项确认绑定是否仍然成立。
+3. 只有数据库替换计划明确且已获授权时，才替换停写后的 DB 文件组；不能把旧 WAL／SHM 混入恢复的主 DB。选择与检查点兼容的代码和依赖，不编辑迁移 journal 来伪造版本。
+4. 再核对 integrity/FK、文件、会话、refs/worktrees、未登记路径和当前有效参数，启动后验收网页、身份、SSE、动态工具及受影响能力。启动本身可能迁移 DB、更新中断状态和准备运行视图，不能当作只读验证。
 
-再核对完整性、文件、会话、refs/worktrees、未登记路径和当前有效参数，启动后验收网页、身份、SSE、动态工具及受影响能力。只回退代码或 DB 都不足以恢复跨媒体一致性；需要修复时通过 owner、原始范围和重新授权执行。
+若文件已丢失，当前数据库检查点无法完成整张工单恢复；报告缺失范围，不新建空文件、远端 fallback 或猜测改绑。另有历史归档时先按[历史完整恢复点的判定](#历史完整恢复点的判定)评估，并单独制定恢复步骤。启动和迁移行为依据：[bootstrap.ts](../src/db/bootstrap.ts)、[migrate.ts](../src/db/migrate.ts)、[API 启动回归](../tests/http/api-startup.test.ts)。

@@ -7,6 +7,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
+import { assertSessionFileComplete } from "../agent/pi-session.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
 import { agentSessions, issues } from "../db/schema.ts";
@@ -180,6 +181,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     };
     reply.raw.once("close", cleanup);
     try {
+      if (binding && sessionReady) await assertSessionFileComplete(binding.sessionFile);
       // Read durable and in-flight events together before awaiting newer Issue state.
       const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];

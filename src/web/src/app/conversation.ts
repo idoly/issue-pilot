@@ -4,7 +4,7 @@ import type { AssistantMessage, ImageContent, NestedToolCalls, TextContent } fro
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { RunEvent } from "../data/client";
 
-type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown; nestedCalls?: NestedToolCalls };
+type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown; nestedCalls?: NestedToolCalls; displayTruncated?: boolean };
 type DisplayBlock = { type: "text"; value: string } | { type: "image"; data: string; mimeType: string };
 type CompletedMessage = Extract<RunEvent["event"], { type: "message_end" }>["message"];
 
@@ -258,8 +258,7 @@ export function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>):
 
 export function boundedText(value: string, maximumCharacters: number): string {
   if (value.length <= maximumCharacters) return value;
-  const omitted = value.length - maximumCharacters;
-  const marker = `\n... (${omitted.toLocaleString()} characters omitted from display) ...\n`;
+  const marker = "\n…（显示已截断，保留开头和结尾）…\n";
   const visibleCharacters = maximumCharacters - marker.length;
   const leadingCharacters = Math.ceil(visibleCharacters / 2);
   return `${value.slice(0, leadingCharacters)}${marker}${value.slice(value.length - (visibleCharacters - leadingCharacters))}`;
@@ -272,7 +271,11 @@ function displayToolResult(result: ToolResult): ToolResult {
     .join("\n");
   const images = result.content.filter((part): part is ImageContent => part.type === "image");
   const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
-  return { ...result, content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images] };
+  return {
+    ...result,
+    ...(text.length > issuePilotConfig.web.agentToolOutputCharacters ? { displayTruncated: true } : {}),
+    content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images],
+  };
 }
 
 export function assistantNotice(entry: Extract<ConversationEntry, { kind: "assistant" }>): string {
