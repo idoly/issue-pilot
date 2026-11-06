@@ -195,6 +195,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "source_rename_rollback_failed",
         "source_rename_finalize_failed",
         "source_save_cleanup_failed",
+        "source_create_cleanup_failed",
         "source_path_cleanup_failed",
         "workspace_runtime_restore_failed",
         "issue_workspace_missing",

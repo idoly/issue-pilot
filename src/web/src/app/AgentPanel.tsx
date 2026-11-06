@@ -281,10 +281,12 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
   if (message?.role !== "assistant") return next;
   const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
   const contextTokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  // Match the snapshot's valid-usage rule; failed or empty requests cannot replace the last context estimate.
+  const validContext = message.stopReason !== "error" && message.stopReason !== "aborted" && contextTokens > 0;
   return {
     ...next,
     latestCacheHitRate: promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : null,
-    contextPercent: current.contextWindow > 0 ? (contextTokens / current.contextWindow) * 100 : null,
+    contextPercent: validContext && current.contextWindow > 0 ? (contextTokens / current.contextWindow) * 100 : current.contextPercent,
   };
 }
 

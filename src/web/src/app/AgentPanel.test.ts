@@ -678,6 +678,85 @@ describe("Agent conversation state", () => {
     view.unmount();
   });
 
+  for (const [stopReason, contextTokens] of [
+    ["error", 50],
+    ["aborted", 50],
+    ["stop", 0],
+  ] as const)
+    it(`preserves the last context estimate for ${stopReason} with ${contextTokens} usage tokens while accumulating its cost`, async () => {
+      EventSourceMock.instances.length = 0;
+      const issue = {
+        id: "ISSUE-20260810-001",
+        title: "Context usage",
+        description: "",
+        priority: "p1",
+        type: "defect_fix",
+        status: "pending",
+        assignee: null,
+        assigneeSubject: null,
+        service: { key: "service", name: "Service" },
+        updatedAt: new Date().toISOString(),
+        repositories: [],
+        attachments: [],
+        comments: [],
+        environmentKey: "dev",
+        workspace: { status: "ready", sourceAvailable: false },
+      } satisfies IssueDetail;
+      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      try {
+        const source = EventSourceMock.instances[0]!;
+        source.emit("snapshot_ready", {
+          footer: {
+            input: 100,
+            output: 0,
+            cacheRead: 900,
+            cacheWrite: 0,
+            cost: 0.1,
+            costSource: "unknown",
+            latestCacheHitRate: 90,
+            contextPercent: 10,
+            contextWindow: 10_000,
+            autoCompact: true,
+          },
+          running: true,
+          issueStatus: "pending",
+        });
+        await screen.findByText("上下文 10.0%/10k (auto)");
+        source.emit(
+          "message",
+          event({
+            type: "message_end",
+            message: {
+              ...assistant([], stopReason),
+              usage: {
+                ...usage,
+                input: contextTokens,
+                totalTokens: contextTokens,
+                cost: { ...usage.cost, total: 0.2 },
+              },
+            },
+          }),
+        );
+        await screen.findByText("$0.300 (来源未标明)");
+        expect(screen.getByText("上下文 10.0%/10k (auto)")).toBeTruthy();
+
+        source.emit(
+          "message",
+          event({
+            type: "message_end",
+            message: {
+              ...assistant([], "stop"),
+              usage: { ...usage, input: 2_000, totalTokens: 2_000 },
+            },
+          }),
+        );
+        await screen.findByText("上下文 20.0%/10k (auto)");
+        expect(screen.getByText("$0.300 (来源未标明)")).toBeTruthy();
+      } finally {
+        view.unmount();
+      }
+    });
+
   for (const [flag, costSource, label] of [
     [true, "provider", "供应商报告"],
     [false, "estimated", "估算"],

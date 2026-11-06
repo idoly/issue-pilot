@@ -121,7 +121,7 @@ Source 路由以 `/api/issues/:key/source/` 开头，仓库名／路径通过请
 
 Source 专用参数头（如 `X-Issue-Pilot-Repository`、`X-Issue-Pilot-Path`）的值使用 `encodeURIComponent` 编码，包括中文路径；身份头和 Content-Type 按各自约定填写。服务端解码并检查路径和仓库策略。文件保存与其他 Source mutation 要求活跃身份，在 Issue 预约中再次校验；实际可写性还取决于未解决开发工单、工作区和 Git 绑定。读到 `access=write` 不是后续写入的永久许可。原子文件替换不等于 Git 提交。
 
-哈希不匹配返回 `409 source_file_changed`，只读返回 `409 source_read_only`，二进制／超预算返回对应 413；调用方先重读合并，不去掉哈希来覆盖。路径新建、删除、重命名、暂存及提交有独立接口，不能用 PUT 保存来模拟。实现、DTO 和边界回归见 [source-browser-routes.ts](../src/http/source-browser-routes.ts)、[source-contracts.ts](../src/workspace/source-contracts.ts)、[source-browser.test.ts](../tests/workspace/source-browser.test.ts)、[source-pagination.test.ts](../tests/workspace/source-pagination.test.ts)。
+哈希不匹配返回 `409 source_file_changed`，只读返回 `409 source_read_only`，二进制／超预算返回对应 413；调用方先重读合并，不去掉哈希来覆盖。路径新建、删除、重命名、暂存及提交有独立接口，不能用 PUT 保存来模拟。新建的收尾错误 `500 source_create_cleanup_failed` 不保证目标不存在，恢复边界见[文件写入与发布](STORAGE.md#普通工作文件)。实现、DTO 和边界回归见 [source-browser-routes.ts](../src/http/source-browser-routes.ts)、[source-contracts.ts](../src/workspace/source-contracts.ts)、[source-browser.test.ts](../tests/workspace/source-browser.test.ts)、[source-pagination.test.ts](../tests/workspace/source-pagination.test.ts)。
 
 ### 钉钉导入
 

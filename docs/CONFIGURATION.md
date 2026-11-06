@@ -101,7 +101,7 @@ owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享�
 
 高水位 0 关闭按占用触发的回收，不关闭其他释放检查。这不是磁盘配额：维护只释放符合条件的开发代码，不删除附件、会话、工作文件或私有 Git；共享 Git 占用不计入此高水位。释放条件和容量口径见[存储说明](STORAGE.md#git-与工作区)。字段范围来自 API bounds：并发 1–64、保留期 1 小时至 365 天（不接受 0）、列表最多 100 项且拒绝重复、非零维护周期至少一分钟。没有覆盖时跟随根配置默认值。
 
-`GET /api/config/parameters` 返回 revision、overrides、values、defaults、bounds。`PUT` 要求 admin 和 `{ expectedRevision, overrides }`；overrides 是完整覆盖快照，省略项回到默认值。例如只修改并发时，应先读取当前 overrides、合并 `maxConcurrentIssues` 后携带原 revision 保存；直接发送 `{ "maxConcurrentIssues": 3 }` 作为 overrides 会同时撤销其他覆盖，包括网络模式。`overrides: {}` 恢复所有根配置默认值。非法值返回 400，revision 冲突为 `configuration_changed`。页面只向 admin 展示编辑表单。依据：[参数路由](../src/http/configuration-routes.ts)、[覆盖、冲突和重启回归](../tests/http/application-parameters.test.ts)。
+`GET /api/config/parameters` 返回 revision、overrides、values、defaults、bounds。`PUT` 要求 admin 和 `{ expectedRevision, overrides }`；overrides 是完整覆盖快照，省略项回到默认值。例如只修改并发时，应先读取当前 overrides、合并 `maxConcurrentIssues` 后携带原 revision 保存；直接发送 `{ "maxConcurrentIssues": 3 }` 作为 overrides 会同时撤销其他覆盖，包括网络模式。`overrides: {}` 恢复所有根配置默认值。非法值返回 400，revision 冲突为 `configuration_changed`。页面只向 admin 展示编辑表单。页面按秒／分钟／小时／MiB 展示，未编辑字段保留 API 原始整数；编辑的时间和容量可用小数，但必须精确换算为整数毫秒／字节，工单并发仍为整数。保存其他参数不会把已有非整显示单位值四舍五入。依据：[参数路由](../src/http/configuration-routes.ts)、[覆盖、冲突和重启回归](../tests/http/application-parameters.test.ts)。
 
 保存先持久化再更新进程快照，通知并发、维护和网络 owner；不预约全部工单、不关闭会话。已有调用继续使用已取得的预算，不能把“无需重启”理解成撤销所有在途操作。网络同步失败时数据库仍为权威，下次获取沙箱重试同步。
 

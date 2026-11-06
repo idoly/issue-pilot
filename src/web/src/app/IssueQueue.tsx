@@ -16,6 +16,7 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [pinError, setPinError] = createSignal("", { ownedWrite: true });
+  const [pinsLoading, setPinsLoading] = createSignal(false, { ownedWrite: true });
   const [pinnedIssueKeys, setPinnedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
   const [pinningIssueKeys, setPinningIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
@@ -42,7 +43,7 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
     return pinnedItems.concat(ordinaryItems);
   });
   const togglePinned = async (issueKey: string) => {
-    if (pinningIssueKeys().includes(issueKey)) return;
+    if (pinsLoading() || pinningIssueKeys().includes(issueKey)) return;
     const pinned = pinnedIssueKeys().includes(issueKey),
       owner = pinRequest;
     setPinningIssueKeys((current) => [...current, issueKey]);
@@ -87,6 +88,8 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
       setPinError("");
       setPinnedIssueKeys([]);
       setPinningIssueKeys([]);
+      // A delayed initial snapshot must settle before a write can update these preferences.
+      setPinsLoading(Boolean(subject));
       if (!subject) return;
       void listIssuePins()
         .then((pinned) => {
@@ -96,6 +99,9 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
           if (currentRequest !== pinRequest) return;
           setPinnedIssueKeys([]);
           setPinError(errorMessage(error));
+        })
+        .finally(() => {
+          if (currentRequest === pinRequest) setPinsLoading(false);
         });
     },
   );
@@ -360,7 +366,7 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
                       class={`queue-pin${pinned() ? " pinned" : ""}`}
                       aria-label={`${pinned() ? "取消固定" : "固定"} ${issue().id}`}
                       title={pinned() ? "取消固定" : "固定到顶部"}
-                      disabled={pinningIssueKeys().includes(issue().id)}
+                      disabled={pinsLoading() || pinningIssueKeys().includes(issue().id)}
                       onClick={(event) => {
                         event.stopPropagation();
                         void togglePinned(issue().id);

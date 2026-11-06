@@ -63,6 +63,7 @@ it("keeps original order within pinned and ordinary groups through pinning and f
   const order = () => screen.getAllByRole("listitem").map((item) => item.querySelector(".issue-key")?.textContent);
   await waitFor(() => expect(order()).toEqual(["second", "fourth", "first", "third"]));
   expect(screen.queryByText("other task")).toBeNull();
+  await waitFor(() => expect(screen.getByRole("button", { name: "固定 third" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "固定 third" }));
   await waitFor(() => expect(order()).toEqual(["second", "third", "fourth", "first"]));
   fireEvent.click(screen.getByRole("button", { name: "取消固定 second" }));
@@ -74,6 +75,70 @@ it("keeps original order within pinned and ordinary groups through pinning and f
   fireEvent.click(screen.getByLabelText("按状态筛选"));
   fireEvent.click(await screen.findByRole("option", { name: "未解决" }));
   await waitFor(() => expect(order()).toEqual(["third", "first", "second"]));
+});
+
+it("waits for saved pin preferences before changing an Issue's pin", async () => {
+  let finish!: (pins: string[]) => void;
+  mocks.pins.mockReturnValueOnce(
+    new Promise<string[]>((resolve) => {
+      finish = resolve;
+    }),
+  );
+  mocks.pin.mockResolvedValue(undefined);
+  render(() => <IssueQueue selectedId="alice" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+  const pending = await screen.findByRole("button", { name: "固定 alice" });
+  fireEvent.click(pending);
+  expect(mocks.pin).not.toHaveBeenCalled();
+  expect(pending).toHaveProperty("disabled", true);
+  finish(["alice"]);
+  const loaded = await screen.findByRole("button", { name: "取消固定 alice" });
+  await waitFor(() => expect(loaded).toHaveProperty("disabled", false));
+  fireEvent.click(loaded);
+  await waitFor(() => expect(mocks.pin).toHaveBeenCalledWith("alice", false));
+  await screen.findByRole("button", { name: "固定 alice" });
+});
+
+it("allows a new pin preference after the initial preferences fail to load", async () => {
+  let fail!: (error: Error) => void;
+  mocks.pins.mockReturnValueOnce(
+    new Promise<string[]>((_resolve, reject) => {
+      fail = reject;
+    }),
+  );
+  mocks.pin.mockResolvedValue(undefined);
+  render(() => <IssueQueue selectedId="alice" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+  const pending = await screen.findByRole("button", { name: "固定 alice" });
+  expect(pending).toHaveProperty("disabled", true);
+  fail(new Error("pin_preferences_unavailable"));
+  await screen.findByText("pin_preferences_unavailable");
+  await waitFor(() => expect(pending).toHaveProperty("disabled", false));
+  fireEvent.click(pending);
+  await waitFor(() => expect(mocks.pin).toHaveBeenCalledWith("alice", true));
+  await screen.findByRole("button", { name: "取消固定 alice" });
+});
+
+it("does not release a new identity's pin controls when the old preferences load", async () => {
+  let finishOld!: (pins: string[]) => void, finishCurrent!: (pins: string[]) => void;
+  mocks.pins.mockReturnValueOnce(
+    new Promise<string[]>((resolve) => {
+      finishOld = resolve;
+    }),
+  );
+  mocks.pins.mockReturnValueOnce(
+    new Promise<string[]>((resolve) => {
+      finishCurrent = resolve;
+    }),
+  );
+  const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
+  render(() => <IssueQueue selectedId="" userSubject={subject()} refreshToken={0} onSelect={() => {}} />);
+  await screen.findByRole("button", { name: "固定 alice" });
+  setSubject("bob");
+  const current = await screen.findByRole("button", { name: "固定 bob" });
+  finishOld(["alice"]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(current).toHaveProperty("disabled", true);
+  finishCurrent(["bob"]);
+  await waitFor(() => expect(screen.getByRole("button", { name: "取消固定 bob" })).toHaveProperty("disabled", false));
 });
 
 it("waits for an identity before opening the creation dialog", async () => {
@@ -250,9 +315,12 @@ for (const outcome of ["success", "failure"] as const)
     );
     const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
     render(() => <IssueQueue selectedId="" userSubject={subject()} refreshToken={0} onSelect={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: "固定 alice" }));
+    const previous = await screen.findByRole("button", { name: "固定 alice" });
+    await waitFor(() => expect(previous).toHaveProperty("disabled", false));
+    fireEvent.click(previous);
     setSubject("bob");
     const button = await screen.findByRole("button", { name: "固定 bob" });
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
     fireEvent.click(button);
     await waitFor(() => expect(mocks.pin).toHaveBeenCalledTimes(2));
     finishOld();

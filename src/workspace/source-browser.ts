@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -227,11 +227,37 @@ export class SourceBrowser {
     return this.withMutablePath(context, relativePath, false, async (candidate) => {
       const next = Buffer.from(content, "utf8");
       if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+      const temporary = path.join(path.dirname(candidate), `.issue-pilot-${randomUUID()}.tmp`);
+      // An exclusive open owns only this temporary file; a collision must not delete another operation's file.
+      const handle = await open(temporary, "wx", 0o644);
+      const failures: unknown[] = [];
       try {
-        await writeFile(candidate, next, { flag: "wx", mode: 0o644 });
+        await writeFile(handle, next);
+        await handle.close();
+        // Publish complete bytes without replacing a destination created after the earlier absence check.
+        try {
+          await link(temporary, candidate);
+        } catch (error) {
+          if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+          throw error;
+        }
       } catch (error) {
-        if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+        failures.push(error);
         throw error;
+      } finally {
+        const cleanup: unknown[] = [];
+        try {
+          await handle.close();
+        } catch (error) {
+          cleanup.push(error);
+        }
+        try {
+          await rm(temporary, { force: true });
+        } catch (error) {
+          cleanup.push(error);
+        }
+        // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
+        if (cleanup.length) throw new AggregateError([...failures, ...cleanup], "source_create_cleanup_failed");
       }
       return this.workingFile(context, relativePath);
     });

@@ -406,7 +406,9 @@ describe("issue pilot workspace", () => {
     const queue = await screen.findByLabelText("工单队列");
     await waitFor(() => expect(within(queue).getAllByRole("listitem")[0]?.textContent).toContain("ISSUE-20260810-042"));
 
-    fireEvent.click(within(queue).getByRole("button", { name: "固定 ISSUE-20260810-041" }));
+    const pin = within(queue).getByRole("button", { name: "固定 ISSUE-20260810-041" });
+    await waitFor(() => expect(pin).toHaveProperty("disabled", false));
+    fireEvent.click(pin);
     await waitFor(() => expect(within(queue).getAllByRole("listitem")[0]?.textContent).toContain("ISSUE-20260810-041"));
     expect(client.setIssuePinned).toHaveBeenCalledWith("ISSUE-20260810-041", true);
 

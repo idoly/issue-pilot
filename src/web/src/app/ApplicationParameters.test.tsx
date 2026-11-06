@@ -83,6 +83,56 @@ test("shows defaults in their display units and saves only values that differ fr
   await waitFor(() => expect((screen.getByLabelText("同时运行的工单") as HTMLInputElement).value).toBe("4"));
 });
 
+for (const highWaterBytes of [10 * 1024 ** 2 + 1, Number.MAX_SAFE_INTEGER])
+  test(`preserves exact stored values including ${highWaterBytes} bytes when saving a different parameter`, async () => {
+    state.user = () => admin;
+    const overrides = { mcpExecutionMs: 1_501, workspaceRetentionMs: 3_600_001, workspaceMaintenanceIntervalMs: 60_001, workspaceHighWaterBytes: highWaterBytes, workspaceTargetBytes: 1 };
+    const original = parameterState(overrides, 2);
+    original.bounds.numbers.workspaceHighWaterBytes.maximum = Number.MAX_SAFE_INTEGER;
+    state.load.mockResolvedValue(original);
+    state.save.mockResolvedValue(original);
+    render(() => <ApplicationParametersView />);
+    const concurrency = await screen.findByLabelText("同时运行的工单");
+    await fireEvent.input(concurrency, { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith({ expectedRevision: 2, overrides: { ...overrides, maxConcurrentIssues: 4 } }));
+    expect(screen.getByLabelText("MCP 调用超时")).toHaveProperty("value", "1.501");
+  });
+
+test("converts decimal display units to exact integers without floating point loss", async () => {
+  state.user = () => admin;
+  const original = parameterState({}, 2);
+  original.bounds.numbers.workspaceHighWaterBytes.maximum = Number.MAX_SAFE_INTEGER;
+  state.load.mockResolvedValue(original);
+  state.save.mockResolvedValue(original);
+  render(() => <ApplicationParametersView />);
+  await fireEvent.input(await screen.findByLabelText("MCP 调用超时"), { target: { value: "1.001" } });
+  await fireEvent.input(screen.getByLabelText("工作区保留时长"), { target: { value: "1.5" } });
+  await fireEvent.input(screen.getByLabelText("磁盘高水位"), { target: { value: "8589934591.99999904632568359375" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await waitFor(() =>
+    expect(state.save).toHaveBeenCalledWith({ expectedRevision: 2, overrides: { mcpExecutionMs: 1_001, workspaceRetentionMs: 5_400_000, workspaceHighWaterBytes: Number.MAX_SAFE_INTEGER } }),
+  );
+});
+
+for (const [label, value] of [
+  ["同时运行的工单", "1.5"],
+  ["MCP 调用超时", "1.0001"],
+  ["磁盘高水位", "20480.0000001"],
+  ["磁盘高水位", "8589934592"],
+] as const)
+  test(`rejects ${label}=${value} instead of rounding to a valid stored integer`, async () => {
+    state.user = () => admin;
+    const original = parameterState();
+    original.bounds.numbers.workspaceHighWaterBytes.maximum = Number.MAX_SAFE_INTEGER;
+    state.load.mockResolvedValue(original);
+    render(() => <ApplicationParametersView />);
+    await fireEvent.input(await screen.findByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await screen.findByRole("alert");
+    expect(state.save).not.toHaveBeenCalled();
+  });
+
 const selectNetworkMode = async (label: "开放网络" | "域名白名单") => {
   fireEvent.click(screen.getByRole("combobox", { name: "工单网络访问" }));
   fireEvent.click(await screen.findByRole("option", { name: label }));

@@ -36,8 +36,14 @@ const listFields: Array<{ key: ListKey; label: string; note: string }> = [
 ];
 
 function parse(text: string, divisor: number, bounds: { minimum: number; maximum: number }): number | null {
-  if (!/^\d+$/.test(text.trim())) return null;
-  const value = Number(text.trim()) * divisor;
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(text.trim());
+  if (!match || (divisor === 1 && match[2] !== undefined)) return null;
+  // Convert decimal units exactly: floating point multiplication can reject 1.001 seconds or round sub-byte values.
+  const fraction = match[2] ?? "";
+  const scale = 10n ** BigInt(fraction.length);
+  const scaled = BigInt(match[1] + fraction) * BigInt(divisor);
+  if (scaled % scale !== 0n) return null;
+  const value = Number(scaled / scale);
   return Number.isSafeInteger(value) && value >= bounds.minimum && value <= bounds.maximum ? value : null;
 }
 
@@ -56,7 +62,7 @@ export function ApplicationParametersView() {
   const isAdmin = () => currentUser()?.isAdmin === true;
   const apply = (value: ApplicationParameterState) => {
     setState(value);
-    setNumbers(Object.fromEntries(numberFields.map((field) => [field.key, String(Math.round(value.values[field.key] / units[field.unit].divisor))])) as Partial<Record<NumberKey, string>>);
+    setNumbers(Object.fromEntries(numberFields.map((field) => [field.key, String(value.values[field.key] / units[field.unit].divisor)])) as Partial<Record<NumberKey, string>>);
     setLists(Object.fromEntries(listFields.map((field) => [field.key, value.values[field.key].join("\n")])) as Partial<Record<ListKey, string>>);
     setNetworkMode(value.values.networkMode);
   };
@@ -84,9 +90,12 @@ export function ApplicationParametersView() {
     for (const field of numberFields) {
       const bounds = current.bounds.numbers[field.key];
       const unit = units[field.unit];
-      const value = parse(numbers()[field.key] ?? "", unit.divisor, bounds);
+      const text = (numbers()[field.key] ?? "").trim();
+      // Some unit conversions repeat in decimal; unchanged fields retain the exact stored milliseconds/bytes.
+      const value = text === String(current.values[field.key] / unit.divisor) ? current.values[field.key] : parse(text, unit.divisor, bounds);
       if (value === null) {
-        setError(`${field.label} 需为 ${field.minimum ?? Math.ceil(bounds.minimum / unit.divisor)} 到 ${Math.floor(bounds.maximum / unit.divisor)} 之间的整数（${unit.name}）。`);
+        const precision = field.unit === "count" ? "整数" : `数值，且可换算为整数${field.unit === "mib" ? "字节" : "毫秒"}`;
+        setError(`${field.label} 需为 ${field.minimum ?? bounds.minimum / unit.divisor} 到 ${bounds.maximum / unit.divisor} 之间的${precision}（${unit.name}）。`);
         return;
       }
       // Unchanged fields stay as the project default so later configuration changes still reach them.
@@ -180,7 +189,7 @@ export function ApplicationParametersView() {
                   <Input
                     aria-label={field.label}
                     aria-describedby={`parameter-note-${field.key}`}
-                    inputmode="numeric"
+                    inputmode={field.unit === "count" ? "numeric" : "decimal"}
                     value={numbers()[field.key] ?? ""}
                     placeholder={`例如 ${units[field.unit].example}`}
                     disabled={loading() || saving()}

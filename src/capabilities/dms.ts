@@ -94,7 +94,7 @@ export class DmsOperationError extends Error {
     // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
     const code = cause instanceof Error ? cause.message : "";
     const safeCode =
-      /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_failed|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed|result_too_large_use_export)$/.test(
+      /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_(?:failed|cleanup_failed)|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed|result_too_large_use_export)$/.test(
         code,
       ) || code === "invalid_dms_mcp_target";
     super(safeCode ? code : "dms_mcp_operation_failed", { cause });
@@ -124,7 +124,7 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
   const target = new URL(configured.url);
   if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash) throw new Error("invalid_dms_mcp_target");
   const headers = { Authorization: configured.authorization };
-  let client: Client | undefined;
+  let connection: { client: Client; closeTransport: () => Promise<void> } | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const handshakeController = new AbortController();
     const handshakeTimer = attempt === 0 ? setTimeout(() => handshakeController.abort(new DOMException("DMS handshake timed out", "TimeoutError")), firstHandshakeMs) : undefined;
@@ -137,6 +137,12 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       }),
       requestInit: { headers },
     });
+    const originalClose = transport.close.bind(transport);
+    let closing: Promise<void> | undefined;
+    const closeTransport = () => (closing ??= Promise.resolve().then(originalClose));
+    // The SDK closes in the background after failed initialization. Share its cleanup
+    // with this owner, which must await and report the original rejection before retrying.
+    transport.close = () => closeTransport().catch(() => undefined);
     const candidate = new Client({ name: "issue-pilot", version: "0.1.0" });
     let cancellation: ReturnType<typeof addAbortListener> | undefined;
     try {
@@ -148,10 +154,14 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
         }),
       ]);
       if (signal.aborted) throw signal.reason;
-      client = candidate;
+      connection = { client: candidate, closeTransport };
       break;
-    } catch {
-      await transport.close().catch(() => undefined);
+    } catch (error) {
+      try {
+        await closeTransport();
+      } catch (cleanupError) {
+        throw new Error("dms_mcp_connection_cleanup_failed", { cause: new AggregateError([error, cleanupError]) });
+      }
       if (signal.aborted) throw cancellationError(signal);
       if (httpFailure) {
         const minimumDelay = httpFailure.retryAfterMs ?? limits.retryDelayMs;
@@ -175,8 +185,8 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       }
     }
   }
-  if (!client) throw new Error("dms_mcp_timeout");
-  const connectedClient = client;
+  if (!connection) throw new Error("dms_mcp_timeout");
+  const { client: connectedClient, closeTransport } = connection;
   return {
     async listTools(requestSignal) {
       const tools: DmsMcpTool[] = [];
@@ -204,7 +214,10 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
         maxTotalTimeout: applicationParameters().dmsExecutionMs,
       });
     },
-    close: () => connectedClient.close(),
+    async close() {
+      await connectedClient.close();
+      await closeTransport();
+    },
   };
 }
 

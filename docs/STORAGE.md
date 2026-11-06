@@ -67,6 +67,8 @@ state 为 0700、DB／JSONL 为 0600、附件为 0400。统一 issueRoot 是 cwd
 
 工作文件目录读取或下载打开失败后若关闭描述符也失败，owner 用 `work_file_read_cleanup_failed` 聚合两项错误，避免关闭错误覆盖读取／路径错误；仅关闭失败则保留该错误。聚合保留诊断，不表示句柄已成功释放或可自动重试。依据：[work-files.ts](../src/workspace/work-files.ts)、[故障注入回归](../tests/workspace/work-files.test.ts)。
 
+源码新建先独占同目录临时文件，写完并关闭后才通过硬链接发布；发布不覆盖竞争创建的目标。写入／关闭／发布前失败不会留下半个目标文件，同名重试仍需检查当前路径。若发布完成后临时链接清理失败，返回 `source_create_cleanup_failed`，完整目标可能已存在，应先重读目标并检查临时证据，不盲目删除或重试。实现与故障回归见 [source-browser.ts](../src/workspace/source-browser.ts)、[source-pagination.test.ts](../tests/workspace/source-pagination.test.ts)。
+
 源码保存比较读取时 SHA-256，冲突返回 source_file_changed。文本、diff、历史与 MCP 读取各有独立预算；超限返回元数据或明确错误，不无界缓冲。预览预算不截断普通下载。
 
 对话只解析当前 workspace、普通相对路径和已授权相关工单；outputs／work／attachments 是真实目录，不剥除为旧别名。历史 issues 绝对路径不自动转换，迁移索引不成为下载兼容层。

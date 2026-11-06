@@ -5,6 +5,7 @@ import path from "node:path";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import { test } from "node:test";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 import { DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
 
@@ -275,6 +276,67 @@ for (const phase of ["single", "double", "cancel"] as const)
       return true;
     });
     assert.equal(closes, 1);
+  });
+
+for (const outcome of ["initialize_failure", "rate_limited", "connected"] as const)
+  test(`DMS transport cleanup is awaited once after ${outcome}`, async (context) => {
+    const operation = new Error("private startup payload"),
+      cleanup = new Error("private cleanup token");
+    const encoder = new TextEncoder();
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let gets = 0,
+      closes = 0;
+    context.mock.method(globalThis, "fetch", async (_input: unknown, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") {
+        gets++;
+        if (outcome === "rate_limited") return new Response(null, { status: 429, headers: { "retry-after": "0" } });
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller;
+              controller.enqueue(encoder.encode("event: endpoint\ndata: /messages\n\n"));
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      const request = JSON.parse(String(init?.body));
+      if (request.method === "initialize") {
+        if (outcome === "initialize_failure") throw operation;
+        stream!.enqueue(
+          encoder.encode(
+            `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } })}\n\n`,
+          ),
+        );
+      }
+      return new Response(null, { status: 202 });
+    });
+    const originalClose = SSEClientTransport.prototype.close;
+    context.mock.method(SSEClientTransport.prototype, "close", async function (this: SSEClientTransport) {
+      closes++;
+      await originalClose.call(this);
+      throw cleanup;
+    });
+    if (outcome === "connected") {
+      const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000));
+      await assert.rejects(session.close(), (error) => error === cleanup);
+      await assert.rejects(session.close(), (error) => error === cleanup);
+    } else {
+      await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(5_000)), (error) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "dms_mcp_connection_cleanup_failed");
+        assert.ok(error.cause instanceof AggregateError);
+        assert.equal(error.cause.errors.length, 2);
+        assert.equal(error.cause.errors[1], cleanup);
+        if (outcome === "initialize_failure") assert.equal(error.cause.errors[0], operation);
+        assert.doesNotMatch(error.message, /private/);
+        const publicError = new DmsOperationError({ phase: "connect", elapsedMs: 0, phaseElapsedMs: {}, sqlDispatchAttempted: false }, error);
+        assert.equal(publicError.message, "dms_mcp_connection_cleanup_failed");
+        return true;
+      });
+    }
+    assert.equal(gets, 1, "failed cleanup must prevent a new connection attempt");
+    assert.equal(closes, 1, "SDK and owner share the same transport cleanup result");
   });
 
 test("uses Authorization for both sides of the MCP SSE protocol", async () => {

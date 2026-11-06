@@ -374,6 +374,83 @@ test("source save collisions preserve another operation's temporary file and the
 });
 
 for (const cleanupFails of [false, true])
+  test(`failed source creation does not publish a partial file and permits retry (cleanup fails: ${cleanupFails})`, async (context) => {
+    const f = await fixture(),
+      write = fs.writeFile,
+      remove = fs.rm,
+      open = fs.open;
+    const primary = Object.assign(new Error("fixture_source_create_failed"), { code: "ENOSPC" }),
+      cleanup = new Error("fixture_source_cleanup_failed");
+    let temporary = "",
+      descriptor: number | undefined;
+    try {
+      const before = await readdir(f.repository);
+      context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
+        const handle = await open(...args);
+        if (path.basename(String(args[0])).startsWith(".issue-pilot-")) {
+          temporary = String(args[0]);
+          descriptor = handle.fd;
+        }
+        return handle;
+      });
+      context.mock.method(fs, "writeFile", async (...args: Parameters<typeof fs.writeFile>) => {
+        await write(args[0], "partial", args[2]);
+        throw primary;
+      });
+      context.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+        if (cleanupFails && String(args[0]) === temporary) throw cleanup;
+        return remove(...args);
+      });
+      syncBuiltinESMExports();
+      await assert.rejects(f.browser.createFile(f.issue, "application", "new.txt", "complete content"), (error) =>
+        cleanupFails ? error instanceof AggregateError && error.message === "source_create_cleanup_failed" && error.errors.includes(primary) && error.errors.includes(cleanup) : error === primary,
+      );
+      await assert.rejects(lstat(path.join(f.repository, "new.txt")), { code: "ENOENT" });
+      assert.ok(descriptor !== undefined);
+      await assert.rejects(fs.stat(`/proc/self/fd/${descriptor}`), { code: "ENOENT" });
+      if (cleanupFails) assert.equal(await readFile(path.join(f.repository, path.basename(temporary)), "utf8"), "partial");
+      else assert.deepEqual(await readdir(f.repository), before, "a failed create must not leave a partial source or temporary file");
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      assert.equal((await f.browser.createFile(f.issue, "application", "new.txt", "complete content")).content, "complete content");
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      await f.close();
+    }
+  });
+
+test("source creation keeps a colliding temporary file and never overwrites a new destination", async (context) => {
+  const f = await fixture(),
+    publish = fs.link;
+  const id = "22222222-2222-4222-8222-222222222222",
+    temporary = path.join(f.repository, `.issue-pilot-${id}.tmp`),
+    target = path.join(f.repository, "new.txt");
+  try {
+    await writeFile(temporary, "other operation evidence");
+    context.mock.method(crypto, "randomUUID", () => id);
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.createFile(f.issue, "application", "new.txt", "new content"), { code: "EEXIST" });
+    assert.equal(await readFile(temporary, "utf8"), "other operation evidence");
+    await assert.rejects(lstat(target), { code: "ENOENT" });
+    context.mock.restoreAll();
+    context.mock.method(fs, "link", async (...args: Parameters<typeof fs.link>) => {
+      await assert.rejects(lstat(target), { code: "ENOENT" });
+      await writeFile(target, "concurrent source", { flag: "wx" });
+      return publish(...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(f.browser.createFile(f.issue, "application", "new.txt", "new content"), /source_path_exists/);
+    assert.equal(await readFile(target, "utf8"), "concurrent source");
+    assert.deepEqual(await readdir(f.repository), [".git", path.basename(temporary), "new.txt"]);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await f.close();
+  }
+});
+
+for (const cleanupFails of [false, true])
   test(`failed source saves retain the primary error and release their descriptor (cleanup fails: ${cleanupFails})`, async (context) => {
     const f = await fixture();
     const openFile = fs.open,

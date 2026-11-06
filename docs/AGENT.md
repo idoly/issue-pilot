@@ -32,7 +32,7 @@ include／remove 改变工具范围后，本轮结束关闭会话，下一轮按
 
 默认操作预算 120 秒、首次握手 12 秒；操作预算可热更新。每次连接最多尝试两次握手：首次握手超时可再试一次；首轮 HTTP 429 使用有效 `Retry-After`，缺失／无效时使用 `retryDelayMs`，仅等待值不超过 `maxRetryDelayMs` 时才有界退避一次。第二次握手、退避和查询仍共享本次操作预算。401／403 不重试；工具发现或 SQL 调用阶段失败不重新握手，已发送 SQL 不自动重放。实现与回归见 [dms.ts](../src/capabilities/dms.ts)、[dms.test.ts](../tests/capabilities/dms.test.ts)。
 
-诊断只返回稳定码、阶段、耗时、sqlDispatchAttempted 和可用的 retryAfterSeconds，不含 URL／SQL／认证。发送尝试不证明已执行。取消也尝试关闭，操作与关闭都失败时聚合保留，不能被 timeout 重新分类吞掉。
+诊断只返回稳定码、阶段、耗时、sqlDispatchAttempted 和可用的 retryAfterSeconds，不含 URL／SQL／认证。发送尝试不证明已执行。取消也尝试关闭，操作与关闭都失败时聚合保留，不能被 timeout 重新分类吞掉。连接初始化失败时，SDK 后台关闭与应用收尾共用同一次关闭结果；应用等待清理完成后才允许重试。清理也失败则返回 `dms_mcp_connection_cleanup_failed`，保留两个内部原因并停止重连，不能视为已释放连接。
 
 内联结果超预算要求 export；导出写入普通工作文件，只有协议收尾成功才原子替换旧文件。失败不重查 SQL、不用空文件覆盖旧交付。批次间隔、恢复探测和断点属于模型指引，不是服务端限流器。
 
