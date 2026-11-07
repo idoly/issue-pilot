@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentEngine } from "../../src/agent/engine.ts";
+import { AgentEngine, type AgentReservation } from "../../src/agent/engine.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 import type { GitCommitIdentity, ManagedPiSession } from "../../src/agent/pi-session.ts";
 import { openDatabase } from "../../src/db/client.ts";
@@ -390,3 +390,72 @@ test("scope conversion rechecks the developer role after its lifecycle wait", as
     await f.cleanup();
   }
 });
+
+for (const explicit of [false, true])
+  test(`retry rechecks the ${explicit ? "explicit" : "default"} caller before enqueueing`, { timeout: 5_000 }, async (context) => {
+    const f = await createApiFixture();
+    const database = openDatabase(f.databaseFile);
+    const sender = "retry-sender@example.test";
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let pending: Promise<unknown> | undefined;
+    try {
+      await createService(f.app, "RetryIdentity");
+      const issue = await createIssue(f.app, "retryidentity");
+      const issueId = f.engine.enqueued.at(-1)!;
+      const enqueued = [...f.engine.enqueued];
+      f.engine.running.clear();
+      // This caller owns no Issues, so disabling them does not reserve the retried Issue.
+      await database.db.insert(subjects).values({ subject: sender, role: "product", createdAt: new Date(0) });
+      const reserve = f.engine.runExclusive.bind(f.engine);
+      context.mock.method(f.engine, "runExclusive", <T>(ids: string[], operation: (reservation: AgentReservation) => Promise<T>) =>
+        reserve(ids, async (reservation) => {
+          if (ids.includes(issueId)) {
+            entered();
+            await gate;
+          }
+          return operation(reservation);
+        }),
+      );
+      const request = {
+        method: "POST" as const,
+        url: `/api/issues/${issue.id}/retry`,
+        ...(explicit ? { headers: { "x-issue-pilot-subject": sender } } : {}),
+      };
+      const response = f.app.inject(request).then((value) => value);
+      pending = response;
+      await waiting;
+      const disabled = await f.app.inject({
+        method: "PATCH",
+        url: `/api/users/${sender}`,
+        headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+        payload: { active: false },
+      });
+      assert.equal(disabled.statusCode, 200, disabled.body);
+      release();
+      const denied = await response;
+      assert.equal(denied.statusCode, 400, denied.body);
+      assert.equal(denied.json().error, "invalid_current_subject");
+      assert.deepEqual(f.engine.enqueued, enqueued);
+      assert.equal(f.engine.isRunning(issueId), false);
+      assert.equal(f.engine.reservations.size, 0);
+      const [unchanged] = await database.db.select().from(issues).where(eq(issues.id, issueId));
+      assert.equal(unchanged!.status, "open");
+
+      // Rejection releases the reservation, and a valid caller can explicitly retry later.
+      const accepted = await f.app.inject({ ...request, headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject } });
+      assert.equal(accepted.statusCode, 202, accepted.body);
+      assert.deepEqual(f.engine.enqueued, [...enqueued, issueId]);
+      assert.equal(f.engine.reservations.size, 0);
+    } finally {
+      release();
+      await pending;
+      database.close();
+      await f.cleanup();
+    }
+  });

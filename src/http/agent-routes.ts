@@ -124,6 +124,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
+      await requireCurrentUser(database, request);
       // The engine can start any unresolved Issue; the detail view offers the same retry for pending ones.
       if (currentIssue.status === "resolved") throw new ApiError(409, "issue_not_retryable");
       reservation.enqueue(issue.id);

@@ -16,6 +16,8 @@
 
 `agent-messages` 固定本次请求的发送者，在会话／引导队列等待后、受理输入或交给 Pi 前重新检查其活跃状态。等待期间失活会返回 `400 invalid_current_subject`，不改用另一个默认账号；已经受理或交付的消息不会因后续停用自动撤销。竞态修复与回归见[后端审查记录](records/2026-11-06-documentation-audit.md#p2消息等待期间停用发送者仍被受理)。
 
+`retry` 在工单预约中读取最新工单后、入队前重新校验本次请求固定的调用者；首次校验后已失活的调用者同样返回 `400 invalid_current_subject`，不会启动新轮次或切换默认账号。已返回 202 的请求不会因后续停用自动撤销。回归见 [mutation-identity.test.ts](../tests/http/mutation-identity.test.ts)。
+
 ## 请求与响应
 
 HTTP 路径中的 `:key` 为业务编号（例如 `ISSUE-20260101-001`），不是 SQLite 内部 UUID。工单摘要／详情的 `id` 字段也是该业务编号，创建后用响应的 `id` 继续调用；仓库等其他资源的 `id` 仍有各自含义。HTTP 解析编号不区分大小写；客户端建议始终使用返回的规范编号。普通 JSON 写入使用 `Content-Type: application/json`，下载接口返回文件而非 JSON。
