@@ -112,6 +112,14 @@ Playwright 镜像 digest 为 `sha256:ee15712262f017b8157421b212b12099146645f44b1
 
 这些是代表目标的真实集成验收，不是全部服务／用户／DMS 数据库／日志库／模型的逐一验证。没有进行业务修改 SQL、日志全文获取、模型工具整轮任务、DBHub 可选驱动或钉钉真实导入。全量 typecheck／npm test／Web build 未在目标执行；目标只装生产依赖并使用匹配源码的既有 Web 构建。
 
+## GitHub 授权补迁
+
+11:42，目标机提交 `abfb3df` 并推送 main。首次推送发现目标没有 GitHub HTTPS 凭证，使用源环境已有授权作一次性注入完成推送，没有将秘密写进参数、日志或源码。
+
+用户随后要求迁入该授权。11:44，使用 Git 官方 credential-store 写入目标 `/home/idoly/.config/git/github-credentials`，目录 0700、文件 0600；通过用户全局 Git 配置限定 `https://github.com` helper。秘密通过 SSH stdin 传输，不进入 argv、文档或 Git 提交。源授权保持不变。
+
+目标独立读取的 username／password 与源在内存中逐项匹配，GitHub push dry-run 成功；它是私有明文凭证文件，不声称加密保存，也不改变上游有效期或权限。后续目标 GitHub HTTPS 推送无需源机临时注入。操作结果留在私有 `github-authorization-migration.json`，只记录位置、权限和检查结果。
+
 ## 访问范围的最终决定
 
 用户随后决定不在目标机处理访问转发；该项不纳入本次迁移交付，不保留为待办。没有修改 Windows 宿主机 portproxy、防火墙或其他网络映射。目标 API 保持监听 3000，目标本机的健康、页面及 API 验收结果不变。

@@ -63,6 +63,12 @@ PATH、JAVA_HOME、MAVEN_HOME 已写入 `/etc/profile`；新登录生效，已�
 
 系统时区为 `Asia/Shanghai`，默认 locale 为 `zh_CN.UTF-8`，保留 `en_US.UTF-8`。UTF-8 和中文字符宽度已验证；Hyper-V 基本控制台的字体不能保证显示中文，请用带中文字体的 SSH 终端。不要为控制台显示问题批量改写文件编码。
 
+### GitHub HTTPS 授权
+
+按用户授权迁入源环境已有的 GitHub 凭证，使用 idoly 的全局 Git 配置，仅匹配 `https://github.com`。凭证由 Git store helper 保存在 `/home/idoly/.config/git/github-credentials`，目录 0700、文件 0600；这是本机私有明文凭证文件，不放入项目或提交记录。
+
+目标机已独立完成凭证读取匹配和 push dry-run，不依赖源机临时注入。该设置用于宿主用户的 GitHub HTTPS 操作，不替代应用对工单 owner 的个人 SSH 凭证选择。授权到期或被撤销后需更新，迁移不改变上游有效期或仓库权限。
+
 ### 当前维护边界
 
 后端直接执行 TypeScript，不生成后端 dist。不要在 live checkout 安装依赖、覆盖源码或原地重建 Web。发布、恢复和数据库检查点按[运维流程](RUNBOOK.md#按风险发布与重启)。迁移包已在真实查询验收后删除，源机原数据保留但不会接收目标的新写入；不能直接启动源机作为当前实例的无损回退。
