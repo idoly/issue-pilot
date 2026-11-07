@@ -120,6 +120,22 @@ Playwright 镜像 digest 为 `sha256:ee15712262f017b8157421b212b12099146645f44b1
 
 目标独立读取的 username／password 与源在内存中逐项匹配，GitHub push dry-run 成功；它是私有明文凭证文件，不声称加密保存，也不改变上游有效期或权限。后续目标 GitHub HTTPS 推送无需源机临时注入。操作结果留在私有 `github-authorization-migration.json`，只记录位置、权限和检查结果。
 
+## Claude、Codex、Git 和 npm 配置补迁
+
+11:53，按用户最终明确的「只要配置和授权」迁入以下文件，不迁缓存和历史：
+
+| 文件 | 本次处理 |
+| --- | --- |
+| `~/.claude/settings.json` | 原样迁入，含既有提供商设置与授权；未迁插件文件 |
+| `~/.codex/config.toml`、`~/.codex/auth.json` | 原样迁入配置与授权；未迁会话、历史或运行数据库 |
+| `~/.gitconfig` | 合并源 `credential.helper=store`，保留目标 GitHub 专用 helper |
+| `~/.git-credentials` | 原样迁入通用 store 的私有明文凭证文件 |
+| `~/.npmrc` | 原样迁入 registry 配置；源文件没有 npm 令牌 |
+
+五个原样迁入文件的 SHA-256 与源一致，均为 0600，新建 `.claude`／`.codex` 目录为 0700。源文件未修改；秘密通过 SSH stdin 传输，没有写入命令参数、文档或提交。`.npm` 缓存、CLI 历史／会话、插件／skills 和运行数据库均未迁移，目标已有 npm 缓存保留。
+
+目标 GitHub credential fill 与源在内存比对一致，独立 push dry-run 成功，npm 有效 registry 与迁入配置一致，JSON／TOML 语法检查通过。目标尚无 `claude`／`codex` 可执行文件，未做两者实际登录、模型调用或插件验收；没有重启应用或改动业务数据。结果留在私有 `user-settings-migration.json`，其中不含授权内容。
+
 ## 访问范围的最终决定
 
 用户随后决定不在目标机处理访问转发；该项不纳入本次迁移交付，不保留为待办。没有修改 Windows 宿主机 portproxy、防火墙或其他网络映射。目标 API 保持监听 3000，目标本机的健康、页面及 API 验收结果不变。

@@ -65,9 +65,17 @@ PATH、JAVA_HOME、MAVEN_HOME 已写入 `/etc/profile`；新登录生效，已�
 
 ### GitHub HTTPS 授权
 
-按用户授权迁入源环境已有的 GitHub 凭证，使用 idoly 的全局 Git 配置，仅匹配 `https://github.com`。凭证由 Git store helper 保存在 `/home/idoly/.config/git/github-credentials`，目录 0700、文件 0600；这是本机私有明文凭证文件，不放入项目或提交记录。
+按用户授权迁入源环境已有的 GitHub 凭证，GitHub 专用 helper 在 idoly 的全局 Git 配置中匹配 `https://github.com`。凭证由 Git store helper 保存在 `/home/idoly/.config/git/github-credentials`，目录 0700、文件 0600；这是本机私有明文凭证文件，不放入项目或提交记录。
 
 目标机已独立完成凭证读取匹配和 push dry-run，不依赖源机临时注入。该设置用于宿主用户的 GitHub HTTPS 操作，不替代应用对工单 owner 的个人 SSH 凭证选择。授权到期或被撤销后需更新，迁移不改变上游有效期或仓库权限。
+
+### 宿主用户的配置与授权补迁
+
+按用户最终范围，只迁入 `~/.claude/settings.json`、`~/.codex/config.toml`、`~/.codex/auth.json`、`~/.npmrc` 和 `~/.git-credentials`，文件均为 0600；新建的 `.claude`／`.codex` 目录为 0700。`.gitconfig` 合并源环境的通用 `credential.helper=store`，保留上面的 GitHub 专用 helper；通用 store 使用 `~/.git-credentials`，同样是私有明文凭证。
+
+`.npmrc` 仅含 registry 配置，无 npm 令牌，已核对目标 npm 的有效值。没有迁移 `.npm` 缓存、会话、历史、插件文件或运行数据库。Claude 配置中仍有启用插件的设置，但插件文件不在本次范围，后续安装 CLI 时需另行安装并验证。
+
+目标未安装 `claude`、`codex` 命令，本次仅验证文件哈希、权限、JSON／TOML 语法及 Git 推送 dry-run，不声称完成两者登录或模型调用验收。这些 CLI 授权不替代应用 SQLite 中的模型／服务凭证，也没有为此重启应用。
 
 ### 当前维护边界
 
