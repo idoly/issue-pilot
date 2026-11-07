@@ -6,3 +6,4 @@ src/web/dist
 *.log
 .tmp
 coverage
+data

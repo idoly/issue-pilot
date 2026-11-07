@@ -2,7 +2,7 @@
 
 [文档导航](README.md) · [使用与状态](USAGE.md#状态与完成条件) · [配置与 MCP](CONFIGURATION.md)
 
-本文供客户端集成与排障使用，覆盖核心流程而非全量 API。路由 owner 为 [src/http](../src/http)，Web 请求／DTO 为 [client.ts](../src/web/src/data/client.ts)，入站 MCP Schema 为 [server.ts](../src/mcp/server.ts)。这些接口随当前源码演进，没有独立于应用版本的兼容承诺。
+本文依据本次目标机源码基线核对，供客户端集成与排障使用，覆盖核心流程而非全量 API。当前 API 同源监听 3000，对外访问入口见[部署](DEPLOYMENT.md#访问与认证)。路由 owner 为 [src/http](../src/http)，Web 请求／DTO 为 [client.ts](../src/web/src/data/client.ts)，入站 MCP Schema 为 [server.ts](../src/mcp/server.ts)。这些接口随当前源码演进，没有独立于应用版本的兼容承诺。
 
 ## 身份与访问边界
 
@@ -14,7 +14,7 @@
 
 浏览器的原生 EventSource 不发送页面选中的 subject 头；SSE 路由没有显式头时按默认活跃用户处理。生产网关需要对 SSE 同样绑定认证身份，不能只为普通 fetch 配置身份转发。实现见 [agent-routes.ts](../src/http/agent-routes.ts)。
 
-`agent-messages` 固定本次请求的发送者，在会话／引导队列等待后、受理输入或交给 Pi 前重新检查其活跃状态。等待期间失活会返回 `400 invalid_current_subject`，不改用另一个默认账号；已经受理或交付的消息不会因后续停用自动撤销。竞态修复与回归见[后端审查记录](records/2026-11-06-documentation-audit.md#p2消息等待期间停用发送者仍被受理)。
+`agent-messages` 固定本次请求的发送者，在会话／引导队列等待后、受理输入或交给 Pi 前重新检查其活跃状态。等待期间失活会返回 `400 invalid_current_subject`，不改用另一个默认账号；已经受理或交付的消息不会因后续停用自动撤销。对应回归见 [mutation-identity.test.ts](../tests/http/mutation-identity.test.ts)。
 
 `retry` 在工单预约中读取最新工单后、入队前重新校验本次请求固定的调用者；首次校验后已失活的调用者同样返回 `400 invalid_current_subject`，不会启动新轮次或切换默认账号。已返回 202 的请求不会因后续停用自动撤销。回归见 [mutation-identity.test.ts](../tests/http/mutation-identity.test.ts)。
 

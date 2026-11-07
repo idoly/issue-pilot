@@ -1,20 +1,18 @@
-# 配置与协议
+# 配置说明
 
-[文档导航](README.md) · [使用](USAGE.md) · [Agent](AGENT.md)
+[文档导航](README.md) · [部署](DEPLOYMENT.md) · [接口](HTTP.md)
 
 ## 配置分层
 
-| 来源 | 内容与优先级 | 生效方式 |
+| 来源 | 权威内容 | 生效方式 |
 | --- | --- | --- |
-| SQLite | 用户、凭证、仓库、服务部署、MCP、模型、偏好；参数覆盖优先于根配置默认值 | 页面／API 保存；会话、预约和热参数各有自己的生效边界，见下文 |
-| [根配置](../issue-pilot.config.ts) | 路径、监听、bootstrap 用户、区域、硬预算与参数默认值 | API 重启；Web 使用到的配置还需重新构建，Vite 开发进程需重启 |
-| Operator Pi 目录 | 模型定义、settings、指令、skills、prompts、extensions；SQLite 允许的 runtime.settings 覆盖 Pi settings 基线 | 模型目录读取时离线刷新；资源和 settings 在会话准备时加载，不保证改文件即更新已打开会话 |
+| 根 issue-pilot.config.ts | state、监听、区域、bootstrap、硬预算和参数默认值 | API 重启；Web 引用的设置需重新构建，Vite 需重启 |
+| SQLite | 用户、凭证、仓库、Service／Deployment、MCP、偏好、模型及参数覆盖 | 页面／API 持久保存；按 owner 的预约、revision 和热更新边界生效 |
+| 运行用户 Pi 目录 | 模型定义、settings、指令、skills、prompts、extensions | 模型目录离线刷新；资源／settings 在准备会话时加载，文件变化不保证更新已有会话 |
 
-业务设置由页面／API 持久化，不从 YAML 或历史私有字段填补缺失值。state 路径相对于源码根解析，没有 state／database 环境变量覆盖。Operator auth.json／models.json 的密钥或 headers 不能成为模型请求的 fallback。
+目标机的 state.directory 为 `data`，databaseFile 为 `issues.db`；路径分别相对源码根和 state root，不随 Shell cwd 改变。没有 state/database 环境变量覆盖，也不通过 .env 或 YAML 导入业务设置。不要用历史私有文件补数据库缺值。来源：[config.ts](../src/config.ts)、[configuration](../src/configuration)。
 
-配置页面分类为用户、仓库、服务、端点、参数。根配置不是所有值的运行时来源；参数页只开放明确支持热更新的项目，不代表端口、时区和硬上限也可热改。
-
-`state.directory` 相对源码根，`state.databaseFile` 相对 state root；更改 Shell 工作目录不会获得新数据库。应用不加载 `.env` 来覆盖这些字段。路径解析见 [config.ts](../src/config.ts)。`bootstrapUser` 仅在用户表为空时插入；默认环境名称会在启动时按根配置同步，现有用户不会随 bootstrap 修改而更新，见 [bootstrap.ts](../src/db/bootstrap.ts)。
+当前 API 监听 0.0.0.0:3000，实际访问边界见[部署](DEPLOYMENT.md#访问与认证)。bootstrapUser 只在用户表为空时插入，改它不会更新已有用户；默认环境名会在启动按根配置同步。
 
 ### Operator 模型目录
 
@@ -44,143 +42,121 @@ NODE
 
 ## 身份与权限
 
-`X-Issue-Pilot-Subject` 选择活跃用户，**不是认证**。可信网关必须认证并绑定该头。调用身份校验时，无显式头会按 `createdAt`、`subject` 升序选择第一名活跃用户，并在该请求内固定选择；再次校验发现该用户失活则拒绝，不换账号。这不是固定的全局登录账号。部分目录／详情 GET 不调用身份校验，因此错误 subject 头也不能作为这些接口拒绝访问的保证；认证边界及消息受理的重检时点见 [HTTP 身份边界](HTTP.md#身份与访问边界)。
+X-Issue-Pilot-Subject 是选择器，不是认证。可信网关必须校验身份、覆盖来访头并阻止绕过直连。调用身份校验的路由要求活跃用户；不传头时按 createdAt、subject 升序取首个活跃用户并固定该请求的选择，失活后不换账号。部分目录和详情 GET 不检查身份，没有逐工单 ACL，见[HTTP 边界](HTTP.md#身份与访问边界)。
 
-| 身份条件 | 主要用途 |
+| 条件 | 用途 |
 | --- | --- |
-| 活跃用户 | 工单操作；源码写入、Git、状态、关联、回收等执行前均重检 |
-| developer | 开发处理方式、仓库／服务／用户维护及约定的私有配置读取 |
-| isAdmin | 全局模型、共享凭证、全局 MCP 管理及运行参数写入 |
+| 活跃用户 | 工单操作、源码及生命周期变更等；执行前重检 |
+| developer | 开发处理方式、仓库／服务／用户维护及约定的私有描述读取 |
+| isAdmin | 共享模型／凭证、全局 MCP、参数和管理操作 |
 
-product／test／developer 是业务角色，isAdmin 独立。用户维护保护活跃用户、开发者、管理员，以及至少一名活跃开发管理用户。配置、Source、生命周期及消息受理路径在相关队列后重新授权；不能把页面隐藏按钮当权限边界。提交作者使用预约内重新读取的人员资料。
+product／test／developer 与 isAdmin 独立。用户变更保护活跃用户、开发者、管理员，以及至少一名活跃且有管理权限的 developer。等待相关 scope／预约后再次授权，不能以页面按钮隐藏代替权限。
 
 ## 凭证与 owner
 
-owner 为 assignee，否则 reporter，必须活跃。完整个人组和共享组只按规则二选一，失败不更换身份。
+工单 owner 为处理人，否则报告人，必须活跃。所选身份失败不切换到其他人或共享凭证。
 
 | 组 | 选择规则 |
 | --- | --- |
-| 模型 | 任何角色 owner 有个人组时整组替换共享 provider／model／thinking／Codemode／Key；没有个人组才用共享组 |
-| Git | developer owner 的远程仓库必须用 SSH URL 和本人私钥（HTTPS 也会拒绝）；严格 known_hosts，不回退 Operator 或其他用户身份 |
-| DMS | prod/test 选择 owner 的完整 URL／Authorization；没有个人组才用应用共享组 |
-| SLS | prod/test 选择 owner 的完整 AccessKey ID／Secret；没有个人组才用应用共享组 |
+| 模型 | 任何角色的完整个人 provider／model／thinking／Codemode／Key 替换共享整组；无个人组才取共享组 |
+| Git | developer 的远程仓库只用本人 SSH 私钥；缺失或失败不回退 Operator／ssh-agent／其他用户 |
+| DMS | prod/test 有完整个人 URL／Authorization 则取个人，否则共享；残缺报错 |
+| SLS | prod/test 有完整个人 AccessKey ID／Secret 则取个人，否则共享；残缺报错 |
 
-个人组残缺、所选 Key 缺失或调用失败均报错。凭证不创建目标、不扩大范围；开发查询仍须明确选择 prod/test。
+凭证不能创建查询目标或扩大范围，开发证据仍显式选 prod/test。普通配置 GET 隐藏连接密钥；developer 选定的说明／MCP 编辑接口只暴露其契约允许值，原生 DMS Authorization 和 SLS Key 不暴露。连接密钥不进入提示、工具输入、argv、诊断或普通日志；授权结果中的业务 token 与连接密钥不是同一类数据。
 
-个人 Git 使用 `ssh -F /dev/null`、`IdentityAgent=none` 和 `BatchMode=yes`：不读取运行用户的 SSH `config`，也不使用其 ssh-agent。配置仓库 URL 时写明实际主机和用户，非默认端口用 `ssh://git@git.example.test:2222/team/repo.git` 这样的 URL；仅在 `~/.ssh/config` 中定义的 Host 别名、端口或 ProxyJump 不会生效。私钥须能在无交互口令输入的情况下使用；应用没有私钥口令配置项。应用复制运行用户的 `~/.ssh/known_hosts`／`known_hosts2` 供此次连接校验，应先核验主机指纹，再配置对应记录。保存凭证不执行远程连接测试。依据：[Git 身份 owner](../src/workspace/git-credentials.ts)、[凭证保存](../src/http/user-routes.ts)、[隔离与主机校验测试](../tests/workspace/git-credentials.test.ts)。
-
-普通配置 GET 脱敏。developer 选定服务的私有编辑／说明接口仅暴露契约规定的 DBHub／MCP 值，native DMS Authorization 和 SLS Key 保持隐藏。连接密钥不进入提示词、工具输入、argv 或普通日志。授权查询结果中的业务登录 token 可在用户明确请求时附来源和时间返回，不扩大访问权限。
+个人 Git 使用 ssh -F /dev/null、IdentityAgent=none 和 BatchMode=yes，不读 ~/.ssh/config。仓库 URL 必须带实际用户／主机，非默认端口用 `ssh://git@git.example.test:2222/team/repo.git`；Host 别名、ProxyJump 和交互私钥口令不生效。运行用户需预先核验 known_hosts，保存凭证不测试连接。owner：[user-credentials.ts](../src/configuration/user-credentials.ts)、[git-credentials.ts](../src/workspace/git-credentials.ts)。
 
 ## 个人与共享设置
 
-“我的凭证”分 API Key、SSH、DMS、SLS。admin 打开 API Key／DMS／SLS 弹窗默认编辑共享组，取消共享勾选才编辑个人组；非 admin 不读取共享状态。SSH 仅 developer。
+“我的凭证”分 API Key、SSH、DMS、SLS。管理员弹窗默认编辑共享组，取消共享选项后编辑个人；非管理员不读取共享状态，SSH 仅 developer。
 
-页面中已有凭证的留空表示保留：模型弹窗省略 Key 字段，SSH／DMS／SLS 未修改时不发保存请求；DMS 地址变化仍须重填 Authorization。直接调用 API 时，空字符串不代表保留，替换组须提供有效字段，清除使用显式 `mode: "clear"`。切换个人／共享目标清空 Key 草稿，保存期间不可切换；关闭或换身份后旧请求不能覆盖新弹窗。
+页面未修改的秘密留空表示保留，实际通过省略 Key 或不发送请求实现；直接 API 的空字符串不代表保留。替换要提供完整有效组，清除使用 `mode: "clear"`。DMS URL 改变需重填 Authorization；模型换 provider 不能保留旧 provider Key。
 
-共享完整模型组在 global_agent_configuration，个人组在 user_credentials.model_credentials，候选只来自运行用户 Pi `models.json.providers` 声明的 provider 下的模型；应用离线刷新目录，不自动联网补齐模型。空目录在首次创建全局模型配置时会阻止启动，见[首次运行](DEPLOYMENT.md#首次本地运行)。`PUT /api/config/agent` 的 apiKey 是 replace／clear，省略保留；个人 `PUT /api/me/credentials` 的 model 是完整 replace 组或 clear。更换 provider 必须提供对应 Key 或清除，不能保留跨 provider Key。
+共享模型位于 global_agent_configuration，个人模型位于 user_credentials.model_credentials；候选来自运行用户 models.json 的 provider。Operator auth.json／models.json 密钥或 headers 不成为模型请求 fallback。全局 runtime 仍适用于所有服务，Deployment 没有模型覆盖。
 
-共享 DMS／SLS 位于 application_settings，独立 revision；更换 DMS URL 需同时提供 Authorization，没有代码默认连接地址。模型和凭证变更按受影响工单预约、关闭旧会话，活动冲突拒绝修改。服务 DMS／SLS 不接受 credentialUpdate，连接密钥只在个人／共享入口维护。
+共享 DMS／SLS 位于 application_settings，独立 revision，密钥不在 Deployment。凭证／模型变更预约受影响工单并关闭旧会话，有活动则冲突；参数更新是另一条路径。
 
 ## 运行参数
 
-[参数页截图](images/parameters.jpg)。owner 为 [parameters.ts](../src/configuration/parameters.ts)，默认值位于 [根配置 parameters](../issue-pilot.config.ts)。
+GET /api/config/parameters 返回 revision、overrides、values、defaults、bounds。管理员 PUT 提交 `{ expectedRevision, overrides }`，overrides 是完整覆盖快照，省略项回到根默认值；只改一项时先合并已有覆盖，不能意外撤销网络或保留期。`overrides: {}` 清除全部覆盖，revision 冲突为 configuration_changed。
 
-| 参数 | 默认值 | 生效边界 |
+| 参数 | 根默认值 | 作用范围 |
 | --- | --- | --- |
-| maxConcurrentIssues | 10 | 调高放行排队，调低不终止已有轮次 |
-| modelResponseIdleMs | 300 秒 | 连续无模型更新的等待；收到更新重置，工具执行期间暂停，下一次启动计时器使用新值 |
-| workspaceRetentionMs | 7 天 | 从开发工单 `resolvedAt` 起算，后续维护检查是否可释放代码 |
-| workspaceHighWaterBytes／workspaceTargetBytes | 20／16 GiB | 工单根目录合计占用超高水位后尝试释放，直到达到目标或无可释放候选；非零高水位须大于目标 |
-| workspaceMaintenanceIntervalMs | 15 分钟 | 保存后重新计时，0 停止周期维护；API 启动仍执行一次维护 |
-| capabilityConnectionMs | 10 秒 | 仅后续 SLS CLI 的 `--connect-timeout`，向上取整到秒；不控制 DMS 或 MCP 连接 |
-| mcpExecutionMs | 120 秒 | 后续 MCP 调用在开始时取值，含已有 Pi 会话中的服务工具／资源读取；在途调用保留原预算 |
-| dmsExecutionMs／slsExecutionMs | 120／30 秒 | 后续原生查询 |
-| dingtalkAttachmentHosts | 根配置中的 HTTPS 主机列表 | 后续导入 |
-| networkMode | `open` | 全局工单网络模式；后续新代理连接读取当前值，已有连接不中断 |
-| networkAllowedDomains | 根配置中的基础域名列表 | `allowlist` 模式限制访问范围；沙箱获取／网络配置同步，不替代宿主拒绝规则 |
+| maxConcurrentIssues | 10 | 取得执行名额的工单轮次，调低不取消已有轮次 |
+| modelResponseIdleMs | 300 秒 | 连续无模型更新等待；更新重置，工具期间暂停，不是整轮时长 |
+| workspaceRetentionMs | 7 天 | 从开发工单 resolvedAt 起算，再检查是否可安全释放 |
+| workspaceHighWaterBytes／workspaceTargetBytes | 20／16 GiB | 工单根合计触发回收，不含共享 Git，不是磁盘配额 |
+| workspaceMaintenanceIntervalMs | 15 分钟 | 后续维护计时，0 停周期但启动仍维护一次 |
+| capabilityConnectionMs | 10 秒 | 后续 SLS CLI connect-timeout，向上取整秒，不控制 MCP／DMS |
+| mcpExecutionMs | 120 秒 | 后续服务 MCP 工具／资源请求开始时取值 |
+| dmsExecutionMs／slsExecutionMs | 120／30 秒 | 后续对应原生查询 |
+| dingtalkAttachmentHosts | 根配置主机列表 | 后续导入附件允许来源 |
+| networkMode／networkAllowedDomains | open／根基础名单 | 新代理连接读取，既有连接不中断 |
 
-高水位 0 关闭按占用触发的回收，不关闭其他释放检查。这不是磁盘配额：维护只释放符合条件的开发代码，不删除附件、会话、工作文件或私有 Git；共享 Git 占用不计入此高水位。释放条件和容量口径见[存储说明](STORAGE.md#git-与工作区)。字段范围来自 API bounds：并发 1–64、保留期 1 小时至 365 天（不接受 0）、列表最多 100 项且拒绝重复、非零维护周期至少一分钟。没有覆盖时跟随根配置默认值。
+这里只列代码默认值，目标实际值以 API values 为准。数值范围、跨字段关系和列表限制以 [parameters.ts](../src/configuration/parameters.ts) 为准：并发 1–64，保留期 1 小时至 365 天，非零维护周期至少 1 分钟，非零高水位大于目标，列表最多 100 且无重复。
 
-`GET /api/config/parameters` 返回 revision、overrides、values、defaults、bounds。`PUT` 要求 admin 和 `{ expectedRevision, overrides }`；overrides 是完整覆盖快照，省略项回到默认值。例如只修改并发时，应先读取当前 overrides、合并 `maxConcurrentIssues` 后携带原 revision 保存；直接发送 `{ "maxConcurrentIssues": 3 }` 作为 overrides 会同时撤销其他覆盖，包括网络模式。`overrides: {}` 恢复所有根配置默认值。非法值返回 400，revision 冲突为 `configuration_changed`。页面只向 admin 展示编辑表单。页面按秒／分钟／小时／MiB 展示，未编辑字段保留 API 原始整数；编辑的时间和容量可用小数，但必须精确换算为整数毫秒／字节，工单并发仍为整数。保存其他参数不会把已有非整显示单位值四舍五入。依据：[参数路由](../src/http/configuration-routes.ts)、[覆盖、冲突和重启回归](../tests/http/application-parameters.test.ts)。
+高水位 0 仅关闭容量触发。回收只释放已解决、空闲、干净且绑定一致的开发代码，不删除附件、JSONL、工作文件或私有 Git。保存先持久化再替换有效快照，通知 Engine／维护／网络；不预约全部工单、不关闭所有会话、不中断既有调用。服务 MCP 通过 getter 和[SDK 补丁](../patches/README.md#服务-mcp-调用预算)在每次调用读取预算，已有会话的后续调用也生效。网络同步失败下次获取沙箱再同步，不重放业务操作。
 
-保存先持久化再更新进程快照，通知并发、维护和网络 owner；不预约全部工单、不关闭会话。已有调用继续使用已取得的预算，不能把“无需重启”理解成撤销所有在途操作。网络同步失败时数据库仍为权威，下次获取沙箱重试同步。
-
-服务 MCP 通过应用配置 getter 和[固定 SDK 补丁](../patches/README.md#服务-mcp-调用预算)在每次新工具／资源请求开始时读取当前预算，调高或调低不要求重建会话，也不追溯改变在途请求。保存参数不重放失败的工具调用；`capabilityConnectionMs` 不影响这条路径。原问题和回归见[审查记录](records/2026-11-06-documentation-audit.md#p2服务-mcp-会话保留旧调用超时)。
-
-workspace.taskConcurrency 仍是代码设置，控制后台准备／检查／测量的批次并发，不是 Agent 并发；端口、state 路径、时区、SSE 和文件等硬预算也不在参数页。
+页面使用秒／分钟／小时／MiB，但 API 保存整数毫秒／字节；未改字段保留原值，不因显示单位四舍五入。源码 taskConcurrency、端口、state 路径、时区和硬预算不在热参数页。回归：[application-parameters.test.ts](../tests/http/application-parameters.test.ts)。
 
 ### 工单网络访问
 
-管理员在“配置 → 参数 → 工单网络访问”选择模式，作用于所有工单的本地工具和 stdio MCP 的 SRT 出站代理：
+open 默认开放已有 HTTP／SOCKS 代理支持的出站能力，不按远端读写操作过滤；allowlist 按 networkAllowedDomains 基础名单加全局 Agent runtime 追加项过滤。域名可带端口，无端口匹配任意端口，裸 `*` 不接受，需开放时选 open。切模式保留名单内容。
 
-- `open`（开放网络，默认）：允许访问业务网站和 API，不按 HTTP 方法区分读取、提交或删除；网站登录、账号权限及实际操作由目标系统和当前任务决定。
-- `allowlist`（域名白名单）：沿用 `networkAllowedDomains` 基础名单及全局 Agent runtime 的追加名单，例如 `gitlab.xhgjdev.com:443`。条目没有端口时匹配任意端口；当前 SRT 不接受允许名单中的裸 `*`，需要开放访问时使用模式选项。
+每个新请求／CONNECT 检查模式，不追溯切断已建 TCP 隧道和 keep-alive，也不解除宿主控制地址／应用端口拒绝或文件隔离。自动开放排除未显式允许的本机、回环、链路本地和云元数据地址。DNS／上游代理仍影响实际路由，不能把本机检查当远端解析保证。
 
-模式持久化在现有 SQLite `application_settings.parameters` JSON 中，不新增表或迁移。旧数据库没有 `networkMode` 覆盖时使用根默认 `open`，因此部署此版本后会扩大原有域名访问范围；需要保持原限制的安装应通过管理员参数保存 `networkMode: "allowlist"`。开放模式隐藏名单输入并保留其内容，切回后继续使用，不自动清空。
-
-SRT 在每个新代理请求／CONNECT 时检查当前模式；不关闭 Pi 会话，也不追溯切断已建立的 TCP 隧道或 HTTP keep-alive 连接。开放模式使用 SRT 的公开网络决策回调，不关闭网络 namespace，不增加另一层协议执行器。它不解除既有宿主控制地址／应用端口拒绝或文件隔离；自动放行还排除未显式允许的回环、本机、链路本地及云元数据地址。明确允许／拒绝名单的优先级保持 SRT 原有语义。
-
-该模式提供现有 HTTP／SOCKS 代理支持的出站能力，不保证 UDP、ICMP 或任意网络栈可用。DNS 解析和路由必须由运行主机提供；使用上游代理时，远端解析及目标隔离还取决于上游代理，不能把本机的 DNS 地址校验当作远端代理的保证。受信应用代码、远端 MCP 服务和模型请求本来就有各自的网络与权限边界，不由此选项重新授权。
-
-这项设置不会自动配置网站凭证、创建浏览器或保存登录态，也没有 GitLab 专用 API 或“只读连接”。会话可使用已有命令和库访问已获授权的网站；交互验证码、单点登录及浏览器依赖仍需相应工具。实现见 [issue-sandbox.ts](../src/agent/issue-sandbox.ts)，参数校验见 [parameters.ts](../src/configuration/parameters.ts)。
+此设置不创建浏览器、保存网站登录或提供任意 UDP／ICMP 支持。远程网站／MCP 的权限仍独立；SDK／Operator 扩展属于可信应用代码。旧数据库缺此覆盖时采用根默认 open，需保留白名单的安装应显式保存 allowlist。owner：[issue-sandbox.ts](../src/agent/issue-sandbox.ts)。
 
 ## 服务和查询目标
 
-仓库目录保存 URL、显示名和手动指定的分组，分组独立于服务关联。prod/test Deployment 保存基线与目标。dev 分支从同服务正式部署推导，不接受独立开发覆盖；既有工单分支和路径仍按自己的历史恢复。
+仓库目录保存 URL、名称与独立分组；Service 关联仓库，prod/test Deployment 保存基线和目标。dev 基线从同服务 prod 推导，不能单独覆盖；既有工单分支和路径是历史记录，不能随配置猜测改绑。
 
-服务保存必须显式提供 deployments 数组，省略不是清空。revision 冲突保留草稿；仓库 URL 级联变化推进关联服务版本。目标和凭证分离：保存目标不要求凭证已配置，实际调用才校验所选组。
-
-### DBHub
-
-固定 `@bytebase/dbhub@1.5.0`，支持页面中的 PostgreSQL、MySQL、MariaDB、SQL Server、Oracle；Oracle database 为服务名。目标位于 deployment.config.dbhub，MySQL 使用 `type: "mysql"`，旧 mysql 字段拒绝。
-
-生成 stdio 连接属于 Deployment，通用 MCP API 不得改删。DSN 编码后只通过 DBHUB_DSN 环境传递，不进入 argv。[dbhub.toml](../scripts/dbhub.toml) 限制只读、行数与超时，数据库账号仍须实际只读。
-
-升级 0068 仅转换顶层旧数组，保留字面值、顺序和无关历史。冲突、无效／重复目标、活动开发目标或未知历史命令会使迁移回滚，不猜测修复。
+保存服务必须显式提供 deployments 数组，省略不等于清空。revision 冲突保留草稿，仓库 URL 级联变更推进服务版本。目标保存不要求已有凭证，实际调用才校验完整组。
 
 ### DMS 与 SLS
 
-DMS 保存 alias／schema 意图，不相信客户端的 instanceId、host、port 或 databaseId；实际解析按当前操作／查询 owner 的所选凭证完成。
+DMS 只保存 instanceAlias／schema 意图，服务器按当前 owner 凭证解析实例、host、port、databaseId，不信客户端提供的解析结果。SLS 保存 region／project／logstores，targets 可列多组；`*` 允许该 Project 的日志库，调用仍必须指定具体名字。同 region／project 可有不同日志库授权，不存在自定义 target 名字。
 
-SLS 保存 region、project、logstores／targets，`*` 可表示 Project 下日志库，但查询仍指定具体名称。SLS 查询范围只保存 region、project、logstores，不保存自定义目标名。`service_query` 必须显式提交 region、project 和具体 logstore，服务端校验完整组合，不接受旧 `target` 名称参数。多个范围可使用相同 region／project 并授权不同日志库。服务描述中标题统一为 `SLS`，环境由上级章节区分；DMS 各数据库标题统一为 `DMS`，保留真实实例 alias 与 schema。0072 迁移直接删除现有部署 `sls.targets[].name` 并推进受影响服务的 revision，不转换旧工具参数或改写历史对话。能力按实际部署目标开放，不按环境名称硬编码禁用；调查保持本环境，开发显式选择 prod/test。
+调查只访问本环境，开发显式选择 prod/test。配置目标决定可用性，凭证不创建目标。原生查询契约集中在 [Agent](AGENT.md#原生证据查询)，真实查询记录不代表所有配置目标均已测试。
+
+### DBHub
+
+DBHub 为部署所属 stdio MCP，支持页面中的 PostgreSQL、MySQL、MariaDB、SQL Server、Oracle，Oracle database 为服务名。配置位于 deployment.config.dbhub，MySQL 使用 type=mysql，旧 mysql 字段拒绝。固定依赖见锁文件。
+
+生成连接不能经通用 MCP API 任意改删。DSN 只经 DBHUB_DSN 环境传递，不进 argv；[dbhub.toml](../scripts/dbhub.toml) 限制只读、行数和超时，远端账号仍须实际只读。可选驱动安装脚本被阻止不等于这些数据库都已可用。
 
 ## 服务 MCP 与钉钉
 
-服务 MCP 支持 HTTPS Streamable HTTP、SSE 和 stdio。Agent 只获得入口／已包含服务在允许来源环境中的部署所属连接；无 deployment_id 的全局连接、默认 dingtalk 和个人偏好指定的导入连接不注入 Agent。
+服务 MCP 支持 HTTPS Streamable HTTP、SSE、stdio。Agent 只获得允许环境中入口／包含服务的部署所属连接；无 deployment_id 的全局连接、默认钉钉和个人导入偏好连接都不注入 Agent。全局连接管理／私有读取／测试仅 admin；测试需发现和关闭都成功才算通过。
 
-全局连接的导入、私有配置读取、增删改和连接测试仅 admin。Pi 管理发现、资源、连接和关闭，应用保留同源／禁止重定向、输入／结果预算、取消和发送前校验。readOnlyHint 不是授权，URL 查询部分不出现在普通列表和模型说明中。测试发现与关闭都成功才报告成功，清理失败不被取消或操作错误覆盖。
+钉钉来源偏好只含源与字段映射，不保存网关密钥。导入走所选全局 MCP，读取 /notable/record 的 dentryUuid／sheetId／rowId，精确查 recordIds。字段缺失或重名报错，个人偏好逐项覆盖共享。
 
-钉钉接受 `/notable/record` 的 dentryUuid／sheetId／rowId，只调用 get_tables 和精确 recordIds 查询。个人字段偏好逐项覆盖共享映射，不保存网关密钥，也不能通过调用参数临时改映射。缺失／重名字段报错，默认标题取“序号”原值。
+重复来源返回原工单；另外会精确匹配没有钉钉来源的手工同标题工单，当前不限定服务／环境，也未定义多个同名候选优先级，调用方须核对返回范围。不同来源已导入工单不因同名自动合并。
 
-导入默认指派当前调用者，重复来源返回原工单、不改派、不重复启动。除来源记录去重外，读取记录后还会用解析出的标题／序号精确匹配**没有钉钉导入来源的手工工单**；当前匹配不限定服务或环境，也没有多个同名候选的优先级约定，调用方必须核对返回的工单范围。不同来源记录即使同名，也不会仅因另一个已导入工单同名而合并。依据：[导入路由](../src/http/dingtalk-routes.ts)、[同名与重复导入回归](../tests/http/dingtalk.test.ts)。
-
-附件只从允许的 HTTPS 主机下载，不重定向、不转发 MCP 凭证；链接附件留在描述，工单与文件一起保存后返回。HTTP 的 `startAgent` 默认和超时／清理错误见 [HTTP 钉钉导入](HTTP.md#钉钉导入)，不要混用页面和 MCP 的默认行为。
-
-附件下载 owner 在文件暂存开始前接管响应流，目录创建、文件打开、读取、大小校验或取消失败时仍取消流并释放读取器。暂存或响应清理失败优先于超时／取消返回服务端失败，原始原因留在内部错误链；页面和日志不包含签名 URL 或私密下载诊断。下载所有权与清理规则见 [dingtalk-attachments.ts](../src/http/dingtalk-attachments.ts)，失败回归见 [dingtalk-attachments.test.ts](../tests/http/dingtalk-attachments.test.ts)。
+附件仅从允许 HTTPS 主机下载，不重定向、不转发 MCP 密钥。导入、工单与附件协调提交；下载暂存／响应流清理失败不能降格成普通取消。HTTP 和页面启动默认不同，见[导入接口](HTTP.md#钉钉导入)，回归：[dingtalk.test.ts](../tests/http/dingtalk.test.ts)、[dingtalk-attachments.test.ts](../tests/http/dingtalk-attachments.test.ts)。
 
 ## Agent 基座与资源
 
-资源来自运行用户 `getAgentDir()`，默认 ~/.pi/agent；应用不维护另一套 skills/extensions，不加载工单本地扩展。检查资源只发现路径，不执行扩展，Operator 扩展不能覆盖应用保护工具。
+资源来自运行用户 getAgentDir()，默认 ~/.pi/agent；PI_CODING_AGENT_DIR 只改变 SDK 资源目录，不改变业务 state。只读资源检查不执行扩展，工单本地扩展不加载，Operator 扩展不能覆盖应用工具。
 
-Pi settings 为基线，SQLite runtime.settings 只覆盖契约允许项，省略恢复基线。runtime.networkAllowedDomains 是**全局 Agent** 的追加列表，与参数中的基础列表组合，个人模型组不维护独立 runtime。域名语法／去重／数量按同一 owner 校验，不解除宿主控制地址拒绝。
+Pi settings 为基线，SQLite runtime.settings 只覆盖契约允许项，省略恢复基线。runtime.networkAllowedDomains 是全局追加项，个人模型组不维护独立 runtime。详细生命周期见 [Agent](AGENT.md)。
 
 ## 入站工单 MCP
 
-`/mcp` 为无状态 Streamable HTTP POST，复用 HTTP 身份，GET／DELETE 为 405。客户端从“配置 → 端点”复制配置，先 users_list／services_list 核对身份与范围。标准连接结构见 [mcp.json](../examples/mcp.json)。
+`/mcp` 为无状态 Streamable HTTP POST，复用 HTTP 身份，GET／DELETE 为 405。从配置端点复制客户端配置，先 users_list／services_list 核对范围。结构示例见 [mcp.json](../examples/mcp.json)。
 
-| 工具 | 行为 |
+| 工具 | 用途 |
 | --- | --- |
-| issues_search／issue_get | 搜索与读取范围、状态、附件 |
-| issue_create | 工单与附件保存后入队，省略处理人即未分配 |
-| dingtalk_import | 默认 p2、不启动、指派当前用户 |
-| issue_message／issue_conversation | 异步发送和分页读取 |
-| attachment_read | 校验原件，文本分页或返回下载元数据 |
-| work_files／work_file_read | 工作文件访问，管理文件只列名称 |
+| issues_search／issue_get | 筛选和读取工单 |
+| issue_create／issue_message | 保存工单或受理消息，异步执行 |
+| issue_conversation | 分页读取对话 |
+| dingtalk_import | 默认 p2、不启动、指派当前调用者 |
+| attachment_read | 校验原件，文本分页或下载元数据 |
+| work_files／work_file_read | 普通工作文件，管理文件只列名 |
 
-Base64 附件不带 data 前缀，默认最多 20 个，单个及解码后合计均不超过 20 MiB。`/mcp` 整个 JSON 请求（含 Base64 和元数据）最多 32 MiB，框架在 JSON 解析前检查，超限返回 `413 payload_too_large`。附件组在任何解码前预检总量，超限工具结果为 `isError: true`、`mcp_attachments_too_large`，不会创建工单或安排 Agent；单件超限为 `mcp_attachment_too_large`。
+Base64 不带 data 前缀，默认最多 20 件，单件及解码后合计不超过 20 MiB；整个 JSON 请求限 32 MiB，解析前超限为 HTTP 413 payload_too_large。工具预检超限为 isError=true 的 mcp_attachments_too_large／mcp_attachment_too_large，不创建工单。这些不是进程总内存或 HTTP 流式上传上限。
 
-这些是入站 MCP 的内存预算，HTTP 流式附件仍不设业务总量／数量上限，由部署控制传输容量。较大的附件批次应使用页面／HTTP 创建流程，不能在请求结果不明时拆成多次 MCP 工单创建；先核对是否已创建。
+列表和对话 offset 从 0 起，默认 limit=30、最多 100，返回 total／offset／items／nextOffset，null 到末尾，不是跨修改稳定游标。文本默认每页 200 行、最多 1000 行，整文件读取预算默认 64 MiB、每页响应 1 MiB；超预算返回 inline=false 和下载路径。完整定义以 [server.ts](../src/mcp/server.ts) 为准。
 
-文本读取默认整文件预算 64 MiB，每页响应 1 MiB、最多 100 项／1,000 行；超 readBytes 返回 inline=false、read_budget_exceeded 和下载路径，二进制只返回元数据。具体 schema 与限额见 [server.ts](../src/mcp/server.ts) 和根配置。响应不明先查询，不盲目重发。
-
-列表与对话分页使用从 0 开始的 `offset`，默认 `limit=30`、最多 100；文本按行分页默认 200 行、最多 1,000 行。分页返回 `{ total, offset, items, nextOffset }`，`nextOffset=null` 表示到末尾，不是跨修改稳定的游标。`issues_search` 先按 HTTP 列表的创建时间／编号倒序取数据，再过滤编号／标题、服务、环境和状态；不是全文描述搜索。工具成功结果位于 `content[].text`，内容为 JSON 字符串；工具失败可能是 HTTP 200 内的 `isError: true` 和稳定错误码，不能只检查 HTTP 状态。HTTP、SSE 与 MCP 的区别见 [HTTP 接口约定](HTTP.md)。
+issues_search 对 HTTP 摘要排序后筛选编号／标题、服务、环境和状态，不全文搜索描述。成功 JSON 位于 content[].text；HTTP 200 内也可能是 isError=true，不能只看状态。结果不明先读已有工单／会话，不拆包反复创建或自动重发。

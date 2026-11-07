@@ -2,29 +2,83 @@
 
 [文档导航](README.md) · [配置](CONFIGURATION.md) · [运维](RUNBOOK.md)
 
-## 部署模型
+## 当前宿主机
 
-Linux 主机或单副本容器运行 Node API，同源提供 Web、HTTP、SSE、/mcp。一个 state root 只有一个 API；可选 4173 前端不是独立业务实例。
+当前安装在 Debian 13 amd64，以 `idoly` 直接运行 Node API，不容器化应用，不注册 systemd service，不配置开机自启或进程自动拉起。API 同源提供 Web、HTTP、SSE、MCP，监听 3000；无需单独运行 4173。
 
-部署需准备持久 state、运行用户的 Operator 配置、系统工具、允许的外部出口和可信认证网关。subject 请求头只是选择身份，网关必须校验并绑定，不能允许任意冒充。
+| 内容 | 实际位置 |
+| --- | --- |
+| 源码、生产依赖和 Web 构建 | `/home/idoly/issue-pilot` |
+| 唯一业务数据根 | `/home/idoly/issue-pilot/data` |
+| 根部署配置 | `/home/idoly/issue-pilot/issue-pilot.config.ts` |
+| 启停入口 | `/home/idoly/issue-pilot/restart.sh` |
+| 启停实现及迁移验证记录 | `/home/idoly/.local/share/issue-pilot-runtime` |
+| PID、启停锁和日志 | `/home/idoly/.local/state/issue-pilot-host` |
+| Operator Pi 配置 | `/home/idoly/.pi/agent` |
+| SSH 主机信任和用户文件 | `/home/idoly/.ssh` |
+
+`restart.sh` 是此次迁移安装的本机入口，通过 Git 本地 exclude 排除，不是任意新 clone 自动具有的文件。其实现 `host-runner.py` 必须与入口一起保留。根配置、生产依赖与既有 `src/web/dist` 对应迁移记录中的源码版本。`data` 已在 `.gitignore` 和 `.containerignore` 排除，不得作为测试或构建上下文。
+
+### 启动、停止与重启
+
+以 `idoly` 在目标机 Bash 中逐条执行，不能使用 sudo 启动应用：
+
+```bash
+cd /home/idoly/issue-pilot
+./restart.sh status
+./restart.sh start
+```
+
+`start` 遇到本脚本已管理的进程直接返回，不重复创建实例。需要重启时执行 `./restart.sh` 或 `./restart.sh restart`；需要停服时执行 `./restart.sh stop`。重启先优雅关闭，最多等待 1800 秒；不会发送 SIGKILL。启动最多等待 600 秒检查 `/health`。超时保留进程与现场，先查看 `status` 和日志，不循环启动。
+
+脚本用 PID、进程启动时间、argv 和工作目录识别自己的进程，用锁排斥重复启停，不按端口杀进程。启动会访问 Git、恢复中断状态并准备运行视图，可能在监听前等待一段时间，不能把无监听立即当作挂死。状态和日志：
+
+```bash
+./restart.sh status
+curl -fsS http://127.0.0.1:3000/health
+tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
+```
+
+只保留当前和上一次启动的 `application.log`／`application.previous.log`。日志按私有业务诊断处理。health 只证明服务已可用，不检查模型、DMS、SLS 或 SSH。
+
+### 访问与认证
+
+目标机本机 API 地址为 `http://127.0.0.1:3000`，同源提供网页和业务接口。当前根配置监听 `0.0.0.0:3000`；本次不配置宿主机端口转发、DNS 或外部访问入口。
+
+应用没有登录服务和逐工单 ACL。接入不可信网络前必须由网关认证并覆盖 subject 头，保护全部业务读取、下载、SSE 和 MCP，阻止绕过网关直连。SSE 关闭代理缓冲并配置长连接超时。精确边界见[HTTP](HTTP.md#身份与访问边界)。
+
+### 系统工具、时区与中文
+
+| 工具 | 安装入口 |
+| --- | --- |
+| Node 26 | `/usr/local/node/bin/node` |
+| Temurin JDK 8 | `/usr/local/java/bin/java` |
+| Maven | `/usr/local/maven/bin/mvn` |
+| aliyun CLI | `/usr/local/bin/aliyun` |
+| Git 2.56 | `/usr/bin/git` |
+| 全局 Pi | `/home/idoly/.local/bin/pi` |
+| 应用 Python | `/home/idoly/issue-pilot/.venv/bin/python3` |
+
+PATH、JAVA_HOME、MAVEN_HOME 已写入 `/etc/profile`；新登录生效，已有 Bash 可 `source /etc/profile`。启停脚本另外显式设置工具环境。Git 由本地 Debian 包 `1:2.56.0+issuepilot1` 管理，替换系统旧 Git，配套文件在 `/usr/libexec/git-core` 和 `/usr/share/git-core`；保留 lazygit。其他必要系统工具包括 bubblewrap、socat、proxychains4、rg、fdfind、OpenSSH、Python venv 和 rsync。
+
+系统时区为 `Asia/Shanghai`，默认 locale 为 `zh_CN.UTF-8`，保留 `en_US.UTF-8`。UTF-8 和中文字符宽度已验证；Hyper-V 基本控制台的字体不能保证显示中文，请用带中文字体的 SSH 终端。不要为控制台显示问题批量改写文件编码。
+
+### 当前维护边界
+
+后端直接执行 TypeScript，不生成后端 dist。不要在 live checkout 安装依赖、覆盖源码或原地重建 Web。发布、恢复和数据库检查点按[运维流程](RUNBOOK.md#按风险发布与重启)。迁移包已在真实查询验收后删除，源机原数据保留但不会接收目标的新写入；不能直接启动源机作为当前实例的无损回退。
+
+Playwright 镜像 `mcr.microsoft.com/playwright:v1.64.1-noble` 已拉取并完成页面 smoke，只用于测试。仓库的 [Containerfile](../Containerfile) 和 [Kubernetes 示例](../deploy/issue-pilot.yaml) 保留为替代部署材料，本机没有按它们部署，也没有验证它们与本机 `data` 路径的直接互换；切换部署方式需重新检查路径绑定、工具、权限和持久介质。
 
 ## 首次本地运行
 
-以下命令在 **Linux、Bash、独立安装目录的仓库根**执行，不在正在提供业务的 checkout 中安装或构建。Node 使用 [CI](../.github/workflows/ci.yml) 声明的版本；容器使用 [Containerfile](../Containerfile) 声明的版本。运行模型本地工具需要 Python/venv、Git、rg、fd/fdfind、OpenSSH client、bubblewrap、socat、proxychains4。SLS 另需 aliyun CLI；Java／Maven 等按被处理项目准备。只启动页面不代表这些工具已可用。
+以下用于 **Linux、Bash、独立安装目录、空数据库**。不是在当前业务安装上重复初始化。源码使用同一 revision 的根配置和锁文件；当前宿主机已验证 Node 26／Git 2.56，其他版本是否满足项目 API 需单独验证，不能只看能否执行 TypeScript。
 
-主机 CI 与容器目前使用不同 Node 主版本，项目没有声明通用 `engines` 范围；选择对应运行方式的版本，不以“支持 TypeScript”推断其他 Node 版本可用。系统还须允许 SRT 创建非特权 namespace；依赖命令存在不等于内核／容器策略允许执行，工具验收入口见[开发验证](DEVELOPMENT.md#验证入口与边界)。
+1. 在独立 checkout 核对[根配置](../issue-pilot.config.ts)。选择自己的私有数据目录，监听设为 `127.0.0.1` 或实施等效隔离，将 `bootstrapUser` 改为自己的演示身份。仅用户表为空时 bootstrap 生效，不会重命名已有用户。
+2. 安装上述 Linux 工具并确认内核允许非特权 namespace。按被处理项目需要准备 JDK／Maven；SLS 需要 aliyun CLI，数据库 MCP 需其实际驱动。
+3. 为运行用户准备 Pi 模型目录，按[离线目录检查](CONFIGURATION.md#operator-模型目录)核对真实 provider、model 和协议；示例中的 `.invalid` 地址不可用于请求。模型密钥之后由应用写入 SQLite，不能用 Operator 登录代替。
+4. 准备可信 SSH `known_hosts`。应用个人 Git 不读取 SSH config 或 ssh-agent，非默认端口写入仓库 URL。
 
-### 1. 启动前准备
-
-1. 获取要运行的源码 revision 并记录 `git rev-parse --short HEAD`；不要把示例 registry 当作已发布安装源。
-2. 检查[根配置](../issue-pilot.config.ts)：首次空数据库会使用 `bootstrapUser` 创建活跃开发管理员。将其改为自己的演示／部署身份，不沿用仓库中的人员信息。**只有用户表为空时才创建**，修改此项不会更新已有用户；已有账号通过用户管理维护。
-3. 本机试运行将 `http.host` 和 `web.host` 设为 `127.0.0.1`，或先实施等效网络隔离。仓库默认是 `0.0.0.0`，没有登录服务；接入网络前必须准备认证网关。
-4. 为运行用户准备全局 Pi 目录中的 `models.json`，按[模型目录模板与离线检查](CONFIGURATION.md#operator-模型目录)核对实际路径及候选。首次没有可选模型会使启动报 `global_agent_model_unavailable`。安装全局 Pi 或执行 `/login` 不会完成应用配置；实际模型 Key 在启动后由页面写入 SQLite。
-5. 需要 Git/SSH 的仓库准备可信 `~/.ssh/known_hosts`，之后为工单 owner 配置个人 SSH Key。应用的个人 Git 不读取 SSH `config` 或使用 ssh-agent，实际主机、端口与无交互私钥要求见[凭证与 owner](CONFIGURATION.md#凭证与-owner)。
-
-### 2. 安装与启动
-
-确认尚未启动此安装目录的 API，然后执行：
+确认独立安装尚未运行，逐行执行，失败即停止：
 
 ```bash
 npm ci
@@ -34,95 +88,19 @@ npm run build
 node --experimental-strip-types src/http/production.ts
 ```
 
-按行执行，任一步失败先修复，不继续启动旧产物。第一次安装可在 `npm ci` 后、启动前执行上面的离线模型目录检查。后端直接执行 TypeScript；没有 `npm start`，也不需要生成后端 `dist`。
+`npm ci` 必须执行项目 postinstall 校验补丁。可选驱动被 npm 策略阻止的脚本需单独审查，不因安装成功就宣称其已可用。`npm run build` 只构建 Web；没有 `npm start` 或通用安装脚本。新 clone 不包含目标机的 `restart.sh`。
 
-postinstall 使用 Git 校验固定补丁，不可跳过。被策略阻止的原生驱动等脚本要单独审查与验收，不因 npm 安装成功声称全部数据库驱动可用。
+首次启动会迁移并 bootstrap；无需先运行 `db:migrate`。`state.directory` 相对源码根、databaseFile 相对 state；没有 state/database 环境变量覆盖。目标安装使用 `data`，其他源码版本以自己的根配置为准，不创建 `.issue-pilot` 兼容路径。
 
-启动会创建 state、执行数据库迁移与恢复检查，不是只读操作；已有安装先走[发布流程](RUNBOOK.md#按风险发布与重启)。首次启动自动初始化用户、prod/test/dev 环境与共享模型选择，但**不会**初始化可用的模型 Key、业务仓库或服务。无需先另跑 `npm run db:migrate`。
+### 完成首张工单
 
-state 默认是源码根下 `.issue-pilot`，`databaseFile` 相对此根，无 state/database 环境变量覆盖。手工隔离使用独立项目和根配置，测试使用构造器注入。业务设置由页面写 SQLite，不创建用户／服务 YAML。
-
-### 3. 检查入口并完成首张工单
-
-在第二个终端执行（API 仍在前台运行）：
+另一个终端直连该独立实例：
 
 ```bash
 curl -fsS http://127.0.0.1:3000/health
 curl -fsS http://127.0.0.1:3000/api/me
 ```
 
-第一条应返回 `{"ok":true}`，第二条应是本次初始化的账号；它们只检查 HTTP 与用户初始化。浏览器访问 `http://127.0.0.1:3000`，按顺序完成：
+浏览器打开 3000，管理员保存可用的共享模型及 Key；登记 SSH 仓库并为服务配置实际 `test` 基线分支，给工单 owner 配置个人 SSH 私钥。创建测试调查工单，明确“只读取仓库，说明一个模块用途，不修改或提交代码”。等待 Agent 从排队／运行变为空闲，检查回复、源码和 `pending` 状态，再确认解决。
 
-1. 管理员在“我的凭证”的共享 API Key 设置中选择实际可用的 provider／model／thinking／Codemode 并保存 Key；确认 provider／model 来自运行用户的模型目录。不要用 Operator 登录状态替代该步骤。
-2. 在“配置 → 仓库”登记一处可访问的仓库，再在“服务”中关联它，为 `test` 部署配置仓库真实存在的基线分支。首次账号为 developer：远程地址应使用 `ssh://git@<host>/<path>.git` 或 `git@<host>:<path>.git`，其个人 Git 路径拒绝 HTTPS 地址，包括公开仓库；不要把协议占位符原样保存。服务不能没有仓库；调查可以不配置 DMS、SLS 或 MCP 查询目标。开发模式还需要同服务的 `prod` 和 `dev` 部署，dev 基线从 prod 推导。
-3. 为实际 owner（处理人，否则报告人）配置可访问该远程仓库的个人 SSH Key，并确认运行用户的 `known_hosts` 已包含可信主机记录。创建测试调查工单，写明“只读取仓库，说明一个模块的用途，不修改或提交代码”，选择刚配置的服务。Git 协议与凭证检查见 [git-credentials.ts](../src/workspace/git-credentials.ts)。
-4. 创建返回并不代表执行完成。观察会话从排队／运行到空闲，确认有回复、源码可读且工单进入 `pending`，再确认解决成为 `resolved`。失败时读取详情的 `workspace.lastError` 并按[排障步骤](RUNBOOK.md#从启动到首张工单的定位顺序)处理，不反复创建工单。
-
-这条路径会调用真实模型并可能产生费用，也会访问所选仓库；只在自己的演示安装中执行。完成后用前台 `Ctrl+C` 请求优雅关闭，等待进程退出；工单数据保留在该安装的 state 中。不要为清理演示而删除未知或正在使用的 state。
-
-没有模型／外部仓库条件时，开发者可执行[隔离接口验证](DEVELOPMENT.md#无需真实模型的核心流程验证)，但它不能替代上述真实集成验收。
-
-## 入口与 supervisor
-
-| 入口 | 用途 |
-| --- | --- |
-| API 3000 | 构建网页、HTTP、SSE、MCP |
-| npm run dev:web，4173 | HMR 开发，代理 /api、/mcp |
-| Vite preview，4173 | 提供构建产物并代理同一 API |
-
-```bash
-node node_modules/vite/bin/vite.js preview --config src/web/vite.config.ts --strictPort
-systemctl --user show issue-pilot-api.service issue-pilot-web.service \
-  --property=MainPID,ExecStart,WorkingDirectory --no-pager
-```
-
-上面的 `systemctl` 命令仅适用于已经创建这些名称的 user units；仓库不提供对应 unit 文件，也不会在 npm 安装时注册服务。主机自行配置 supervisor 时，需匹配实际 Node/PATH、WorkingDirectory、源码、依赖、venv 和 dist，并允许足够时间排空 Engine。API 的 shutdownGraceMs 有界关闭卡住 HTTP 连接，不替代 Agent 优雅结束。已有安装的更新按[发布步骤](RUNBOOK.md#按风险发布与重启)，不要混装运行中依赖。
-
-参数 Tab 可以调整一部分运维策略，不需要重启；state 路径、端口、bootstrap、区域及硬预算仍是部署级变更。不要把“参数热更新”扩展解释为任意代码配置都能即时切换。
-
-## 容器
-
-[Containerfile](../Containerfile) 构建 Web 与修补后的生产依赖，提供 Node、Java／Maven、Git、aliyun CLI、Python requirements 和 SRT 系统依赖；版本以该文件及锁文件为准。根配置随源码复制进镜像，首次用户、监听和路径须在构建前准备，不能通过未实现的环境变量覆盖。业务配置由挂载 state 中的 SQLite 保存。
-
-```bash
-# 先替换为自己有推送权限的镜像仓库及本次源码 revision tag；push 会对外写入镜像。
-IMAGE='registry.example.com/issue-pilot:replace-with-revision'
-podman build -f Containerfile -t "$IMAGE" .
-podman push "$IMAGE"
-```
-
-替换镜像地址和版本，核对包源／镜像／源码网络。基础镜像按声明 tag，准确软件依赖按锁文件；不能用删除必要构建镜像或弱化 sandbox 的方式掩盖环境失败。
-
-## Kubernetes
-
-[示例清单](../deploy/issue-pilot.yaml) 为单副本 Recreate、UID/GID 1000、RuntimeDefault seccomp、只读根文件系统，移除 capabilities，不挂载 ServiceAccount token。节点须支持 SRT 所需的非特权 namespace，不采用 privileged 绕过。
-
-| 资源 | 容器位置 |
-| --- | --- |
-| /var/lib/issue-pilot | /opt/issue-pilot/.issue-pilot，持久 state |
-| /etc/issue-pilot | /home/node，只读 Operator HOME |
-| emptyDir | /tmp，临时执行空间 |
-
-清单不创建 namespace、主机目录、Operator 配置或认证网关。先将示例镜像替换为已构建并推送的实际镜像，创建 `issue-pilot` namespace；在匹配节点准备 `/var/lib/issue-pilot` 和 `/etc/issue-pilot`（含 `.pi/agent/models.json`、按需 `.ssh/known_hosts`），核对 UID/GID 1000 的访问权限和容量，设置清单要求的 `issue-pilot/state=true` 节点标签。只读 HOME 的内容要在挂载前准备，不能指望容器内 `/login` 写入。完成这些前置条件及网关后：
-
-```bash
-kubectl -n issue-pilot apply -f deploy/issue-pilot.yaml
-kubectl -n issue-pilot rollout status deployment/issue-pilot --timeout=35m
-kubectl -n issue-pilot get deployment,pod,service
-```
-
-示例 registry 不是可直接使用的生产地址。现有绝对路径已进入绑定时，迁移路径需独立演练，不能只改 mount 或批量改 DB。
-
-该清单使用节点本地 `hostPath`，没有 PVC 或跨节点数据复制。标签应唯一定位保存这套 state 的节点；给多台节点同一标签，重新调度可能读到另一套目录或空目录。节点故障需按恢复计划迁移数据，不能靠增加副本恢复可用性。`/tmp` 的 1 GiB `emptyDir` 只限制临时卷，容器的内存限制和 state 容量是独立约束。
-
-startupProbe 每 5 秒检测一次，最多 360 次；它为监听前迁移和仓库准备留出窗口，不代表冷启动耗时承诺。Kubernetes 终止宽限为 1,800 秒；Engine 会排空内存队列，较长任务可能超出此时间而被平台终止，不能仅凭 HTTP 的 30 秒关闭宽限判断停机完成。
-
-## 网络与上线验收
-
-网关保护源码、下载、私有配置和 MCP，限制传输和内存压力；SSE 关闭代理缓冲，设置长连接超时。HTTP 附件不设业务总量／数量上限，入站 MCP Base64 有独立限额，不能混同。
-
-`/mcp` 在 JSON 解析前限制单请求 32 MiB，附件解码前检查合计 20 MiB；具体错误与上传方式见[入站 MCP](CONFIGURATION.md#入站工单-mcp)。Base64、JSON 和内部 multipart 仍有多份内存开销，这些预算不是进程总内存上限。网关还需按实际客户端配置并发及速率限制；本仓库的 Kubernetes Service 不提供这些控制。这些预算不能推导安全并发数，需在独立环境按实际负载验证。
-
-工单默认通过 SRT 开放网络出口；需保留域名限制的安装将 `networkMode` 设为 `allowlist`，再维护基础列表及全局 Agent runtime 的追加项，SSH 和 HTTPS 端口分别核对。旧数据库缺此字段时也使用新默认，部署前应选择所需模式，详见[工单网络访问](CONFIGURATION.md#工单网络访问)。网站账号权限仍由目标系统决定，Operator 身份和模型密钥选择继续由应用隔离。
-
-验收至少覆盖 health、页面、身份、SSE、动态 native executor、路径越界、Python/Excel、stdio MCP 与 Git/SSH。health 200 不证明模型、外部数据库、驱动或 sandbox 可用。CI、本机与真实容器结果分别报告，不互相替代。
+该路径会调用真实模型、可能产生费用并访问远程 Git。失败时查看 workspace.lastError、owner 和范围后再重试，不重复创建。完成演示用前台 Ctrl+C 优雅关闭，数据保留。没有模型或远程 Git 条件时执行[临时夹具流程](DEVELOPMENT.md#无需真实模型的核心流程验证)，不得把它报告成真实集成成功。

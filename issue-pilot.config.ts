@@ -2,7 +2,7 @@ const gibibyte = 1024 ** 3;
 
 export const issuePilotConfig = Object.freeze({
   state: Object.freeze({
-    directory: ".issue-pilot",
+    directory: "data",
     databaseFile: "issues.db",
     sqliteBusyTimeoutMs: 5_000,
   }),

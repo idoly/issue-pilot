@@ -10,3 +10,4 @@ coverage/
 infra/.env
 *.log
 .DS_Store
+/data/

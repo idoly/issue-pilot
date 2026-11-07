@@ -1,45 +1,44 @@
 # 文档导航
 
-[项目首页](../README.md) · [演示页面图与来源](images/README.md)
-
-现行指南按使用、配置、实现和运维分别维护，不以阶段变更记录代替当前契约。根默认值以 [issue-pilot.config.ts](../issue-pilot.config.ts) 为准，业务类型以 [contracts.ts](../src/domain/contracts.ts) 为准，数据库升级以不可变的 [drizzle](../drizzle) 为准。
+[项目首页](../README.md)
 
 ## 适用范围与读者
 
-这组指南描述**当前 checkout 的源码实现**，不是某个已发布镜像的功能承诺。最近一次完整文档核对的源码基线为 `ee147d32f28d678b9a17a2038e976601fad480ba`（2026-11-07）；该次文档核对未修改业务实现，后续局部修复见审查记录。之后阅读时用 `git rev-parse --short HEAD` 和 `git status --short` 确认源码及未提交改动，并在同一 revision 下阅读代码、锁文件和部署清单。`package.json` 的应用版本与示例镜像 tag 不足以标识源码能力；页面图和历史记录各自有独立的版本说明。
+现行指南于 2026-11-07 依据目标机 `/home/idoly/issue-pilot` 重新整理，代码基线为 `96d347fffa3b3d78388986a56f9ad43b9e2ce87e`。目标机的根配置将 `state.directory` 设为 `data`，并有数据忽略规则和本机 `restart.sh`。通用业务契约来自此版本源码；安装路径、工具路径和无 service 的启动方式描述这台机器，不能推定其他 checkout 相同。
 
-- 使用者：创建工单、补充证据、检查结果及确认解决。
-- 管理者：设置用户、共享模型／凭证、服务部署和运行参数。
-- 开发维护者：理解状态、调用边界，安全地测试、发布、定位及恢复故障。
+```bash
+git rev-parse HEAD
+git status --short
+```
 
-文档以任务为入口，字段和完整类型以链接的 owner 为准，不维护第二份全量配置、依赖版本表或接口 Schema。现行 Markdown 是人工维护的文档源，仓库没有生成全套指南的脚本；更新时核对实现、测试和命令，而不是重写历史验收结果或手改截图 manifest。
+在目标机仓库根执行上述命令可确认后续版本和本机差异。`package.json` 的 `0.1.0`、全局 Pi 版本和镜像 tag 都不能单独标识应用代码。配置以[根配置](../issue-pilot.config.ts)、SQLite 及运行用户 Pi 目录的实际职责为准，详见[配置分层](CONFIGURATION.md#配置分层)。
 
-## 先读哪一份
-
-| 任务 | 入口 |
+| 读者／问题 | 主说明位置 |
 | --- | --- |
-| 使用工单 | [使用指南](USAGE.md) |
-| 设置账号、凭证、服务或参数 | [配置与协议](CONFIGURATION.md) |
-| 初次安装、首次工单或容器部署 | [部署指南](DEPLOYMENT.md#首次本地运行) |
-| 编写 HTTP 客户端、判断异步结果 | [HTTP 接口约定](HTTP.md) |
-| 修改代码 | [系统架构](ARCHITECTURE.md) → [开发指南](DEVELOPMENT.md) |
-| 选择单元、浏览器、SSH 或 CLI 验收 | [验证入口与边界](DEVELOPMENT.md#验证入口与边界) |
-| 排障、清理、发布或恢复 | [运维手册](RUNBOOK.md) |
+| 使用者如何提交、阅读、补充和确认结果 | [使用指南](USAGE.md) |
+| 管理者如何设置人员、凭证、部署和参数 | [配置说明](CONFIGURATION.md) |
+| 运维如何启动目标机、访问网页及准备新安装 | [部署指南](DEPLOYMENT.md) |
+| 客户端如何区分受理、完成、取消和冲突 | [HTTP 接口](HTTP.md) |
+| 维护者如何沿调用链修改并验证 | [架构](ARCHITECTURE.md) → [开发](DEVELOPMENT.md) |
+| 文件、会话与 Git 怎么保留和恢复 | [存储](STORAGE.md) → [运维](RUNBOOK.md) |
+| Agent 工具、查询及会话如何受约束 | [Agent](AGENT.md) |
 
-## 技术主题
+## 当前验证与未覆盖范围
 
-- [Agent 与能力](AGENT.md)：投递与队列、工具、查询、会话和 SRT。
-- [数据存储](STORAGE.md)：事实来源、文件事务、Git、容量与恢复单位。
-- [依赖补丁](../patches/README.md)：现存补丁、版本覆盖、兼容验证与退出条件。
-- [离线旧目录迁移](operations/legacy-layout-migration.md)：仅用于已确认来源的旧 state，不是普通发布步骤。
-- [页面图说明](images/README.md)：既有演示截图的源码版本、来源和验证范围，不代表当前分支已经重新截图。
+迁移时完成数据完整性、附件权限与哈希、会话保留、Git 路径和非干净状态核对；目标机的 HTTP、重启脚本、SRT 聚焦测试和 Chromium 页面 smoke 已验证。本轮又完成真实模型、DMS 常量查询，以及 SLS 正式／测试环境聚合查询。
 
-## 历史材料与代理规则
+准确时间、范围、结果和失败尝试统一记在[本次迁移记录](records/2026-11-07-host-migration.md)。真实查询仅代表记录中的凭证链路和所选目标，不代表所有用户、服务、数据库、日志库、模型和外部 MCP 均已验收。生产依赖安装不含完整开发依赖，本轮没有在目标运行全量类型检查、测试或重新构建 Web。
 
-[records](records) 保存特定版本的审查与验证记录，只用于追溯，不代表之后版本的验收结果。已发布迁移、恢复证据和必要离线工具不能因旧名称而删除。
+## 文档维护
 
-[2026-11-06 文档核查与修复](records/2026-11-06-documentation-audit.md) 记录当时后端、页面、并发与部署的证据及验证边界；当前使用约定仍以以上指南为入口。
+当前 Markdown 是人工维护的源文件，没有全站生成器。按事实 owner 更新一处主说明，其余页面引用；不复制一份全量接口 Schema、依赖版本或文件目录清单。文档验证方式见[开发指南](DEVELOPMENT.md#文档清理与交付)。
 
-开发代理遵守 [AGENTS.md](../AGENTS.md)。测试、截图和演练使用独立数据，不能读取真实 `.issue-pilot` 作为夹具；提交、推送、部署和真实状态操作分别需要授权。
+保留的专题：
 
-[2026-11-07 代码审查与局部整改](records/2026-11-07-systematic-review.md) 记录失败路径、页面状态与参数精度修复，以及本轮验证边界。
+- [依赖补丁](../patches/README.md)：补丁来源、行为与升级验证。
+- [旧布局离线迁移](operations/legacy-layout-migration.md)：只适用于来源已确认的旧布局，不能用来重复迁移当前 `data`。
+- [历史演示图](images/README.md)：原始截图版本和生成边界，本轮未重拍。
+- [历史记录](records)：特定版本的审查、验证与迁移证据，不作为当前部署指令。
+- [代理规则](../AGENTS.md)：修改边界、并发次序、持久契约与必要验证。
+
+当前安装以[宿主机部署](DEPLOYMENT.md#当前宿主机)为准。仓库仍有 Containerfile 和 Kubernetes 示例，它们没有在本次目标部署中使用；Playwright 容器只承担浏览器测试。
