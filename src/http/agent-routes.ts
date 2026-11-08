@@ -70,7 +70,10 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     let manager: Awaited<ReturnType<typeof readIssueSessionHistory>>;
     try {
-      manager = await runScopeExclusive(() => readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId));
+      manager = await runScopeExclusive(async () => {
+        await requireCurrentUser(database, request);
+        return readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
+      });
     } catch (error) {
       if (error instanceof Error && error.message === "agent_session_not_found") throw new ApiError(404, "agent_session_not_found");
       throw error;
