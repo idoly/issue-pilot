@@ -33,7 +33,7 @@ test("retains seed environment timestamps when startup does not change their val
 
 test("keeps application paths and workspace defaults in the project configuration", () => {
   assert.equal(applicationConfig.databaseFile, join(applicationConfig.stateRoot, "issues.db"));
-  assert.equal(basename(applicationConfig.stateRoot), ".issue-pilot");
+  assert.equal(basename(applicationConfig.stateRoot), "data");
   assert.equal(applicationConfig.parameters.workspaceHighWaterBytes, 20 * 1024 ** 3);
   assert.equal(applicationConfig.parameters.workspaceTargetBytes, 16 * 1024 ** 3);
   assert.equal(applicationConfig.http.host, "0.0.0.0");

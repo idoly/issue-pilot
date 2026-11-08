@@ -315,7 +315,6 @@ function sessionTools(options: StartPiSessionOptions, identityEnvironment: () =>
         PI_PROVIDER: context.model.provider,
         PI_MODEL: context.model.modelId,
         PI_REASONING_LEVEL: context.model.thinkingLevel,
-        PATH: [path.resolve(import.meta.dirname, "../../.venv/bin"), process.env.PATH].filter(Boolean).join(path.delimiter),
         ...(settings.getShellPath() ? { ISSUE_PILOT_SHELL_PATH: settings.getShellPath()! } : {}),
         ...(settings.getShellCommandPrefix() ? { ISSUE_PILOT_SHELL_PREFIX: settings.getShellCommandPrefix()! } : {}),
         ...gitEnvironment,

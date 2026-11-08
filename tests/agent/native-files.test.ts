@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -11,7 +10,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { PiSessionRuntime, createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 
 const execFileAsync = promisify(execFile);
-const python = fileURLToPath(new URL("../../.venv/bin/python3", import.meta.url));
+const python = "python3";
 
 test("native tools read a readonly attachment original directly and explicitly save an edited workbook", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-native-files-"));
@@ -19,6 +18,7 @@ test("native tools read a readonly attachment original directly and explicitly s
   let runtime: PiSessionRuntime | undefined;
   try {
     const work = root;
+    const hostPython = (await execFileAsync(python, ["-c", "import sys; print(sys.executable)"])).stdout.trim();
     await execFileAsync(python, [
       "-c",
       `from openpyxl import Workbook
@@ -54,8 +54,9 @@ book.close()
 Path('opaque.bin').write_bytes(bytes([0, 255, 1, 2]))
 print('files generated')`,
       }),
-      call("bash", { command: "python3 -m pip --version && pip --version && python3 process.py" }),
+      call("bash", { command: "python3 -m pip --version && python3 -c 'import sys; print(sys.executable)' && python3 process.py" }),
       (transcript) => {
+        assert.ok(JSON.stringify(transcript).includes(hostPython));
         assert.ok(!JSON.stringify(transcript).includes("synthetic-private-row"));
         return fauxAssistantMessage("Delivered files.");
       },
