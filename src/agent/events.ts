@@ -3,10 +3,14 @@ import type { AgentRunState } from "../domain/contracts.ts";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 
 type ToolCompletionEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_end" }>;
-// Replay carries the SDK's persisted nested-call record alongside the tool result.
+type ToolUpdateEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_update" }>;
+type MessageEndEvent = Extract<JsonAgentSessionEvent, { type: "message_end" }>;
+// Replay carries persisted nested calls; HTTP display projections may bound result text.
 type AgentWireEvent =
-  | Exclude<JsonAgentSessionEvent, ToolCompletionEvent>
-  | (ToolCompletionEvent & { result: ToolCompletionEvent["result"] & { nestedCalls?: NestedToolCalls } })
+  | Exclude<JsonAgentSessionEvent, ToolCompletionEvent | ToolUpdateEvent | MessageEndEvent>
+  | (MessageEndEvent & { message: MessageEndEvent["message"] & { displayTruncated?: boolean } })
+  | (ToolCompletionEvent & { result: ToolCompletionEvent["result"] & { nestedCalls?: NestedToolCalls; displayTruncated?: boolean } })
+  | (ToolUpdateEvent & { partialResult: ToolUpdateEvent["partialResult"] & { displayTruncated?: boolean } })
   | { type: "session_reset" }
   | { type: "issue_run_state"; state: AgentRunState }
   | { type: "issue_user"; message: string; images?: ImageContent[] }

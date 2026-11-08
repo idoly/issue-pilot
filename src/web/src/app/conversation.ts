@@ -1,8 +1,10 @@
 import type { CodemodeToolDetails } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ImageContent, NestedToolCalls, TextContent } from "@earendil-works/pi-ai";
 
-import { issuePilotConfig } from "../../../../issue-pilot.config";
+import { displayToolResult } from "../../../agent/event-display";
 import type { RunEvent } from "../data/client";
+
+export { boundedText } from "../../../agent/event-display";
 
 type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown; nestedCalls?: NestedToolCalls; displayTruncated?: boolean };
 type DisplayBlock = { type: "text"; value: string } | { type: "image"; data: string; mimeType: string };
@@ -82,7 +84,7 @@ function applyCompletedMessage(entries: ConversationEntry[], envelope: RunEvent,
   if (message.role === "toolResult" && (message.nestedCalls || pendingTool)) {
     const previous = entries.find((entry) => entry.kind === "tool" && entry.toolCallId === message.toolCallId);
     const durationMs = message.durationMs ?? (previous?.kind === "tool" ? previous.durationMs : undefined);
-    const result = { content: message.content, details: message.details, nestedCalls: message.nestedCalls };
+    const result = { content: message.content, details: message.details, nestedCalls: message.nestedCalls, displayTruncated: message.displayTruncated };
     return applyAgentEvent(entries, {
       ...envelope,
       event: { type: "tool_execution_end", toolCallId: message.toolCallId, toolName: message.toolName, result, isError: message.isError, ...(durationMs === undefined ? {} : { durationMs }) },
@@ -254,28 +256,6 @@ export function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>):
       .map((part) => part.text)
       .join("\n") ?? "";
   return entry.name === "bash" ? text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "") : text;
-}
-
-export function boundedText(value: string, maximumCharacters: number): string {
-  if (value.length <= maximumCharacters) return value;
-  const marker = "\n…（显示已截断，保留开头和结尾）…\n";
-  const visibleCharacters = maximumCharacters - marker.length;
-  const leadingCharacters = Math.ceil(visibleCharacters / 2);
-  return `${value.slice(0, leadingCharacters)}${marker}${value.slice(value.length - (visibleCharacters - leadingCharacters))}`;
-}
-
-function displayToolResult(result: ToolResult): ToolResult {
-  const text = result.content
-    .filter((part): part is TextContent => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
-  const images = result.content.filter((part): part is ImageContent => part.type === "image");
-  const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
-  return {
-    ...result,
-    ...(text.length > issuePilotConfig.web.agentToolOutputCharacters ? { displayTruncated: true } : {}),
-    content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images],
-  };
 }
 
 export function assistantNotice(entry: Extract<ConversationEntry, { kind: "assistant" }>): string {

@@ -7,6 +7,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
+import { agentDisplayEvent } from "../agent/event-display.ts";
 import { assertSessionFileComplete } from "../agent/pi-session.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
@@ -78,7 +79,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
     const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new ApiError(400, "invalid_offset");
     const transcript = sessionTranscript(manager, issue.id),
-      page = transcript.slice(offset, offset + 50);
+      page = transcript.slice(offset, offset + 50).map(agentDisplayEvent);
     return { events: page, nextOffset: offset + page.length < transcript.length ? offset + page.length : null };
   });
 
@@ -237,7 +238,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
         }
         let serialized: string;
         try {
-          serialized = JSON.stringify(event);
+          serialized = JSON.stringify(agentDisplayEvent(event));
         } catch (error) {
           cleanup();
           reply.raw.destroy();
