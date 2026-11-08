@@ -8,15 +8,83 @@ class FakeResponse extends EventEmitter {
   destroyed = false;
   writableEnded = false;
   readonly payloads: string[] = [];
+  readonly completions: ((error?: Error | null) => void)[] = [];
   blockNextWrite = false;
 
-  write(payload: string): boolean {
+  write(payload: string, onComplete: (error?: Error | null) => void = () => undefined): boolean {
     this.payloads.push(payload);
+    this.completions.push(onComplete);
     if (!this.blockNextWrite) return true;
     this.blockNextWrite = false;
     return false;
   }
 }
+
+for (const drainFirst of [false, true])
+  test(`completes paced replay after a flushed write ${drainFirst ? "with" : "without"} a drain event`, { timeout: 1_000 }, async () => {
+    const response = new FakeResponse();
+    const writer = createOrderedSseWriter(response);
+    response.blockNextWrite = true;
+    writer.write("data: replay\n\n");
+    const replay = writer.drain();
+    if (drainFirst) response.emit("drain");
+    else response.completions[0]!();
+    await replay;
+
+    response.blockNextWrite = true;
+    writer.write("event: snapshot_ready\ndata: {}\n\n");
+    writer.write("event: heartbeat\ndata: {}\n\n");
+    let finished = false;
+    const pending = writer.drain().then(() => {
+      finished = true;
+    });
+    // A late callback from the previous frame must not release the current write.
+    response.completions[0]!();
+    await Promise.resolve();
+    assert.equal(finished, false);
+    assert.equal(response.payloads.length, 2);
+    response.completions[1]!();
+    await pending;
+    assert.deepEqual(response.payloads, ["data: replay\n\n", "event: snapshot_ready\ndata: {}\n\n", "event: heartbeat\ndata: {}\n\n"]);
+    assert.equal(response.listenerCount("drain"), 0);
+    response.emit("close");
+  });
+
+test("does not wait for a drain after synchronous write completion", { timeout: 1_000 }, async () => {
+  const response = new FakeResponse();
+  response.write = (payload, onComplete) => {
+    response.payloads.push(payload);
+    onComplete?.();
+    return false;
+  };
+  const writer = createOrderedSseWriter(response);
+  writer.write("data: replay\n\n");
+  await writer.drain();
+  writer.write("event: snapshot_ready\ndata: {}\n\n");
+  await writer.drain();
+  assert.equal(response.payloads.length, 2);
+  assert.equal(response.listenerCount("drain"), 0);
+  response.emit("close");
+});
+
+test("releases paced replay on write callback failure and ignores late completions", { timeout: 1_000 }, async () => {
+  const response = new FakeResponse();
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, (error) => failures.push(error));
+  writer.write("data: accepted\n\n");
+  response.blockNextWrite = true;
+  writer.write("data: blocked\n\n");
+  writer.write("data: must-not-write\n\n");
+  const pending = writer.drain();
+  response.completions[0]!(new Error("write_failed"));
+  await pending;
+  response.completions[1]!();
+  writer.write("data: must-not-write-after-failure\n\n");
+  assert.equal(response.payloads.length, 2);
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /write_failed/);
+  for (const event of ["drain", "close", "error"]) assert.equal(response.listenerCount(event), 0, event);
+});
 
 test("queues SSE payloads in order until a blocked response drains", () => {
   const response = new FakeResponse();

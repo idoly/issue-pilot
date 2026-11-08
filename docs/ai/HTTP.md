@@ -131,6 +131,8 @@ GET .../agent-stream sends durable/current replay, then snapshot_ready, then liv
 
 Reconnect is full replay, not Last-Event-ID continuation. Deduplicate durable entry/event IDs and replace totals with snapshots. Preserve backpressure and queue budgets; slow clients disconnect on overflow. Invalid frames invalidate the client connection; generation checks reject late old-stream events.
 
+A backpressured replay resumes on either drain or completion of the blocked write. ServerResponse can finish writing without emitting drain; waiting only for that event can strand replay before snapshot_ready and before heartbeats start. Late callbacks from earlier frames must not release a newer blocked write, and close/error must release replay waits.
+
 Tool text is bounded before HTTP serialization by web.agentToolOutputCharacters, retaining head/tail and displayTruncated; Web applies the same fallback. Do not modify originals or treat this as a bound on images, metadata or total transcript size. Owners: [agent-routes.ts](../../src/http/agent-routes.ts), [sse.ts](../../src/http/sse.ts), [event-display.ts](../../src/agent/event-display.ts).
 
 | Reader | Paging |

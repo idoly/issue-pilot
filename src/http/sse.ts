@@ -3,7 +3,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 interface SseTarget {
   readonly destroyed: boolean;
   readonly writableEnded: boolean;
-  write(payload: string): boolean;
+  write(payload: string, onComplete: (error?: Error | null) => void): boolean;
   once(event: "drain" | "close" | "error", listener: (error?: unknown) => void): unknown;
   off(event: "drain" | "close" | "error", listener: (error?: unknown) => void): unknown;
 }
@@ -63,19 +63,32 @@ export function createOrderedSseWriter(target: SseTarget, onWriteFailure: (error
         const next = queue[consumed++]!;
         queuedBytes -= Buffer.byteLength(next);
         let accepted: boolean;
+        let completed = false;
+        let resume: (() => void) | undefined;
         try {
-          accepted = target.write(next);
+          accepted = target.write(next, (error) => {
+            completed = true;
+            if (error) {
+              fail(error);
+              return;
+            }
+            // ServerResponse can finish a chunk without forwarding the socket's drain event.
+            // Its write callback also confirms that this frame and preceding writes have flushed.
+            resume?.();
+          });
         } catch (error) {
           fail(error);
           break;
         }
-        if (accepted) continue;
+        if (accepted || completed) continue;
         const removeListener = () => target.off("drain", onDrain);
         const onDrain = () => {
+          resume = undefined;
           removeDrainListener = undefined;
           removeListener();
           pump();
         };
+        resume = onDrain;
         removeDrainListener = removeListener;
         target.once("drain", onDrain);
       }
