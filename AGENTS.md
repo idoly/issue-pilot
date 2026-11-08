@@ -1,105 +1,87 @@
 # Agent Guide
 
-Issue Pilot manages durable Issues, Git worktrees, attachments, outputs and Pi conversations. Read [Architecture](docs/ARCHITECTURE.md) and [Development](docs/DEVELOPMENT.md), then the relevant [Configuration](docs/CONFIGURATION.md), [Deployment](docs/DEPLOYMENT.md) or [Runbook](docs/RUNBOOK.md). Read current owning code before changing behavior.
+This file is for coding agents. Human guides are indexed in [docs/README.md](docs/README.md); English implementation contracts are in [docs/ai/README.md](docs/ai/README.md). Read [Architecture](docs/ai/ARCHITECTURE.md), [Development](docs/DEVELOPMENT.md), then the relevant contract and its current owning code/tests before changing behavior.
 
 ## Before work
 
-1. Run `git status --short`. Preserve existing changes and compare the final result against a task-specific baseline.
-2. Locate the owner, domain contracts, root configuration, schema and focused tests.
-3. Classify affected state as durable, conditionally durable or generated.
-4. Keep the patch scoped. Commit, push, restart or mutate live state only when authorized by the user; existing session authorization remains valid.
+1. Run `git status --short`. Preserve existing changes and compare completion against a task-specific baseline.
+2. Locate the owning code, domain contracts, root configuration, schema and focused tests.
+3. Classify affected state as durable, conditionally durable or generated; names alone do not establish deletability.
+4. Keep the patch scoped. Commit, push, deploy, restart or mutate live state only with user authorization; existing session authorization remains valid.
 
-The target checkout's configured `data` root (historically `.issue-pilot`) can contain real credentials, JSONL, attachments, local branches, dirty worktrees and recovery evidence. Never use it as a test fixture. Tests inject temporary roots through `buildApi({ stateRoot, databaseFile })` or manager constructors. A manual isolated server needs an independent project copy and its own root configuration; there is no state path environment override.
+The configured data root (currently `data`) may contain credentials, JSONL, attachments, private branches, dirty worktrees and recovery evidence. Never use it as a fixture. Tests inject temporary roots through `buildApi({ stateRoot, databaseFile })` or manager constructors. Manual testing needs an independent checkout and root configuration; there is no state-path environment override. Pi tests also need an isolated agent directory.
 
-Before an authorized operational change, follow the Runbook's current database-only recovery policy and bounded checkpoint retention. Do not create or retain full Issue-file backups; database checkpoints do not restore attachments, sessions, working files or private Git. Do not accumulate a new large snapshot for every agent round or routine check. Preserve unknown paths, database-unrepresented directories, changed checkouts and dirty worktrees. Do not repair branch/path drift by guessing, reset, remote fallback or silent metadata updates.
+Operations follow [the Runbook](docs/RUNBOOK.md) and [Storage](docs/ai/STORAGE.md): database-only checkpoints when warranted, bounded retention, no new full Issue-file backups. Preserve unknown paths, DB-unrepresented directories, dirty worktrees and recovery evidence. Never fix branch/path drift by guessing, reset, remote fallback or silent rebinding.
 
-## Owners
+## Ownership and design
 
-| Concern | Source |
-| --- | --- |
-| Paths, defaults, budgets and retention | issue-pilot.config.ts, src/config.ts |
-| Roles, work modes, states and business predicates | src/domain/contracts.ts |
-| Current database and immutable upgrades | src/db/schema.ts, src/db/bootstrap.ts, drizzle/ |
-| Configuration, projection and credentials | src/configuration |
-| Hot-updatable operational parameters | src/configuration/parameters.ts |
-| HTTP identity and authorization | src/http/route-context.ts |
-| HTTP coordination | src/http/*-routes.ts |
-| Service prepare/apply | src/http/service-configuration.ts |
-| Attachment transactions | src/http/attachment-store.ts |
-| Agent queue, reservations and recovery | src/agent/engine.ts |
-| Pi sessions and model runtime | src/agent/pi-session.ts, src/agent/model-runtime.ts |
-| Tool input and dispatch | src/agent/service-query-tool.ts, src/capabilities/registry.ts |
-| External protocols and Pi MCP integration | src/capabilities, src/mcp/client.ts, src/mcp/pi-extension.ts |
-| Inbound Issue MCP | src/mcp/server.ts |
-| Local tools and SRT | src/agent/native-tools.ts, src/agent/issue-sandbox.ts, src/agent/native-tool-executor.ts |
-| Application state lease | src/workspace/state-lease.ts |
-| Working files and query exports | src/workspace/work-files.ts |
-| Git, projects, runtime and lifecycle | src/workspace |
-| Web requests and DTOs | src/web/src/data/client.ts |
-| Shared configuration and identity | ApplicationResources.tsx |
-| SSE and conversation projection | agent-stream.ts, conversation.ts, AgentPanel.tsx |
-| Code browser | CodeBrowser.tsx, SourceText.tsx, SourceDiff.tsx, monaco.ts, src/workspace/source-browser.ts |
+See the [ownership table](docs/ai/ARCHITECTURE.md#owners). Routes coordinate owners; do not reimplement Git, protocols, attachment transactions or command authorization. Prefer public Pi APIs, installed libraries and small local helpers.
 
-Routes coordinate owners; they do not reimplement Git, protocols, attachment storage or command authorization. Prefer public Pi APIs and small local helpers over new generic layers.
+- Choose the simplest complete design, not merely the shortest code. Every abstraction, interface, module and dependency needs a concrete maintenance benefit.
+- Keep each business rule with one owner. Distinguish identity, role, permission and behavior; use closed types for stable domains.
+- Isolate actual variation using data/configuration where useful; do not invent speculative extension frameworks, selectable runtimes or format-specific executors.
+- Keep workflows traceable across a few owners. Limited repetition is better than combining unrelated semantics; do not split or rewrite reasonable files for style.
+- Preserve transactions, concurrency, cancellation, idempotency, budgets, diagnostics, rollback/finalize and shutdown. Never hide failures to simplify code.
+- Prefer gradual, justified changes. Test behavior and boundaries, not interfaces that only mirror implementation.
+- Before deletion, check static/dynamic references, build and migration effects, current use and unique evidence. Preserve uncertain uses and report gaps.
 
-## Design and review
-
-Correctness comes first. Aim for code that a new maintainer three years from now can understand and safely change with a small, local diff. Avoid both unnecessary abstraction and oversimplification through hard-coded or scattered business rules.
-
-1. Choose the simplest implementation that completely satisfies current requirements. Fewer lines alone do not prove better design.
-2. Isolate real variation points. Use data, configuration or mappings where they fit; do not anticipate unlikely features or build speculative extension frameworks.
-3. Give each business rule a clear owner. Distinguish identity, roles, permissions and behavior. Keep stable, closed types as enums.
-4. Require a concrete maintenance benefit for every abstraction, module, interface and dependency. Prefer language, standard library, framework and official SDK capabilities.
-5. Allow limited repetition when semantics differ. Do not force unrelated behavior into one helper or add layers that only forward calls.
-6. Keep workflows traceable across a few related owners. Do not split files for length or rewrite reasonable implementations for style.
-7. Preserve boundaries, error meaning, transactions, concurrency, cancellation, idempotency, diagnostics and recovery. Do not hide failures or swallow errors to make code shorter.
-8. Evaluate common business changes for unnecessary cross-module impact; implement only current needs and justified extension points.
-9. Test behavior, boundaries and invariants. Do not create meaningless interfaces or tests that only mirror implementation.
-10. Prefer local, gradual evolution and necessary compatibility. Keep a reasonable design when a replacement has no demonstrated benefit.
-11. Identify obsolete code, files, directories, dependencies and configuration. Before deletion, verify static and dynamic references, builds, migrations and runtime effects; report uncertain uses and preserve them.
-
-A review-only request authorizes findings and recommendations, not source edits, dependency upgrades or architecture changes. Once changes are authorized, prioritize correctness, security and consistency, implement the minimum useful patch and validate it.
-
-For each confirmed finding, give location, evidence, effect, reasonable trigger, minimum remedy, tradeoff and verification. Prioritize P0/P1/P2/P3 by actual impact, likelihood and repair cost. Distinguish reproduced failures, predictable risks and theoretical concerns. Do not manufacture findings or force a refactor. Report overall conclusion, findings, overdesign, oversimplification, designs to retain and a minimal improvement plan, including coverage and gaps.
+A review-only request authorizes findings, not edits or upgrades. Confirmed findings must include location, evidence, effect, plausible trigger, minimum remedy, tradeoff and verification. Prioritize actual impact/likelihood/repair cost using P0–P3. Distinguish reproduced failures, predictable risks and theoretical concerns. Report conclusion, overdesign, oversimplification, designs to retain, a minimal plan and coverage gaps; do not manufacture findings.
 
 ## Required contracts
 
-- Issue keys use `ISSUE-YYYYMMDD-NNN...` in the configured time zone. Creation claims an empty Issue root and inserts exactly one Workspace.
-- Issue scope must match a Service/Environment Deployment. `resolved` and non-null `resolved_at` are equivalent.
-- User/repository/service changes persist in SQLite. User/service YAML configuration loading, import, export and conversion are retired. Do not reintroduce file projection or use historical private files to fill missing database values. Development code baselines derive from the same service's production branches, while recorded Issue branches/paths remain history.
-- The shared model group (global provider, model, thinking level, Codemode and shared API key, maintained by admins) applies to all services/environments; deployments have no model override. Agent runtime settings stay global.
-- Business roles remain product/test/developer. `isAdmin` is independent. User mutations protect active users, developers, managers and at least one active developer with management access.
-- Credential owner is assignee, else reporter, and must be active. Developer owners use personal SSH identity (developer-only); failed or missing SSH credentials never fall back to another identity. Model groups come only from SQLite: any owner's complete personal group (provider, model, thinking, Codemode, key) replaces the shared group; otherwise the shared group applies. Missing keys fail, failed keys never switch identity, and Operator auth.json/models.json credentials never reach requests. Shared credentials are admin-only.
-- DMS and SLS credentials belong to users or the shared application group, never deployments: choose the active Issue owner's complete personal group in prod/test, else the corresponding shared group; incomplete personal groups fail without fallback. Missing or failed credentials never switch identity, and credentials do not create targets.
-- Ordinary configuration GET projects credentials out. Developer-only selected descriptions/MCP configuration may expose their documented values; native DMS connection Authorization and SLS connection keys remain hidden. Connection configuration secrets never enter prompts, tool input, argv, diagnostics or ordinary logs. Business login/session tokens explicitly requested from authorized SLS/DMS results may be returned with source and time; the request itself is sufficient, and retrieved values do not expand access scope.
-- Native evidence queries retain exact source/target and read-only checks. Development queries explicitly select prod/test; code include/remove stays in the Issue environment.
-- Resources use the running user's global Pi configuration; the application does not maintain a separate skills/extensions directory. Protect application tool names and keep global resource inspection free of extension execution.
-- Service MCP tools require deployment ownership and the Issue's entry/included service scope. DingTalk default and user-preference import connections are application-only and never Agent tools. Native DMS/SLS availability follows actual configured deployment targets, without hard-coded test/prod exclusions. Read-only hints are descriptive, not authorization. Preserve SQLite as the authoritative business configuration, literal credentials, SDK transport compatibility, cancellation and input/result budgets; Pi owns discovery, registration, connections and shutdown.
-- DingTalk imports use the selected global MCP connection. Per-user DingTalk settings contain source and field preferences, never gateway credentials.
-- Native capabilities are DMS and aliyun SLS CLI; MySQL uses configured external MCP. Retired adapter settings remain private historical state and must not execute or appear in public configuration.
-- Prod/test use read-only snapshots, active dev uses isolated worktrees, released dev restores from local working branches. Source API enforces repository policy; historical branch and workspace names remain history.
-- Each Issue owns one persistent `workspaces/<key>` root containing code, files, original attachments, sessions and runtime metadata. Only Issue creation claims it; preparation, exports and message admission must refuse a missing or redirected root, preserve bindings and never recreate empty durable state. Model-controlled local operations use one SRT boundary; only this root is persistently writable and related Issue directories are read-only. Pi SDK, Operator extensions and application storage owners remain trusted application code; remote MCP services retain their own authority (docs/AGENT.md).
-- Use normal code and installed libraries for formats. Do not add format-specific executors, nested sandboxes or a selectable runtime framework without a concrete need.
-- Attachments have one durable 0400 regular file validated against DB size/hash. Writes belong to Issue transactions. Agent preparation reads originals and never creates editable copies automatically; edits explicitly create ordinary work files. Pasted Agent images belong to Pi messages, not attachment storage.
-- Query exports atomically replace ordinary working files and preserve old content on failure. New output snapshots, publication tools and legacy download routes are retired. Migration indexes are offline recovery evidence; normal runtime reads current work files only. Runtime/wrappers/checkouts are generated; abnormal or unknown state still requires owner inspection.
-- Per-Issue serialization includes failure cleanup. Queued work cannot reuse a disposed session or overwrite a newer round with old failure state.
-- Web Agent drafts, saves and failures belong to application resources, so page navigation does not discard them. Identity changes cancel unsent work for the old identity.
-- Unknown tool input is parsed at the boundary; protocol response and authorization checks stay with the owner. Keep execute checks needed after mutable Pi hooks.
-- Published migration SQL and journal entries are immutable. Do not automatically parse legacy layouts, adopt directories or repair state.
+### Business and configuration
+
+- Issue keys are `ISSUE-YYYYMMDD-NNN...` in the configured time zone. Creation claims an empty root and inserts exactly one Workspace. Issue scope must match a Service/Environment Deployment; resolved iff resolved_at is non-null.
+- SQLite is authoritative for users, repositories, services, credentials and model selection. Do not restore retired YAML loading/import/export/projection or fill gaps from old private files.
+- Dev baselines derive from the same service's production branches. Recorded Issue paths/branches remain history; configuration changes do not rewrite them.
+- Roles remain product/test/developer; isAdmin is independent. Protect required active users, developers, managers and at least one active developer with management access.
+- Shared model provider/model/thinking/Codemode/key and runtime settings are global. Deployments have no model override.
+
+### Identity, secrets and capabilities
+
+- Credential owner is assignee, else reporter, and must be active. Any owner's complete personal model group replaces shared; otherwise use shared. Missing/failed selected keys fail, never switch identity. Operator auth.json/models.json secrets never reach requests.
+- Developer Git uses that person's SSH identity only. Missing/failed SSH never falls back to Operator, ssh-agent, another person or a shared identity.
+- DMS/SLS credentials belong to users or the shared application group, not deployments. Select the active owner's complete personal group in prod/test, else shared; incomplete personal groups fail without fallback. Credentials do not create targets.
+- Shared credential management is admin-only. Ordinary configuration GET projects credentials out. Developer-only selected descriptions/MCP configuration expose only documented fields; native DMS Authorization and SLS keys remain hidden. Connection secrets never enter prompts, tool input, argv, diagnostics or ordinary logs.
+- Authorized SLS/DMS business login/session tokens explicitly requested by the user may be returned with source/time. The request suffices; retrieved values do not expand access scope.
+- Native queries preserve exact source/target and read-only checks. Development evidence explicitly selects prod/test; code include/remove stays in the Issue environment.
+- Native capabilities are DMS and aliyun SLS CLI; MySQL uses configured external MCP. Retired adapters remain private non-executable history.
+- Service MCP requires deployment ownership plus Issue entry/included service scope. Global DingTalk import connections are application-only. Availability follows actual targets, without hard-coded prod/test exclusions. Read-only hints are descriptive, not authorization.
+- Preserve SQLite authority, literal credentials, SDK transport compatibility, cancellation and budgets. Pi owns MCP discovery, registration, connections and shutdown. Parse unknown input at boundaries; keep execution checks after mutable hooks.
+- Resources use the runtime user's global Pi configuration. No application-private skills/extensions or Issue-local extensions. Protect application tool names; inspection must not execute extensions. DingTalk preferences store source/mapping, never gateway credentials.
+
+### Files, Git and execution
+
+- Prod/test use read-only snapshots; active dev uses isolated worktrees; released dev restores from recorded local branches. Source APIs enforce repository policy and optimistic file hashes.
+- Each Issue owns one persistent workspaces/<key> root for code, files, originals, sessions and metadata. Only creation claims it. Preparation, exports and admission refuse missing/redirected roots and preserve bindings; never recreate empty durable state.
+- All model-controlled local operations cross one SRT boundary: only the current Issue root is persistently writable, related Issues are read-only. SDK, Operator extensions and storage owners are trusted application code; remote MCP retains independent authority.
+- Host Node/npm, Java/Maven, Python and shared libraries are read-only to Issues. Do not inject a project .venv or create one by default. Project dependencies, build products and npm/Maven writable caches remain Issue-local; administrators maintain shared tools.
+- Each attachment has one durable 0400 regular original verified against DB size/hash. Writes belong to Issue transactions. Preparation reads originals; explicit editing creates ordinary work files. Pasted images belong to Pi messages.
+- Query exports atomically replace ordinary work files and retain old content on failure. Retired output snapshots/publication/download layers must not return. Migration indexes are offline evidence, not runtime aliases.
+- Runtime manifests/wrappers/clean checkouts are generated, but abnormal/unknown state still requires inspection. Published migration SQL/journal entries are immutable; normal startup never adopts legacy directories or repairs drift.
+
+### Sessions and Web
+
+- Per-Issue serialization includes failure cleanup. Queued work cannot reuse disposed sessions or overwrite a newer round with an old error.
+- Persist message admission before acknowledgement; uncertain delivery is not permission to resend. Cancellation does not undo completed side effects; restart does not rebuild the execution queue automatically.
+- Web Agent drafts, sends and failures belong to application resources across navigation. Identity changes cancel unsent old-identity work; reject late responses.
+- SSE replay becomes usable only at snapshot_ready; reconnect replaces projection, preserves deduplication/backpressure and never skips invalid frames. Display truncation must not modify durable results.
 
 ## Concurrency
 
-Keep Agent activity, Issue-set reservation, API configuration scope, lifecycle, per-Issue inspection and repository operations distinct. Repository keys include state root and URL hash.
+Keep Agent activity, Issue-set reservations, configuration scope, lifecycle, per-Issue inspection and repository queues distinct. Repository keys include state root and URL hash.
 
 ```text
-configuration read: scope queue -> SQLite read snapshot
-service/Issue scope write: scope queue -> Issue reservation
-release/reopen: lifecycle queue -> inspection queue -> Issue reservation
+configuration read: scope queue → SQLite read snapshot
+service/Issue scope write: scope queue → Issue reservation
+release/reopen: lifecycle queue → inspection queue → Issue reservation
 ```
 
-Do not reverse these orders or replace them with a global mutex. Reauthorize after relevant queue waits. SQLite rollback does not restore files or Git; owners must prepare, roll back and finalize each medium.
+Never reverse these orders or replace them with a global mutex. Reauthorize after relevant waits. SQLite rollback cannot restore files/Git; each owner must prepare, roll back and finalize its own medium.
 
 ## Verification and completion
+
+Maintain host-native application deployment and local independent-checkout verification only. Do not restore application container builds, Kubernetes or remote CI. Playwright/SSH test containers remain verification tools.
 
 For code changes run focused behavior tests and applicable full checks:
 
@@ -107,9 +89,15 @@ For code changes run focused behavior tests and applicable full checks:
 npm run typecheck
 npm test
 npm run build
+npm run format:check
+npm run lint
 git diff --check
 ```
 
-On constrained machines use backend `--test-concurrency=2` and Vitest `--maxWorkers=1` as described in Development. Runtime, dependency, protocol security or container changes also require production dependency audit and available deployment health checks. Match deployment verification to the affected state as described in the Runbook. Routine Web, documentation or backend releases without migrations or live-state repairs need health, artifact and focused behavior checks, not a full state scan. For schema/data migrations, storage/Git lifecycle changes applied to live state, or abnormal recovery, check the relevant integrity/FK, file modes, refs/worktrees and unmanaged directories; broaden only when the affected scope or observed anomalies justify it.
+Use backend --test-concurrency=2 and Vitest --maxWorkers=1 on constrained hosts as documented in Development. Runtime/dependency/protocol-security changes also require production dependency audit and available deployment health checks.
 
-Cover failure, retry, cancellation, repeated calls, rollback/finalize and shutdown where relevant. Keep HTTP and Web DTOs aligned and update the owning document. Inspect the final diff for unrelated work, state, generated artifacts and secrets. Report changes, checks and material gaps; do not claim tests prove all code safe or every unused path found.
+Match checks to affected state. Routine Web/backend releases without migrations need health, artifact and focused behavior checks, not a full state scan. Schema/data migrations, live storage/Git repair or abnormal recovery need relevant integrity/FK, modes, refs/worktrees and unmanaged-directory checks; broaden only when justified.
+
+Cover failure, retry, cancellation, repetition, rollback/finalize and shutdown where relevant. Update the owning document without duplicating contracts. Human guides use concise Chinese; AGENTS.md and docs/ai use English. Maintain current guides without compatibility redirects, per-round reports or obsolete screenshot archives. Preserve the bounded host migration retrospective as reusable evidence, not current deployment instructions. This does not authorize deleting durable business history, immutable migrations, test fixtures or recovery evidence.
+
+Inspect the final diff for unrelated edits, generated state and secrets. Report changes, checks and material gaps; do not claim complete safety or exhaustive unused-code discovery. Document-only changes require link/anchor/command-syntax checks and git diff --check, not service restarts or live-state scans.
