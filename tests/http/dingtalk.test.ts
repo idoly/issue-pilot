@@ -29,6 +29,7 @@ async function fixture() {
     calls: [] as Array<{ name: string; input: Record<string, unknown> }>,
     configurations: [] as McpConfiguration[],
     closed: 0,
+    closeError: false,
     failConnection: false,
     beforeRecords: undefined as ((signal: AbortSignal) => Promise<void>) | undefined,
   };
@@ -39,6 +40,7 @@ async function fixture() {
       list: async () => [],
       close: async () => {
         state.closed++;
+        if (state.closeError) throw Object.assign(new Error("fixture-private-close"), { code: "EIO" });
       },
       call: async (name, input) => {
         state.calls.push({ name, input });
@@ -261,6 +263,88 @@ test("existing manual Issues are detected by exact title or external number", as
     assert.equal(response.json().status, "existing");
     assert.equal(response.json().issueKey, existing.json().id);
     assert.equal((await f.database.db.select().from(issues)).length, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("manual matching stays within the requested service and environment", async () => {
+  const f = await fixture();
+  try {
+    const otherService = await createService(f.app, "Inventory", ["prod"]);
+    for (const [serviceKey, workMode] of [
+      [otherService.key, "production_analysis"],
+      [f.payload.serviceKey, "development_fix"],
+    ] as const) {
+      const manual = await f.app.inject({
+        method: "POST",
+        url: "/api/issues",
+        payload: { title: "EXT-one", serviceKey, workMode, priority: "p2", description: "Manual", assigneeSubject: f.user.subject, ccSubjects: [] },
+      });
+      assert.equal(manual.statusCode, 201, manual.body);
+    }
+    const imported = await f.submit();
+    assert.equal(imported.statusCode, 200, imported.body);
+    assert.equal(imported.json().status, "created");
+    assert.equal((await f.database.db.select().from(issues)).length, 3);
+    f.state.row.recordId = "two";
+    const invalid = await f.submit({ url: recordUrl.replace("rowId=one", "rowId=two"), serviceKey: "unknown" });
+    assert.equal(invalid.statusCode, 400, invalid.body);
+    assert.equal(invalid.json().error, "invalid_service_for_work_mode");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("multiple manual matches in one service and environment require an explicit decision", async () => {
+  const f = await fixture();
+  try {
+    for (let index = 0; index < 2; index++) {
+      const created = await f.app.inject({
+        method: "POST",
+        url: "/api/issues",
+        payload: { title: "EXT-one", serviceKey: f.payload.serviceKey, workMode: f.payload.workMode, priority: "p2", description: "Manual", assigneeSubject: f.user.subject, ccSubjects: [] },
+      });
+      assert.equal(created.statusCode, 201, created.body);
+    }
+    const response = await f.submit();
+    assert.equal(response.statusCode, 409, response.body);
+    assert.equal(response.json().error, "dingtalk_manual_match_ambiguous");
+    assert.equal((await f.database.db.select().from(issues)).length, 2);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("MCP connection closure failure is visible after a committed import and does not duplicate it", async () => {
+  const f = await fixture();
+  try {
+    f.state.closeError = true;
+    const response = await f.submit();
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().status, "created");
+    assert.equal(response.json().connectionCleanup, "failed");
+    assert.doesNotMatch(response.body, /fixture-private/);
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
+    const repeated = await f.submit();
+    assert.equal(repeated.json().status, "existing");
+    assert.equal(repeated.json().connectionCleanup, undefined);
+    assert.equal((await f.database.db.select().from(issues)).length, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("import and MCP closure failures retain both causes without exposing private details", async () => {
+  const f = await fixture();
+  try {
+    f.state.closeError = true;
+    f.state.row.recordId = "different";
+    const response = await f.submit();
+    assert.equal(response.statusCode, 500, response.body);
+    assert.equal(response.json().error, "dingtalk_connection_close_failed");
+    assert.doesNotMatch(response.body, /fixture-private/);
+    assert.equal((await f.database.db.select().from(issues)).length, 0);
   } finally {
     await f.cleanup();
   }

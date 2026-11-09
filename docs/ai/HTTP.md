@@ -57,7 +57,7 @@ Creation requires title, priority, serviceKey and workMode. Mappings belong to [
 
 Replace the example service with a configured service. Dev requires active developer creator and credential owner; reassigning to a non-developer fails. Unassigned Issues use reporter credentials and do not enter a personal assignee queue.
 
-Attachments use multipart: issue holds complete JSON; files can carry uploads. Originals are part of Issue transactions, not an independent upload-write API. HTTP file streaming has no business file-size/count ceiling, but fields, transport and proxies retain limits. MCP Base64 and pasted Agent images have distinct budgets.
+Attachments use multipart: issue holds complete JSON; files can carry uploads. Issue creation and edit check the current active subject before staging multipart files, then reauthorize after queue waits. Originals are part of Issue transactions, not an independent upload-write API. HTTP file streaming has no business file-size/count ceiling, but fields, transport and proxies retain limits. MCP Base64 and pasted Agent images have distinct budgets.
 
 PATCH still requires title/priority. Omitted description/assigneeSubject/ccSubjects become empty/unassigned/empty list. removedAttachmentIds removes named originals; others remain. Service/environment/type/workMode/relations cannot be changed through ordinary editing.
 
@@ -121,7 +121,7 @@ GET /api/dingtalk/source reports preferences/connection configuration, not remot
 
 POST /api/dingtalk/import requires url/serviceKey/workMode/priority; assigneeSubject/startAgent are optional. HTTP starts only for explicit true. The page defaults assignee to current user and explicitly starts. MCP defaults priority p2, no start, omitted assignee=current caller. Duplicate imports do not reassign/restart.
 
-The response includes created/existing status and issueKey. Source deduplication/manual same-title rules are in [Configuration](CONFIGURATION.md#service-mcp-and-dingtalk); a matching title alone does not prove new creation.
+The response includes created/existing status and issueKey. A successful import with connectionCleanup: "failed" means the Issue result is committed or confirmed but MCP connection closure failed; inspect connection diagnostics without retrying creation solely for cleanup. If closure and import both fail, the server retains both causes and returns dingtalk_connection_close_failed. Source deduplication/manual matching rules are in [Configuration](CONFIGURATION.md#service-mcp-and-dingtalk).
 
 Each import shares its start-time timeout signal, with client disconnect cancellation. Cancellation is not an immediate bound on all queues/cleanup. Ordinary timeout is 408; staging/stream cleanup failure remains a 500, not ordinary cancellation. Read existing Issues after uncertain outcomes.
 

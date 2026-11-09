@@ -125,7 +125,7 @@ Service MCP supports HTTPS Streamable HTTP, SSE and stdio. Connections require d
 
 Global connection management, private reads and testing are admin-only. Discovery and close must both succeed for a successful test. Read-only hints are descriptive, not authorization; preserve budgets, cancellation and input/result checks.
 
-DingTalk preferences hold only source and field mappings; personal values override shared values, not gateway credentials. Import deduplicates exact source records and can match manual same-title Issues without a DingTalk source. That manual match currently has no service/environment restriction or defined priority among multiple matches; verify the returned key and scope.
+DingTalk preferences hold only source and field mappings; personal values override shared values, not gateway credentials. Import deduplicates exact source records first. A valid new record may match a manual same-title or external-number Issue only in the requested service and work mode environment. Multiple matching manual Issues return dingtalk_manual_match_ambiguous (409) without choosing one. An invalid service/work mode target cannot succeed through manual matching.
 
 Attachments require allowed HTTPS hosts, no redirects and no forwarded MCP key. Stream/staging cleanup failures must not become ordinary cancellation. Start defaults are documented in [Protocols](HTTP.md#dingtalk-import). Owners: [dingtalk-routes.ts](../../src/http/dingtalk-routes.ts), [dingtalk-attachments.ts](../../src/http/dingtalk-attachments.ts).
 

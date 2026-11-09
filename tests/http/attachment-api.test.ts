@@ -34,6 +34,39 @@ function issueMultipart(boundary: string, issue: Record<string, unknown>, fileNa
   );
 }
 
+test("inactive subjects are rejected before multipart staging on create and edit", async (context) => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Identity staging");
+    const existing = await createIssue(fixture.app, "identity-staging");
+    let staged = 0;
+    context.mock.method(fsPromises, "mkdtemp", async () => {
+      staged++;
+      throw new Error("fixture-staging-must-not-run");
+    });
+    syncBuiltinESMExports();
+    for (const [method, url, input] of [
+      ["POST", "/api/issues", issuePayload("identity-staging")],
+      ["PATCH", `/api/issues/${existing.id}`, issueMetadataPayload("Unauthorized edit")],
+    ] as const) {
+      const boundary = "invalid-subject-upload";
+      const response = await fixture.app.inject({
+        method,
+        url,
+        headers: { "x-issue-pilot-subject": "inactive", "content-type": `multipart/form-data; boundary=${boundary}` },
+        payload: issueMultipart(boundary, input, "evidence.txt", "private evidence"),
+      });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.equal(response.json().error, "invalid_current_subject");
+    }
+    assert.equal(staged, 0);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await fixture.cleanup();
+  }
+});
+
 for (const state of ["missing", "symlink"] as const)
   test(`attachment edits refuse a ${state} Issue root without writing or adopting another directory`, async () => {
     const fixture = await createApiFixture();

@@ -24,6 +24,7 @@ const errors: Record<string, string> = {
   dingtalk_columns_required: "请配置钉钉标题字段映射。",
   dingtalk_record_not_found: "记录不存在或无权访问。",
   dingtalk_record_invalid: "记录标题为空或内容超出工单长度，请检查记录。",
+  dingtalk_manual_match_ambiguous: "同一服务和环境中有多个同名手工工单，请先核对工单再导入。",
   dingtalk_attachment_host_not_allowed: "附件下载地址尚未受信任，请检查附件存储配置。",
   dingtalk_attachment_download_failed: "附件下载失败，工单未创建，可重试。",
   dingtalk_attachment_size_changed: "附件大小已变化，请重试。",
@@ -123,9 +124,10 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
       setResults((values) => [...values.filter((row) => row.issueKey !== response.issueKey), response]);
       setUrl("");
+      if (response.connectionCleanup === "failed") setError("工单结果已确认，但钉钉连接关闭失败；请联系管理员检查连接。");
       if (response.status === "created") {
         props.onCreated();
-        if (props.onOpenIssue(response.issueKey)) props.onClose();
+        if (response.connectionCleanup !== "failed" && props.onOpenIssue(response.issueKey)) props.onClose();
       }
     } catch (error) {
       if (current(task.owner)) setError(message(error));

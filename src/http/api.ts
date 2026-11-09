@@ -190,6 +190,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "attachment_staging_cleanup_failed",
         "attachment_copy_cleanup_failed",
         "attachment_read_cleanup_failed",
+        "dingtalk_connection_close_failed",
         "issue_state_rollback_failed",
         "issue_update_rollback_failed",
         "source_rename_rollback_failed",
@@ -241,8 +242,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerMcpRoutes(routeContext);
     registerApplicationMcp(routeContext);
     registerConfigurationRoutes(routeContext);
-    const { createIssue } = registerIssueRoutes(routeContext);
-    registerDingtalkRoutes(routeContext, createIssue, options.dingtalkConnector);
+    const { createIssue, resolveCreationScope } = registerIssueRoutes(routeContext);
+    registerDingtalkRoutes(routeContext, createIssue, resolveCreationScope, options.dingtalkConnector);
     registerAttachmentRoutes(routeContext);
     registerAgentRoutes(routeContext);
     registerSourceBrowserRoutes(routeContext);

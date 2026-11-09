@@ -52,4 +52,5 @@ export interface DingtalkImportResponse {
   status: "created" | "existing";
   issueKey: string;
   assignee?: DingtalkUser;
+  connectionCleanup?: "failed";
 }

@@ -26,7 +26,7 @@ import {
   services,
   subjects,
 } from "../db/schema.ts";
-import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind } from "../domain/contracts.ts";
+import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind, type IssueWorkMode } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { IssueDeletionRefusal, WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
@@ -85,6 +85,7 @@ async function readIssueInput(request: FastifyRequest): Promise<{ input: Record<
 
 export type DingtalkImportClaim = Pick<typeof dingtalkIssueImports.$inferInsert, "baseId" | "tableId" | "recordId" | "sourceUrl">;
 export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"];
+export type IssueCreationScopeResolver = ReturnType<typeof registerIssueRoutes>["resolveCreationScope"];
 
 export function registerIssueRoutes(context: ApiRouteContext) {
   const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive, events } = context;
@@ -141,21 +142,21 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       ccSubjects,
     };
   };
-  const parseCreateIssueInput = async (input: Record<string, unknown>) => {
-    if (Object.hasOwn(input, "environmentKey") || Object.hasOwn(input, "type")) throw new ApiError(400, "issue_create_scope_contract_invalid");
-    const workMode = choice(input.workMode, "work_mode", ISSUE_WORK_MODES);
+  const resolveCreationScope = async (workMode: IssueWorkMode, serviceKey: string) => {
     const scope = issueScopeForWorkMode(workMode);
     const environment = await findEnvironmentByKind(scope.environmentKind);
     if (!environment) throw new ApiError(400, "invalid_work_mode");
-    const serviceDeployment = await findServiceDeployment(text(input.serviceKey, "service_key", 100), environment.id);
+    const serviceDeployment = await findServiceDeployment(serviceKey, environment.id);
     if (!serviceDeployment) throw new ApiError(400, "invalid_service_for_work_mode");
+    return { type: scope.issueType, environment, serviceId: serviceDeployment.service.id, service: { key: serviceDeployment.service.key, name: serviceDeployment.service.name } };
+  };
+  const parseCreateIssueInput = async (input: Record<string, unknown>) => {
+    if (Object.hasOwn(input, "environmentKey") || Object.hasOwn(input, "type")) throw new ApiError(400, "issue_create_scope_contract_invalid");
+    const workMode = choice(input.workMode, "work_mode", ISSUE_WORK_MODES);
     return {
       ...(await parseIssueMetadataInput(input)),
       workMode,
-      type: scope.issueType,
-      environment,
-      serviceId: serviceDeployment.service.id,
-      service: { key: serviceDeployment.service.key, name: serviceDeployment.service.name },
+      ...(await resolveCreationScope(workMode, text(input.serviceKey, "service_key", 100))),
     };
   };
   const parseRelatedIssueKeys = (input: Record<string, unknown>) => {
@@ -360,12 +361,14 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     }
   };
   app.post("/api/issues", async (request, reply) => {
+    await ensureCurrentSubject(database, request);
     const { input, attachments } = await readIssueInput(request);
     const result = await createIssue(input, request, attachments);
     return reply.code(201).send(result.issue);
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
+    await ensureCurrentSubject(database, request);
     const issue = await requireIssue(database, request.params.key);
     const { input, attachments: pendingAttachments } = await readIssueInput(request);
     const failures: unknown[] = [];
@@ -623,5 +626,5 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     return reply.code(201).send({ id: comment.id, author: authorSubject, body: comment.body, createdAt: comment.createdAt.toISOString() });
   });
 
-  return { createIssue };
+  return { createIssue, resolveCreationScope };
 }

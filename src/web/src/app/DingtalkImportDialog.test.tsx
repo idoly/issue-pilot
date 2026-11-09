@@ -94,6 +94,17 @@ test("keeps the imported Issue available when navigation is declined", async () 
   expect(opened).toHaveBeenCalledTimes(2);
   expect(importDingtalkRecords).toHaveBeenCalledOnce();
 });
+test("shows connection cleanup failure without hiding the committed Issue", async () => {
+  const { created, opened } = await open();
+  fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });
+  vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, status: "created", issueKey: "ISSUE-20261022-001", connectionCleanup: "failed" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "导入工单" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "导入工单" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("连接关闭失败");
+  expect(screen.getByRole("button", { name: "ISSUE-20261022-001" })).toBeTruthy();
+  expect(created).toHaveBeenCalledOnce();
+  expect(opened).not.toHaveBeenCalled();
+});
 test("shows a useful import failure and keeps the entered link for retry", async () => {
   await open();
   fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });
