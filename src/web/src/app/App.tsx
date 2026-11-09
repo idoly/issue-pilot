@@ -1,7 +1,7 @@
 import { Button, Segmented, Select, Skeleton } from "../ui";
 import { createEffect, createSignal, lazy, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 
-import { getIssue, type IssueDetail } from "../data/client";
+import { getIssue, type IssueDetail, type IssueExecutionItem } from "../data/client";
 import { parseIssueKey } from "../../../domain/contracts";
 import { DingtalkImportButton } from "./DingtalkImportDialog";
 import { AgentPanel } from "./AgentPanel";
@@ -11,6 +11,19 @@ import { OverviewView } from "./OverviewView";
 import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
 import type { SourcePanel } from "./CodeBrowser";
+
+import { createIssueList, type IssueListResource } from "./issue-list";
+
+function summaryChanged(detail: IssueDetail | IssueExecutionItem, summary: IssueExecutionItem): boolean {
+  const fields = ["title", "priority", "type", "status", "assignee", "assigneeSubject", "environmentKey", "updatedAt"] as const;
+  return (
+    fields.some((field) => detail[field] !== summary[field]) ||
+    detail.service.key !== summary.service.key ||
+    detail.service.name !== summary.service.name ||
+    ("workspace" in detail ? detail.workspace.status : detail.workspaceStatus) !== summary.workspaceStatus ||
+    Boolean(detail.agentRunning) !== summary.agentRunning
+  );
+}
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
 type AppView = "dashboard" | "issues" | "configuration";
@@ -22,6 +35,7 @@ const viewOptions: Array<{ value: AppView; label: string }> = [
 
 function AgentWorkspace(props: {
   issue: IssueDetail;
+  refreshError: string;
   sourceAgentOpen: boolean;
   sourceExpanded: boolean;
   sourceDetailsOpen: boolean;
@@ -38,6 +52,11 @@ function AgentWorkspace(props: {
       class={`agent-workspace${props.sourceExpanded ? " source-open" : ""}${props.sourceExpanded && !props.sourceAgentOpen ? " agent-closed" : ""}`}
       aria-label={`${props.issue.id} 智能体工作区`}
     >
+      <Show when={props.refreshError}>
+        <div class="workspace-error" role="alert">
+          工单详情刷新失败：{props.refreshError}
+        </div>
+      </Show>
       <AgentPanel issue={props.issue} drafts={agentDrafts} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} />
       <Show when={props.sourceExpanded}>
         <CodeBrowser
@@ -78,13 +97,13 @@ function CurrentUserIdentity(props: { mayChange: () => boolean }) {
   );
 }
 
-function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: number; hidden: boolean; keepExternalSelection: boolean; onSelect: (id: string) => void }) {
+function ResourceBackedIssueQueue(props: { selectedId: string; issueList: IssueListResource; hidden: boolean; keepExternalSelection: boolean; onSelect: (id: string) => void }) {
   const { currentUser } = useApplicationResources();
   return (
     <IssueQueue
       selectedId={props.selectedId}
       userSubject={currentUser()?.subject ?? ""}
-      refreshToken={props.refreshToken}
+      issueList={props.issueList}
       hidden={props.hidden}
       keepExternalSelection={props.keepExternalSelection}
       onSelect={props.onSelect}
@@ -92,7 +111,7 @@ function ResourceBackedIssueQueue(props: { selectedId: string; refreshToken: num
   );
 }
 
-function ResourceBackedOverview(props: { onSelectIssue: (issueKey: string) => void }) {
+function ResourceBackedOverview(props: { issueList: IssueListResource; onSelectIssue: (issueKey: string) => void }) {
   const { people, selectCurrentUser, refreshPeople } = useApplicationResources();
   let generation = 0,
     disposed = false;
@@ -115,6 +134,7 @@ function ResourceBackedOverview(props: { onSelectIssue: (issueKey: string) => vo
   };
   return (
     <OverviewView
+      issues={props.issueList}
       onSelectIssue={(issueKey, subject) => {
         void open(issueKey, subject);
       }}
@@ -133,7 +153,6 @@ export function App(props: { initialView?: AppView } = {}) {
   const [issue, setIssue] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
-  const [issueRefreshToken, setIssueRefreshToken] = createSignal(0, { ownedWrite: true });
   const [issueReloadToken, setIssueReloadToken] = createSignal(0, { ownedWrite: true });
   const [keepExternalSelection, setKeepExternalSelection] = createSignal(Boolean(linkedIssue), { ownedWrite: true });
   const [dashboardTarget, setDashboardTarget] = createSignal(linkedIssue, { ownedWrite: true });
@@ -175,13 +194,20 @@ export function App(props: { initialView?: AppView } = {}) {
   };
   window.addEventListener("popstate", onHistoryNavigation);
   onCleanup(() => window.removeEventListener("popstate", onHistoryNavigation));
+  const issueList = createIssueList(() => (view() === "configuration" ? false : view()));
   let issueWorkspace: HTMLElement | undefined;
   let selectionGeneration = 0;
   const issueRefreshes = new Map<string, number>();
+  let nextRefresh = 0;
+  onCleanup(() => {
+    selectionGeneration++;
+  });
   createEffect(
-    () => ({ id: selectedId(), reload: issueReloadToken() }),
-    ({ id }) => {
+    () => ({ id: selectedId(), reload: issueReloadToken(), active: view() === "issues" }),
+    ({ id, active }) => {
       const currentGeneration = ++selectionGeneration;
+      issueRefreshes.clear();
+      if (!active) return;
       setSourceExpanded(false);
       setSourceDirty(false);
       if (!id) {
@@ -226,19 +252,37 @@ export function App(props: { initialView?: AppView } = {}) {
       }
     },
   );
-  const refreshIssue = async (issueKey: string, refreshQueue = false) => {
+  const refreshIssue = async (issueKey: string, refreshQueue = true) => {
     const currentGeneration = selectionGeneration;
-    const currentRefresh = (issueRefreshes.get(issueKey) ?? 0) + 1;
+    const currentRefresh = ++nextRefresh;
     issueRefreshes.set(issueKey, currentRefresh);
-    if (refreshQueue) setIssueRefreshToken((value) => value + 1);
-    const refreshed = await getIssue(issueKey);
-    if (currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey) {
-      const statusChanged = issue()?.status !== refreshed.status;
-      setIssue(refreshed);
-      if (!refreshQueue && statusChanged) setIssueRefreshToken((value) => value + 1);
+    if (refreshQueue) void issueList.refresh();
+    const isCurrent = () => currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey;
+    try {
+      const refreshed = await getIssue(issueKey);
+      if (isCurrent()) {
+        setIssue(refreshed);
+        setIssueError("");
+      }
+      return refreshed;
+    } catch (error) {
+      if (isCurrent()) setIssueError(error instanceof Error ? error.message : "工单加载失败");
+      throw error;
+    } finally {
+      if (issueRefreshes.get(issueKey) === currentRefresh) issueRefreshes.delete(issueKey);
     }
-    return refreshed;
   };
+  createEffect(issueList.items, (items) => {
+    // A sampled change also invalidates the selected details, including changes made by another client.
+    const current = untrack(issue);
+    if (untrack(view) !== "issues" || untrack(loading) || !current || issueRefreshes.has(current.id)) return;
+    const summaries = new Map(items.map((item) => [item.id, item]));
+    const changed = [current, ...(current.relatedIssues ?? [])].some((detail) => {
+      const summary = summaries.get(detail.id);
+      return !summary || summaryChanged(detail, summary);
+    });
+    if (untrack(issueError) || changed) void refreshIssue(current.id, false).catch(() => undefined);
+  });
   return (
     <ApplicationResourcesProvider>
       <div class="app-shell">
@@ -270,7 +314,7 @@ export function App(props: { initialView?: AppView } = {}) {
               }}
             />
             <DingtalkImportButton
-              onCreated={() => setIssueRefreshToken((value) => value + 1)}
+              onCreated={() => void issueList.refresh()}
               onOpenIssue={(key) => {
                 if (!mayNavigate()) return false;
                 setKeepExternalSelection(true);
@@ -303,6 +347,7 @@ export function App(props: { initialView?: AppView } = {}) {
           <Switch>
             <Match when={view() === "dashboard"}>
               <ResourceBackedOverview
+                issueList={issueList}
                 onSelectIssue={(issueKey) => {
                   if (!untrack(mayNavigate)) return;
                   // User navigation becomes its own history entry so Back returns to the previous Issue.
@@ -320,7 +365,7 @@ export function App(props: { initialView?: AppView } = {}) {
             <Match when={view() === "issues"}>
               <ResourceBackedIssueQueue
                 selectedId={selectedId()}
-                refreshToken={issueRefreshToken()}
+                issueList={issueList}
                 hidden={sourceExpanded()}
                 keepExternalSelection={keepExternalSelection()}
                 onSelect={(issueKey) => {
@@ -369,6 +414,7 @@ export function App(props: { initialView?: AppView } = {}) {
                   {(current) => (
                     <>
                       <AgentWorkspace
+                        refreshError={issueError()}
                         issue={current()}
                         sourceAgentOpen={sourceAgentOpen()}
                         sourceExpanded={sourceExpanded()}
@@ -410,7 +456,7 @@ export function App(props: { initialView?: AppView } = {}) {
                           await refreshIssue(current().id, true);
                         }}
                         onCreatedFollowUp={(issueKey) => {
-                          setIssueRefreshToken((value) => value + 1);
+                          void issueList.refresh();
                           if (!mayNavigate()) return;
                           setKeepExternalSelection(false);
                           setSelectedId(issueKey);

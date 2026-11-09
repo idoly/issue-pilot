@@ -12,6 +12,46 @@ import { agentSessions } from "../../src/db/schema.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
 
+test("a large live result arriving during replay is bounded before entering the SSE buffer", { timeout: 10_000 }, async (context) => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  try {
+    await createService(fixture.app, "Buffered display");
+    const issue = await createIssue(fixture.app, "buffered-display");
+    const text = "x".repeat(issuePilotConfig.http.sseQueuedBytes + 1_024);
+    const result = { content: [{ type: "text" as const, text }] };
+    const subscribe = events.subscribe.bind(events);
+    context.mock.method(events, "subscribe", (...args: Parameters<typeof subscribe>) => {
+      const stop = subscribe(...args);
+      // Publish after subscription, while the route awaits its final Issue/identity reads.
+      queueMicrotask(() =>
+        events.publish({
+          id: "during-replay",
+          issueId: args[0],
+          createdAt: new Date().toISOString(),
+          event: { type: "tool_execution_end", toolCallId: "large", toolName: "read", result, isError: false },
+        }),
+      );
+      return stop;
+    });
+    const origin = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${origin}/api/issues/${issue.id}/agent-stream`, { signal: AbortSignal.timeout(5_000) });
+    assert.equal(response.status, 200);
+    let replay = "";
+    for await (const chunk of response.body!) {
+      replay += new TextDecoder().decode(chunk);
+      if (replay.includes("event: snapshot_ready") && replay.includes('"displayTruncated":true')) break;
+    }
+    assert.match(replay, /event: snapshot_ready/);
+    assert.match(replay, /"displayTruncated":true/);
+    assert.equal(replay.split("id: during-replay\n").length, 2);
+    assert.ok(replay.length < issuePilotConfig.web.agentToolOutputCharacters * 2);
+    assert.equal(result.content[0]!.text, text);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("SSE replay, live results and history pages bound display text without rewriting durable results", { timeout: 10_000 }, async () => {
   const events = new AgentEventBus();
   const fixture = await createApiFixture({ events });

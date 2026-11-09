@@ -1,59 +1,19 @@
-import { createSignal, onCleanup } from "solid-js";
-
-import { listIssues, type IssueExecutionItem } from "../data/client";
 import { Dashboard } from "./Dashboard";
 import { Statistics } from "./Statistics";
+import type { IssueListResource } from "./issue-list";
 
-const refreshIntervalMs = 10_000;
-
-export function OverviewView(props: { onSelectIssue: (issueKey: string, userSubject?: string) => void }) {
-  const [issues, setIssues] = createSignal<IssueExecutionItem[]>([], { ownedWrite: true });
-  const [loading, setLoading] = createSignal(true, { ownedWrite: true });
-  const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
-  const [refreshing, setRefreshing] = createSignal(false, { ownedWrite: true });
-  let requestGeneration = 0;
-  let requestController: AbortController | undefined;
-
-  const refresh = () => {
-    const generation = ++requestGeneration;
-    requestController?.abort();
-    requestController = new AbortController();
-    setRefreshing(true);
-    void listIssues(requestController.signal)
-      .then((value) => {
-        if (generation !== requestGeneration) return;
-        setIssues(value);
-        setLoadError("");
-      })
-      .catch((error) => {
-        if (generation !== requestGeneration || requestController?.signal.aborted) return;
-        setLoadError(error instanceof Error ? error.message : "首页数据加载失败");
-      })
-      .finally(() => {
-        if (generation === requestGeneration) {
-          requestController = undefined;
-          setLoading(false);
-          setRefreshing(false);
-        }
-      });
-  };
-
-  refresh();
-  // Do not let the timer abort an in-flight sample; manual refresh still supersedes it.
-  const refreshIfIdle = () => {
-    if (!requestController) refresh();
-  };
-  const refreshTimer = window.setInterval(refreshIfIdle, refreshIntervalMs);
-  onCleanup(() => {
-    window.clearInterval(refreshTimer);
-    requestGeneration += 1;
-    requestController?.abort();
-  });
-
+export function OverviewView(props: { issues: IssueListResource; onSelectIssue: (issueKey: string, userSubject?: string) => void }) {
   return (
     <main class="overview-view" aria-label="首页">
-      <Dashboard issues={issues()} loading={loading()} loadError={loadError()} refreshing={refreshing()} onRefresh={refresh} onSelectIssue={props.onSelectIssue} />
-      <Statistics issues={issues()} />
+      <Dashboard
+        issues={props.issues.items()}
+        loading={props.issues.loading()}
+        loadError={props.issues.error()}
+        refreshing={props.issues.refreshing()}
+        onRefresh={props.issues.refresh}
+        onSelectIssue={props.onSelectIssue}
+      />
+      <Statistics issues={props.issues.items()} />
     </main>
   );
 }

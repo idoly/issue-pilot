@@ -11,7 +11,7 @@ import { AgentPanel, ConversationItem } from "./AgentPanel";
 import { AgentDraftStore, clearAgentDrafts } from "./agent-drafts";
 import {
   activityForEvent,
-  applyAgentEvent,
+  ConversationProjection,
   boundedText,
   codemodeCalls,
   diffLineClass,
@@ -22,6 +22,12 @@ import {
   toolLabelParts,
   type ConversationEntry,
 } from "./conversation";
+
+function applyAgentEvent(entries: ConversationEntry[], event: RunEvent): ConversationEntry[] {
+  const projection = new ConversationProjection(entries);
+  projection.apply(event);
+  return projection.snapshot();
+}
 
 function event(payload: RunEvent["event"], id: string = crypto.randomUUID()): RunEvent {
   return { id, issueId: "63ccbb08-d769-47b6-87a6-e93acea184f7", createdAt: "2026-08-06T00:00:00.000Z", event: payload };
@@ -41,6 +47,49 @@ function assistant(content: AssistantMessage["content"], stopReason: AssistantMe
 }
 
 describe("Agent conversation state", () => {
+  it("keeps published conversation snapshots unchanged across later deltas and tool completions", () => {
+    const projection = new ConversationProjection();
+    projection.apply(event({ type: "message_start", message: assistant([], "pending") }, "assistant"));
+    projection.apply(event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "first" } }));
+    projection.apply(event({ type: "tool_execution_start", toolCallId: "tool", toolName: "read", args: { path: "file.txt" } }, "tool-start"));
+    const published = projection.snapshot();
+    const saved = structuredClone(published);
+    Object.freeze(published);
+    projection.apply(event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " second" } }));
+    projection.apply(event({ type: "tool_execution_end", toolCallId: "tool", toolName: "read", result: { content: [{ type: "text", text: "complete" }] }, isError: false }));
+    expect(published).toEqual(saved);
+    const next = projection.snapshot();
+    expect(next).toMatchObject([
+      { id: "assistant", blocks: [{ value: "first second" }] },
+      { id: "tool-start", status: "complete", arguments: { path: "file.txt" } },
+    ]);
+    const resumed = new ConversationProjection(next);
+    resumed.apply(event({ type: "message_end", message: assistant([{ type: "text", text: "finished" }], "stop") }));
+    expect(resumed.snapshot()[0]).toMatchObject({ id: "assistant", blocks: [{ value: "finished" }], stopReason: "stop" });
+    expect(next[0]).toMatchObject({ streaming: true, blocks: [{ value: "first second" }] });
+  });
+
+  it("preserves tool identities and order when a large replay completes calls in reverse order", () => {
+    const projection = new ConversationProjection();
+    for (let index = 0; index < 5_000; index++)
+      projection.apply(
+        event({ type: "message_end", message: assistant([{ type: "toolCall", id: `call-${index}`, name: "read", arguments: { path: `${index}.txt` } }], "toolUse") }, `message-${index}`),
+      );
+    for (let index = 4_999; index >= 0; index--)
+      projection.apply(event({ type: "tool_execution_end", toolCallId: `call-${index}`, toolName: "read", result: { content: [{ type: "text", text: `result-${index}` }] }, isError: false }));
+    const entries = projection.snapshot();
+    expect(entries).toHaveLength(10_000);
+    for (let index = 0; index < 5_000; index++) {
+      expect(entries[index * 2 + 1]).toMatchObject({
+        id: `message-${index}:call-${index}`,
+        kind: "tool",
+        status: "complete",
+        arguments: { path: `${index}.txt` },
+        result: { content: [{ type: "text", text: `result-${index}` }] },
+      });
+    }
+  });
+
   it("Escape cancels the visible active Issue once without clearing its draft; ignores composition, modifiers and hidden panels", async () => {
     const issue = {
       id: "ISSUE-20260810-099",

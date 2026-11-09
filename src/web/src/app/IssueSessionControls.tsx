@@ -2,7 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Modal, Select } from "../ui";
 import { errorMessage, listIssueSessions, readIssueSession, type IssueDetail, type IssueSessionSummary } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
-import { applyAgentEvent, type ConversationEntry } from "./conversation";
+import { ConversationProjection, type ConversationEntry } from "./conversation";
 import { ConversationItem } from "./AgentPanel";
 
 export function IssueSessionControls(props: { issue: IssueDetail; disabled: boolean }) {
@@ -75,7 +75,11 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
     try {
       const page = await readIssueSession(props.issue.id, id, offset, task.signal);
       if (generation !== task.owner) return;
-      setEntries((current) => page.events.reduce(applyAgentEvent, offset ? current : []));
+      setEntries((current) => {
+        const projection = new ConversationProjection(offset ? current : []);
+        for (const event of page.events) projection.apply(event);
+        return projection.snapshot();
+      });
       setNextOffset(page.nextOffset);
     } catch (cause) {
       if (generation === task.owner) setError(errorMessage(cause));

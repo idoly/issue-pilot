@@ -341,17 +341,26 @@ test("refuses a cached session replaced with whitespace and accepts its restored
   }
 });
 
-test("refuses a session file rewritten with a different header even when it grows", async () => {
+test("repeatedly refuses a rewritten session and accepts restoration followed by normal appends", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-session-rewrite-"));
   try {
     const file = path.join(root, ".session-rewrite.jsonl");
     const header = (id: string) => JSON.stringify({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: root });
     const record = (id: string) => JSON.stringify({ type: "message", id, role: "user", content: "x", timestamp: new Date().toISOString() });
-    await fs.promises.writeFile(file, `${header("first")}\n${record("m1")}\n`);
+    const original = `${header("first")}\n${record("m1")}\n`;
+    await fs.promises.writeFile(file, original);
     await assertSessionFileComplete(file);
     // Same inode, larger file, valid JSONL, but no longer the validated session: the append-only cache must not trust it.
-    await fs.promises.writeFile(file, `${header("second")}\n${record("m1")}\n${record("m2")}\n`);
-    await assert.rejects(assertSessionFileComplete(file), { message: "agent_session_file_incomplete" });
+    const rewritten = `${header("second")}\n${record("m1")}\n${record("m2")}\n`;
+    await fs.promises.writeFile(file, rewritten);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await assert.rejects(assertSessionFileComplete(file), { message: "agent_session_file_incomplete" });
+      assert.equal(await readFile(file, "utf8"), rewritten);
+    }
+    await fs.promises.writeFile(file, original);
+    await assertSessionFileComplete(file);
+    await fs.promises.appendFile(file, `${record("m2")}\n`);
+    await assertSessionFileComplete(file);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

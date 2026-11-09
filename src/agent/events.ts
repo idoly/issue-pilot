@@ -1,6 +1,7 @@
 import type { ImageContent, NestedToolCalls } from "@earendil-works/pi-ai";
 import type { AgentRunState } from "../domain/contracts.ts";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
+import { agentDisplayEvent } from "./event-display.ts";
 
 type ToolCompletionEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_end" }>;
 type ToolUpdateEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_update" }>;
@@ -146,9 +147,9 @@ export class AgentEventBus {
   }
 }
 
-// Buffer events between the replay snapshot and live activation so SSE preserves one ordered stream.
-export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string, budget?: { maxPendingBytes: number; onFailure: (error: unknown) => void }) {
-  let pending: RunEvent[] = [];
+// Buffer display events between replay and live activation; raw model results stay with the event bus.
+export function subscribeBufferedAgentDisplayEvents(bus: AgentEventBus, issueId: string, budget?: { maxPendingBytes: number; onFailure: (error: unknown) => void }) {
+  let pending: Array<{ event: RunEvent; bytes: number }> = [];
   let pendingBytes = 0;
   let closed = false;
   let sink: RunEventListener | undefined;
@@ -158,25 +159,38 @@ export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string
     pendingBytes = 0;
     stop();
   };
+  const fail = (error: unknown) => {
+    if (closed) return;
+    unsubscribe();
+    if (budget) budget.onFailure(error);
+    else throw error;
+  };
   const buffer = (event: RunEvent) => {
     if (closed) return;
+    let bytes = 0;
     if (budget) {
       try {
-        pendingBytes += Buffer.byteLength(JSON.stringify(event));
+        bytes = Buffer.byteLength(JSON.stringify(event));
+        pendingBytes += bytes;
         if (pendingBytes > budget.maxPendingBytes) throw new Error("sse_queue_budget_exceeded");
       } catch (error) {
-        unsubscribe();
-        budget.onFailure(error);
+        fail(error);
         return;
       }
     }
-    pending.push(event);
+    pending.push({ event, bytes });
   };
   const stop = bus.subscribe(issueId, (event) => {
-    if (!closed) {
-      if (sink) sink(event);
-      else buffer(event);
+    if (closed) return;
+    let displayed: RunEvent;
+    try {
+      displayed = agentDisplayEvent(event);
+    } catch (error) {
+      fail(error);
+      return;
     }
+    if (sink) sink(displayed);
+    else buffer(displayed);
   });
   return {
     activate(nextSink: RunEventListener): void {
@@ -184,9 +198,9 @@ export function subscribeBufferedAgentEvents(bus: AgentEventBus, issueId: string
       if (closed) return;
       // Keep events published during replay behind the existing backlog.
       sink = buffer;
-      for (const event of pending) {
+      for (const { event, bytes } of pending) {
         if (closed) break;
-        if (budget) pendingBytes -= Buffer.byteLength(JSON.stringify(event));
+        pendingBytes -= bytes;
         if (bus.deliver(nextSink, event)) continue;
         unsubscribe();
         break;

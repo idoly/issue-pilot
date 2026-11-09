@@ -42,6 +42,8 @@ Combined editing preflights reset, saves fields/attachments, then resets. Post-c
 
 Before reading a bound session validate a nonempty regular JSONL, valid header/records and final newline. Never repair blanks, malformed lines or truncation automatically. SSE may skip missing durable replay; MCP follows its failure contract. Neither creates a replacement empty file. SDK reading of a complete old format may migrate it, so do not promise that every read is byte-preserving. Verify [session-read-integrity.test.ts](../../tests/http/session-read-integrity.test.ts).
 
+Summary and transcript validation share `openRegularSessionFile` in [pi-session.ts](../../src/agent/pi-session.ts): refuse symlinks and special files without blocking on a FIFO, then inspect the opened descriptor. Reset writes its link as the first entry after the header; summary listing stops at that first entry and never follows later reset-shaped conversation records. This avoids scanning large tool outputs merely to list sessions. Full validation samples and parses through one descriptor; its bounded append cache changes only after successful validation, so a rejected session-ID rewrite remains rejected on retry while cached. This cache is an optimization, not a durable identity ledger or protection against every concurrent external rewrite; Pi subsequently opens the validated path.
+
 Read-only rounds close instances at completion and restore from durable history next round; idle dev instances may be reused. Failure cleanup stays serialized and cannot overwrite a newer round. Aggregate abort/shutdown/dispose and storage cleanup errors.
 
 ## Native evidence queries

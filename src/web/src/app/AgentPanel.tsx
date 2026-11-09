@@ -13,13 +13,14 @@ import {
   type AgentFooterStats,
   type IssueDetail,
   type IssueStatus,
+  type AgentRunState,
   type RunEvent,
 } from "../data/client";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { IssueMarkdown, resolveIssueFileLink } from "./IssueMarkdown";
 import {
   activityForEvent,
-  applyAgentEvent,
+  ConversationProjection,
   assistantNotice,
   diffLineClass,
   duration,
@@ -320,7 +321,9 @@ function footerMetrics(footer: AgentFooterStats) {
 export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<IssueDetail>; drafts?: AgentDraftStore }) {
   const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
-  const [processing, setProcessing] = createSignal(false, { ownedWrite: true });
+  const [inferredProcessing, setProcessing] = createSignal(false, { ownedWrite: true });
+  const [runState, setRunState] = createSignal<AgentRunState | undefined>(undefined, { ownedWrite: true });
+  const processing = () => (runState() === undefined ? inferredProcessing() : runState() !== "idle");
   const [issueStatus, setIssueStatus] = createSignal<IssueStatus>(
     untrack(() => props.issue.status),
     { ownedWrite: true },
@@ -347,6 +350,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setSending(draftRecord.sending);
   };
   const [entries, setEntries] = createSignal<ConversationEntry[]>([], { ownedWrite: true });
+  let projection = new ConversationProjection();
   const [unread, setUnread] = createSignal(0, { ownedWrite: true });
   const [atLatest, setAtLatest] = createSignal(true, { ownedWrite: true });
   const [activity, setActivity] = createSignal<AgentActivity | null>(null, { ownedWrite: true });
@@ -370,7 +374,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   );
 
   const canSend = () => issueStatus() !== "resolved";
-  const canInterrupt = () => processing() || props.issue.agentRunning === true;
+  const canInterrupt = () => (runState() === undefined ? processing() || props.issue.agentRunning === true : processing());
   const canSubmit = () => canSend() && !sending() && (images().length > 0 || /\S/.test(draft()));
   const usageMetrics = () => footerMetrics(footer());
   const codeRoot = () => props.issue.workingDirectory ?? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`;
@@ -450,15 +454,16 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (removed) URL.revokeObjectURL(removed.url);
       return current.filter((image) => image.url !== url);
     });
-  const updateConversation = (update: (current: ConversationEntry[]) => ConversationEntry[]) => {
+  const updateConversation = (events: RunEvent[]) => {
+    for (const event of events) projection.apply(event);
+    const next = projection.snapshot();
     if (followLatest) {
-      setEntries(update);
+      setEntries(next);
       return;
     }
     let added: ConversationEntry[] = [];
     const generation = issueGeneration;
     setEntries((current) => {
-      const next = update(current);
       // Live events replace entries in place or append them. Reconnect snapshots have their own path.
       if (next.length > current.length) added = next.slice(current.length);
       return next;
@@ -479,7 +484,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       if (!update || !("delta" in update) || typeof update.delta !== "string") return envelope;
       return { ...envelope, event: { ...envelope.event, assistantMessageEvent: { ...update, delta: deltas.join("") } } } as RunEvent;
     });
-    updateConversation((current) => updates.reduce((next, event) => applyAgentEvent(next, event), current));
+    updateConversation(updates);
   };
   const flushMessageUpdates = () => {
     if (messageUpdateFrame !== undefined) window.cancelAnimationFrame(messageUpdateFrame);
@@ -519,9 +524,10 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       return;
     }
     flushMessageUpdates();
-    updateConversation((current) => applyAgentEvent(current, event));
+    updateConversation([event]);
     setFooter((current) => footerAfterEvent(current, event.event));
     const type = event.event.type;
+    if (event.event.type === "issue_run_state") setRunState(event.event.state);
     setProcessing((current) => processingAfterEvent(current, event.event));
     const nextActivity = activityForEvent(event.event);
     if (nextActivity !== undefined) setActivity(nextActivity);
@@ -548,6 +554,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     onSnapshot: (payload, replay, generation) => {
       // The snapshot is authoritative; deltas queued by the previous connection must not replay over it.
       discardMessageUpdates();
+      projection = new ConversationProjection(replay.entries);
       setEntries(replay.entries);
       setFooter(payload.footer ?? emptyFooter());
       // A reconnect must not yank a reader who scrolled back through history.
@@ -557,13 +564,21 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
       const statusChanged = Boolean(payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus) && payload.issueStatus !== props.issue.status);
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
+      setRunState(payload.runState);
       setProcessing(payload.runState ? payload.runState !== "idle" : payload.running === true);
-      if (statusChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
+      const running = payload.runState ? payload.runState !== "idle" : payload.running;
+      const executionChanged = running !== undefined && running !== Boolean(props.issue.agentRunning);
+      if (statusChanged || executionChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
       queueMicrotask(keepLatest);
     },
     onEvent: (envelope, generation) => {
       append(envelope);
-      if (envelope.event.type === "issue_status" || envelope.event.type === "agent_start" || (envelope.event.type === "tool_execution_end" && envelope.event.toolName === "workspace"))
+      if (
+        envelope.event.type === "issue_status" ||
+        envelope.event.type === "issue_run_state" ||
+        envelope.event.type === "agent_start" ||
+        (envelope.event.type === "tool_execution_end" && envelope.event.toolName === "workspace")
+      )
         refreshIssue(props.issue.id, generation);
     },
   });
@@ -573,12 +588,14 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       setFollowLatest(true);
       followedTop = 0;
       discardMessageUpdates();
+      projection = new ConversationProjection();
       setEntries([]);
       setFooter(emptyFooter());
       clearUnread();
       setError("");
       setSnapshotReady(false);
       setProcessing(false);
+      setRunState(undefined);
       setActivity(null);
       setQueue({ steering: [], followUp: [] });
       setAgent({ provider: "", model: "", thinkingLevel: "" });

@@ -10,6 +10,8 @@ The application issues no login session. X-Issue-Pilot-Subject selects a DB user
 
 [requireCurrentUser](../../src/http/route-context.ts) requires active identity, pins implicit selection by createdAt/subject, and reloads authorization after relevant waits. Deactivation never switches identity. developer and isAdmin are independent.
 
+Session lists and history pages reauthorize inside the configuration scope after waiting. SSE reauthorizes after catalog/transcript preparation and before sending headers; a deactivated reader receives an ordinary error, not a successful replay. This admission check does not revoke an already established stream. Regression: [session-read-identity.test.ts](../../tests/http/session-read-identity.test.ts).
+
 Not every GET checks identity: examples include /api/issues, /api/issues/:key, /api/users, /api/catalog and /api/config. Assignee/reporter relations are not read access control. API/MCP private,no-store headers are not authorization or encryption.
 
 Native browser EventSource does not send the page-selected subject header. Without a trusted gateway identity binding, the server uses its implicit user selection. Protect SSE as well as ordinary fetches.
@@ -134,6 +136,8 @@ Reconnect is full replay, not Last-Event-ID continuation. Deduplicate durable en
 A backpressured replay resumes on either drain or completion of the blocked write. ServerResponse can finish writing without emitting drain; waiting only for that event can strand replay before snapshot_ready and before heartbeats start. Late callbacks from earlier frames must not release a newer blocked write, and close/error must release replay waits.
 
 Tool text is bounded before HTTP serialization by web.agentToolOutputCharacters, retaining head/tail and displayTruncated; Web applies the same fallback. Do not modify originals or treat this as a bound on images, metadata or total transcript size. Owners: [agent-routes.ts](../../src/http/agent-routes.ts), [sse.ts](../../src/http/sse.ts), [event-display.ts](../../src/agent/event-display.ts).
+
+Events arriving during replay are projected before entering the display buffer. Its UTF-8 byte budget counts the projected event, including all remaining images/metadata, and retains each queued size for draining. Raw events remain unchanged for other observers. Projection failure closes the subscription and reports the error, as does queue overflow.
 
 | Reader | Paging |
 | --- | --- |

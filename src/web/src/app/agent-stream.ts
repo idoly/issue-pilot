@@ -1,5 +1,5 @@
 import { AGENT_RUN_STATES, type AgentRunState, type AgentFooterStats, type IssueStatus, type RunEvent } from "../data/client";
-import { activityForEvent, applyAgentEvent, type AgentActivity, type ConversationEntry } from "./conversation";
+import { activityForEvent, ConversationProjection, type AgentActivity, type ConversationEntry } from "./conversation";
 
 interface AgentStreamSnapshot {
   agent?: { provider: string; model: string; thinkingLevel: string };
@@ -52,7 +52,7 @@ export class AgentStreamController {
     this.callbacks.onConnection(false);
 
     let replayComplete = false;
-    let replayEntries: ConversationEntry[] = [];
+    const replay = new ConversationProjection();
     let replayActivity: AgentActivity | null = null;
     let replayQueue = { steering: [] as string[], followUp: [] as string[] };
     let replayAgentStarted = false;
@@ -90,7 +90,7 @@ export class AgentStreamController {
         const parsed = JSON.parse(event.data) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent_event_protocol_error");
         if ("runState" in parsed && !AGENT_RUN_STATES.includes(parsed.runState as AgentRunState)) throw new Error("agent_event_protocol_error");
-        this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replayEntries, activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
+        this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replay.snapshot(), activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
         this.callbacks.onConnection(true);
         this.callbacks.onError("");
@@ -114,7 +114,7 @@ export class AgentStreamController {
           return;
         }
         if (!replayComplete) {
-          replayEntries = applyAgentEvent(replayEntries, envelope);
+          replay.apply(envelope);
           const nextActivity = activityForEvent(envelope.event);
           if (nextActivity !== undefined) replayActivity = nextActivity;
           if (envelope.event.type === "queue_update") replayQueue = { steering: [...envelope.event.steering], followUp: [...envelope.event.followUp] };

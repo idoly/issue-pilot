@@ -6,8 +6,10 @@ import { test } from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { AgentEventBus, sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../../src/agent/events.ts";
+import { AgentEventBus, sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../../src/agent/events.ts";
 import { sessionFooterStats } from "../../src/agent/footer.ts";
+import { agentDisplayEvent } from "../../src/agent/event-display.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const usage = {
   input: 0,
@@ -103,7 +105,7 @@ test("buffers live events until session replay is ready", () => {
   const bus = new AgentEventBus((error) => errors.push(error));
   const received: string[] = [];
   const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
-  const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
+  const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1");
   bus.publish(event("during-replay-1"));
   bus.publish(event("during-replay-2"));
   assert.equal(received.length, 0);
@@ -114,7 +116,7 @@ test("buffers live events until session replay is ready", () => {
   assert.deepEqual(received, ["during-replay-1", "during-replay-2", "live"]);
   assert.throws(() => subscription.activate(() => undefined), /agent_event_subscription_already_active/);
 
-  const failing = subscribeBufferedAgentEvents(bus, "issue-2");
+  const failing = subscribeBufferedAgentDisplayEvents(bus, "issue-2");
   bus.publish({ ...event("buffered-failure"), issueId: "issue-2" });
   assert.doesNotThrow(() =>
     failing.activate(() => {
@@ -130,7 +132,7 @@ test("keeps buffered events ahead of events published while replay is being deli
   const bus = new AgentEventBus(),
     received: string[] = [];
   const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
-  const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
+  const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1");
   bus.publish(event("first"));
   bus.publish(event("second"));
   subscription.activate((envelope) => {
@@ -152,7 +154,7 @@ test("bounds live events buffered during slow replay and detaches only the slow 
     failures: unknown[] = [];
   const event = (id: string): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "issue_user", message: "中文" } });
   const bytes = Buffer.byteLength(JSON.stringify(event("first")));
-  const slow = subscribeBufferedAgentEvents(bus, "issue-1", { maxPendingBytes: bytes, onFailure: (error) => failures.push(error) });
+  const slow = subscribeBufferedAgentDisplayEvents(bus, "issue-1", { maxPendingBytes: bytes, onFailure: (error) => failures.push(error) });
   const stop = bus.subscribe("issue-1", ({ id }) => received.push(id));
   bus.publish(event("first"));
   assert.equal(failures.length, 0);
@@ -167,9 +169,95 @@ test("bounds live events buffered during slow replay and detaches only the slow 
   stop();
 });
 
+test("buffer budgets count displayed tool text and retain raw results for other observers", () => {
+  const bus = new AgentEventBus();
+  const original: RunEvent = {
+    id: "large",
+    issueId: "issue-1",
+    createdAt: "2026-11-09T00:00:00Z",
+    event: {
+      type: "tool_execution_end",
+      toolCallId: "call",
+      toolName: "read",
+      isError: false,
+      result: { content: [{ type: "text", text: "x".repeat(issuePilotConfig.web.agentToolOutputCharacters * 20) }] },
+    },
+  };
+  const expected = agentDisplayEvent(original);
+  const failures: unknown[] = [],
+    displayed: RunEvent[] = [],
+    raw: RunEvent[] = [];
+  const stop = bus.subscribe("issue-1", (event) => raw.push(event));
+  const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1", {
+    maxPendingBytes: Buffer.byteLength(JSON.stringify(expected)) * 2,
+    onFailure: (error) => failures.push(error),
+  });
+  bus.publish(original);
+  assert.deepEqual(failures, []);
+  subscription.activate((event) => displayed.push(event));
+  bus.publish({ ...original, id: "live" });
+  assert.deepEqual(displayed, [expected, { ...expected, id: "live" }]);
+  assert.equal(raw[0], original);
+  assert.equal(
+    original.event.type === "tool_execution_end" && original.event.result.content[0]?.type === "text" && original.event.result.content[0].text.length,
+    issuePilotConfig.web.agentToolOutputCharacters * 20,
+  );
+  subscription.unsubscribe();
+  stop();
+});
+
+test("unbounded tool metadata still consumes the replay buffer budget", () => {
+  const bus = new AgentEventBus(),
+    failures: unknown[] = [];
+  const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1", { maxPendingBytes: 1_024, onFailure: (error) => failures.push(error) });
+  bus.publish({
+    id: "metadata",
+    issueId: "issue-1",
+    createdAt: "2026-11-09T00:00:00Z",
+    event: {
+      type: "tool_execution_end",
+      toolCallId: "call",
+      toolName: "read",
+      isError: false,
+      result: { content: [], details: { description: "x".repeat(2_048) } },
+    },
+  });
+  assert.equal(failures.length, 1);
+  assert.match(String(failures[0]), /sse_queue_budget_exceeded/);
+  subscription.activate(() => assert.fail("overflowed metadata must not be delivered"));
+  subscription.unsubscribe();
+});
+
+for (const phase of ["replay", "live"] as const)
+  test(`a display projection failure closes the ${phase} subscription and reports it once`, () => {
+    const bus = new AgentEventBus(),
+      failures: unknown[] = [],
+      displayed: RunEvent[] = [];
+    const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1", { maxPendingBytes: 1_024, onFailure: (error) => failures.push(error) });
+    if (phase === "live") subscription.activate((event) => displayed.push(event));
+    bus.publish({
+      id: "invalid",
+      issueId: "issue-1",
+      createdAt: "2026-11-09T00:00:00Z",
+      event: {
+        type: "tool_execution_end",
+        toolCallId: "call",
+        toolName: "read",
+        isError: false,
+        result: { content: [null] },
+      },
+    } as unknown as RunEvent);
+    assert.equal(failures.length, 1);
+    if (phase === "replay") subscription.activate((event) => displayed.push(event));
+    bus.publish({ id: "later", issueId: "issue-1", createdAt: "2026-11-09T00:00:00Z", event: { type: "agent_start" } });
+    assert.equal(failures.length, 1);
+    assert.deepEqual(displayed, []);
+    subscription.unsubscribe();
+  });
+
 test("unsubscribing before activation discards the buffered events", () => {
   const bus = new AgentEventBus();
-  const subscription = subscribeBufferedAgentEvents(bus, "issue-1");
+  const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1");
   bus.publish({ id: "first", issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: { type: "agent_start" } });
   subscription.unsubscribe();
   subscription.activate(() => assert.fail("disconnected subscription must not replay"));

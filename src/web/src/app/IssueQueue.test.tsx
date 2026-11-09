@@ -21,6 +21,12 @@ vi.mock("./ApplicationResources", () => ({
   }),
 }));
 import { IssueQueue } from "./IssueQueue";
+import { createIssueList } from "./issue-list";
+
+function Queue(props: Omit<Parameters<typeof IssueQueue>[0], "issueList">) {
+  const issueList = createIssueList();
+  return <IssueQueue {...props} issueList={issueList} />;
+}
 
 const rows = (): IssueExecutionItem[] =>
   ["alice", "bob"].map((subject) => ({
@@ -44,7 +50,47 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.resetAllMocks();
+});
+
+for (const change of ["status", "assignee", "title"] as const)
+  it(`preserves selection when a background ${change} change excludes it from the queue filter`, async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let items = [rows()[0]!, { ...rows()[0]!, id: "second", title: "second task" }];
+    mocks.list.mockImplementation(async () => items);
+    const [selected, setSelected] = createSignal("alice", { ownedWrite: true });
+    const select = vi.fn(setSelected);
+    render(() => <Queue selectedId={selected()} userSubject="alice" onSelect={select} />);
+    await screen.findByText("alice task");
+    fireEvent.click(screen.getByLabelText("按状态筛选"));
+    fireEvent.click(await screen.findByRole("option", { name: "未解决" }));
+    fireEvent.input(screen.getByLabelText("搜索工单"), { target: { value: "task" } });
+    const updates = { status: { status: "resolved" as const }, assignee: { assigneeSubject: "bob" }, title: { title: "renamed" } };
+    items = [{ ...items[0]!, ...updates[change] }, items[1]!];
+    select.mockClear();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(screen.queryByText("alice task")).toBeNull());
+    expect(select).not.toHaveBeenCalled();
+    expect(selected()).toBe("alice");
+    // An explicit filter change can still select the first matching Issue.
+    fireEvent.input(screen.getByLabelText("搜索工单"), { target: { value: "second" } });
+    await waitFor(() => expect(selected()).toBe("second"));
+  });
+
+it("changes selection for an explicit identity change and for a removed Issue", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let items = rows();
+  mocks.list.mockImplementation(async () => items);
+  const [selected, setSelected] = createSignal("alice", { ownedWrite: true });
+  const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
+  render(() => <Queue selectedId={selected()} userSubject={subject()} onSelect={setSelected} />);
+  await screen.findByText("alice task");
+  setSubject("bob");
+  await waitFor(() => expect(selected()).toBe("bob"));
+  items = items.filter((item) => item.id !== "bob");
+  await vi.advanceTimersByTimeAsync(10_000);
+  await waitFor(() => expect(selected()).toBe(""));
 });
 
 it("keeps original order within pinned and ordinary groups through pinning and filtering", async () => {
@@ -59,7 +105,7 @@ it("keeps original order within pinned and ordinary groups through pinning and f
   // Pin preference order must not become a new within-group sort order.
   mocks.pins.mockResolvedValue(["fourth", "other-owner", "second"]);
   mocks.pin.mockResolvedValue(undefined);
-  render(() => <IssueQueue selectedId="" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+  render(() => <Queue selectedId="" userSubject="alice" onSelect={() => {}} />);
   const order = () => screen.getAllByRole("listitem").map((item) => item.querySelector(".issue-key")?.textContent);
   await waitFor(() => expect(order()).toEqual(["second", "fourth", "first", "third"]));
   expect(screen.queryByText("other task")).toBeNull();
@@ -85,7 +131,7 @@ it("waits for saved pin preferences before changing an Issue's pin", async () =>
     }),
   );
   mocks.pin.mockResolvedValue(undefined);
-  render(() => <IssueQueue selectedId="alice" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+  render(() => <Queue selectedId="alice" userSubject="alice" onSelect={() => {}} />);
   const pending = await screen.findByRole("button", { name: "固定 alice" });
   fireEvent.click(pending);
   expect(mocks.pin).not.toHaveBeenCalled();
@@ -106,7 +152,7 @@ it("allows a new pin preference after the initial preferences fail to load", asy
     }),
   );
   mocks.pin.mockResolvedValue(undefined);
-  render(() => <IssueQueue selectedId="alice" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+  render(() => <Queue selectedId="alice" userSubject="alice" onSelect={() => {}} />);
   const pending = await screen.findByRole("button", { name: "固定 alice" });
   expect(pending).toHaveProperty("disabled", true);
   fail(new Error("pin_preferences_unavailable"));
@@ -130,7 +176,7 @@ it("does not release a new identity's pin controls when the old preferences load
     }),
   );
   const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
-  render(() => <IssueQueue selectedId="" userSubject={subject()} refreshToken={0} onSelect={() => {}} />);
+  render(() => <Queue selectedId="" userSubject={subject()} onSelect={() => {}} />);
   await screen.findByRole("button", { name: "固定 alice" });
   setSubject("bob");
   const current = await screen.findByRole("button", { name: "固定 bob" });
@@ -143,7 +189,7 @@ it("does not release a new identity's pin controls when the old preferences load
 
 it("waits for an identity before opening the creation dialog", async () => {
   const [subject, setSubject] = createSignal("", { ownedWrite: true });
-  render(() => <IssueQueue selectedId="" userSubject={subject()} refreshToken={0} onSelect={() => {}} />);
+  render(() => <Queue selectedId="" userSubject={subject()} onSelect={() => {}} />);
   const create = screen.getByRole("button", { name: "新建工单" });
   expect(create).toHaveProperty("disabled", true);
   fireEvent.click(create);
@@ -170,7 +216,7 @@ for (const outcome of ["success", "failure"] as const)
           finishCurrent = () => resolve(rows());
         }),
     );
-    render(() => <IssueQueue selectedId="alice" userSubject="alice" refreshToken={0} onSelect={() => {}} />);
+    render(() => <Queue selectedId="alice" userSubject="alice" onSelect={() => {}} />);
     await screen.findByText("alice task");
     fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
     const first = await screen.findByRole("dialog", { name: "新建工单" });
@@ -200,7 +246,7 @@ it("keeps a newly created Issue when an older initial list finishes later", asyn
   mocks.list.mockResolvedValueOnce([]).mockResolvedValueOnce([...rows(), created]);
   mocks.create.mockResolvedValueOnce(created);
   const [selected, setSelected] = createSignal("", { ownedWrite: true });
-  render(() => <IssueQueue selectedId={selected()} userSubject="alice" refreshToken={0} onSelect={setSelected} />);
+  render(() => <Queue selectedId={selected()} userSubject="alice" onSelect={setSelected} />);
   try {
     fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
     const dialog = await screen.findByRole("dialog", { name: "新建工单" });
@@ -227,7 +273,7 @@ it("does not select an Issue created after the queue unmounts", async () => {
       }),
   );
   const selected = vi.fn();
-  const view = render(() => <IssueQueue selectedId="alice" userSubject="alice" refreshToken={0} onSelect={selected} />);
+  const view = render(() => <Queue selectedId="alice" userSubject="alice" onSelect={selected} />);
   fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
   const dialog = await screen.findByRole("dialog", { name: "新建工单" });
   fireEvent.input(within(dialog).getByLabelText("工单标题"), { target: { value: "pending creation" } });
@@ -269,7 +315,7 @@ for (const outcome of ["success", "failure"] as const)
     );
     const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
     const selected = vi.fn();
-    render(() => <IssueQueue selectedId="" userSubject={subject()} refreshToken={0} onSelect={selected} />);
+    render(() => <Queue selectedId="" userSubject={subject()} onSelect={selected} />);
     fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
     const old = await screen.findByRole("dialog", { name: "新建工单" });
     fireEvent.input(within(old).getByLabelText("工单标题"), { target: { value: "alice creation" } });
@@ -314,7 +360,7 @@ for (const outcome of ["success", "failure"] as const)
         }),
     );
     const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
-    render(() => <IssueQueue selectedId="" userSubject={subject()} refreshToken={0} onSelect={() => {}} />);
+    render(() => <Queue selectedId="" userSubject={subject()} onSelect={() => {}} />);
     const previous = await screen.findByRole("button", { name: "固定 alice" });
     await waitFor(() => expect(previous).toHaveProperty("disabled", false));
     fireEvent.click(previous);

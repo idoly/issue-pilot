@@ -6,7 +6,7 @@ import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
-import { sessionTranscript, subscribeBufferedAgentEvents, type RunEvent } from "../agent/events.ts";
+import { sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
 import { agentDisplayEvent } from "../agent/event-display.ts";
 import { assertSessionFileComplete } from "../agent/pi-session.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
@@ -54,7 +54,7 @@ async function readAgentMessage(request: FastifyRequest): Promise<{ message: str
   return { message, images };
 }
 
-export function registerAgentRoutes(context: ApiRouteContext): void {
+export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "events" | "modelCatalog" | "runScopeExclusive" | "stateRoot">): void {
   const { app, database, engine, events, modelCatalog, runScopeExclusive, stateRoot } = context;
   const recentEventLimit = issuePilotConfig.http.sseRecentEventIds;
   if (!Number.isSafeInteger(recentEventLimit) || recentEventLimit < 1) throw new Error("invalid_sse_event_id_budget");
@@ -62,7 +62,10 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
   app.get<{ Params: { key: string } }>("/api/issues/:key/sessions", async (request, _reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
-    return runScopeExclusive(async () => (await issueSessionHistory(database.db, stateRoot, issue)).map(({ file: _file, ...entry }) => entry));
+    return runScopeExclusive(async () => {
+      await requireCurrentUser(database, request);
+      return (await issueSessionHistory(database.db, stateRoot, issue)).map(({ file: _file, ...entry }) => entry);
+    });
   });
 
   app.get<{ Params: { key: string; sessionId: string }; Querystring: { offset?: string } }>("/api/issues/:key/sessions/:sessionId", async (request, _reply) => {
@@ -161,7 +164,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       reply.hijack();
       return;
     }
-    const liveEvents = subscribeBufferedAgentEvents(events, issue.id, {
+    const liveEvents = subscribeBufferedAgentDisplayEvents(events, issue.id, {
       maxPendingBytes: issuePilotConfig.http.sseQueuedBytes,
       onFailure(error) {
         try {
@@ -199,6 +202,9 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       const footer = sessionFooterStats(manager, contextWindow, autoCompact, sessionContext);
       const currentEvents = events.replayCurrent(issue.id);
       const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
+      // Catalog loading and transcript validation can outlive the reader's authorization.
+      // Refuse before sending SSE headers; the request keeps its initially selected identity.
+      await requireCurrentUser(database, request);
       if (cleaned) {
         reply.hijack();
         return;
@@ -241,7 +247,7 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
         }
         let serialized: string;
         try {
-          serialized = JSON.stringify(agentDisplayEvent(event));
+          serialized = JSON.stringify(event);
         } catch (error) {
           cleanup();
           reply.raw.destroy();
@@ -251,14 +257,14 @@ export function registerAgentRoutes(context: ApiRouteContext): void {
       };
       // Pace replay instead of queueing the entire transcript behind a slow socket.
       for (const event of transcript) {
-        send(event);
+        send(agentDisplayEvent(event));
         await writer.drain();
         if (cleaned) return;
       }
       // Snapshot totals also include hidden entries, such as cache-warming usage.
       for (const entry of manager?.getEntries() ?? []) sentEntries.add(entry.id);
       for (const event of currentEvents) {
-        send(event);
+        send(agentDisplayEvent(event));
         await writer.drain();
         if (cleaned) return;
       }

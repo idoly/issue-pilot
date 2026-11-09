@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import type { ReadStream } from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
-import { readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -76,6 +82,117 @@ test("reset preserves the old transcript and files, binds an empty session, and 
     await f.cleanup();
   }
 });
+
+for (const target of ["existing", "missing"] as const)
+  test(`session summaries refuse a symlink (${target} target) and recover after restoration`, async () => {
+    const f = await fixture();
+    const file = f.manager.getSessionFile()!;
+    const saved = `${file}.saved`;
+    try {
+      const original = await readFile(file);
+      await rename(file, saved);
+      await symlink(target === "existing" ? saved : `${file}.missing`, file);
+      const url = `/api/issues/${f.issue.key}/sessions`;
+      const response = await f.app.inject({ method: "GET", url, headers });
+      assert.equal(response.statusCode, 500, response.body);
+      assert.equal(response.json().error, "agent_session_file_incomplete");
+      assert.deepEqual(await readFile(saved), original);
+      assert.equal((await f.db.db.select().from(agentSessions))[0]!.sessionFile, file);
+      await rm(file);
+      await rename(saved, file);
+      const restored = await f.app.inject({ method: "GET", url, headers });
+      assert.equal(restored.statusCode, 200, restored.body);
+      assert.equal(restored.json()[0].sessionId, f.manager.getSessionId());
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+test("session listing reads only creation metadata instead of a multi-megabyte conversation", async (context) => {
+  const f = await fixture();
+  const file = f.manager.getSessionFile()!;
+  const streams: ReadStream[] = [];
+  const actualOpen = fsPromises.open;
+  try {
+    const record = JSON.stringify({ type: "custom", customType: "fixture-output", data: "x".repeat(8_192) }) + "\n";
+    await fsPromises.appendFile(file, record.repeat(2_048));
+    context.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
+      const handle = await actualOpen(...args);
+      if (args[0] === file) {
+        const create = handle.createReadStream.bind(handle);
+        context.mock.method(handle, "createReadStream", (...options: Parameters<typeof create>) => {
+          const stream = create(...options);
+          streams.push(stream);
+          return stream;
+        });
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    const response = await f.app.inject({ method: "GET", url: `/api/issues/${f.issue.key}/sessions`, headers });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json()[0].sessionId, f.manager.getSessionId());
+    assert.equal(streams.length, 1);
+    const readBytes = streams.reduce((sum, stream) => sum + stream.bytesRead, 0);
+    assert.ok(readBytes < 256 * 1024, `summary read ${readBytes} bytes of a ${record.length * 2_048} byte transcript`);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await f.cleanup();
+  }
+});
+
+test("session history ignores reset links embedded after conversation records", async () => {
+  const f = await fixture();
+  try {
+    f.manager.appendCustomEntry("issue-pilot-session-reset", { previousFile: ".session-unrelated.jsonl" });
+    const response = await f.app.inject({ method: "GET", url: `/api/issues/${f.issue.key}/sessions`, headers });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().length, 1);
+    assert.equal(response.json()[0].sessionId, f.manager.getSessionId());
+  } finally {
+    await f.cleanup();
+  }
+});
+
+for (const kind of ["directory", "FIFO"] as const)
+  test(`session summaries reject a ${kind} without blocking subsequent reads`, { skip: process.platform === "win32" }, async () => {
+    const f = await fixture();
+    const file = f.manager.getSessionFile()!;
+    const saved = `${file}.saved`;
+    let pending: Promise<unknown> | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await rename(file, saved);
+      if (kind === "directory") await mkdir(file);
+      else await promisify(execFile)("mkfifo", [file]);
+      const url = `/api/issues/${f.issue.key}/sessions`;
+      const response = f.app.inject({ method: "GET", url, headers }).then((value) => value);
+      pending = response;
+      const result = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("session_summary_read_blocked")), 2_000);
+        }),
+      ]);
+      assert.equal(result.statusCode, 500, result.body);
+      assert.equal(result.json().error, "agent_session_file_incomplete");
+      await rm(file, { recursive: kind === "directory" });
+      await rename(saved, file);
+      const restored = await f.app.inject({ method: "GET", url, headers });
+      assert.equal(restored.statusCode, 200, restored.body);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      // Unblock a regressed FIFO reader so a failed test still releases the fixture and worker thread.
+      if (kind === "FIFO")
+        await open(file, constants.O_WRONLY | constants.O_NONBLOCK).then(
+          (handle) => handle.close(),
+          () => undefined,
+        );
+      await pending;
+      await f.cleanup();
+    }
+  });
 test("saving metadata with resetSession resets in the same reservation without starting a round", async () => {
   const f = await fixture();
   try {

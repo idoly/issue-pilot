@@ -38,6 +38,7 @@ SQLite, JSONL, Git, attachments and work files jointly retain facts. There is no
 | State lease, Git, runtime views and lifecycle | [workspace](../../src/workspace) |
 | Web requests and DTOs | [client.ts](../../src/web/src/data/client.ts) |
 | Identity, resources, drafts and late responses | [ApplicationResources.tsx](../../src/web/src/app/ApplicationResources.tsx), [agent-drafts.ts](../../src/web/src/app/agent-drafts.ts) |
+| Issue summaries and cross-view refresh | [issue-list.ts](../../src/web/src/app/issue-list.ts), [App.tsx](../../src/web/src/app/App.tsx) |
 | SSE, conversation and display budgets | [agent-stream.ts](../../src/web/src/app/agent-stream.ts), [conversation.ts](../../src/web/src/app/conversation.ts), [event-display.ts](../../src/agent/event-display.ts) |
 | Source and editors | [source-browser.ts](../../src/workspace/source-browser.ts), [CodeBrowser.tsx](../../src/web/src/app/CodeBrowser.tsx), [SourceText.tsx](../../src/web/src/app/SourceText.tsx), [monaco.ts](../../src/web/src/app/monaco.ts) |
 
@@ -92,7 +93,9 @@ The private host runner allows up to 1800 seconds for graceful stop and 600 seco
 - ApplicationResources owns identity, configuration and per-Issue Agent drafts/failures. Navigation can restore them; identity changes cancel old unsent work and generation checks reject late responses.
 - A stream is usable only after replay reaches snapshot_ready. Invalid frames invalidate the connection; reconnect replaces the projection instead of accepting a partial snapshot.
 - Stable entry IDs/contentIndex preserve block identity. Streaming is plain text; completed content uses Markdown. Tool details and Monaco load lazily; editors and models are disposed independently.
-- The overview polls full Issue summaries every 10 seconds, skipping a tick if the prior request is active. This is not server pagination or push.
+- ConversationProjection owns display reduction for replay, live batches and history pages. Tool-call and streaming-assistant indexes avoid repeatedly scanning history; snapshots use copy-on-write so an entire replay or batch needs at most one array copy while previously published snapshots remain unchanged.
+- [issue-list.ts](../../src/web/src/app/issue-list.ts) owns one application snapshot for the queue, overview and statistics. Mounted Issue/home views sample it every 10 seconds without interrupting an active request; navigation and explicit refresh invalidate older responses. Configuration pauses sampling, disposal cancels it, and failures retain the last successful list. This is not server pagination or cross-client push.
+- [App.tsx](../../src/web/src/app/App.tsx) refreshes selected details when its own or a related Issue's sampled summary/execution fields change, or a related Issue disappears, and reloads on returning to the workspace. Per-selection/request guards reject stale details, while background refresh preserves drafts and open editors. Queue sampling does not navigate away when an existing Issue stops matching filters; explicit filter/identity changes and actual removal can choose another Issue. Agent lifecycle events refresh both details and the shared list; authoritative SSE runState includes cleanup and takes precedence over business completion or an older HTTP agentRunning flag.
 - SSE queue budgets, display budgets, source limits and durable session size are separate. Local budgets do not bound total process memory.
 
 See [Development](../DEVELOPMENT.md), [Protocols](HTTP.md), [Agent](AGENT.md) and [Storage](STORAGE.md) for focused verification and failure boundaries.

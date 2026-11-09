@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import path from "node:path";
-import { lstat, open, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { open, rm, writeFile, type FileHandle } from "node:fs/promises";
 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
@@ -112,16 +113,6 @@ async function sampleBytes(descriptor: FileHandle, size: number): Promise<{ head
   };
 }
 
-async function prefixMatches(file: string, size: number, head: string, tail: string): Promise<boolean> {
-  const descriptor = await open(file, "r");
-  try {
-    const sample = await sampleBytes(descriptor, size);
-    return sample.head === head && sample.tail === tail;
-  } finally {
-    await descriptor.close();
-  }
-}
-
 /** Read line 1 only; an appended session must still carry the header this process validated. */
 async function headerMatches(descriptor: FileHandle, sessionId: string): Promise<boolean> {
   const buffer = Buffer.alloc(4096);
@@ -139,22 +130,39 @@ async function headerMatches(descriptor: FileHandle, sessionId: string): Promise
   }
 }
 
-export async function assertSessionFileComplete(file: string): Promise<void> {
-  const metadata = await lstat(file);
-  if (!metadata.isFile() || !metadata.size) throw new Error("agent_session_file_incomplete");
-  const cached = validatedSessions.get(file);
-  const unchanged = cached && cached.dev === metadata.dev && cached.ino === metadata.ino && cached.size === metadata.size && cached.mtimeMs === metadata.mtimeMs;
-  if (unchanged) return;
-  // Same inode and a growing file: the earlier prefix was already validated and ends at a newline.
-  // Growing on the same inode is only an append if the validated prefix is unchanged; a warm cache must not
-  // hide an in-place rewrite that keeps the header and byte count intact.
-  const growing = Boolean(cached && cached.dev === metadata.dev && cached.ino === metadata.ino && metadata.size > cached.size);
-  const incremental = growing && (await prefixMatches(file, cached!.size, cached!.head, cached!.tail));
-  const start = incremental ? cached!.size : 0;
-  const descriptor = await open(file, "r");
+/** Summary and transcript readers share the same regular-file boundary. The caller owns the returned handle. */
+export async function openRegularSessionFile(file: string) {
+  // NOFOLLOW refuses redirected files; NONBLOCK lets us reject a FIFO without hanging the scope queue.
+  const descriptor = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ELOOP") throw new Error("agent_session_file_incomplete", { cause: error });
+    throw error;
+  });
   try {
-    const current = await descriptor.stat(),
-      tail = Buffer.alloc(1);
+    const metadata = await descriptor.stat();
+    if (!metadata.isFile() || !metadata.size) throw new Error("agent_session_file_incomplete");
+    return { descriptor, metadata };
+  } catch (error) {
+    try {
+      await descriptor.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "agent_session_file_close_failed");
+    }
+    throw error;
+  }
+}
+
+export async function assertSessionFileComplete(file: string): Promise<void> {
+  const { descriptor, metadata: current } = await openRegularSessionFile(file);
+  try {
+    const cached = validatedSessions.get(file);
+    const unchanged = cached && cached.dev === current.dev && cached.ino === current.ino && cached.size === current.size && cached.mtimeMs === current.mtimeMs;
+    if (unchanged) return;
+    // Only reuse a validated prefix when its samples still match on this same opened file.
+    const growing = cached && cached.dev === current.dev && cached.ino === current.ino && current.size > cached.size;
+    const prefix = growing ? await sampleBytes(descriptor, cached.size) : undefined;
+    const incremental = prefix && prefix.head === cached!.head && prefix.tail === cached!.tail;
+    const start = incremental ? cached!.size : 0;
+    const tail = Buffer.alloc(1);
     await descriptor.read(tail, 0, 1, current.size - 1);
     if (tail[0] !== 0x0a) throw new Error("agent_session_file_incomplete");
     // A larger file on the same inode could still have been rewritten: the header must remain this session's.
@@ -180,10 +188,11 @@ export async function assertSessionFileComplete(file: string): Promise<void> {
       first = false;
     }
     if (first) throw new Error("agent_session_file_incomplete");
-    validatedSessions.delete(file);
     // A rewritten file must not swap in another session's transcript under the same binding.
     if (cached && cached.dev === current.dev && cached.ino === current.ino && sessionId !== cached.sessionId) throw new Error("agent_session_file_incomplete");
     const sample = await sampleBytes(descriptor, current.size);
+    // Failed validation must retain the last known session identity, including on subsequent retries.
+    validatedSessions.delete(file);
     validatedSessions.set(file, { dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, sessionId, ...sample });
     if (validatedSessions.size > validatedSessionsLimit) {
       const oldest = validatedSessions.keys().next().value;

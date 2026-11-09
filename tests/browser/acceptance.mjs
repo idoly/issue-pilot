@@ -11,7 +11,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
+import { issueRelations, issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
 import { repositoryStorePath } from "../../src/workspace/git.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
@@ -830,6 +830,76 @@ try {
   await resourcePanel.press("End");
   await page.waitForFunction((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1, await resourcePanel.elementHandle());
   await assertHomeFixed();
+  // One real SSE lifecycle updates the conversation, queue and details; navigation shares the list.
+  const synchronization = openDatabase(databaseFile);
+  try {
+    await synchronization.db.update(issues).set({ assigneeSubject: issuePilotConfig.bootstrapUser.subject, status: "pending", resolvedAt: null }).where(eq(issues.id, issue.id));
+    const [related] = await synchronization.db.select().from(issues).where(eq(issues.title, "Home scroll fixture 1"));
+    await synchronization.db.update(issues).set({ assigneeSubject: issuePilotConfig.bootstrapUser.subject, status: "pending", resolvedAt: null }).where(eq(issues.id, related.id));
+    await synchronization.db.insert(issueRelations).values({ issueId: issue.id, relatedIssueId: related.id });
+    await page.setViewportSize({ width: 1680, height: 1050 });
+    await page.goto(`${origin}/?issue=${issue.key}`);
+    await page.getByRole("button", { name: "编辑工单", exact: true }).waitFor();
+    await page.getByText("正在加载对话…", { exact: true }).waitFor({ state: "hidden" });
+    engine.running.add(issue.id);
+    publish({ type: "issue_run_state", state: "running" });
+    await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "编辑工单", exact: true }).click();
+    const edit = page.getByRole("dialog", { name: "编辑工单", exact: true });
+    await page.waitForFunction((button) => button.disabled, await edit.getByRole("button", { name: "重置", exact: true }).elementHandle());
+    await edit.getByRole("button", { name: "取消", exact: true }).click();
+    publish({ type: "issue_status", status: "complete" });
+    // Business completion still leaves cleanup activity in the authoritative execution state.
+    await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor();
+    const synchronizedTitle = "Synchronized browser Issue";
+    await synchronization.db.update(issues).set({ title: synchronizedTitle, updatedAt: new Date() }).where(eq(issues.id, issue.id));
+    engine.running.delete(issue.id);
+    publish({ type: "issue_run_state", state: "idle" });
+    await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor({ state: "hidden" });
+    await page.getByRole("heading", { name: synchronizedTitle, exact: true }).waitFor();
+    await page.getByLabel("工单队列", { exact: true }).getByText(synchronizedTitle, { exact: true }).waitFor();
+    await page.getByRole("button", { name: "编辑工单", exact: true }).click();
+    await page.waitForFunction((button) => !button.disabled, await edit.getByRole("button", { name: "重置", exact: true }).elementHandle());
+    await edit.getByRole("button", { name: "取消", exact: true }).click();
+    await page.getByRole("radio", { name: "首页", exact: true }).click();
+    await page.getByRole("list", { name: "待处理工单", exact: true }).getByText(synchronizedTitle, { exact: true }).waitFor();
+    await synchronization.db.update(issues).set({ description: "Description changed while viewing the homepage", updatedAt: new Date() }).where(eq(issues.id, issue.id));
+    await page.getByRole("radio", { name: "工单", exact: true }).click();
+    await page.getByText("Description changed while viewing the homepage", { exact: true }).waitFor();
+    // Changing only the related Issue must invalidate the embedded card, even with an open editor.
+    const queue = page.getByLabel("工单队列", { exact: true });
+    await queue.getByText(related.title, { exact: true }).click();
+    await page.getByRole("heading", { name: related.title, exact: true }).waitFor();
+    await queue.getByText(synchronizedTitle, { exact: true }).click();
+    await page.getByRole("heading", { name: synchronizedTitle, exact: true }).waitFor();
+    await page.getByLabel("按状态筛选", { exact: true }).click();
+    await page.getByRole("option", { name: "未解决", exact: true }).click();
+    await page.getByLabel("发送给 Agent", { exact: true }).fill("Preserve this linked-view draft");
+    await page.getByRole("button", { name: "编辑工单", exact: true }).click();
+    await edit.getByLabel("编辑工单标题", { exact: true }).fill("Unsaved linked-view title");
+    const dialogs = [];
+    const dismissNavigation = async (dialog) => {
+      dialogs.push(dialog.message());
+      await dialog.dismiss();
+    };
+    page.on("dialog", dismissNavigation);
+    await synchronization.db.update(issues).set({ title: "Related renamed externally", status: "resolved", resolvedAt: new Date(), updatedAt: new Date() }).where(eq(issues.id, related.id));
+    const card = page.getByRole("link", { name: `打开关联工单 ${related.key}`, exact: true });
+    await page.waitForFunction((key) => document.querySelector(`[aria-label="打开关联工单 ${key}"]`)?.title === "Related renamed externally", related.key);
+    await card.getByText("已解决", { exact: true }).waitFor();
+    assert.equal(await edit.getByLabel("编辑工单标题", { exact: true }).inputValue(), "Unsaved linked-view title");
+    // The current Issue can leave the filter without background navigation or a discard prompt.
+    await synchronization.db.update(issues).set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() }).where(eq(issues.id, issue.id));
+    await queue.getByText(synchronizedTitle, { exact: true }).waitFor({ state: "hidden" });
+    await page.getByRole("heading", { name: synchronizedTitle, exact: true }).waitFor();
+    assert.equal(await edit.getByLabel("编辑工单标题", { exact: true }).inputValue(), "Unsaved linked-view title");
+    assert.equal(await page.getByLabel("发送给 Agent", { exact: true }).inputValue(), "Preserve this linked-view draft");
+    assert.deepEqual(dialogs, []);
+    page.off("dialog", dismissNavigation);
+    await edit.getByRole("button", { name: "取消", exact: true }).click();
+  } finally {
+    synchronization.close();
+  }
   const unexpected = failures.filter((failure) => !/^Failed to load resource: the server responded with a status of 409/.test(failure));
   assert.deepEqual(unexpected, []);
   const inspection = openDatabase(databaseFile);
@@ -899,6 +969,11 @@ try {
           "network modes save through HTTP and preserve the hidden allowlist in open mode",
           "fixed home layout for wheel, keyboard and programmatic scrolling, with reachable activity and statistics on desktop and mobile",
           "health and database integrity",
+          "SSE running/cleanup/idle synchronizes conversation controls and detail actions",
+          "metadata refresh updates the queue and homepage without changing business status",
+          "returning from the homepage reloads the same selected Issue details",
+          "related Issue changes update embedded cards while retaining an open editor",
+          "background filter exclusion preserves the selected Issue, editor and Agent draft without navigation prompts",
         ],
         resources,
       },

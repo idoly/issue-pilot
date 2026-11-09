@@ -1611,10 +1611,10 @@ describe("issue pilot workspace", () => {
     getIssue.mockImplementationOnce(async () => oldRefresh).mockImplementationOnce(async () => newRefresh);
     const source = EventSourceMock.instances.at(-1)!;
 
-    source.emit("snapshot_ready", { running: false, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
     source.emit("message", { id: "status-old", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
     source.emit("message", { id: "status-new", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
-    resolveNew({ ...current, status: "resolved", workspace: { ...current.workspace, status: "ready" } });
+    resolveNew({ ...current, agentRunning: false, status: "resolved", workspace: { ...current.workspace, status: "ready" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
     const currentSource = EventSourceMock.instances.at(-1)!;

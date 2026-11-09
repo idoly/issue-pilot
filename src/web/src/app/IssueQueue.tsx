@@ -8,13 +8,14 @@ import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice 
 import { environmentName, priorityColor, priorityOptions, issueCreationDate, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 
+import type { IssueListResource } from "./issue-list";
+
 type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
 
-export function IssueQueue(props: { selectedId: string; userSubject: string; refreshToken: number; hidden?: boolean; keepExternalSelection?: boolean; onSelect: (id: string) => void }) {
+export function IssueQueue(props: { selectedId: string; userSubject: string; issueList: IssueListResource; hidden?: boolean; keepExternalSelection?: boolean; onSelect: (id: string) => void }) {
   const { catalog, people, currentUser, catalogError, peopleError, refreshCatalog } = useApplicationResources();
-  const [issues, setIssues] = createSignal<Awaited<ReturnType<typeof listIssues>>>([], { ownedWrite: true });
-  const [loading, setLoading] = createSignal(true, { ownedWrite: true });
-  const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
+  const { items: issues, error: loadError, refresh: loadIssues } = props.issueList;
+  const loading = () => props.issueList.loading() || props.issueList.refreshing();
   const [pinError, setPinError] = createSignal("", { ownedWrite: true });
   const [pinsLoading, setPinsLoading] = createSignal(false, { ownedWrite: true });
   const [pinnedIssueKeys, setPinnedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
@@ -58,28 +59,6 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
       if (owner === pinRequest) setPinningIssueKeys((current) => current.filter((key) => key !== issueKey));
     }
   };
-  let listRequest = 0;
-  const loadIssues = () => {
-    const currentRequest = ++listRequest;
-    setLoading(true);
-    setLoadError("");
-    void listIssues()
-      .then((loaded) => {
-        if (currentRequest === listRequest) setIssues(loaded);
-      })
-      .catch((error) => {
-        if (currentRequest !== listRequest) return;
-        // Keep the last good list on failure; clearing it would unmount the selected workspace.
-        setLoadError(error instanceof Error ? error.message : "工单加载失败");
-      })
-      .finally(() => {
-        if (currentRequest === listRequest) setLoading(false);
-      });
-  };
-  createEffect(
-    () => props.refreshToken,
-    () => loadIssues(),
-  );
   let pinRequest = 0;
   createEffect(
     () => props.userSubject,
@@ -105,10 +84,26 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
         });
     },
   );
+  let appliedFilter: string | undefined;
   createEffect(
-    () => ({ loading: loading(), selectedId: props.selectedId, visible: filtered(), keepExternalSelection: props.keepExternalSelection, loadError: loadError() }),
-    ({ loading, selectedId, visible, keepExternalSelection, loadError }) => {
-      if (!loading && !keepExternalSelection && !loadError && !visible.some((issue) => issue.id === selectedId)) props.onSelect(visible[0]?.id ?? "");
+    () => ({
+      loading: loading(),
+      selectedId: props.selectedId,
+      visible: filtered(),
+      items: issues(),
+      filter: JSON.stringify([props.userSubject, query().trim().toLowerCase(), status(), environmentFilter(), serviceFilter()]),
+      keepExternalSelection: props.keepExternalSelection,
+      loadError: loadError(),
+    }),
+    ({ loading, selectedId, visible, items, filter, keepExternalSelection, loadError }) => {
+      if (loading || loadError) return;
+      const filterChanged = filter !== appliedFilter;
+      appliedFilter = filter;
+      // Background changes update rows, not navigation. Explicit filters and actual removal may select another Issue.
+      if (!keepExternalSelection && !visible.some((issue) => issue.id === selectedId) && (filterChanged || !items.some((issue) => issue.id === selectedId))) {
+        const next = visible[0]?.id ?? "";
+        if (next !== selectedId) props.onSelect(next);
+      }
     },
   );
   const [createOpen, setCreateOpen] = createSignal(false, { ownedWrite: true });
@@ -135,7 +130,6 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
     relatedRequest = 0;
   onCleanup(() => {
     contextGeneration++;
-    listRequest++;
     pinRequest++;
     relatedRequest++;
   });
@@ -223,8 +217,7 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
         attachments(),
       );
       if (owner !== contextGeneration) return;
-      loadIssues();
-      setIssues((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
+      props.issueList.created(issue);
       props.onSelect(issue.id);
       closeCreateIssue();
       setTitle("");
@@ -297,23 +290,21 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; ref
             </div>
           }
         >
-          <Show
-            when={!loadError() && !catalogError()}
-            fallback={
-              <div class="queue-error" role="alert">
-                {loadError() || catalogError()}
-                <Button
-                  size="small"
-                  onClick={() => {
-                    loadIssues();
-                    void refreshCatalog().catch(() => undefined);
-                  }}
-                >
-                  重试
-                </Button>
-              </div>
-            }
-          >
+          <Show when={loadError() || catalogError()}>
+            <div class="queue-error" role="alert">
+              {loadError() || catalogError()}
+              <Button
+                size="small"
+                onClick={() => {
+                  void loadIssues();
+                  void refreshCatalog().catch(() => undefined);
+                }}
+              >
+                重试
+              </Button>
+            </div>
+          </Show>
+          <Show when={issues().length > 0 || (!loadError() && !catalogError())}>
             <Show when={pinError()}>
               <div class="queue-action-error" role="alert">
                 {pinError()}

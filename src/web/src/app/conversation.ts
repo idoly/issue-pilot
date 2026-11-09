@@ -38,14 +38,6 @@ function assistantBlocks(content: AssistantMessage["content"] | undefined, fallb
   return blocks.length ? blocks : fallback ? [{ contentIndex: 0, type: "text", value: fallback }] : [];
 }
 
-function streamingAssistantIndex(entries: ConversationEntry[]): number {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry?.kind === "assistant" && entry.streaming) return index;
-  }
-  return -1;
-}
-
 function displayBlocks(content: string | Array<TextContent | ImageContent>): DisplayBlock[] {
   if (typeof content === "string") return content ? [{ type: "text", value: content }] : [];
   const blocks: DisplayBlock[] = [];
@@ -56,47 +48,82 @@ function displayBlocks(content: string | Array<TextContent | ImageContent>): Dis
   return blocks;
 }
 
-function applyCompletedMessage(entries: ConversationEntry[], envelope: RunEvent, message: CompletedMessage): ConversationEntry[] {
-  if (message.role === "assistant") {
-    const content = message.content ?? [];
-    const index = streamingAssistantIndex(entries);
-    const next = [...entries];
-    const assistant: ConversationEntry = {
-      id: index >= 0 ? next[index]!.id : envelope.id,
-      kind: "assistant",
-      blocks: assistantBlocks(content),
-      ...(typeof message.stopReason === "string" ? { stopReason: message.stopReason } : {}),
-      ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}),
-      ...(content.some((part) => part.type === "toolCall") ? { hasToolCalls: true } : {}),
-      ...(message.usage ? { usage: message.usage } : {}),
-    };
-    const completed = assistant as Extract<ConversationEntry, { kind: "assistant" }>;
-    if (index >= 0) next[index] = assistant;
-    else if (completed.blocks.length || completed.errorMessage || completed.stopReason) next.push(assistant);
-    for (const part of content) {
-      if (part.type !== "toolCall" || !part.id || !part.name || next.some((entry) => entry.kind === "tool" && entry.toolCallId === part.id)) continue;
-      next.push({ id: `${envelope.id}:${part.id}`, kind: "tool", toolCallId: part.id, name: part.name, status: "running", startedAt: envelope.createdAt, arguments: part.arguments });
+/** One event reducer for replay, live batches and history pages. Published snapshots stay immutable. */
+export class ConversationProjection {
+  private entries: ConversationEntry[];
+  private shared = true;
+  private readonly tools = new Map<string, number>();
+  private readonly streamingAssistants: number[] = [];
+
+  constructor(entries: ConversationEntry[] = []) {
+    this.entries = entries;
+    for (const [index, entry] of entries.entries()) this.indexEntry(index, entry);
+  }
+
+  snapshot(): ConversationEntry[] {
+    this.shared = true;
+    return this.entries;
+  }
+
+  private indexEntry(index: number, entry: ConversationEntry): void {
+    if (entry.kind === "tool" && !this.tools.has(entry.toolCallId)) this.tools.set(entry.toolCallId, index);
+    if (entry.kind === "assistant" && entry.streaming) this.streamingAssistants.push(index);
+  }
+
+  private put(entry: ConversationEntry, index?: number): void {
+    // Replay and each UI batch copy at most once, after a snapshot has actually been published.
+    if (this.shared) {
+      this.entries = [...this.entries];
+      this.shared = false;
     }
-    return next;
+    if (index === undefined) {
+      this.indexEntry(this.entries.length, entry);
+      this.entries.push(entry);
+    } else {
+      this.entries[index] = entry;
+      if (entry.kind === "assistant" && !entry.streaming && this.streamingAssistants.at(-1) === index) this.streamingAssistants.pop();
+    }
   }
-  // With parallel tools a reconnect can miss a tool's end event; its saved result still completes a running entry.
-  const pendingTool = message.role === "toolResult" && entries.some((entry) => entry.kind === "tool" && entry.toolCallId === message.toolCallId && entry.status === "running");
-  if (message.role === "toolResult" && (message.nestedCalls || pendingTool)) {
-    const previous = entries.find((entry) => entry.kind === "tool" && entry.toolCallId === message.toolCallId);
-    const durationMs = message.durationMs ?? (previous?.kind === "tool" ? previous.durationMs : undefined);
-    const result = { content: message.content, details: message.details, nestedCalls: message.nestedCalls, displayTruncated: message.displayTruncated };
-    return applyAgentEvent(entries, {
-      ...envelope,
-      event: { type: "tool_execution_end", toolCallId: message.toolCallId, toolName: message.toolName, result, isError: message.isError, ...(durationMs === undefined ? {} : { durationMs }) },
-    });
-  }
-  if (message.role === "compactionSummary") return [...entries, { id: envelope.id, kind: "summary", summaryType: "compaction", summary: message.summary, tokensBefore: message.tokensBefore }];
-  if (message.role === "branchSummary") return [...entries, { id: envelope.id, kind: "summary", summaryType: "branch", summary: message.summary }];
-  if (message.role === "custom" && message.display) return [...entries, { id: envelope.id, kind: "custom", label: message.customType, blocks: displayBlocks(message.content) }];
-  if (message.role === "bashExecution")
-    return [
-      ...entries,
-      {
+
+  private completedMessage(envelope: RunEvent, message: CompletedMessage): void {
+    if (message.role === "assistant") {
+      const content = message.content ?? [];
+      const index = this.streamingAssistants.at(-1);
+      const assistant: Extract<ConversationEntry, { kind: "assistant" }> = {
+        id: index === undefined ? envelope.id : this.entries[index]!.id,
+        kind: "assistant",
+        blocks: assistantBlocks(content),
+        ...(typeof message.stopReason === "string" ? { stopReason: message.stopReason } : {}),
+        ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}),
+        ...(content.some((part) => part.type === "toolCall") ? { hasToolCalls: true } : {}),
+        ...(message.usage ? { usage: message.usage } : {}),
+      };
+      if (index !== undefined || assistant.blocks.length || assistant.errorMessage || assistant.stopReason) this.put(assistant, index);
+      for (const part of content) {
+        if (part.type !== "toolCall" || !part.id || !part.name || this.tools.has(part.id)) continue;
+        this.put({ id: `${envelope.id}:${part.id}`, kind: "tool", toolCallId: part.id, name: part.name, status: "running", startedAt: envelope.createdAt, arguments: part.arguments });
+      }
+      return;
+    }
+    // Saved results complete running parallel tools and enrich already-completed tools with nested-call metadata.
+    if (message.role === "toolResult") {
+      const index = this.tools.get(message.toolCallId);
+      const previous = index === undefined ? undefined : (this.entries[index] as Extract<ConversationEntry, { kind: "tool" }>);
+      if (message.nestedCalls || previous?.status === "running") {
+        const durationMs = message.durationMs ?? previous?.durationMs;
+        const result = { content: message.content, details: message.details, nestedCalls: message.nestedCalls, displayTruncated: message.displayTruncated };
+        this.apply({
+          ...envelope,
+          event: { type: "tool_execution_end", toolCallId: message.toolCallId, toolName: message.toolName, result, isError: message.isError, ...(durationMs === undefined ? {} : { durationMs }) },
+        });
+      }
+      return;
+    }
+    if (message.role === "compactionSummary") this.put({ id: envelope.id, kind: "summary", summaryType: "compaction", summary: message.summary, tokensBefore: message.tokensBefore });
+    else if (message.role === "branchSummary") this.put({ id: envelope.id, kind: "summary", summaryType: "branch", summary: message.summary });
+    else if (message.role === "custom" && message.display) this.put({ id: envelope.id, kind: "custom", label: message.customType, blocks: displayBlocks(message.content) });
+    else if (message.role === "bashExecution")
+      this.put({
         id: envelope.id,
         kind: "bash",
         command: message.command,
@@ -104,69 +131,71 @@ function applyCompletedMessage(entries: ConversationEntry[], envelope: RunEvent,
         ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}),
         cancelled: message.cancelled,
         truncated: message.truncated,
-      },
-    ];
-  return entries;
-}
+      });
+  }
 
-export function applyAgentEvent(entries: ConversationEntry[], envelope: RunEvent): ConversationEntry[] {
-  const event = envelope.event;
-  if (event.type === "issue_user" && typeof event.message === "string")
-    return [...entries, { id: envelope.id, kind: "user", text: event.message, ...(event.images?.length ? { images: event.images } : {}) }];
-  if (event.type === "message_start" && typeof event.message === "object" && event.message?.role === "assistant") {
-    return [...entries, { id: envelope.id, kind: "assistant", blocks: [], streaming: true }];
+  apply(envelope: RunEvent): void {
+    const event = envelope.event;
+    if (event.type === "issue_user" && typeof event.message === "string") {
+      this.put({ id: envelope.id, kind: "user", text: event.message, ...(event.images?.length ? { images: event.images } : {}) });
+      return;
+    }
+    if (event.type === "message_start" && typeof event.message === "object" && event.message?.role === "assistant") {
+      this.put({ id: envelope.id, kind: "assistant", blocks: [], streaming: true });
+      return;
+    }
+    if (event.type === "message_update") {
+      const update = event.assistantMessageEvent;
+      if (!update || !("delta" in update) || typeof update.delta !== "string" || (update.type !== "text_delta" && update.type !== "thinking_delta")) return;
+      const index = this.streamingAssistants.at(-1);
+      const current = index === undefined ? { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true } : (this.entries[index] as Extract<ConversationEntry, { kind: "assistant" }>);
+      const blockType = update.type === "thinking_delta" ? ("thinking" as const) : ("text" as const);
+      const contentIndex = update.contentIndex ?? 0;
+      const blocks = [...current.blocks];
+      const blockIndex = blocks.findIndex((block) => block.contentIndex === contentIndex);
+      const existing = blockIndex >= 0 ? blocks[blockIndex] : undefined;
+      const block = existing && existing.type === blockType ? { ...existing, value: existing.value + update.delta } : { contentIndex, type: blockType, value: update.delta };
+      if (blockIndex >= 0) blocks[blockIndex] = block;
+      else blocks.push(block);
+      blocks.sort((left, right) => left.contentIndex - right.contentIndex);
+      this.put({ ...current, blocks }, index);
+      return;
+    }
+    if (event.type === "message_end" && typeof event.message === "object") {
+      this.completedMessage(envelope, event.message);
+      return;
+    }
+    if (event.type === "entry_appended") {
+      const entry = event.entry;
+      if (entry.type === "branch_summary") this.put({ id: entry.id, kind: "summary", summaryType: "branch", summary: entry.summary });
+      if (entry.type === "custom_message" && entry.display) this.put({ id: entry.id, kind: "custom", label: entry.customType, blocks: displayBlocks(entry.content) });
+    }
+    if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
+      if (event.parentToolCallId) return;
+      const index = this.tools.get(event.toolCallId);
+      const previous = index === undefined ? undefined : (this.entries[index] as Extract<ConversationEntry, { kind: "tool" }>);
+      const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
+      const result = rawResult
+        ? displayToolResult({ ...rawResult, ...(!("nestedCalls" in rawResult) && previous?.result?.nestedCalls ? { nestedCalls: previous.result.nestedCalls } : {}) })
+        : undefined;
+      this.put(
+        {
+          id: previous?.id ?? envelope.id,
+          kind: "tool",
+          toolCallId: event.toolCallId,
+          name: event.toolName,
+          status: event.type === "tool_execution_end" ? (event.isError ? "error" : "complete") : "running",
+          startedAt: previous?.startedAt ?? envelope.createdAt,
+          ...(event.type === "tool_execution_end" && (event.durationMs !== undefined || previous)
+            ? { durationMs: event.durationMs ?? Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous!.startedAt)) }
+            : {}),
+          ...("args" in event ? { arguments: event.args } : previous?.arguments !== undefined ? { arguments: previous.arguments } : {}),
+          ...(result ? { result } : previous?.result ? { result: previous.result } : {}),
+        },
+        index,
+      );
+    }
   }
-  if (event.type === "message_update") {
-    const update = event.assistantMessageEvent;
-    if (!update || !("delta" in update) || typeof update.delta !== "string" || (update.type !== "text_delta" && update.type !== "thinking_delta")) return entries;
-    const index = streamingAssistantIndex(entries);
-    const next = [...entries];
-    const current = index >= 0 ? (next[index] as Extract<ConversationEntry, { kind: "assistant" }>) : { id: envelope.id, kind: "assistant" as const, blocks: [], streaming: true };
-    const blockType = update.type === "thinking_delta" ? ("thinking" as const) : ("text" as const);
-    const contentIndex = update.contentIndex ?? 0;
-    const blocks = [...current.blocks];
-    const blockIndex = blocks.findIndex((block) => block.contentIndex === contentIndex);
-    const existing = blockIndex >= 0 ? blocks[blockIndex] : undefined;
-    const block = existing && existing.type === blockType ? { ...existing, value: existing.value + update.delta } : { contentIndex, type: blockType, value: update.delta };
-    if (blockIndex >= 0) blocks[blockIndex] = block;
-    else blocks.push(block);
-    blocks.sort((left, right) => left.contentIndex - right.contentIndex);
-    const updated = { ...current, blocks };
-    if (index >= 0) next[index] = updated;
-    else next.push(updated);
-    return next;
-  }
-  if (event.type === "message_end" && typeof event.message === "object") return applyCompletedMessage(entries, envelope, event.message);
-  if (event.type === "entry_appended") {
-    const entry = event.entry;
-    if (entry.type === "branch_summary") return [...entries, { id: entry.id, kind: "summary", summaryType: "branch", summary: entry.summary }];
-    if (entry.type === "custom_message" && entry.display) return [...entries, { id: entry.id, kind: "custom", label: entry.customType, blocks: displayBlocks(entry.content) }];
-  }
-  if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
-    if (event.parentToolCallId) return entries;
-    const index = entries.findIndex((entry) => entry.kind === "tool" && entry.toolCallId === event.toolCallId);
-    const previous = index >= 0 ? (entries[index] as Extract<ConversationEntry, { kind: "tool" }>) : undefined;
-    const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
-    const result = rawResult ? displayToolResult({ ...rawResult, ...(!("nestedCalls" in rawResult) && previous?.result?.nestedCalls ? { nestedCalls: previous.result.nestedCalls } : {}) }) : undefined;
-    const entry: ConversationEntry = {
-      id: previous?.id ?? envelope.id,
-      kind: "tool",
-      toolCallId: event.toolCallId,
-      name: event.toolName,
-      status: event.type === "tool_execution_end" ? (event.isError ? "error" : "complete") : "running",
-      startedAt: previous?.startedAt ?? envelope.createdAt,
-      ...(event.type === "tool_execution_end" && (event.durationMs !== undefined || previous)
-        ? { durationMs: event.durationMs ?? Math.max(0, Date.parse(envelope.createdAt) - Date.parse(previous!.startedAt)) }
-        : {}),
-      ...("args" in event ? { arguments: event.args } : previous?.arguments !== undefined ? { arguments: previous.arguments } : {}),
-      ...(result ? { result } : previous?.result ? { result: previous.result } : {}),
-    };
-    if (index < 0) return [...entries, entry];
-    const next = [...entries];
-    next[index] = entry;
-    return next;
-  }
-  return entries;
 }
 
 export function panelError(error: string): string {
