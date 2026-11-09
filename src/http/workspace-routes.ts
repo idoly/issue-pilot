@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { create as contentDisposition } from "content-disposition";
 import { issueRelations, issues } from "../db/schema.ts";
-import { issueRoot } from "../workspace/state.ts";
+import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
@@ -27,6 +27,8 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
 
   const fileAccess = (issue: { id: string; key: string }) =>
     runScopeExclusive(async () => {
+      // Read roots can fail on a missing repository entry before the work-file owner checks the Issue root.
+      await assertIssueRoot(context.stateRoot, issue.key);
       const readRoots = await context.sourceBrowser.readRoots(issue);
       const related = await database.db
         .select({ id: issues.id, key: issues.key })
@@ -71,7 +73,6 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     try {
       return await listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue));
     } catch (error) {
-      if (!relative && error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
       return workFileError(error);
     }
   });

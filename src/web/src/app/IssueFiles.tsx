@@ -39,7 +39,8 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
   // Only a real change reloads the list. An equal key short-circuits before the effect runs, so an
   // unrelated Issue refresh cannot dispose its cleanup and abort the request in flight.
   const listingKey = createMemo(
-    () => `${props.issue.id}\0${currentUser()?.subject ?? ""}\0${currentUser()?.role ?? ""}\0${directory()}\0${props.issue.updatedAt}\0${props.hidden ? "hidden" : "visible"}\0${refresh()}`,
+    () =>
+      `${props.issue.id}\0${currentUser()?.subject ?? ""}\0${currentUser()?.role ?? ""}\0${directory()}\0${props.issue.updatedAt}\0${JSON.stringify(props.issue.repositories.map((repository) => [repository.name, repository.url, repository.workingBranch]))}\0${props.hidden ? "hidden" : "visible"}\0${refresh()}`,
   );
   createEffect(listingKey, () => {
     const input = untrack(() => ({ key: props.issue.id, subject: currentUser()?.subject, directory: directory(), hidden: props.hidden }));

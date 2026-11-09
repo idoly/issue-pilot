@@ -120,6 +120,16 @@ it("keeps the open directory and preview when the Issue object is replaced with 
   await waitFor(() => expect(state.list).toHaveBeenCalledTimes(calls + 1));
 });
 
+it("reloads working files when a workspace tool changes repositories without changing Issue metadata", async () => {
+  state.list.mockResolvedValueOnce([file("original", "directory")]).mockResolvedValueOnce([file("original", "directory"), file("added", "directory")]);
+  const [current, setCurrent] = createSignal(issue);
+  render(() => <IssueFiles issue={current()} />);
+  await screen.findByRole("button", { name: "打开目录 original" });
+  setCurrent({ ...issue, repositories: [...issue.repositories, { name: "added", url: "https://example.test/added.git", baseBranch: "main", workingBranch: null }] });
+  await screen.findByRole("button", { name: "打开目录 added" });
+  expect(state.list).toHaveBeenCalledTimes(2);
+});
+
 it("does not abort an in-flight listing when the Issue object is replaced with identical content", async () => {
   let finish!: (rows: IssueWorkFile[]) => void;
   let signal: AbortSignal | undefined;

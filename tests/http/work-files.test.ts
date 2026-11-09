@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { parse as parseDisposition } from "content-disposition";
+import { eq } from "drizzle-orm";
 import { createApiFixture, createIssue, createService, issuePayload } from "./fixture.ts";
+import { openDatabase } from "../../src/db/client.ts";
+import { issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
@@ -80,6 +84,66 @@ test("work file APIs distinguish missing paths, non-directory ancestors and syml
         assert.equal(response.statusCode, status, response.body);
         assert.equal(response.body.includes(fixture.root), false);
       }
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("work file APIs report a missing or redirected durable Issue root", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Root loss", ["test"]);
+    const issue = await createIssue(fixture.app, "root-loss", "test", "Missing working root");
+    const root = issueRoot(fixture.root, String(issue.id));
+    const base = `/api/issues/${issue.id}/files`;
+    await rm(root, { recursive: true });
+    for (const resource of [base, `${base}/download?path=evidence.txt`]) {
+      const response = await fixture.app.inject({ method: "GET", url: resource });
+      assert.equal(response.statusCode, 500, response.body);
+      assert.deepEqual(response.json(), { error: "issue_root_missing" });
+    }
+    await symlink(fixture.root, root);
+    const redirected = await fixture.app.inject({ method: "GET", url: base });
+    assert.equal(redirected.statusCode, 500, redirected.body);
+    assert.deepEqual(redirected.json(), { error: "invalid_issue_root" });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("ready work file APIs report root loss or redirection before resolving repository read roots", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Ready root loss", ["test"]);
+    const issue = await createIssue(fixture.app, "ready-root-loss", "test", "Ready root loss");
+    const database = openDatabase(fixture.databaseFile);
+    try {
+      const [record] = await database.db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(eq(issues.key, String(issue.id)));
+      assert.ok(record);
+      await database.db
+        .insert(issueRepositories)
+        .values({ id: randomUUID(), issueId: record.id, url: "https://example.test/ready-root-loss.git", baseBranch: "main", workspaceName: "ready-root-loss" });
+      await database.db.update(issueWorkspaces).set({ runtimeReady: true }).where(eq(issueWorkspaces.issueId, record.id));
+    } finally {
+      await database.close();
+    }
+    const root = issueRoot(fixture.root, String(issue.id));
+    await rm(root, { recursive: true });
+    const base = `/api/issues/${issue.id}/files`;
+    for (const resource of [base, `${base}/download?path=evidence.txt`]) {
+      const response = await fixture.app.inject({ method: "GET", url: resource });
+      assert.equal(response.statusCode, 500, response.body);
+      assert.deepEqual(response.json(), { error: "issue_root_missing" });
+    }
+    await symlink(fixture.root, root);
+    for (const resource of [base, `${base}/download?path=evidence.txt`]) {
+      const response = await fixture.app.inject({ method: "GET", url: resource });
+      assert.equal(response.statusCode, 500, response.body);
+      assert.deepEqual(response.json(), { error: "invalid_issue_root" });
     }
   } finally {
     await fixture.cleanup();

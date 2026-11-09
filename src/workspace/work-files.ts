@@ -52,8 +52,7 @@ export async function prepareIssueWorkDirectory(stateRoot: string, issueKey: str
 async function resolveWorkPath(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess): Promise<string> {
   if (relative.includes("\0") || relative.includes("\\") || path.isAbsolute(relative) || relative.split("/").some((segment) => segment === ".." || segment.toLowerCase() === ".git"))
     throw new Error("invalid_issue_file_path");
-  const root = issueRoot(stateRoot, issueKey);
-  if (!(await lstat(root)).isDirectory() || (await realpath(root)) !== root) throw new Error("invalid_issue_work_directory");
+  const root = await assertIssueRoot(stateRoot, issueKey);
   const target = await realpath(path.resolve(root, relative || "."));
   const selected = path.relative(root, target);
   const allowed =

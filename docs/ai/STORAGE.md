@@ -52,7 +52,9 @@ Only claimIssueRoot may exclusively claim an empty root during creation. Code pr
 
 Missing roots yield issue_root_missing; invalid roots yield invalid_issue_root. Preserve permission/I/O error meaning. Existing roots may rebuild generated manifests/read-only entries. Missing roots require inspection of DB, Git, remaining files and known recovery sources; shared or remote branches are not substitutes for recorded history.
 
-Tests: [state.test.ts](../../tests/workspace/state.test.ts), [message-admission.test.ts](../../tests/agent/message-admission.test.ts), [work-files.test.ts](../../tests/workspace/work-files.test.ts).
+Work-file access checks the durable Issue root before resolving repository read roots, then validates the path again when opening it. A root listing does not treat a missing Issue root as an empty directory.
+
+Tests: [state.test.ts](../../tests/workspace/state.test.ts), [message-admission.test.ts](../../tests/agent/message-admission.test.ts), [work-files.test.ts](../../tests/workspace/work-files.test.ts), [work-files HTTP test](../../tests/http/work-files.test.ts).
 
 ## Attachments
 
