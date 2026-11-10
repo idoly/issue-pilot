@@ -40,9 +40,17 @@ import {
   WorkspaceScopeMigrationRefusal,
   type WorkspaceInspection,
 } from "../../src/workspace/lifecycle.ts";
-import { IssueProjectManager, prepareDevelopmentIssueRuntimes } from "../../src/workspace/project.ts";
+import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { IssueScopeTransitionManager, ScopeTransitionRefusal } from "../../src/workspace/scope-transition.ts";
 import { claimIssueRoot, classifyRepositoryState, gitRoot, issueRoot } from "../../src/workspace/state.ts";
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -199,12 +207,14 @@ for (const failureStage of ["session", "runtime"] as const)
     }
   });
 
-test("API startup continues after one automatic release fails and preserves its checkout", async () => {
+test("HTTP stays healthy during scheduled maintenance and a failed release preserves its checkout", { timeout: 10_000 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-startup-release-failure-"));
   const databaseFile = path.join(root, "issues.db");
   const database = await openApplicationDatabase(databaseFile);
   let closedDatabase = false;
   let app: Awaited<ReturnType<typeof buildApi>> | undefined;
+  const started = deferred();
+  const finish = deferred();
   try {
     const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
     await database.db.insert(subjects).values({ subject: "startup-owner", role: "developer" });
@@ -239,6 +249,8 @@ test("API startup continues after one automatic release fails and preserves its 
     closedDatabase = true;
     const controller = new TestAgentController();
     controller.closeSessionHook = async () => {
+      started.resolve();
+      await finish.promise;
       throw new Error("fixture_session_close_failed");
     };
     app = await buildApi({
@@ -247,12 +259,27 @@ test("API startup continues after one automatic release fails and preserves its 
       engine: controller,
       modelCatalog,
       logger: false,
-      workspacePolicy: { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 },
+      workspacePolicy: { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 10, taskConcurrency: 1 },
     });
-    assert.equal((await app.inject({ method: "GET", url: "/health" })).statusCode, 200);
-    assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "startup\n");
+    assert.deepEqual(controller.closedSessions, []);
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    await started.promise;
+    const response = await fetch(`${address}/health`);
+    assert.deepEqual(await response.json(), { ok: true });
     assert.deepEqual(controller.closedSessions, [issue!.id]);
+
+    let closed = false;
+    const closing = app.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closed, false);
+    finish.resolve();
+    await closing;
+    app = undefined;
+    assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "startup\n");
   } finally {
+    finish.resolve();
     await app?.close();
     if (!closedDatabase) await database.close();
     await rm(root, { recursive: true, force: true });
@@ -426,10 +453,13 @@ test("applies an updated policy to the maintenance timer without restarting the 
     cycles++;
     return { totalBytes: 0, released: [], blocked: [], failures: [] };
   };
-  const stop = manager.start();
+  manager.start();
   try {
     assert.throws(() => manager.updatePolicy({ ...disabled, highWaterBytes: 10, targetBytes: 10 }), /workspace_target_must_be_below_high_water/);
     assert.deepEqual(manager.policy, disabled);
+    // Listening with periodic maintenance disabled must not run an initial scan.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(cycles, 0);
     manager.updatePolicy({ ...disabled, maintenanceIntervalMs: 5 });
     const deadline = Date.now() + 2_000;
     while (cycles < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -439,7 +469,33 @@ test("applies an updated policy to the maintenance timer without restarting the 
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(cycles, stoppedAt);
   } finally {
-    await stop();
+    await manager.stop();
+  }
+});
+
+test("a slow maintenance pass does not start or accumulate timer work", async () => {
+  const policy = { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 5, taskConcurrency: 1 };
+  const manager = new WorkspaceLifecycleManager({} as never, ".", engine as never, policy);
+  const firstPass = deferred();
+  const completed = deferred();
+  let cycles = 0;
+  manager.maintain = async () => {
+    cycles++;
+    await firstPass.promise;
+    return { totalBytes: 0, released: [], blocked: [], failures: [] };
+  };
+  manager.start(undefined, () => completed.resolve());
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(cycles, 1);
+    manager.updatePolicy({ ...policy, maintenanceIntervalMs: 0 });
+    firstPass.resolve();
+    await completed.promise;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(cycles, 1);
+  } finally {
+    firstPass.resolve();
+    await manager.stop();
   }
 });
 
@@ -467,9 +523,8 @@ test("stops maintenance only after the active exclusive operation drains", async
   await started;
 
   let stopped = false;
-  const stop = manager.start();
-  const firstStop = stop();
-  assert.equal(stop(), firstStop);
+  const firstStop = manager.stop();
+  assert.equal(manager.stop(), firstStop);
   const stopping = firstStop.then(() => {
     stopped = true;
   });
@@ -514,11 +569,9 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   await otherIssue;
   assert.deepEqual(inspected, ["issue-a", "issue-b"]);
   let stopped = false;
-  const stopping = manager
-    .start()()
-    .then(() => {
-      stopped = true;
-    });
+  const stopping = manager.stop().then(() => {
+    stopped = true;
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(stopped, false);
   releaseFirst();
@@ -638,13 +691,13 @@ test("isolates maintenance reporter failures", async () => {
     taskConcurrency: 1,
   });
   let reports = 0;
-  const stop = manager.start(() => {
+  manager.start(() => {
     reports += 1;
     throw new Error("logger_failed");
   });
   for (let attempt = 0; !reports && attempt < 2_000; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
   assert.ok(reports, "maintenance did not report");
-  await stop();
+  await manager.stop();
   assert.ok(reports >= 1);
 });
 
@@ -662,14 +715,14 @@ test("maintenance reports each failed Issue even when the reporter itself fails"
     ],
   });
   const reported: Error[] = [];
-  const stop = manager.start((error) => {
+  manager.start((error) => {
     assert(error instanceof Error);
     reported.push(error);
     throw new Error("reporter failed");
   });
   for (let attempt = 0; reported.length < 2 && attempt < 2_000; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
   assert.equal(reported.length, 2, "maintenance did not report both failures");
-  await stop();
+  await manager.stop();
   assert.match(reported[0]!.message, /ISSUE-20261024-951/);
   assert.equal(reported[0]!.cause, first);
   assert.match(reported[1]!.message, /ISSUE-20261024-952/);
@@ -744,8 +797,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     const runtimeProjects = new IssueProjectManager(database.db, root);
     const prepareRuntime = (candidate: Pick<typeof issues.$inferSelect, "id" | "key" | "type">) => runtimeProjects.hydrateDevelopmentRuntime(candidate);
-    const runtimePreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
-    assert.deepEqual(runtimePreparation, { prepared: [issue!.key], blocked: [] });
+    assert.equal(await prepareRuntime(issue!), issueRoot(root, issue!.key));
     const wrapperRoot = issueRoot(root, issue!.key);
     assert.equal((await stat(wrapperRoot)).mode & 0o777, 0o700);
     await assert.rejects(access(path.join(wrapperRoot, "npm")), { code: "ENOENT" });
@@ -756,11 +808,10 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const unknownMetadata = path.join(path.dirname(prepared[0]!.workspacePath), ".issue-pilot", "unknown.txt");
     await mkdir(path.dirname(unknownMetadata), { recursive: true });
     await writeFile(unknownMetadata, "preserve\n", "utf8");
-    const blockedPreparation = await prepareDevelopmentIssueRuntimes(database.db, root);
-    assert.deepEqual(blockedPreparation, { prepared: [issue!.key], blocked: [] });
+    assert.equal(await prepareRuntime(issue!), wrapperRoot);
     assert.equal(await readFile(unknownMetadata, "utf8"), "preserve\n");
     await rm(path.dirname(unknownMetadata), { recursive: true });
-    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [issue!.key], blocked: [] });
+    assert.equal(await prepareRuntime(issue!), wrapperRoot);
 
     const lifecycle = new WorkspaceLifecycleManager(
       database.db,
@@ -1572,7 +1623,7 @@ test("statistics reuse one sample across a maintenance cycle unless refreshed", 
   assert.equal(inspections, 4);
 });
 
-test("a refresh requested during an in-flight scan measures again instead of sharing the older scan", async () => {
+test("overlapping refreshes share a fresh sample instead of the ordinary scan already in flight", async () => {
   const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,
     highWaterBytes: 0,
@@ -1614,14 +1665,16 @@ test("a refresh requested during an in-flight scan measures again instead of sha
   const first = manager.stats();
   await started;
   const refreshed = manager.stats(true);
+  const alsoRefreshed = manager.stats(true);
   releaseFirst();
-  const [firstResult, refreshedResult] = await Promise.all([first, refreshed]);
+  const [firstResult, refreshedResult, alsoRefreshedResult] = await Promise.all([first, refreshed, alsoRefreshed]);
   assert.equal(inspections, 2);
   assert.equal(firstResult.totalBytes, 1);
   assert.equal(refreshedResult.totalBytes, 2);
+  assert.equal(alsoRefreshedResult, refreshedResult);
 });
 
-test("a release queued behind an in-flight scan invalidates the scan result when it completes", async () => {
+test("statistics requested after a queued release see the released workspace", async () => {
   const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Infinity,
     highWaterBytes: 0,
@@ -1669,15 +1722,17 @@ test("a release queued behind an in-flight scan invalidates the scan result when
     released = true;
     return { issueKey: row.issue.key, releasedBytes: 0, remainingBytes: 0, alreadyReleased: false };
   };
-  const statistics = manager.stats();
+  const statistics = manager.stats(true);
   await started;
   const release = manager.releaseIssue(row.issue.id);
+  const afterRelease = manager.stats(true);
   finish();
-  await statistics;
+  assert.equal((await statistics).workspaces[0]!.blockedReason, null);
   await release;
-  const current = await manager.stats();
+  const current = await afterRelease;
   assert.equal(scans, 2);
   assert.equal(current.workspaces[0]!.blockedReason, "workspace_released");
+  assert.equal(await manager.stats(), current);
 });
 
 test("a failed release whose workspace cannot be measured does not stop maintenance of other candidates", async () => {
@@ -1693,7 +1748,8 @@ test("a failed release whose workspace cannot be measured does not stop maintena
       await mkdir(issueRoot(root, row.issue.key), { recursive: true });
       await writeFile(path.join(issueRoot(root, row.issue.key), "evidence.txt"), "x".repeat(8192));
     }
-    const manager = new WorkspaceLifecycleManager({} as never, root, engine as never, { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
+    const database = { select: () => ({ from: () => ({ where: async () => [] }) }) };
+    const manager = new WorkspaceLifecycleManager(database as never, root, engine as never, { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
     const internals = manager as unknown as {
       issueRows(): Promise<typeof rows>;
       issueRow(issueId: string): Promise<(typeof rows)[number]>;
@@ -1822,7 +1878,7 @@ test("a released Issue whose root is missing is never rebuilt from the shared br
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_snapshot");
     // The root held the private store and durable content; losing it must not be papered over.
     await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
-    assert.deepEqual(await prepareDevelopmentIssueRuntimes(database.db, root), { prepared: [], blocked: [{ issueKey: issue!.key, reason: "workspace_missing" }] });
+    await assert.rejects(new IssueProjectManager(database.db, root).hydrateDevelopmentRuntime(issue!), /workspace_missing/);
     await assert.rejects(access(issueRoot(root, issue!.key)), { code: "ENOENT" });
     await assert.rejects(manager.reopenIssue(issue!.id), (error) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_missing");
     // A repeated release returns the same stable refusal rather than a generic restore failure.

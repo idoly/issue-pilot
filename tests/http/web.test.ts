@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -66,6 +66,14 @@ test("serves the production Web and keeps unlisted files private", async (contex
       const missingApi = await app.inject({ method: "GET", url: "/api/missing", headers: { accept: "text/html" } });
       assert.equal(missingApi.statusCode, 404);
       assert.deepEqual(JSON.parse(missingApi.body), { error: "not_found" });
+
+      // A compatible Web release stages new assets first, then atomically replaces the HTML entrypoint.
+      await writeFile(path.join(webRoot, "assets", "app-e5f6a7b8.js"), "globalThis.issuePilot = 'updated';");
+      await writeFile(path.join(webRoot, ".next-index.html"), '<!doctype html><script src="/assets/app-e5f6a7b8.js"></script>');
+      await rename(path.join(webRoot, ".next-index.html"), path.join(webRoot, "index.html"));
+      assert.match((await app.inject("/")).body, /app-e5f6a7b8/);
+      assert.match((await app.inject("/assets/app-e5f6a7b8.js")).body, /updated/);
+      assert.equal((await app.inject("/assets/app-b1c2d3e4.js")).body, asset.body);
     } finally {
       await app.close();
     }
@@ -102,7 +110,9 @@ test("fails startup when the configured Web build is incomplete", async () => {
   try {
     await Promise.all([mkdir(webRoot), mkdir(stateRoot)]);
     await writeFile(path.join(webRoot, "assets-only.js"), "void 0;");
-    await assert.rejects(buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, stateLease, webRoot }), /web_build_file_missing:index\.html/);
+    const databaseFile = path.join(stateRoot, "issues.db");
+    await assert.rejects(buildApi({ stateRoot, databaseFile, logger: false, stateLease, webRoot }), /web_build_file_missing:index\.html/);
+    await assert.rejects(stat(databaseFile), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

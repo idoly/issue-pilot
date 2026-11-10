@@ -63,6 +63,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0070_issue_type_guard",
       "0071_repository_groups",
       "0072_sls_scope_identity",
+      "0073_index_issue_recovery",
     ],
   );
   const previousJournal = {
@@ -97,9 +98,13 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     ])
       await client.execute(statement);
 
+    await assert.rejects(migrate(db, { migrationsFolder: migrationSource }), /issue_recovery_state_invalid/);
+    assert.equal((await client.execute("select count(*) count from __drizzle_migrations")).rows[0]!.count, previousJournal.entries.length);
+    await client.execute("insert into issue_workspaces (issue_id, status, created_at, updated_at) values ('issue', 'failed', 1, 1)");
+    await client.execute("update issues set status = 'pending' where id = 'issue'");
     await migrate(db, { migrationsFolder: migrationSource });
 
-    assert.deepEqual((await client.execute("select key, title from issues")).rows, [{ key: "ISSUE-20260809-001", title: "Preserved" }]);
+    assert.deepEqual((await client.execute("select key, title, status from issues")).rows, [{ key: "ISSUE-20260809-001", title: "Preserved", status: "open" }]);
     assert.deepEqual((await client.execute("select issue_id, subject from issue_cc_recipients")).rows, [{ issue_id: "issue", subject: "recipient" }]);
     assert.deepEqual((await client.execute("select issue_id, session_file, workspace_path from issue_pilot_sessions")).rows, [
       { issue_id: "issue", session_file: "/sessions/issue.jsonl", workspace_path: "/workspaces/issue" },
@@ -334,6 +339,7 @@ test("refuses to install resolution triggers over inconsistent Issue state", asy
     assert.equal((await client.execute("select count(*) count from __drizzle_migrations")).rows[0]!.count, previousJournal.entries.length);
 
     await client.execute("update issues set resolved_at = 1 where id = 'issue'");
+    await client.execute("insert into issue_workspaces (issue_id, status, created_at, updated_at) values ('issue', 'ready', 1, 1)");
     await migrate(db, { migrationsFolder: migrationSource });
     assert.deepEqual(
       (await client.execute("select name from sqlite_master where type = 'trigger' and name like '%resolution_state%' order by name")).rows.map((row) => row.name),

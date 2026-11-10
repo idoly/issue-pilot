@@ -23,8 +23,7 @@ import { cancelPendingAgentMessages, appendQueuedAgentMessage, pendingAgentMessa
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, assertSessionFileComplete, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
-import { prepareIssueWorkDirectory } from "../workspace/work-files.ts";
-import { issueRoot, pathExists } from "../workspace/state.ts";
+import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, applicationSettings, issueAttachments, mcpServices, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
 import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, errorMessage, personGitIdentity, type AgentRunState, type CapabilityName, type DeploymentConfig, type EnvironmentKind } from "../domain/contracts.ts";
@@ -163,7 +162,7 @@ export class AgentEngine implements AgentController {
       const prepareAdmission = async () => {
         await authorize?.();
         this.assertNotReserved(issueId);
-        await prepareIssueWorkDirectory(this.stateRoot, issue.key);
+        await assertIssueRoot(this.stateRoot, issue.key);
         if (gitIdentity && !this.personalSessions.has(issueId)) this.sessions.get(issueId)?.setGitIdentity(gitIdentity);
       };
       const managed = this.sessions.get(issueId);
@@ -183,7 +182,7 @@ export class AgentEngine implements AgentController {
         await this.steerQueue.run(issueId, async () => {
           await authorize?.();
           this.assertNotReserved(issueId);
-          await prepareIssueWorkDirectory(this.stateRoot, issue.key);
+          await assertIssueRoot(this.stateRoot, issue.key);
           // Earlier messages still queued for a later round keep their order; never steer past them.
           if (this.sessions.get(issueId) !== managed || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
@@ -475,7 +474,7 @@ export class AgentEngine implements AgentController {
     if (messageEntryId || latestMessage === undefined) {
       const selected = await this.sessionQueue.run(issueId, async () => {
         const live = this.sessions.has(issue.id);
-        const manager = await this.sessionManagerLocked(issue, await prepareIssueWorkDirectory(this.stateRoot, issue.key));
+        const manager = await this.sessionManagerLocked(issue, await assertIssueRoot(this.stateRoot, issue.key));
         if (!live) reusableManager = manager;
         return selectAgentMessage(manager, issue, messageEntryId);
       });
@@ -531,7 +530,7 @@ export class AgentEngine implements AgentController {
       this.personalSessions.add(issue.id);
     }
 
-    const workDirectory = await prepareIssueWorkDirectory(this.stateRoot, issue.key);
+    const workDirectory = await assertIssueRoot(this.stateRoot, issue.key);
     this.roundSignal(issue.id);
     const project = await this.projectManager.prepare(issue, environmentKind, personalGit?.env);
     this.roundSignal(issue.id);
@@ -686,7 +685,7 @@ export class AgentEngine implements AgentController {
   }
 
   private async sessionManagerLocked(issue: { id: string; key: string }, workDirectory: string): Promise<SessionManager> {
-    const sessionDirectory = await prepareIssueWorkDirectory(this.stateRoot, issue.key);
+    const sessionDirectory = await assertIssueRoot(this.stateRoot, issue.key);
     const active = this.sessions.get(issue.id)?.session.sessionManager;
     if (active) return active;
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
@@ -732,7 +731,7 @@ export class AgentEngine implements AgentController {
     await this.sessionQueue.run(issue.id, async () => {
       await prepareAdmission();
       const current = this.sessions.get(issue.id)?.session.sessionManager;
-      const manager = current ?? (await this.sessionManagerLocked(issue, await prepareIssueWorkDirectory(this.stateRoot, issue.key)));
+      const manager = current ?? (await this.sessionManagerLocked(issue, await assertIssueRoot(this.stateRoot, issue.key)));
       let entryId: string;
       try {
         entryId = await this.recordUserMessage(issue.id, manager, message, images, issue);
@@ -757,7 +756,7 @@ export class AgentEngine implements AgentController {
   private async startQueuedMessage(issue: AgentMessageScope & { id: string; key: string }, managed: ManagedPiSession, entryId: string): Promise<void> {
     await this.sessionQueue.run(issue.id, async () => {
       if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
-      await prepareIssueWorkDirectory(this.stateRoot, issue.key);
+      await assertIssueRoot(this.stateRoot, issue.key);
       startAgentMessage(managed.session.sessionManager, entryId, issue);
       const next = pendingAgentMessages(managed.session.sessionManager)[0];
       if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, undefined, next.images, next.id));

@@ -1,14 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { and, eq } from "drizzle-orm";
-import pMap from "p-map";
-import type { Database } from "../db/client.ts";
-import { issueWorkspaces } from "../db/schema.ts";
-import { errorMessage } from "../domain/contracts.ts";
-import { errorDiagnostic } from "../diagnostics.ts";
-import { repositoryStorePath } from "./git.ts";
-import { assertIssueRoot, issueRoot, sharedCheckoutsRoot } from "./state.ts";
+import type { issueRepositories } from "../db/schema.ts";
+import { developmentRepositoryStorePath, repositoryStorePath } from "./git.ts";
+import { readIssueBranchCommit, validateIssueWorktreeBinding } from "./issue-git.ts";
+import { assertIssueRoot, issueRoot, sharedCheckoutsRoot, type RepositoryState } from "./state.ts";
 
 export interface IssueRuntimeRepository {
   name: string;
@@ -21,41 +17,37 @@ export interface RelatedIssueRuntime {
   workDirectory: string;
 }
 export type IssueRuntimeAccess = "read" | "write";
-export interface RuntimePreparationResult {
-  prepared: string[];
-  blocked: Array<{ issueKey: string; reason: string }>;
-}
-export async function prepareIssueRuntimeBatch<T extends { id: string; key: string }>(
-  database: Database,
-  issueRows: T[],
-  prepareRuntime: (issue: T) => Promise<unknown>,
-  options: { concurrency?: number } = {},
-): Promise<RuntimePreparationResult> {
-  const outcomes = await pMap(
-    issueRows,
-    async (issue) => {
-      try {
-        await prepareRuntime(issue);
-        return { issueKey: issue.key };
-      } catch (error) {
-        try {
-          await database
-            .update(issueWorkspaces)
-            .set({ runtimeReady: false, updatedAt: new Date() })
-            .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.runtimeReady, true)));
-        } catch (stateError) {
-          throw new AggregateError([error, stateError], "workspace_runtime_state_failed");
-        }
-        return { issueKey: issue.key, reason: errorMessage(errorDiagnostic(error)) };
-      }
-    },
-    // A fatal state write cannot release startup ownership while other preparations still write files or Git.
-    { concurrency: options.concurrency ?? 1, stopOnError: false },
-  );
-  return {
-    prepared: outcomes.filter((row) => row.reason === undefined).map((row) => row.issueKey),
-    blocked: outcomes.filter((row): row is { issueKey: string; reason: string } => row.reason !== undefined),
-  };
+/** Resolve the recorded code entry without changing the view, branch, or remote refs. */
+export async function resolveRecordedRepository(
+  stateRoot: string,
+  issueKey: string,
+  repository: typeof issueRepositories.$inferSelect,
+  name: string,
+  state: Exclude<RepositoryState, "invalid">,
+): Promise<{ root: string; store?: string }> {
+  const entry = path.join(await assertIssueRoot(stateRoot, issueKey), entryName(name));
+  const metadata = await lstat(entry);
+  const development = state === "development_workspace";
+  if (development ? !metadata.isDirectory() : !metadata.isSymbolicLink()) throw new Error("source_runtime_invalid");
+  const root = await realpath(entry);
+  if (development && (!repository.localPath || path.resolve(repository.localPath) !== entry || root !== entry)) throw new Error("source_runtime_invalid");
+  try {
+    if (development) {
+      const store = await developmentRepositoryStorePath(stateRoot, issueKey, repository.url);
+      await validateIssueWorktreeBinding(store, root, repository.workingBranch!);
+      return { root, store };
+    }
+    const store = repositoryStorePath(stateRoot, repository.url);
+    const parent = path.join(sharedCheckoutsRoot(stateRoot), path.basename(store));
+    if (path.dirname(root) !== parent || !/^[a-f0-9]{40}$/.test(path.basename(root))) throw new Error("source_runtime_invalid");
+    // commitBefore is the baseline for dev. A released view represents the recorded local working branch.
+    const commit = state === "read_only" ? repository.commitBefore : await readIssueBranchCommit(await developmentRepositoryStorePath(stateRoot, issueKey, repository.url), repository.workingBranch!);
+    if (path.basename(root) !== commit) throw new Error("source_runtime_invalid");
+    return { root };
+  } catch (error) {
+    if (error instanceof Error && error.message === "source_runtime_invalid") throw error;
+    throw new Error("source_git_binding_invalid", { cause: error });
+  }
 }
 function managedRepository(stateRoot: string, issueKey: string, repositoryPath: string, access: IssueRuntimeAccess): string {
   const resolved = path.resolve(repositoryPath);
@@ -83,10 +75,10 @@ function entryName(name: string): string {
   if (!/^[a-z0-9._-]+$/i.test(name) || [".", "..", ".git", manifestName].includes(name.toLowerCase())) throw new Error("invalid_runtime_repository_name");
   return name;
 }
-async function loadRuntime(root: string): Promise<RuntimeEntry[]> {
+async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; modesMatch: boolean } | undefined> {
   const file = path.join(root, manifestName),
     metadata = await absent(file);
-  if (!metadata) return [];
+  if (!metadata) return undefined;
   if (!metadata.isFile()) throw new Error("invalid_issue_runtime_manifest");
   const data = JSON.parse(await readFile(file, "utf8"));
   if (data.version !== 1 || !Array.isArray(data.entries)) throw new Error("invalid_issue_runtime_manifest");
@@ -96,6 +88,7 @@ async function loadRuntime(root: string): Promise<RuntimeEntry[]> {
     new Set(entries.map((entry) => entry.name)).size !== entries.length
   )
     throw new Error("invalid_issue_runtime_manifest");
+  let modesMatch = (metadata.mode & 0o7777) === 0o600;
   for (const entry of entries) {
     entryName(entry.name);
     const selected = path.join(root, entry.name),
@@ -107,8 +100,9 @@ async function loadRuntime(root: string): Promise<RuntimeEntry[]> {
         : !metadata.isFile() || digest(await readFile(selected, "utf8")) !== entry.value
     )
       throw new Error("issue_runtime_entry_changed");
+    if (entry.kind === "file" && (metadata.mode & 0o7777) !== 0o400) modesMatch = false;
   }
-  return entries;
+  return { entries, modesMatch };
 }
 /** Released code may retain only the application's recorded links to this repository's immutable cache. */
 export async function assertReleasedIssueRuntime(stateRoot: string, issueKey: string, repositories: Array<{ name: string; url: string }>): Promise<void> {
@@ -117,7 +111,7 @@ export async function assertReleasedIssueRuntime(stateRoot: string, issueKey: st
   // A released Issue keeps its durable content in this root; losing it must never rebuild from the shared refs.
   if (!metadata) throw new Error("workspace_missing");
   if (!metadata.isDirectory() || (await realpath(root)) !== root) throw new Error("workspace_path_already_exists");
-  const entries = await loadRuntime(root);
+  const entries = (await loadRuntime(root))?.entries ?? [];
   for (const repository of repositories) {
     const name = entryName(repository.name),
       selected = await absent(path.join(root, name));
@@ -136,7 +130,7 @@ export async function prepareIssueRuntime(
   relatedIssues: RelatedIssueRuntime[] = [],
 ): Promise<string> {
   const root = await assertIssueRoot(stateRoot, issueKey);
-  await chmod(root, 0o700);
+  if (((await lstat(root)).mode & 0o7777) !== 0o700) await chmod(root, 0o700);
   const desired: Array<{ name: string; kind: "link" | "file"; content: string }> = [],
     names = new Set<string>();
   const add = (name: string, kind: "link" | "file", content: string) => {
@@ -167,9 +161,20 @@ export async function prepareIssueRuntime(
     if (path.resolve(related.workDirectory) !== target) throw new Error("invalid_related_issue_directory");
     add(`.related-${key}`, "link", target);
   }
-  const previous = await loadRuntime(root),
-    previousNames = new Set(previous.map((entry) => entry.name));
-  for (const entry of desired) if (!previousNames.has(entry.name) && (await absent(path.join(root, entry.name)))) throw new Error("issue_runtime_path_collision");
+  const manifest = await loadRuntime(root);
+  const previous = manifest?.entries ?? [];
+  const previousByName = new Map(previous.map((entry) => [entry.name, entry]));
+  const entries: RuntimeEntry[] = desired.map(({ name, kind, content }) => ({ name, kind, value: kind === "link" ? content : digest(content) }));
+  for (const entry of entries) if (!previousByName.has(entry.name) && (await absent(path.join(root, entry.name)))) throw new Error("issue_runtime_path_collision");
+  if (
+    manifest?.modesMatch &&
+    previous.length === entries.length &&
+    entries.every(({ name, kind, value }) => {
+      const entry = previousByName.get(name);
+      return entry?.kind === kind && entry.value === value;
+    })
+  )
+    return root;
   const operation = randomUUID(),
     backups: Array<{ original: string; backup: string }> = [],
     installed: string[] = [],
@@ -179,13 +184,11 @@ export async function prepareIssueRuntime(
     failure: unknown,
     result: string | undefined;
   try {
-    const entries: RuntimeEntry[] = [];
     for (const entry of desired) {
       const temporary = path.join(root, `.runtime-${operation}-${staged.length}`);
       staged.push(temporary);
       if (entry.kind === "link") await symlink(path.relative(root, entry.content), temporary);
       else await writeFile(temporary, entry.content, { mode: 0o400, flag: "wx" });
-      entries.push({ name: entry.name, kind: entry.kind, value: entry.kind === "link" ? entry.content : digest(entry.content) });
     }
     for (const entry of previous) {
       const original = path.join(root, entry.name),

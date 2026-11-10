@@ -603,7 +603,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         status: workspaceStatus,
         sourceAvailable,
         lastError: workspace?.lastError ?? null,
-        retryable: issue.status !== "resolved" && !engine.isRunning(issue.id) && (workspaceStatus !== "ready" || (!sessionReady && ["open", "in_progress"].includes(issue.status))),
+        retryable:
+          issue.status !== "resolved" && !engine.isRunning(issue.id) && (workspaceStatus !== "ready" || !workspace?.runtimeReady || (!sessionReady && ["open", "in_progress"].includes(issue.status))),
       },
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),

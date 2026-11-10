@@ -1,18 +1,6 @@
-import { execFile } from "node:child_process";
-import { access, lstat, mkdir, readdir, realpath, rmdir } from "node:fs/promises";
+import { access, lstat, mkdir, opendir, readdir, realpath, rmdir } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-
-import pMap from "p-map";
-
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
-
-const execFileAsync = promisify(execFile);
-const stateTaskOptions = { concurrency: issuePilotConfig.workspace.taskConcurrency, stopOnError: false } as const;
-
-type SharedCheckout = { checkout: string; commit: string };
-type SharedRepository = { commonDirectory: string; checkouts: SharedCheckout[] };
 
 export interface RepositoryStateRecord {
   localPath: string | null;
@@ -52,9 +40,23 @@ export function issueRoot(stateRoot: string, issueKey: string): string {
   return path.join(workspacesRoot(stateRoot), issueSegment(issueKey));
 }
 
-/** Old layout is inspected only by migration tools and guards against unmigrated state. */
+/** Old layout is never used as a source of runtime paths. */
 export function legacyIssueRoot(stateRoot: string, issueKey: string): string {
   return path.resolve(stateRoot, "issues", issueSegment(issueKey));
+}
+
+export async function assertIssueLayoutCurrent(stateRoot: string, issueKey: string): Promise<void> {
+  const legacy = legacyIssueRoot(stateRoot, issueKey);
+  const directory = await opendir(legacy).catch((error: unknown) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
+  if (!directory) return;
+  try {
+    if ((await realpath(legacy)) !== legacy || (await directory.read()) !== null) throw new Error("issue_layout_migration_required");
+  } finally {
+    await directory.close();
+  }
 }
 
 /** Only Issue creation claims the durable root; generated views must not hide its loss. */
@@ -65,12 +67,20 @@ export async function assertIssueRoot(stateRoot: string, issueKey: string): Prom
     throw error;
   });
   if (!metadata.isDirectory() || (await realpath(root)) !== root) throw new Error("invalid_issue_root");
+  await assertIssueLayoutCurrent(stateRoot, issueKey);
   return root;
 }
 
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
   const root = issueRoot(stateRoot, issueKey);
+  const legacy = legacyIssueRoot(stateRoot, issueKey);
+  const oldRoot = await lstat(legacy).catch((error: unknown) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
+  if (oldRoot) throw new Error(`unmanaged_issue_state:issues/${path.basename(legacy)}`);
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
+  if ((await realpath(path.dirname(root))) !== path.dirname(root)) throw new Error("invalid_issue_root");
   try {
     await mkdir(root, { mode: 0o700 });
   } catch (error) {
@@ -104,60 +114,27 @@ function isMissing(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
-async function directoryNames(directory: string): Promise<string[]> {
+async function directoryEntries(directory: string) {
   try {
-    return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    return await readdir(directory, { withFileTypes: true });
   } catch (error) {
-    if (isMissing(error)) return [];
+    if (isMissing(error)) return undefined;
     throw error;
   }
 }
 
-async function validateSharedCheckouts(stateRoot: string): Promise<void> {
+export async function listSharedCheckouts(stateRoot: string): Promise<Array<{ checkout: string; commit: string; commonDirectory: string }>> {
   const checkoutRoot = sharedCheckoutsRoot(stateRoot);
-  let repositoryEntries;
-  try {
-    repositoryEntries = await readdir(checkoutRoot, { withFileTypes: true });
-  } catch (error) {
-    if (isMissing(error)) return;
-    throw error;
-  }
-  const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
-  const gitEnvironment = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
-  const sharedRepositories: SharedRepository[] = [];
-  for (const repositoryEntry of repositoryEntries) {
+  const checkouts = [];
+  for (const repositoryEntry of (await directoryEntries(checkoutRoot)) ?? []) {
     if (!repositoryEntry.isDirectory() || !/^[0-9a-f]{20}$/.test(repositoryEntry.name)) throw new Error("shared_checkout_changed");
     const repositoryRoot = path.join(checkoutRoot, repositoryEntry.name);
     const commonDirectory = path.join(repositoriesRoot(stateRoot), repositoryEntry.name);
     const commitEntries = await readdir(repositoryRoot, { withFileTypes: true });
     if (!commitEntries.length || commitEntries.some((entry) => !entry.isDirectory() || !/^[0-9a-f]{40}$/.test(entry.name))) throw new Error("shared_checkout_changed");
-    sharedRepositories.push({
-      commonDirectory,
-      checkouts: commitEntries.map((entry) => ({ checkout: path.join(repositoryRoot, entry.name), commit: entry.name })),
-    });
+    for (const entry of commitEntries) checkouts.push({ checkout: path.join(repositoryRoot, entry.name), commit: entry.name, commonDirectory });
   }
-  const checkouts = sharedRepositories.flatMap(({ commonDirectory, checkouts }) => checkouts.map((checkout) => ({ ...checkout, commonDirectory })));
-  try {
-    await pMap(
-      checkouts,
-      async ({ checkout, commit, commonDirectory }) => {
-        const [head, status, actualCommonDirectory] = await Promise.all([
-          execFileAsync("git", ["-C", checkout, "rev-parse", "HEAD"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
-          execFileAsync("git", ["-C", checkout, "status", "--porcelain", "--untracked-files=all", "--ignored=matching"], {
-            encoding: "utf8",
-            env: gitEnvironment,
-            timeout: gitOperationMs,
-            maxBuffer: gitOutputBytes,
-          }),
-          execFileAsync("git", ["-C", checkout, "rev-parse", "--git-common-dir"], { encoding: "utf8", env: gitEnvironment, timeout: gitOperationMs, maxBuffer: gitOutputBytes }),
-        ]);
-        if (head.stdout.trim() !== commit || status.stdout.trim() || path.resolve(checkout, actualCommonDirectory.stdout.trim()) !== commonDirectory) throw new Error("shared_checkout_changed");
-      },
-      stateTaskOptions,
-    );
-  } catch (error) {
-    throw new Error("shared_checkout_changed", { cause: error });
-  }
+  return checkouts;
 }
 
 function managedIssueWorkspaceEntries(workspaceRoot: string, localPaths: string[]): Set<string> {
@@ -179,28 +156,23 @@ export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, l
   if ([...expectedEntries].some((name) => !entries.some((entry) => entry.name === name && entry.isDirectory()))) throw new Error("workspace_repository_missing");
 }
 
-export async function pruneState(stateRoot: string, issueKeys: string[]): Promise<void> {
+/** Offline audit; neither startup nor ordinary Issue operations need the complete key set. */
+export async function assertIssueStateLayout(stateRoot: string, issueKeys: string[]): Promise<void> {
   const active = new Set(issueKeys.map((key) => normalizeIssueKey(key).toLowerCase()));
   const unmanaged: string[] = [];
-  for (const category of ["workspaces", "issues"]) {
-    for (const entry of await directoryNames(path.resolve(stateRoot, category))) {
-      if (!active.has(entry.toLowerCase())) unmanaged.push(`${category}/${entry}`);
+  const legacy = await directoryEntries(path.resolve(stateRoot, "issues"));
+  for (const [category, entries] of [
+    ["workspaces", await directoryEntries(workspacesRoot(stateRoot))],
+    ["issues", legacy],
+  ] as const) {
+    for (const entry of entries ?? []) {
+      if (entry.isDirectory() && !active.has(entry.name.toLowerCase())) unmanaged.push(`${category}/${entry.name}`);
     }
   }
   if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
-  for (const key of issueKeys) {
-    const legacy = legacyIssueRoot(stateRoot, key);
-    const content = await readdir(legacy).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
-    if (content.length) throw new Error("issue_layout_migration_required");
+  // The ordinary layout has no legacy parent. Still probe recorded names if it exists,
+  // including non-directory entries so ENOTDIR and permission errors remain visible.
+  if (legacy) {
+    for (const key of issueKeys) await assertIssueLayoutCurrent(stateRoot, key);
   }
-  await validateSharedCheckouts(stateRoot);
-  const repositoriesDirectory = repositoriesRoot(stateRoot);
-  await pMap(
-    await directoryNames(repositoriesDirectory),
-    (entry) => execFileAsync("git", ["-C", path.join(repositoriesDirectory, entry), "worktree", "prune", "--expire", "now"], { timeout: issuePilotConfig.limits.process.gitPruneMs }),
-    stateTaskOptions,
-  );
 }

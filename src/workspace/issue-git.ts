@@ -76,16 +76,40 @@ export async function validateIssueGitStore(store: string, expectedUrl?: string)
   if (hooks.some((name) => !name.endsWith(".sample"))) throw new Error("workspace_git_hooks_require_inspection");
 }
 
-export async function validateIssueWorktreeBinding(store: string, workspace: string, branch: string): Promise<void> {
+/** Check both links of a registered worktree before trusting Git commands in it. */
+export async function readLinkedWorktreeHead(store: string, workspace: string): Promise<string> {
   const pointerFile = path.join(workspace, ".git");
-  if (!(await lstat(pointerFile)).isFile() || (await realpath(store)) !== store) throw new Error("workspace_git_binding_invalid");
+  if (!(await lstat(pointerFile)).isFile() || (await realpath(workspace)) !== workspace || (await realpath(store)) !== store) throw new Error("workspace_git_binding_invalid");
   const pointer = (await readFile(pointerFile, "utf8")).trim();
   if (!pointer.startsWith("gitdir: ")) throw new Error("workspace_git_binding_invalid");
   const directory = path.resolve(workspace, pointer.slice(8));
   if (path.dirname(directory) !== path.join(store, "worktrees") || (await realpath(directory)) !== directory) throw new Error("workspace_git_binding_invalid");
-  const [common, backPointer, head] = await Promise.all(["commondir", "gitdir", "HEAD"].map((name) => readFile(path.join(directory, name), "utf8")));
-  if (path.resolve(directory, common!.trim()) !== store || path.resolve(directory, backPointer!.trim()) !== pointerFile) throw new Error("workspace_git_binding_invalid");
-  if (head!.trim() !== `ref: refs/heads/${branch}`) throw new Error("workspace_branch_does_not_match_issue_policy");
+  const common = await readFile(path.join(directory, "commondir"), "utf8");
+  const backPointer = await readFile(path.join(directory, "gitdir"), "utf8");
+  if (path.resolve(directory, common.trim()) !== store || path.resolve(directory, backPointer.trim()) !== pointerFile) throw new Error("workspace_git_binding_invalid");
+  return (await readFile(path.join(directory, "HEAD"), "utf8")).trim();
+}
+
+export async function validateIssueWorktreeBinding(store: string, workspace: string, branch: string): Promise<void> {
+  const head = await readLinkedWorktreeHead(store, workspace);
+  if (head !== `ref: refs/heads/${branch}`) throw new Error("workspace_branch_does_not_match_issue_policy");
+}
+
+/** Resolve an exact local branch in one Git call. Probe failures to distinguish absence from damage. */
+export async function readIssueBranchCommit(store: string, branch: string): Promise<string> {
+  const ref = `refs/heads/${branch}`;
+  try {
+    return await git(["-C", store, "show-ref", "--verify", "--hash", "--", ref]);
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code !== 128) throw error;
+    try {
+      await git(["-C", store, "show-ref", "--exists", ref]);
+    } catch (probe) {
+      if ((probe as { code?: unknown } | null)?.code === 2) throw new Error("working_branch_not_found", { cause: error });
+      throw probe;
+    }
+    throw error;
+  }
 }
 
 export const publishedIssueBranchFile = "issue-pilot-published.json";
@@ -94,20 +118,21 @@ export const publishedIssueBranchFile = "issue-pilot-published.json";
  * Import objects, then compare-and-swap only the branch this store was created for.
  * Callers that already validated this store in the same operation pass `storeValidated`.
  */
-export async function publishIssueBranch(sharedStore: string, privateStore: string, branch: string, storeValidated = false): Promise<void> {
+export async function publishIssueBranch(sharedStore: string, privateStore: string, branch: string, storeValidated = false): Promise<string> {
   if (!storeValidated) await validateIssueGitStore(privateStore);
   const markerFile = path.join(privateStore, publishedIssueBranchFile);
   const marker: unknown = JSON.parse(await readFile(markerFile, "utf8"));
   if (!marker || typeof marker !== "object" || !("branch" in marker) || marker.branch !== branch || !("commit" in marker) || typeof marker.commit !== "string" || !/^[a-f0-9]{40}$/.test(marker.commit))
     throw new Error("workspace_git_publication_invalid");
-  const commit = await git(["-C", privateStore, "rev-parse", `refs/heads/${branch}`]);
-  const current = await git(["-C", sharedStore, "rev-parse", `refs/heads/${branch}`]);
+  const commit = await readIssueBranchCommit(privateStore, branch);
+  const current = await readIssueBranchCommit(sharedStore, branch);
   if (current !== marker.commit && current !== commit) throw new Error("working_branch_changed_outside_issue");
   if (current !== commit) {
     await git(["-C", sharedStore, "fetch", "--no-tags", privateStore, `refs/heads/${branch}`]);
     await git(["-C", sharedStore, "update-ref", `refs/heads/${branch}`, commit, current]);
   }
-  await writeAtomicGitFile(markerFile, JSON.stringify({ branch, commit }) + "\n");
+  if (marker.commit !== commit || ((await lstat(markerFile)).mode & 0o7777) !== 0o600) await writeAtomicGitFile(markerFile, JSON.stringify({ branch, commit }) + "\n");
+  return commit;
 }
 
 async function preserveIndexObjects(sharedStore: string, privateStore: string, workspace: string): Promise<void> {

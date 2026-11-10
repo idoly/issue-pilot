@@ -104,6 +104,7 @@ test("serializes repository operations across manager instances sharing one stat
         maximumActive = Math.max(maximumActive, active);
         await new Promise((resolve) => setTimeout(resolve, 5));
         active -= 1;
+        if (args[0] === "check-ref-format") return `${args.at(-1)}\n`;
         return args.includes("rev-parse") ? "a".repeat(40) : "";
       };
     }
@@ -187,6 +188,7 @@ for (const missingBranch of [false, true])
       const restore = { ...input, workingBranch: prepared.workingBranch!, existingBaseCommit: prepared.baseCommit };
       if (missingBranch) {
         await git(["-C", prepared.cachePath, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`]);
+        await git(["-C", prepared.cachePath, "tag", prepared.workingBranch!, expected]);
         await assert.rejects(manager.prepare(restore), /working_branch_not_found/);
         await assert.rejects(manager.prepareBranchSnapshot({ issueKey: input.issueKey, url: remote, baseBranch: "main", workingBranch: prepared.workingBranch! }), /working_branch_not_found/);
         await assert.rejects(access(prepared.workspacePath));

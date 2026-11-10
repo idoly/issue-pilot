@@ -6,7 +6,6 @@ import type { Database } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
-import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
 import { deploymentContext } from "./service-context.ts";
 import { dingtalkMcpNames, serviceMcpConnections } from "./service-mcp.ts";
@@ -179,7 +178,6 @@ export function loadServiceConfigurationDescription(database: Database, key: str
   });
 }
 
-export async function loadConfiguration(database: Database, modelCatalog: AgentModelCatalog): Promise<Configuration> {
-  const agentModels = await modelCatalog.list();
+export function loadConfiguration(database: Database, agentModels: AgentModelDefinition[]): Promise<Configuration> {
   return readSnapshot(database, (reader) => projectConfiguration(reader, agentModels));
 }

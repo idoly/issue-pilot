@@ -119,27 +119,29 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
     return runScopeExclusive(() => loadConfigurationCatalog(database.db));
   });
   app.get("/api/config", async (_request, _reply) => {
-    return runScopeExclusive(() => loadConfiguration(database.db, modelCatalog));
+    const models = await modelCatalog.list();
+    return runScopeExclusive(() => loadConfiguration(database.db, models));
   });
-  app.put("/api/config/agent", { logLevel: "silent" }, async (request) =>
-    runScopeExclusive(async () => {
+  app.put("/api/config/agent", { logLevel: "silent" }, async (request) => {
+    await requireAdmin(database, request);
+    const input = record(request.body);
+    let apiKey: string | undefined;
+    if (input.apiKey !== undefined) {
+      const update = record(input.apiKey);
+      if (update.mode === "replace" && Object.keys(update).length === 2) apiKey = text(update.value, "agent_api_key", 10_000);
+      else if (update.mode === "clear" && Object.keys(update).length === 1) apiKey = "";
+      else throw new ApiError(400, "invalid_credential_update");
+    }
+    let runtime;
+    try {
+      runtime = parseAgentRuntime(input.runtime);
+    } catch (error) {
+      if (error instanceof AgentRuntimeConfigurationError) throw new ApiError(400, error.message);
+      throw error;
+    }
+    const configuration = { ...agentModelSelection(input, await modelCatalog.list()), runtime };
+    return runScopeExclusive(async () => {
       await requireAdmin(database, request);
-      const input = record(request.body);
-      let apiKey: string | undefined;
-      if (input.apiKey !== undefined) {
-        const update = record(input.apiKey);
-        if (update.mode === "replace" && Object.keys(update).length === 2) apiKey = text(update.value, "agent_api_key", 10_000);
-        else if (update.mode === "clear" && Object.keys(update).length === 1) apiKey = "";
-        else throw new ApiError(400, "invalid_credential_update");
-      }
-      let runtime;
-      try {
-        runtime = parseAgentRuntime(input.runtime);
-      } catch (error) {
-        if (error instanceof AgentRuntimeConfigurationError) throw new ApiError(400, error.message);
-        throw error;
-      }
-      const configuration = { ...agentModelSelection(input, await modelCatalog.list()), runtime };
       const affected = await database.db.select({ id: issues.id }).from(issues);
       try {
         return await runIssueExclusive(
@@ -158,8 +160,8 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
         if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, "global_configuration_has_running_issues");
         throw error;
       }
-    }),
-  );
+    });
+  });
   app.get("/api/config/parameters", async (_request, _reply) => {
     return runScopeExclusive(() => loadApplicationParameterState(database.db));
   });

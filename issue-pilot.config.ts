@@ -103,7 +103,6 @@ export const issuePilotConfig = Object.freeze({
       terminationGraceMs: 1_000,
       gitOperationMs: 120_000,
       gitOutputBytes: 2 * 1024 * 1024,
-      gitPruneMs: 30_000,
       diskUsageMs: 120_000,
       diskUsageOutputBytes: 1024 * 1024,
     }),

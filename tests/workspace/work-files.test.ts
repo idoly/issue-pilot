@@ -4,9 +4,9 @@ import { test } from "node:test";
 import { syncBuiltinESMExports } from "node:module";
 import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
+import { assertIssueRoot, claimIssueRoot, issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
 import path from "node:path";
-import { generatedWorkFileSaver, IssueWorkFileStore, listIssueWorkFiles, openIssueWorkFile, prepareIssueWorkDirectory } from "../../src/workspace/work-files.ts";
+import { generatedWorkFileSaver, IssueWorkFileStore, listIssueWorkFiles, openIssueWorkFile } from "../../src/workspace/work-files.ts";
 
 const key = "ISSUE-20261021-001";
 
@@ -265,6 +265,20 @@ test("Issue creation claims an empty working directory and preserves an unknown 
   }
 });
 
+test("Issue creation refuses a key still occupied by legacy files", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-legacy-claim-"));
+  try {
+    const legacy = legacyIssueRoot(root, key);
+    await mkdir(legacy, { recursive: true });
+    await writeFile(path.join(legacy, "evidence.txt"), "preserve");
+    await assert.rejects(claimIssueRoot(root, key), /unmanaged_issue_state:issues/);
+    await assert.rejects(stat(issueRoot(root, key)), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(legacy, "evidence.txt"), "utf8"), "preserve");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 for (const phase of ["before-open", "after-validation"] as const)
   test(`work file listing does not follow a directory replaced ${phase}`, async (context) => {
     const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-list-parent-race-"));
@@ -272,7 +286,7 @@ for (const phase of ["before-open", "after-validation"] as const)
       resolve = fs.realpath;
     try {
       await claimIssueRoot(root, key);
-      const work = await prepareIssueWorkDirectory(root, key),
+      const work = await assertIssueRoot(root, key),
         folder = path.join(work, "nested"),
         outside = path.join(root, "outside");
       await mkdir(folder);
@@ -335,7 +349,7 @@ test("listing waits for pending metadata before closing its directory after a fa
   const failure = new Error("fixture_metadata_failed");
   try {
     await claimIssueRoot(root, key);
-    const work = await prepareIssueWorkDirectory(root, key);
+    const work = await assertIssueRoot(root, key);
     await writeFile(path.join(work, "failed.txt"), "failed");
     await writeFile(path.join(work, "waiting.txt"), "waiting");
     context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
@@ -386,7 +400,7 @@ test("a replaced parent directory cannot redirect a validated download to an out
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-parent-race-"));
   try {
     await claimIssueRoot(root, key);
-    const work = await prepareIssueWorkDirectory(root, key),
+    const work = await assertIssueRoot(root, key),
       outside = path.join(root, "outside");
     await mkdir(path.join(work, "nested"));
     await mkdir(outside);
@@ -424,7 +438,7 @@ test("a rejected download closes its opened descriptor", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-download-descriptor-check-"));
   try {
     await claimIssueRoot(root, key);
-    const work = await prepareIssueWorkDirectory(root, key);
+    const work = await assertIssueRoot(root, key);
     await writeFile(path.join(work, "evidence.txt"), "inside");
     const resolve = fs.realpath;
     let descriptor: number | undefined;
@@ -457,7 +471,7 @@ for (const operation of ["listing", "download"] as const)
     let descriptor: number | undefined;
     try {
       await claimIssueRoot(root, key);
-      const work = await prepareIssueWorkDirectory(root, key),
+      const work = await assertIssueRoot(root, key),
         file = path.join(work, "evidence.txt");
       await writeFile(file, "preserved evidence");
       context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
@@ -511,7 +525,7 @@ test("listing reports a close failure after successful directory reads", async (
   const open = fs.open;
   try {
     await claimIssueRoot(root, key);
-    const work = await prepareIssueWorkDirectory(root, key);
+    const work = await assertIssueRoot(root, key);
     context.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
       const handle = await open(...args);
       if (args[0] === work) {
@@ -536,7 +550,7 @@ test("lists and downloads working files without following paths outside the Issu
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-working-files-"));
   try {
     await claimIssueRoot(root, key);
-    const work = await prepareIssueWorkDirectory(root, key);
+    const work = await assertIssueRoot(root, key);
     assert.equal(work, issueRoot(root, key));
     await mkdir(path.join(work, "nested"));
     await writeFile(path.join(work, "nested", "库存 #1.xlsx"), "workbook");

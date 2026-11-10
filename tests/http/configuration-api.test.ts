@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { inspect } from "node:util";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { createClient, type TransactionMode, type Transaction } from "@libsql/client";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadConfigurationCatalog } from "../../src/configuration/read.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { createApiFixture, createIssue, createService, json, servicePayload, testAgent } from "./fixture.ts";
+import { createApiFixture, createIssue, createService, json, modelCatalog, servicePayload, testAgent } from "./fixture.ts";
 
 test("DMS scope errors preserve upstream HTTP status without private response details", async () => {
   const fixture = await createApiFixture(),
@@ -81,6 +82,50 @@ test("configuration snapshots do not block Workspace writes", async () => {
     await fixture.cleanup();
   }
 });
+
+for (const method of ["GET", "PUT"] as const) {
+  test(`${method} configuration catalog loading leaves service writes unblocked`, async () => {
+    let started!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let hold = false;
+    const fixture = await createApiFixture({
+      modelCatalog: {
+        async list() {
+          if (hold) {
+            started();
+            await released;
+          }
+          return modelCatalog.list();
+        },
+      },
+    });
+    hold = true;
+    const pending = Promise.resolve(method === "GET" ? fixture.app.inject({ method, url: "/api/config" }) : fixture.app.inject({ method, url: "/api/config/agent", payload: testAgent }));
+    const deadline = new AbortController();
+    let write: ReturnType<typeof createService> | undefined;
+    try {
+      const timeout = delay(2_000, undefined, { signal: deadline.signal, ref: false }).then(() => assert.fail("the model catalog blocked a service write"));
+      await Promise.race([entered, timeout]);
+      write = createService(fixture.app, "Catalog wait", ["test"]);
+      await Promise.race([write, timeout]);
+      release();
+      const response = await pending;
+      assert.equal(response.statusCode, 200, response.body);
+      if (method === "GET") assert.ok(response.json().services.some(({ key }: { key: string }) => key === "catalog-wait"));
+    } finally {
+      deadline.abort();
+      release();
+      await pending.catch(() => undefined);
+      await write?.catch(() => undefined);
+      await fixture.cleanup();
+    }
+  });
+}
 
 test("projects bootstrap user, environments, models, repositories, and deployments without internal fields", async () => {
   const fixture = await createApiFixture();

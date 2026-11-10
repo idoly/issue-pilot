@@ -512,6 +512,13 @@
       "when": 1793980800000,
       "tag": "0072_sls_scope_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1794067200000,
+      "tag": "0073_index_issue_recovery",
+      "breakpoints": true
     }
   ]
 }

@@ -12,15 +12,13 @@ import { AgentEngine, type AgentController } from "../agent/engine.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import type { DatabaseConnection } from "../db/client.ts";
-import { issues } from "../db/schema.ts";
 import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } from "../agent/model-runtime.ts";
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, workspaceLifecyclePolicy, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
-import { prepareDevelopmentIssueRuntimes, prepareReadOnlyIssueRuntimes } from "../workspace/project.ts";
 import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import { ApplicationStateLease } from "../workspace/state-lease.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
-import { pruneState } from "../workspace/state.ts";
+import { WorktreeManager } from "../workspace/git.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
 import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
@@ -34,7 +32,7 @@ import { registerMcpRoutes } from "./mcp-routes.ts";
 import { registerCapabilityRoutes } from "./capability-routes.ts";
 import { registerRepositoryRoutes } from "./repository-routes.ts";
 import { registerUserRoutes } from "./user-routes.ts";
-import { registerWebRoutes } from "./web-routes.ts";
+import { assertWebBuild, registerWebRoutes } from "./web-routes.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
 export type { AgentController } from "../agent/engine.ts";
@@ -113,6 +111,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     })());
 
   try {
+    if (options.webRoot) await assertWebBuild(options.webRoot);
     // Bootstrap recovers persistent state, so claim the control socket first.
     stateLease = options.stateLease ?? new ApplicationStateLease(stateRoot);
     await stateLease.start();
@@ -123,20 +122,9 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const parameters = (await loadApplicationParameterState(database.db)).values;
     installApplicationParameters(parameters);
     app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
-    const pruneStartedAt = performance.now();
-    const issueKeys = (await database.db.select({ key: issues.key }).from(issues)).map(({ key }) => key);
-    await pruneState(stateRoot, issueKeys);
-    app.log.info({ durationMs: Math.round(performance.now() - pruneStartedAt) }, "Pruned application state");
-
-    const developmentStartedAt = performance.now();
-    const developmentRuntimes = await prepareDevelopmentIssueRuntimes(database.db, stateRoot);
-    for (const blocked of developmentRuntimes.blocked) app.log.warn(blocked, "Development issue runtime could not be prepared");
-    app.log.info({ issueKeys: developmentRuntimes.prepared, durationMs: Math.round(performance.now() - developmentStartedAt) }, "Prepared development issue runtimes");
-
-    const readOnlyStartedAt = performance.now();
-    const readOnlyRuntimes = await prepareReadOnlyIssueRuntimes(database.db, stateRoot);
-    for (const blocked of readOnlyRuntimes.blocked) app.log.warn(blocked, "Read-only issue runtime could not be prepared");
-    app.log.info({ issueKeys: readOnlyRuntimes.prepared, durationMs: Math.round(performance.now() - readOnlyStartedAt) }, "Prepared read-only issue runtimes");
+    const sharedGitStartedAt = performance.now();
+    await WorktreeManager.assertSharedState(stateRoot);
+    app.log.info({ durationMs: Math.round(performance.now() - sharedGitStartedAt) }, "Validated shared Git snapshots");
 
     const sharedModelRuntime = () => (modelRuntime ??= createPiModelRuntime());
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());
@@ -156,11 +144,13 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       );
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
     const workspaces = new WorkspaceLifecycleManager(database.db, stateRoot, engine, options.workspacePolicy ?? workspaceLifecyclePolicy(parameters));
-    const maintenanceStartedAt = performance.now();
-    const maintenance = await workspaces.maintain();
-    for (const failure of maintenance.failures) app.log.error({ issueKey: failure.issueKey, err: errorDiagnostic(failure.error) }, "Workspace automatic release failed");
-    app.log.info({ durationMs: Math.round(performance.now() - maintenanceStartedAt) }, "Completed workspace maintenance");
-    stopWorkspaceMaintenance = workspaces.start((error) => app.log.error(errorDiagnostic(error)));
+    stopWorkspaceMaintenance = () => workspaces.stop();
+    app.addHook("onListen", async () => {
+      workspaces.start(
+        (error) => app.log.error(errorDiagnostic(error)),
+        (durationMs) => app.log.info({ durationMs }, "Completed workspace maintenance"),
+      );
+    });
 
     app.setErrorHandler((error, _request, reply) => {
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
@@ -201,6 +191,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "workspace_runtime_restore_failed",
         "issue_root_missing",
         "invalid_issue_root",
+        "issue_layout_migration_required",
         "issue_workspace_missing",
         "issue_workspace_not_found",
         "issue_service_not_found",

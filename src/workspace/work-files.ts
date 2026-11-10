@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { KeyedSerialQueue } from "../serial.ts";
-import { assertIssueRoot, legacyIssueRoot, issueRoot } from "./state.ts";
+import { assertIssueRoot, issueRoot } from "./state.ts";
 
 export interface IssueWorkFile {
   name: string;
@@ -15,8 +15,13 @@ export interface IssueWorkFile {
   updatedAt: string;
   managed?: boolean;
 }
+export interface WorkFileRepository {
+  entry: string;
+  resolve: () => Promise<string>;
+}
 export interface WorkFileAccess {
   readRoots?: Record<string, string>;
+  repositories?: ReadonlyMap<string, WorkFileRepository>;
 }
 export function isManagedIssueFile(relative: string): boolean {
   const segments = relative.split(path.sep),
@@ -39,25 +44,32 @@ function inside(root: string, selected: string): boolean {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-export async function prepareIssueWorkDirectory(stateRoot: string, issueKey: string): Promise<string> {
-  const legacy = legacyIssueRoot(stateRoot, issueKey);
-  const oldEntries = await readdir(legacy).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  });
-  if (oldEntries.length) throw new Error("issue_layout_migration_required");
-  return assertIssueRoot(stateRoot, issueKey);
-}
-
 async function resolveWorkPath(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess): Promise<string> {
   if (relative.includes("\0") || relative.includes("\\") || path.isAbsolute(relative) || relative.split("/").some((segment) => segment === ".." || segment.toLowerCase() === ".git"))
     throw new Error("invalid_issue_file_path");
   const root = await assertIssueRoot(stateRoot, issueKey);
   const target = await realpath(path.resolve(root, relative || "."));
-  const selected = path.relative(root, target);
-  const allowed =
-    inside(root, target) || Object.entries(access.readRoots ?? {}).some(([prefix, allowedRoot]) => (relative === prefix || relative.startsWith(prefix + "/")) && inside(allowedRoot, target));
-  if (!allowed || selected.split(path.sep).some((segment) => segment.toLowerCase() === ".git")) throw new Error("invalid_issue_file_path");
+  const requested = path.posix.normalize(relative || ".");
+  const under = (prefix: string) => requested === prefix || requested.startsWith(prefix + "/");
+  const allowed = inside(root, target) || Object.entries(access.readRoots ?? {}).some(([prefix, allowedRoot]) => under(prefix) && inside(allowedRoot, target));
+  // A source link can lead outside the Issue root. A development worktree is inside it
+  // and may be reached through another symlink, so verify the actual entry there too.
+  let repository: WorkFileRepository | undefined;
+  for (const [prefix, candidate] of access.repositories ?? []) {
+    if (under(prefix)) {
+      repository = candidate;
+      break;
+    }
+    if (allowed && inside(candidate.entry, target)) repository = candidate;
+  }
+  if (
+    path
+      .relative(root, target)
+      .split(path.sep)
+      .some((segment) => segment.toLowerCase() === ".git") ||
+    (repository ? !inside(await repository.resolve(), target) : !allowed)
+  )
+    throw new Error("invalid_issue_file_path");
   return target;
 }
 
@@ -79,9 +91,8 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
           const selected = path.posix.join(relative, entry.name);
           const permittedDirectory =
             metadata.isSymbolicLink() &&
-            access.readRoots?.[selected] &&
-            (await realpath(path.join(pinned, entry.name))) === access.readRoots[selected] &&
-            (await stat(access.readRoots[selected]!)).isDirectory();
+            (access.repositories?.has(selected) ||
+              (access.readRoots?.[selected] && (await realpath(path.join(pinned, entry.name))) === access.readRoots[selected] && (await stat(access.readRoots[selected]!)).isDirectory()));
           return {
             name: entry.name,
             path: selected,
@@ -230,7 +241,7 @@ export class IssueWorkFileStore {
     const target = path.join(this.directory, selected);
     return writes.run(target, async () => {
       signal?.throwIfAborted();
-      await prepareIssueWorkDirectory(this.stateRoot, this.issueKey);
+      await assertIssueRoot(this.stateRoot, this.issueKey);
       const temporary = path.join(this.directory, `.work-file-${randomUUID()}.tmp`);
       const present = await lstat(target).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return undefined;

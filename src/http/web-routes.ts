@@ -4,7 +4,8 @@ import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-async function requireWebFile(root: string, name: string): Promise<void> {
+export async function assertWebBuild(root: string): Promise<void> {
+  const name = "index.html";
   try {
     const metadata = await stat(path.join(root, name));
     if (metadata.isFile()) return;
@@ -45,7 +46,6 @@ function cacheControl(file: string): string {
 
 export async function registerWebRoutes(app: FastifyInstance, configuredRoot: string): Promise<void> {
   const root = path.resolve(configuredRoot);
-  await requireWebFile(root, "index.html");
   await app.register(fastifyStatic, {
     root,
     prefix: "/",

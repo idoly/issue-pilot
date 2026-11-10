@@ -438,12 +438,16 @@ export const agentSessions = sqliteTable("issue_pilot_sessions", {
   ...timestamps,
 });
 
-export const issueWorkspaces = sqliteTable("issue_workspaces", {
-  issueId: text("issue_id")
-    .primaryKey()
-    .references(() => issues.id, { onDelete: "cascade" }),
-  status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("not_created"),
-  runtimeReady: integer("runtime_ready", { mode: "boolean" }).notNull().default(false),
-  lastError: text("last_error"),
-  ...timestamps,
-});
+export const issueWorkspaces = sqliteTable(
+  "issue_workspaces",
+  {
+    issueId: text("issue_id")
+      .primaryKey()
+      .references(() => issues.id, { onDelete: "cascade" }),
+    status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("not_created"),
+    runtimeReady: integer("runtime_ready", { mode: "boolean" }).notNull().default(false),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [index("issue_workspaces_interrupted_idx").on(table.status, table.issueId).where(sql`${table.status} IN ('preparing', 'running')`)],
+);

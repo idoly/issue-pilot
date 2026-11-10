@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { create as contentDisposition } from "content-disposition";
 import { issueRelations, issues } from "../db/schema.ts";
-import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
+import { issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
 import { WorkspaceConversionRefusal, WorkspaceReleaseRefusal, WorkspaceScopeMigrationRefusal } from "../workspace/lifecycle.ts";
@@ -27,9 +27,9 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
 
   const fileAccess = (issue: { id: string; key: string }) =>
     runScopeExclusive(async () => {
-      // Read roots can fail on a missing repository entry before the work-file owner checks the Issue root.
-      await assertIssueRoot(context.stateRoot, issue.key);
-      const readRoots = await context.sourceBrowser.readRoots(issue);
+      // Assemble paths here; the file reader verifies the root and any selected repository.
+      const repositories = await context.sourceBrowser.workFileRepositories(issue);
+      const readRoots: Record<string, string> = {};
       const related = await database.db
         .select({ id: issues.id, key: issues.key })
         .from(issueRelations)
@@ -37,18 +37,18 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
         .where(eq(issueRelations.issueId, issue.id));
       for (const row of related) {
         const prefix = `.related-${row.key.toLowerCase()}`;
-        readRoots[prefix] = issueRoot(context.stateRoot, row.key);
-        let relatedRoots: Record<string, string>;
+        let relatedRepositories: typeof repositories;
         try {
-          relatedRoots = await context.sourceBrowser.readRoots(row);
+          relatedRepositories = await context.sourceBrowser.workFileRepositories(row);
         } catch (error) {
           // A related Issue's checkout drift must not block this Issue's own files; its checkouts stay unavailable.
           app.log.warn({ issueKey: issue.key, relatedIssueKey: row.key, err: errorDiagnostic(error) }, "related_issue_read_roots_unavailable");
           continue;
         }
-        for (const [name, root] of Object.entries(relatedRoots)) readRoots[`${prefix}/${name}`] = root;
+        readRoots[prefix] = issueRoot(context.stateRoot, row.key);
+        for (const [name, repository] of relatedRepositories) repositories.set(`${prefix}/${name}`, repository);
       }
-      return { readRoots };
+      return { readRoots, repositories };
     });
   const relativeWorkPath = (value: unknown, optional = false): string => {
     if (value === undefined && optional) return "";
@@ -57,8 +57,9 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   };
   const workFileError = (error: unknown): never => {
     const code = error instanceof Error ? error.message : "";
-    if (["invalid_issue_file_path", "invalid_issue_work_directory", "issue_file_not_directory", "issue_file_not_regular", "managed_issue_file_private"].includes(code)) throw new ApiError(400, code);
-    if (code === "source_git_binding_invalid") throw new ApiError(409, code);
+    if (["invalid_issue_file_path", "issue_file_not_directory", "issue_file_not_regular", "managed_issue_file_private"].includes(code)) throw new ApiError(400, code);
+    if (["source_git_binding_invalid", "source_runtime_invalid"].includes(code)) throw new ApiError(409, code);
+    if (code === "source_path_not_found") throw new ApiError(404, "issue_file_not_found");
     if (code === "issue_file_directory_too_large") throw new ApiError(413, code);
     if (error && typeof error === "object" && "code" in error) {
       if (error.code === "ENOENT" || error.code === "ENOTDIR") throw new ApiError(404, "issue_file_not_found");

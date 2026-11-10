@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Server } from "node:net";
 import { test } from "node:test";
 
-import { inspect } from "node:util";
+import { inspect, promisify } from "node:util";
+import { eq } from "drizzle-orm";
 import { DrizzleQueryError } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
@@ -15,6 +17,14 @@ import { errorChain } from "../../src/diagnostics.ts";
 import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
 import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
+
+import { agentSessions, issues, issueWorkspaces, serviceRepositories } from "../../src/db/schema.ts";
+import { IssueProjectManager } from "../../src/workspace/project.ts";
+import { WorktreeManager } from "../../src/workspace/git.ts";
+import { issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
+import { registerTestRepositories } from "../helpers/repositories.ts";
+
+const git = promisify(execFile);
 
 class StartupEngine implements AgentController {
   closed = 0;
@@ -80,6 +90,100 @@ test("rejects a second API before recovering the first API's active Issue state"
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);
   } finally {
     await connection.close();
+    await fixture.cleanup();
+  }
+});
+
+test("serves recorded Issue code after restart without fetching or rebuilding historical workspaces", async () => {
+  const fixture = await createApiFixture();
+  const database = openDatabase(fixture.databaseFile);
+  let app: FastifyInstance | undefined;
+  try {
+    const remote = path.join(fixture.root, "remote");
+    await git("git", ["init", "-b", "main", remote]);
+    await writeFile(path.join(remote, "README.md"), "recorded version");
+    await git("git", ["-C", remote, "add", "README.md"]);
+    const commit = (message: string) => git("git", ["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=test@example.test", "commit", "-am", message]);
+    await commit("initial");
+    await createService(fixture.app, "Restart", ["test"]);
+    await registerTestRepositories(database.db, [remote]);
+    await database.db.update(serviceRepositories).set({ url: remote });
+    const saved = await createIssue(fixture.app, "restart", "test", "Recorded code");
+    const unrelated = await createIssue(fixture.app, "restart", "test", "Unselected view");
+    const [record] = await database.db
+      .select()
+      .from(issues)
+      .where(eq(issues.key, String(saved.id)));
+    const [other] = await database.db
+      .select()
+      .from(issues)
+      .where(eq(issues.key, String(unrelated.id)));
+    const projects = new IssueProjectManager(database.db, fixture.root);
+    for (const issue of [record!, other!]) {
+      const workspacePath = await projects.hydrateReadOnlyRuntime(issue);
+      await database.db.insert(agentSessions).values({ issueId: issue.id, workspacePath, sessionFile: path.join(workspacePath, ".session-fixture.jsonl") });
+    }
+    await writeFile(path.join(remote, "README.md"), "advanced remote version");
+    await commit("advance");
+    const advanced = await new WorktreeManager(fixture.root).prepareShared({ url: remote, baseBranch: "main" });
+
+    const workspace = issueRoot(fixture.root, record!.key);
+    const unrelatedManifest = path.join(issueRoot(fixture.root, other!.key), ".issue-runtime.json");
+    await writeFile(unrelatedManifest, "preserve invalid manifest");
+    await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: false }).where(eq(issueWorkspaces.issueId, other!.id));
+    await writeFile(path.join(issueRoot(fixture.root, other!.key), ".session-fixture.jsonl"), "");
+    const legacy = legacyIssueRoot(fixture.root, other!.key);
+    const unmanaged = issueRoot(fixture.root, "ISSUE-20260807-999");
+    await mkdir(legacy, { recursive: true });
+    await writeFile(path.join(legacy, "old-work.txt"), "preserve legacy files");
+    await mkdir(unmanaged);
+    await writeFile(path.join(unmanaged, "unmanaged.txt"), "preserve unmanaged files");
+    const [before] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, record!.id));
+    await fixture.stop();
+    await rename(remote, remote + "-offline");
+
+    app = await buildApi({ stateRoot: fixture.root, databaseFile: fixture.databaseFile, engine: new StartupEngine(), modelCatalog, logger: false });
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    assert.equal((await fetch(address + "/health")).status, 200);
+    assert.equal(((await (await fetch(address + "/api/issues")).json()) as unknown[]).length, 2);
+    const unprepared = await app.inject(`/api/issues/${other!.key}`);
+    assert.equal(unprepared.statusCode, 200, unprepared.body);
+    assert.equal(unprepared.json().workspace.sourceAvailable, false);
+    assert.equal(unprepared.json().workspace.retryable, true);
+    const legacyFiles = await app.inject(`/api/issues/${other!.key}/files`);
+    assert.equal(legacyFiles.statusCode, 500);
+    assert.deepEqual(legacyFiles.json(), { error: "issue_layout_migration_required" });
+    assert.equal(await readFile(path.join(legacy, "old-work.txt"), "utf8"), "preserve legacy files");
+    assert.equal(await readFile(path.join(unmanaged, "unmanaged.txt"), "utf8"), "preserve unmanaged files");
+    const readCode = () =>
+      app!.inject({
+        method: "GET",
+        url: `/api/issues/${record!.key}/source/file`,
+        headers: { "x-issue-pilot-repository": "remote", "x-issue-pilot-path": "README.md" },
+      });
+    const snapshot = await readCode();
+    assert.equal(snapshot.statusCode, 200, snapshot.body);
+    assert.equal(snapshot.json().content, "recorded version");
+    assert.equal(await readFile(unrelatedManifest, "utf8"), "preserve invalid manifest");
+    const [after] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, record!.id));
+    assert.deepEqual(after, before);
+
+    const entry = path.join(workspace, "remote");
+    await unlink(entry);
+    await symlink(advanced.workspacePath, entry);
+    const mismatched = await readCode();
+    assert.equal(mismatched.statusCode, 409, mismatched.body);
+    assert.deepEqual(mismatched.json(), { error: "source_runtime_invalid" });
+    await writeFile(path.join(workspace, "evidence.txt"), "ordinary file");
+    const files = `/api/issues/${record!.key}/files`;
+    assert.equal((await app.inject(files)).statusCode, 200);
+    assert.equal((await app.inject(files + "/download?path=evidence.txt")).body, "ordinary file");
+    const blockedDownload = await app.inject(files + "/download?path=remote/README.md");
+    assert.equal(blockedDownload.statusCode, 409, blockedDownload.body);
+    assert.deepEqual(blockedDownload.json(), { error: "source_runtime_invalid" });
+  } finally {
+    await app?.close();
+    await database.close();
     await fixture.cleanup();
   }
 });

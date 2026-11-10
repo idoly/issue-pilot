@@ -56,6 +56,12 @@ Work-file access checks the durable Issue root before resolving repository read 
 
 Tests: [state.test.ts](../../tests/workspace/state.test.ts), [message-admission.test.ts](../../tests/agent/message-admission.test.ts), [work-files.test.ts](../../tests/workspace/work-files.test.ts), [work-files HTTP test](../../tests/http/work-files.test.ts).
 
+## Issue state audit
+
+Ordinary startup does not compare all Issue records with filesystem entries. Creation still refuses a target occupied in the current or legacy layout. Root validation and lifecycle mutations refuse legacy contents for the selected Issue. No operation adopts or removes unowned directories as a result of the audit.
+
+[check-issue-state.ts](../../scripts/check-issue-state.ts) opens SQLite read-only and checks required Workspace rows, resolution state and directory ownership. Use the [runbook](../RUNBOOK.md#工单状态审计) command when investigating storage drift, with writers stopped for a consistent comparison. Missing roots and Git bindings are also checked by the operations that require them; the audit is not a full integrity or Git check. The migration that adds indexed recovery validates existing Issue relations before applying it; this migration can take time proportional to the database size once.
+
 ## Attachments
 
 [attachment-store.ts](../../src/http/attachment-store.ts) stages uploads, computes size/SHA-256 and coordinates files/metadata with Issue transactions. Reads verify direct root ownership, regular-file type, exact 0400, size and hash. Recheck the opened descriptor's real location and send from that descriptor, avoiding check/reopen races.
@@ -85,7 +91,7 @@ Shared bare stores retain baseline objects/refs; shared snapshots are detached. 
 | development_snapshot | All null | All non-null |
 | invalid | Empty, mixed or other combination | Refuse and preserve |
 
-Recovery checks HEAD, common directory, pointers and branch. Resolve baselines using full refs. Restore dev only from valid recorded local branches: no reset, remote fallback or guessed rebinding. Ref publication uses compare-and-swap and rejects unexpected external changes.
+Startup verifies shared snapshot integrity without rebuilding Issue views. Code access checks the selected binding against its recorded prod/test commit or local dev working branch. Read-only recovery checks related context before starting Git work. Recovery checks HEAD, common directory, pointers and branch. Resolve baselines using full refs. Restore dev only from valid recorded local branches: no reset, remote fallback or guessed rebinding. Ref publication uses compare-and-swap and rejects unexpected external changes.
 
 Release requires resolved, idle, correctly bound and clean state, including staged/untracked/ignored content. Remove only registered code; retain Issue root, conversations, originals, work files and private branches. Missing roots cannot be released/reopened.
 
@@ -103,9 +109,9 @@ Files and SQLite cannot commit atomically. A 500/disconnection does not prove no
 
 Issue totalBytes includes originals, JSONL, work files, caches and private Git. sharedGitBytes is separate. Neither is whole-disk usage or an atomic filesystem snapshot.
 
-Concurrent readers share in-flight sampling. Cache results for one maintenance cycle, root default 15 minutes; when the cycle is zero, cache for five seconds. GET /api/workspaces/stats?refresh=true schedules fresh sampling, not a high-frequency polling mechanism. sampledAt marks batch completion; candidate bytes are not guaranteed reclaimable bytes.
+Concurrent readers share in-flight sampling. Cache results for one maintenance cycle, root default 15 minutes; when the cycle is zero, cache for five seconds. GET /api/workspaces/stats?refresh=true bypasses cached and ordinary samples, but overlapping refreshes share one fresh sample unless a lifecycle write or policy change intervenes. sampledAt marks batch completion; candidate bytes are not guaranteed reclaimable bytes.
 
-High water considers Issue roots, excludes shared Git and still applies all safe-release checks.
+The background pass measures Issue roots for high water and updates the sample after release. High water excludes shared Git and is not a filesystem quota. Retention and quota release only eligible development worktrees; a recorded, ready snapshot still counts toward capacity but has no worktree to release. A recorded release with an unfinished snapshot view can be retried even below high water. The first scheduled pass waits one configured interval after listening; zero disables automatic passes. Each scheduled pass finishes before the next delay starts; release, reopen and statistics can wait behind it in the lifecycle queue. Actual removal still rechecks state and measures bytes under the Issue reservation.
 
 ## Database checkpoints
 

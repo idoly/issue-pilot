@@ -36,6 +36,7 @@ test("enforces the Issue type enum without rebuilding the table or trusting the 
     await assert.rejects(migrate(db.db, { migrationsFolder: path.resolve("drizzle") }), /CHECK constraint failed/);
 
     await db.client.execute("UPDATE issues SET type = 'smart_analysis' WHERE id = 'i1'");
+    await db.client.execute("INSERT INTO issue_workspaces (issue_id,status,created_at,updated_at) VALUES ('i1','not_created',0,0)");
     await migrate(db.db, { migrationsFolder: path.resolve("drizzle") });
     await assert.rejects(
       db.client.execute({

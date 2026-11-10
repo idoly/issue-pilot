@@ -9,9 +9,10 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
-import { developmentRepositoryStorePath, issueRepositoryWorkspaceNames, repositoryStorePath } from "./git.ts";
-import { validateIssueWorktreeBinding } from "./issue-git.ts";
-import { classifyRepositoryState, issueRoot, sharedCheckoutsRoot } from "./state.ts";
+import { issueRepositoryWorkspaceNames } from "./git.ts";
+import { resolveRecordedRepository } from "./runtime.ts";
+import type { WorkFileRepository } from "./work-files.ts";
+import { classifyRepositoryState, issueRoot } from "./state.ts";
 
 import type {
   SourceBlame,
@@ -32,12 +33,9 @@ import type {
 const repositoryNamePattern = /^[a-z0-9._-]+$/;
 
 type IssueReference = { id: string; key: string };
-type RepositoryRow = typeof issueRepositories.$inferSelect;
-
 type SourceContext = {
-  repository: RepositoryRow;
   root: string;
-  source: SourceRepository;
+  workingBranch: string | null;
   /** Validated isolated store of a development workspace; writes reuse it instead of rescanning. */
   store?: string;
 };
@@ -94,9 +92,8 @@ export class SourceBrowser {
   }
 
   async repositories(issue: IssueReference): Promise<SourceRepository[]> {
-    const rows = await this.repositoryRows(issue);
+    const { rows, state } = await this.repositorySet(issue);
     const names = issueRepositoryWorkspaceNames(rows);
-    const state = classifyRepositoryState(rows);
     return rows.map((repository) => ({
       name: names.get(repository.url)!,
       url: repository.url,
@@ -105,19 +102,22 @@ export class SourceBrowser {
     }));
   }
 
-  async readRoots(issue: IssueReference): Promise<Record<string, string>> {
-    let rows: RepositoryRow[];
-    try {
-      rows = await this.repositoryRows(issue);
-    } catch (error) {
-      if (error instanceof Error && ["source_browser_unavailable", "source_repository_state_invalid"].includes(error.message)) return {};
+  async workFileRepositories(issue: IssueReference): Promise<Map<string, WorkFileRepository>> {
+    const recorded = await this.repositorySet(issue).catch((error: unknown) => {
+      if (error instanceof Error && ["source_browser_unavailable", "source_repository_state_invalid"].includes(error.message)) return undefined;
       throw error;
-    }
-    const names = issueRepositoryWorkspaceNames(rows),
-      roots: Record<string, string> = {};
+    });
+    const roots = new Map<string, WorkFileRepository>();
+    if (!recorded) return roots;
+    const { rows, state } = recorded;
+    const names = issueRepositoryWorkspaceNames(rows);
+    const root = issueRoot(this.stateRoot, issue.key);
     for (const repository of rows) {
       const name = names.get(repository.url)!;
-      roots[name] = (await this.context(issue, name, rows)).root;
+      roots.set(name, {
+        entry: path.join(root, name),
+        resolve: async () => (await resolveRecordedRepository(this.stateRoot, issue.key, repository, name, state).catch(missingPathError)).root,
+      });
     }
     return roots;
   }
@@ -759,19 +759,21 @@ export class SourceBrowser {
     return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size, sha256: createHash("sha256").update(content).digest("hex") };
   }
 
-  private async repositoryRows(issue: IssueReference): Promise<RepositoryRow[]> {
+  private async repositorySet(issue: IssueReference) {
     const [workspace, repositories] = await Promise.all([
       this.database.select({ runtimeReady: issueWorkspaces.runtimeReady }).from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)).limit(1),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (!workspace[0]?.runtimeReady) throw new Error("source_browser_unavailable");
-    if (classifyRepositoryState(repositories) === "invalid") throw new Error("source_repository_state_invalid");
-    return repositories;
+    const state = classifyRepositoryState(repositories);
+    if (state === "invalid") throw new Error("source_repository_state_invalid");
+    return { rows: repositories, state };
   }
 
   private async writableContext(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
     const context = await this.context(issue, repositoryName);
-    if (context.source.access !== "write") throw new Error("source_read_only");
+    const expectedStore = context.store;
+    if (!expectedStore) throw new Error("source_read_only");
     const result = await this.executor.execute(
       issuePilotConfig.runtime.sourceBrowser.gitExecutable,
       ["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"],
@@ -780,13 +782,11 @@ export class SourceBrowser {
     // A killed or failed probe is not a binding mismatch; keep the two conditions distinguishable.
     if (result.killed) throw new Error("source_git_timeout");
     const [gitDirectory, commonDirectory, workingDirectory, branch] = result.stdout.trim().split("\n");
-    // context() already validated the isolated store for a development workspace; only read-state contexts lack it.
-    const expectedStore = context.store ?? (await developmentRepositoryStorePath(this.stateRoot, issue.key, context.repository.url));
     if (
       result.code !== 0 ||
       commonDirectory !== expectedStore ||
       workingDirectory !== context.root ||
-      branch !== context.repository.workingBranch ||
+      branch !== context.workingBranch ||
       !gitDirectory ||
       path.dirname(gitDirectory) !== path.join(expectedStore, "worktrees")
     )
@@ -861,57 +861,14 @@ export class SourceBrowser {
     if (result.code !== 0) throw new Error(failure);
   }
 
-  private async context(issue: IssueReference, repositoryName: string, knownRows?: RepositoryRow[]): Promise<SourceContext> {
+  private async context(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
     if (!repositoryNamePattern.test(repositoryName)) throw new Error("source_repository_not_found");
-    const rows = knownRows ?? (await this.repositoryRows(issue));
-    const state = classifyRepositoryState(rows);
+    const { rows, state } = await this.repositorySet(issue);
     const names = issueRepositoryWorkspaceNames(rows);
     const repository = rows.find((candidate) => names.get(candidate.url) === repositoryName);
     if (!repository) throw new Error("source_repository_not_found");
-    const runtimeRepository = path.join(issueRoot(this.stateRoot, issue.key), repositoryName);
-    let metadata;
-    try {
-      metadata = await lstat(runtimeRepository);
-    } catch (error) {
-      missingPathError(error);
-    }
-    if (state === "development_workspace" ? !metadata!.isDirectory() : !metadata!.isSymbolicLink()) throw new Error("source_runtime_invalid");
-    let root: string;
-    try {
-      root = await realpath(runtimeRepository);
-    } catch (error) {
-      missingPathError(error);
-    }
-    let validatedStore: string | undefined;
-    if (state === "development_workspace") {
-      if (!repository.localPath || path.resolve(repository.localPath) !== root) throw new Error("source_runtime_invalid");
-      const store = await developmentRepositoryStorePath(this.stateRoot, issue.key, repository.url);
-      validatedStore = store;
-      // One owner validates the worktree binding; translate its stable diagnostic for the browser.
-      try {
-        await validateIssueWorktreeBinding(store, root, repository.workingBranch!);
-      } catch (error) {
-        throw new Error("source_git_binding_invalid", { cause: error });
-      }
-    } else {
-      const checkoutRoot = sharedCheckoutsRoot(this.stateRoot);
-      const relative = path.relative(checkoutRoot, root);
-      const segments = relative.split(path.sep);
-      if (
-        relative.startsWith("..") ||
-        path.isAbsolute(relative) ||
-        segments.length !== 2 ||
-        segments[0] !== path.basename(repositoryStorePath(this.stateRoot, repository.url)) ||
-        !/^[a-f0-9]{40}$/.test(segments[1]!)
-      )
-        throw new Error("source_runtime_invalid");
-    }
-    return {
-      repository,
-      root,
-      ...(validatedStore ? { store: validatedStore } : {}),
-      source: { name: repositoryName, url: repository.url, branch: repository.workingBranch ?? repository.baseBranch, access: state === "development_workspace" ? "write" : "read" },
-    };
+    const view = await resolveRecordedRepository(this.stateRoot, issue.key, repository, repositoryName, state).catch(missingPathError);
+    return { ...view, workingBranch: repository.workingBranch };
   }
 
   private async resolvePath(root: string, relativePath: string): Promise<string> {

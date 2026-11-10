@@ -87,7 +87,7 @@ Root defaults below are not the installation's effective values:
 | modelResponseIdleMs | 300 seconds | Continuous model inactivity; paused during tools |
 | workspaceRetentionMs | 7 days | From resolvedAt, followed by safety checks |
 | workspaceHighWaterBytes / workspaceTargetBytes | 20 / 16 GiB | Issue-root capacity trigger, excluding shared Git; not a disk quota |
-| workspaceMaintenanceIntervalMs | 15 minutes | Future maintenance; zero disables timer, not startup maintenance |
+| workspaceMaintenanceIntervalMs | 15 minutes | Delay from listen or from the end of the last pass; zero disables automatic passes |
 | capabilityConnectionMs | 10 seconds | Future SLS CLI connect timeout, rounded up to seconds |
 | mcpExecutionMs | 120 seconds | Each new MCP tool/resource request |
 | dmsExecutionMs / slsExecutionMs | 120 / 30 seconds | New native queries |

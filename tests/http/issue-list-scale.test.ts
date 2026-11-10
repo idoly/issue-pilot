@@ -3,11 +3,10 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { environments, issues, services } from "../../src/db/schema.ts";
-import { IssueProjectManager } from "../../src/workspace/project.ts";
+import { environments, services } from "../../src/db/schema.ts";
 import { createApiFixture, createService } from "./fixture.ts";
 
-test("lists and hydrates more Issues than SQLite permits in one parameter list", async () => {
+test("lists more Issues than SQLite permits in one parameter list", async () => {
   const fixture = await createApiFixture();
   const database = openDatabase(fixture.databaseFile);
   try {
@@ -34,21 +33,6 @@ test("lists and hydrates more Issues than SQLite permits in one parameter list",
     assert.equal(listed[0]!.id, "ISSUE-20261020-33000");
     assert.equal(listed.at(-1)!.id, "ISSUE-20261020-00001");
 
-    // Exercise batch loading against SQLite without preparing 33,000 Git runtimes.
-    const manager = new IssueProjectManager(database.db, fixture.root);
-    const hydrated: string[] = [];
-    manager.hydrateReadOnlyRuntime = async (issue, _cache, repositories) => {
-      assert.ok(repositories);
-      assert.equal(repositories.length, 1);
-      assert.equal(repositories[0]!.issueId, issue.id);
-      hydrated.push(issue.id);
-      return "fixture-runtime";
-    };
-    const rows = await database.db.select().from(issues);
-    const result = await manager.hydrateReadOnlyRuntimes(rows);
-    assert.equal(result.prepared.length, count);
-    assert.deepEqual(result.blocked, []);
-    assert.equal(new Set(hydrated).size, count);
     assert.deepEqual((await database.client.execute("PRAGMA foreign_key_check")).rows, []);
   } finally {
     await database.close();

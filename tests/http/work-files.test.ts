@@ -189,8 +189,8 @@ test("a related Issue whose checkouts cannot be resolved does not block the prim
     const key = String(created.json().id);
     await mkdir(issueRoot(fixture.root, key), { recursive: true });
     await writeFile(path.join(issueRoot(fixture.root, key), "own.txt"), "primary evidence");
-    const readRoots = SourceBrowser.prototype.readRoots;
-    context.mock.method(SourceBrowser.prototype, "readRoots", async function (this: SourceBrowser, issue: { id: string; key: string }) {
+    const readRoots = SourceBrowser.prototype.workFileRepositories;
+    context.mock.method(SourceBrowser.prototype, "workFileRepositories", async function (this: SourceBrowser, issue: { id: string; key: string }) {
       if (issue.key === related.id) throw new Error("source_git_binding_invalid");
       return readRoots.call(this, issue);
     });

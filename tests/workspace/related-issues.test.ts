@@ -105,7 +105,7 @@ test("related Issues expose their complete current working directory and convers
     ]);
 
     const preparedProduction = await projects.prepare(production!, "prod");
-    assert.deepEqual(preparedProduction.relatedIssueKeys.sort(), [development!.key, relatedProduction!.key].sort());
+    assert.deepEqual([...preparedProduction.relatedIssueKeys].sort(), [development!.key, relatedProduction!.key].sort());
     const relatedRoot = path.join(issueRoot(root, production!.key), `.related-${development!.key.toLowerCase()}`);
     assert.equal(await readFile(path.join(relatedRoot, "remote", "README.md"), "utf8"), "uncommitted local experiment\n");
     assert.match(await readFile(relatedRoot + ".jsonl", "utf8"), /check the contract/);
@@ -123,7 +123,7 @@ test("related Issues expose their complete current working directory and convers
     await assert.rejects(readFile(metadataOnlyRoot + ".jsonl", "utf8"), (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT");
     assert.equal(await readFile(path.join(preparedProduction.runtimeRoot, "remote", "README.md"), "utf8"), "production baseline\n");
 
-    // Development and startup hydration retain the same directory references.
+    // Development preparation and explicit recovery retain the same directory references.
     await database.db.insert(issueRelations).values({ issueId: development!.id, relatedIssueId: relatedProduction!.id });
     const developmentWithRelations = await projects.prepare(development!, "dev");
     assert.deepEqual(developmentWithRelations.relatedIssueKeys, [relatedProduction!.key]);
@@ -132,6 +132,14 @@ test("related Issues expose their complete current working directory and convers
     assert.equal((await readdir(issueRoot(root, development!.key))).includes("remote"), true);
     await projects.hydrateDevelopmentRuntime(development!);
     assert.equal(JSON.parse(await readFile(devEvidence, "utf8")).key, relatedProduction!.key);
+
+    // A related checkout on a different branch is not a valid code reference.
+    const branch = preparedDevelopment.repositories[0]!.workingBranch!;
+    await git(["-C", developmentRepository, "switch", "-c", "drifted"]);
+    await assert.rejects(projects.prepare(production!, "prod"), /related_issue_context_unavailable/);
+    assert.equal(await readFile(path.join(developmentRepository, "README.md"), "utf8"), "uncommitted local experiment\n");
+    await git(["-C", developmentRepository, "switch", branch]);
+    assert.deepEqual((await projects.prepare(production!, "prod")).relatedIssueKeys, preparedProduction.relatedIssueKeys);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });
