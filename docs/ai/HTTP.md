@@ -40,6 +40,15 @@ Native browser EventSource does not send the page-selected subject header. Witho
 
 Configuration, users, repositories, MCP, capability switches, pins and statistics have separate owners. Do not infer bodies/permissions or impose one concurrency mechanism on all endpoints.
 
+## Issue vector search
+
+Owner: [issue-search-routes.ts](../../src/http/issue-search-routes.ts) and [issue-index.ts](../../src/search/issue-index.ts). See the [configuration guide](../CONFIGURATION.md#工单语义搜索) for the operator workflow.
+
+- Admin GET/PUT /api/config/issue-search exposes enabled, accountId, tokenConfigured and revision. PUT requires expectedRevision, enabled and accountId; omitted apiToken keeps it for the same account, null clears it. The Token is only sent to the fixed Cloudflare HTTPS origin. A settings change aborts in-flight search operations. Ordinary catalog exposes only issueSearchEnabled when true.
+- POST /api/issue-search takes a nonempty query (max 500 characters). Any active user can search across all accounts. Results are at most 10 business keys with current title and status, ranked by local cosine distance. Rows whose indexed text has changed or that were deleted are skipped. There is no keyword fallback or implicit refresh.
+- Admin POST /api/issue-search/refresh starts with {} and follows nextCursor by sending { after }. Each call checks up to 256 Issue rows and embeds up to 16 changed documents, using title and the beginning of the description, capped at 7,000 UTF-8 bytes. A full pass starts without a cursor so it also removes deleted entries. Cursor traversal is not a cross-mutation snapshot. Completed batches remain useful if a later batch fails; restart traversal to pick up earlier edits.
+- Cloudflare uses the Qwen3 embeddings REST endpoint with distinct document and query inputs. Timeout, access denial, malformed results and rate limits return stable errors without a provider body. Disabled search or missing credentials cannot send a request. Startup and settings saves do not open or build the index.
+
 ## Creation and complete-form edits
 
 Creation requires title, priority, serviceKey and workMode. Mappings belong to [contracts.ts](../../src/domain/contracts.ts); environmentKey/type are not extra create inputs. HTTP requires p0–p3 explicitly, unlike MCP defaults.

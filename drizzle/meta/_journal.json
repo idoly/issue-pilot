@@ -519,6 +519,13 @@
       "when": 1794067200000,
       "tag": "0073_index_issue_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "6",
+      "when": 1794326400000,
+      "tag": "0074_issue_search_configuration",
+      "breakpoints": true
     }
   ]
 }

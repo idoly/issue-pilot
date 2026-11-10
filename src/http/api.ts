@@ -25,6 +25,7 @@ import { ApiError } from "./input.ts";
 import { registerDingtalkRoutes } from "./dingtalk-routes.ts";
 import type { McpConnector } from "../mcp/client.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
+import { registerIssueSearchRoutes } from "./issue-search-routes.ts";
 import { registerSourceBrowserRoutes } from "./source-browser-routes.ts";
 import { registerApplicationMcp } from "../mcp/server.ts";
 import { registerMcpRoutes } from "./mcp-routes.ts";
@@ -38,6 +39,7 @@ export type { AgentController } from "../agent/engine.ts";
 
 export interface ApiOptions {
   dingtalkConnector?: McpConnector;
+  issueSearchFetch?: typeof fetch;
   databaseFile?: string;
   stateRoot?: string;
   engine?: AgentController;
@@ -229,6 +231,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerMcpRoutes(routeContext);
     registerApplicationMcp(routeContext);
     registerConfigurationRoutes(routeContext);
+    registerIssueSearchRoutes(routeContext, options.issueSearchFetch);
     const { createIssue, resolveCreationScope } = registerIssueRoutes(routeContext);
     registerDingtalkRoutes(routeContext, createIssue, resolveCreationScope, options.dingtalkConnector);
     registerAttachmentRoutes(routeContext);

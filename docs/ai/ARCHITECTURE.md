@@ -28,6 +28,7 @@ SQLite, JSONL, Git, attachments and work files jointly retain facts. There is no
 | Roles, states, work modes and business predicates | [domain/contracts.ts](../../src/domain/contracts.ts) |
 | Schema, bootstrap and immutable upgrades | [schema.ts](../../src/db/schema.ts), [bootstrap.ts](../../src/db/bootstrap.ts), [drizzle](../../drizzle) |
 | Configuration, credentials, projections and hot parameters | [configuration](../../src/configuration) |
+| Optional Issue vector search and generated index | [search](../../src/search), [issue-search-routes.ts](../../src/http/issue-search-routes.ts) |
 | HTTP identity and reauthorization after waits | [route-context.ts](../../src/http/route-context.ts) |
 | Admission, scheduling, reservations, cancellation and recovery | [engine.ts](../../src/agent/engine.ts), [message-delivery.ts](../../src/agent/message-delivery.ts) |
 | Pi sessions, model isolation and resources | [pi-session.ts](../../src/agent/pi-session.ts), [model-runtime.ts](../../src/agent/model-runtime.ts), [pi-runtime.ts](../../src/configuration/pi-runtime.ts) |

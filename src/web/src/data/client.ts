@@ -1,3 +1,5 @@
+import type { IssueSearchConfiguration, IssueSearchConfigurationUpdate, IssueSearchHit } from "../../../search/contracts";
+export type { IssueSearchConfiguration, IssueSearchHit } from "../../../search/contracts";
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { DingtalkSourceResponse, DingtalkImportInput, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
@@ -490,6 +492,10 @@ export async function loadSourceDiffFile(key: string, repository: string, path: 
 }
 
 const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE" | "PUT", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
+
+export const loadIssueSearchConfiguration = (signal: AbortSignal) => request<IssueSearchConfiguration>("/api/config/issue-search", { signal });
+export const saveIssueSearchConfiguration = (input: IssueSearchConfigurationUpdate) => jsonRequest<IssueSearchConfiguration>("/api/config/issue-search", "PUT", input);
+export const searchIssues = (query: string, signal: AbortSignal) => request<IssueSearchHit[]>("/api/issue-search", { method: "POST", body: JSON.stringify({ query }), signal });
 
 function appendFiles(form: FormData, files: File[]): void {
   for (const file of files) form.append("files", file, file.name);

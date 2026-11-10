@@ -8,6 +8,7 @@ import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
 import { SettingsView } from "./SettingsView";
 import { OverviewView } from "./OverviewView";
+import { IssueSearchDialog } from "./IssueSearchDialog";
 import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
 import type { SourcePanel } from "./CodeBrowser";
@@ -283,8 +284,25 @@ export function App(props: { initialView?: AppView } = {}) {
     });
     if (untrack(issueError) || changed) void refreshIssue(current.id, false).catch(() => undefined);
   });
+  const openIssueLink = (key: string) => {
+    if (!mayNavigate()) return false;
+    if (view() === "issues" && selectedId() === key) {
+      if (!issue() || issueError()) setIssueReloadToken((value) => value + 1);
+      return true;
+    }
+    const url = new URL(`/?issue=${encodeURIComponent(key)}`, window.location.origin);
+    window.history.pushState({ ...window.history.state, issuePilotNavigationIndex: ++navigationIndex, issuePilotView: "issues" }, "", url);
+    setSourceDirty(false);
+    setIssueEditDirty(false);
+    setKeepExternalSelection(true);
+    setDashboardTarget(key);
+    setSelectedId(key);
+    setView("issues");
+    return true;
+  };
   return (
     <ApplicationResourcesProvider>
+      <IssueSearchDialog onOpenIssue={openIssueLink} />
       <div class="app-shell">
         <a
           class="skip-link"
@@ -346,21 +364,7 @@ export function App(props: { initialView?: AppView } = {}) {
         >
           <Switch>
             <Match when={view() === "dashboard"}>
-              <ResourceBackedOverview
-                issueList={issueList}
-                onSelectIssue={(issueKey) => {
-                  if (!untrack(mayNavigate)) return;
-                  // User navigation becomes its own history entry so Back returns to the previous Issue.
-                  const url = new URL(`/?issue=${encodeURIComponent(issueKey)}`, window.location.origin);
-                  window.history.pushState({ ...window.history.state, issuePilotNavigationIndex: ++navigationIndex, issuePilotView: "issues" }, "", url);
-                  setSourceDirty(false);
-                  setIssueEditDirty(false);
-                  setKeepExternalSelection(true);
-                  setDashboardTarget(issueKey);
-                  setSelectedId(issueKey);
-                  setView("issues");
-                }}
-              />
+              <ResourceBackedOverview issueList={issueList} onSelectIssue={openIssueLink} />
             </Match>
             <Match when={view() === "issues"}>
               <ResourceBackedIssueQueue
@@ -442,16 +446,7 @@ export function App(props: { initialView?: AppView } = {}) {
                           setSourceDetailsOpen(typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 699px)").matches);
                           setSourceExpanded(true);
                         }}
-                        onOpenIssue={(issueKey) => {
-                          if (issueKey === selectedId() || !mayNavigate()) return;
-                          const url = new URL(`/?issue=${encodeURIComponent(issueKey)}`, window.location.origin);
-                          window.history.pushState({ ...window.history.state, issuePilotNavigationIndex: ++navigationIndex, issuePilotView: "issues" }, "", url);
-                          setIssueEditDirty(false);
-                          setKeepExternalSelection(true);
-                          setDashboardTarget(issueKey);
-                          setSelectedId(issueKey);
-                          setView("issues");
-                        }}
+                        onOpenIssue={openIssueLink}
                         onUpdated={async () => {
                           await refreshIssue(current().id, true);
                         }}

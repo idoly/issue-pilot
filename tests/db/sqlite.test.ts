@@ -64,6 +64,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0071_repository_groups",
       "0072_sls_scope_identity",
       "0073_index_issue_recovery",
+      "0074_issue_search_configuration",
     ],
   );
   const previousJournal = {

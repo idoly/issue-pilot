@@ -3788,3 +3788,20 @@ summary.agent-tool-head > svg {
     scroll-behavior: auto !important;
   }
 }
+
+.issue-search-results {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.issue-search-results li {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.issue-search-results span {
+  font-size: 12px;
+  color: #526d5c;
+}

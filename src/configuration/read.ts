@@ -35,13 +35,17 @@ function serviceContext(description: string, entries: readonly ServiceContextEnt
 type ConfigurationReader = Pick<Database, "select">;
 
 async function projectConfigurationCatalog(database: ConfigurationReader): Promise<ConfigurationCatalog> {
-  const [environmentRows, serviceRows, deploymentRows] = await Promise.all([
+  const [environmentRows, serviceRows, deploymentRows, [search]] = await Promise.all([
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
     database.select({ id: services.id, key: services.key, name: services.name }).from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
     database
       .select({ serviceId: serviceDeployments.serviceId, environmentId: serviceDeployments.environmentId })
       .from(serviceDeployments)
       .orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
+    database
+      .select({ enabled: sql<number>`json_extract(${schema.applicationSettings.issueSearch}, '$.enabled')` })
+      .from(schema.applicationSettings)
+      .where(eq(schema.applicationSettings.id, 1)),
   ]);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
   const deploymentsByServiceId = new Map<string, Array<{ environmentKey: string }>>();
@@ -53,6 +57,7 @@ async function projectConfigurationCatalog(database: ConfigurationReader): Promi
     deploymentsByServiceId.set(deployment.serviceId, grouped);
   }
   return {
+    ...(search?.enabled === 1 ? { issueSearchEnabled: true as const } : {}),
     environments: environmentRows.map(({ key, name }) => ({ key, name })),
     services: serviceRows.map((service) => ({ key: service.key, name: service.name, deployments: deploymentsByServiceId.get(service.id) ?? [] })),
   };

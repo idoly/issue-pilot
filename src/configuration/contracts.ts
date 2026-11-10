@@ -25,6 +25,7 @@ interface ServiceCatalogItem {
 }
 
 export interface ConfigurationCatalog {
+  issueSearchEnabled?: true;
   environments: EnvironmentOption[];
   services: ServiceCatalogItem[];
 }

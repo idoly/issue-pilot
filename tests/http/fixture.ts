@@ -97,7 +97,9 @@ export interface ApiFixture {
   cleanup(): Promise<void>;
 }
 
-export async function createApiFixture(options: { events?: AgentEventBus; dingtalkConnector?: McpConnector; modelCatalog?: AgentModelCatalog } = {}): Promise<ApiFixture> {
+export async function createApiFixture(
+  options: { events?: AgentEventBus; dingtalkConnector?: McpConnector; modelCatalog?: AgentModelCatalog; issueSearchFetch?: typeof fetch } = {},
+): Promise<ApiFixture> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
   const engine = new TestAgentController();
@@ -107,6 +109,7 @@ export async function createApiFixture(options: { events?: AgentEventBus; dingta
     engine,
     ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}),
     ...(options.events ? { events: options.events } : {}),
+    ...(options.issueSearchFetch ? { issueSearchFetch: options.issueSearchFetch } : {}),
     modelCatalog: options.modelCatalog ?? modelCatalog,
     logger: false,
   });
