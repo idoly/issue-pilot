@@ -68,7 +68,7 @@ API 的参数更新是带版本的完整覆盖，接入方应阅读[配置契约
 
 ### 工单语义搜索
 
-在「配置 → 参数 → 工单搜索」填写 Cloudflare Account ID 和具有 Workers AI Read 权限的 API Token，再启用。默认关闭，保存即生效，无需重启。Token 只在后端保存，留空保留已存值；更换账号需填写新 Token。关闭并勾选清除可删除已存 Token。
+在「配置 → 参数」的运行参数中填写 Cloudflare Account ID 和具有 Workers AI Read 权限的 API Token，勾选「启用工单搜索」并保存。未配置凭据时默认关闭；保存即生效，无需重启。Token 只在后端保存，留空保留已存值；更换账号需填写新 Token。关闭并勾选清除可删除已存 Token。
 
 [Cloudflare Workers AI 免费额度](https://developers.cloudflare.com/workers-ai/platform/pricing/)为每个账号每天 10,000 Neurons，UTC 00:00 重置。只用免费额度请保持 Workers Free，超额时 Cloudflare 会拒绝请求；Workers Paid 超额会计费。
 

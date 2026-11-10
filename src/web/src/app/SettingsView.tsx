@@ -80,8 +80,9 @@ export function SettingsView() {
           tabindex={0}
           hidden={selectedPanel() !== "parameters"}
         >
-          <ApplicationParametersView />
-          <IssueSearchSettings />
+          <ApplicationParametersView>
+            <IssueSearchSettings />
+          </ApplicationParametersView>
         </div>
       </Show>
       <Show when={visitedPanels().includes("services")}>

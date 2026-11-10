@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show, type ParentProps } from "solid-js";
 import { Button, Input, Select, Skeleton } from "../ui";
 import { errorMessage, loadApplicationParameters, updateApplicationParameters, type ApplicationParameterKey, type ApplicationParameterState, type ApplicationParameters } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
@@ -48,7 +48,7 @@ function parse(text: string, divisor: number, bounds: { minimum: number; maximum
 }
 
 /** Admin view of the parameters that apply without restart. Values save together so cross-field rules stay consistent. */
-export function ApplicationParametersView() {
+export function ApplicationParametersView(props: ParentProps) {
   const { currentUser } = useApplicationResources();
   const [state, setState] = createSignal<ApplicationParameterState | null>(null, { ownedWrite: true });
   const [numbers, setNumbers] = createSignal<Partial<Record<NumberKey, string>>>({}, { ownedWrite: true });
@@ -235,6 +235,7 @@ export function ApplicationParametersView() {
                 </Show>
               )}
             </For>
+            {props.children}
           </div>
         </Show>
       </Show>

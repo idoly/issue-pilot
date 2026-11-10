@@ -63,11 +63,6 @@ function SearchSettingsForm(props: { subject: string }) {
           {error()}
         </p>
       </Show>
-      <Show when={saved()}>
-        <p class="parameters-hint" role="status">
-          工单搜索配置已保存。
-        </p>
-      </Show>
       <Show
         when={state()}
         fallback={
@@ -79,42 +74,53 @@ function SearchSettingsForm(props: { subject: string }) {
         }
       >
         <form
+          class="search-parameter-fields"
           onSubmit={(event) => {
             event.preventDefault();
             void save();
           }}
         >
-          <div class="parameters-grid">
+          <label>
+            <span>
+              启用工单搜索
+              <small id="search-data-note">（查询和索引所需文本发送给 Cloudflare）</small>
+            </span>
+            <input
+              aria-label="启用工单搜索"
+              aria-describedby="search-data-note"
+              type="checkbox"
+              checked={enabled()}
+              disabled={saving()}
+              onChange={(event) => setEnabled(event.currentTarget.checked)}
+            />
+          </label>
+          <label>
+            <span>Cloudflare Account ID</span>
+            <Input value={accountId()} maxlength={32} disabled={saving()} onInput={(event) => setAccountId(event.currentTarget.value)} />
+          </label>
+          <label>
+            <span>Cloudflare API Token</span>
+            <PasswordInput
+              value={token()}
+              disabled={saving() || clearToken()}
+              placeholder={state()?.tokenConfigured ? "已配置，留空保留" : "Workers AI Read Token"}
+              maxlength={1024}
+              onInput={(event) => setToken(event.currentTarget.value)}
+            />
+          </label>
+          <Show when={state()?.tokenConfigured}>
             <label>
-              <span>启用工单搜索</span>
-              <input type="checkbox" checked={enabled()} disabled={saving()} onChange={(event) => setEnabled(event.currentTarget.checked)} />
+              <span>清除已保存的 Token</span>
+              <input type="checkbox" checked={clearToken()} disabled={saving()} onChange={(event) => setClearToken(event.currentTarget.checked)} />
             </label>
-            <label>
-              <span>Cloudflare Account ID</span>
-              <Input value={accountId()} maxlength={32} disabled={saving()} onInput={(event) => setAccountId(event.currentTarget.value)} />
-            </label>
-            <label>
-              <span>Cloudflare API Token</span>
-              <PasswordInput
-                value={token()}
-                disabled={saving() || clearToken()}
-                placeholder={state()?.tokenConfigured ? "已配置，留空保留" : "Workers AI Read Token"}
-                maxlength={1024}
-                onInput={(event) => setToken(event.currentTarget.value)}
-              />
-            </label>
-            <Show when={state()?.tokenConfigured}>
-              <label>
-                <span>清除已保存的 Token</span>
-                <input type="checkbox" checked={clearToken()} disabled={saving()} onChange={(event) => setClearToken(event.currentTarget.checked)} />
-              </label>
-            </Show>
-          </div>
-          <div class="user-management-header parameters-header">
-            <span>开启后，索引所需的工单标题和描述，以及用户输入的搜索词，会发送给 Cloudflare。索引由管理员显式更新。</span>
+          </Show>
+          <div>
             <Button htmlType="submit" type="primary" loading={saving()}>
               保存工单搜索配置
             </Button>
+            <Show when={saved()}>
+              <p role="status">工单搜索配置已保存。</p>
+            </Show>
           </div>
         </form>
       </Show>
@@ -125,13 +131,8 @@ function SearchSettingsForm(props: { subject: string }) {
 export function IssueSearchSettings() {
   const { currentUser } = useApplicationResources();
   return (
-    <section class="user-management-card parameters-card" aria-label="工单搜索">
-      <header class="user-management-header">
-        <strong>工单搜索</strong>
-      </header>
-      <Show when={currentUser()?.isAdmin ? currentUser()?.subject : undefined} keyed fallback={<p class="parameters-hint">只有管理人员可以修改工单搜索配置。</p>}>
-        {(subject) => <SearchSettingsForm subject={subject} />}
-      </Show>
-    </section>
+    <Show when={currentUser()?.isAdmin ? currentUser()?.subject : undefined} keyed>
+      {(subject) => <SearchSettingsForm subject={subject} />}
+    </Show>
   );
 }

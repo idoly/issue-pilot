@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
+  const { applicationParameterBounds, applicationParameterDefaults } = await import("../../../configuration/parameters");
   const { Blob } = await import("node:buffer");
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
@@ -92,6 +93,13 @@ vi.mock("../data/client", async (importOriginal) => {
     loadCatalog: vi.fn(async () => ({
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
+    })),
+    loadApplicationParameters: vi.fn(async () => ({
+      revision: 0,
+      overrides: {},
+      values: applicationParameterDefaults,
+      defaults: applicationParameterDefaults,
+      bounds: applicationParameterBounds,
     })),
     loadIssueSearchConfiguration: vi.fn(async () => ({ enabled: false, accountId: "", tokenConfigured: false, revision: 0 })),
     saveIssueSearchConfiguration: vi.fn<typeof actual.saveIssueSearchConfiguration>(),
@@ -307,10 +315,11 @@ describe("issue pilot workspace", () => {
     fireEvent.keyDown(window, shortcut);
     expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "参数" }));
-    const enabled = await screen.findByLabelText("启用工单搜索");
+    const parameters = within(await screen.findByRole("region", { name: "参数表单" }));
+    const enabled = await parameters.findByLabelText("启用工单搜索");
     await fireEvent.click(enabled);
-    await fireEvent.input(screen.getByLabelText("Cloudflare Account ID"), { target: { value: accountId } });
-    const secret = screen.getByLabelText("Cloudflare API Token") as HTMLInputElement;
+    await fireEvent.input(parameters.getByLabelText("Cloudflare Account ID"), { target: { value: accountId } });
+    const secret = parameters.getByLabelText("Cloudflare API Token") as HTMLInputElement;
     expect(secret.type).toBe("password");
     await fireEvent.input(secret, { target: { value: "fixture-token" } });
     vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...catalog, issueSearchEnabled: true });

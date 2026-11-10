@@ -553,6 +553,12 @@
   gap: 4px;
   font: 14px / 20px var(--app-font);
 }
+.search-parameter-fields {
+  display: contents;
+}
+.search-parameter-fields input[type="checkbox"] {
+  justify-self: start;
+}
 .parameters-grid label > span {
   color: #526d5c;
 }
