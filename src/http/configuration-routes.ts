@@ -186,23 +186,24 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
         if (error instanceof ApplicationParameterError) throw new ApiError(400, error.message);
         throw error;
       }
-      const { parameters, parametersChanged, search } = await database.db.transaction(async (transaction) => {
+      const { parameters, previousValues, search } = await database.db.transaction(async (transaction) => {
         const current = await loadApplicationParameterState(transaction);
         checkRevision(input.expectedRevision, current.revision);
         const search = input.issueSearch === undefined ? { settings: await loadIssueSearchSettings(transaction), changed: false } : await updateIssueSearchSettings(transaction, input.issueSearch);
-        if (isDeepStrictEqual(overrides, current.overrides)) return { parameters: current, parametersChanged: false, search };
+        if (isDeepStrictEqual(overrides, current.overrides)) return { parameters: current, previousValues: undefined, search };
         const revision = current.revision + 1;
         await saveApplicationParameters(transaction, overrides, revision);
-        return { parameters: { ...current, revision, overrides, values: resolveApplicationParameters(overrides) }, parametersChanged: true, search };
+        return { parameters: { ...current, revision, overrides, values: resolveApplicationParameters(overrides) }, previousValues: current.values, search };
       });
       if (search.changed) cancelActiveSearches();
-      if (parametersChanged) {
+      if (previousValues) {
         const { values } = parameters;
         installApplicationParameters(values);
-        engine.setMaxConcurrentIssues?.(values.maxConcurrentIssues);
-        workspaces.updatePolicy({ ...workspaceLifecyclePolicy(values), taskConcurrency: workspaces.policy.taskConcurrency });
+        if (values.maxConcurrentIssues !== previousValues.maxConcurrentIssues) engine.setMaxConcurrentIssues?.(values.maxConcurrentIssues);
+        const policy = workspaceLifecyclePolicy(values);
+        if (!isDeepStrictEqual(policy, workspaceLifecyclePolicy(previousValues))) workspaces.updatePolicy({ ...policy, taskConcurrency: workspaces.policy.taskConcurrency });
         // A failed sync is retried when the sandbox is next acquired; the saved values stay authoritative.
-        await applyIssueSandboxNetwork();
+        if (!isDeepStrictEqual(values.networkAllowedDomains, previousValues.networkAllowedDomains)) await applyIssueSandboxNetwork();
       }
       return { ...parameters, issueSearch: projectIssueSearchSettings(search.settings) };
     }),

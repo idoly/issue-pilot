@@ -24,6 +24,7 @@ vi.mock("./ApplicationResources", () => ({
 import { IssueWorkspace } from "./IssueWorkspace";
 
 const issue: IssueDetail = {
+  editVersion: "a".repeat(64),
   id: "ISSUE-20261018-001",
   title: "Synthetic scope",
   description: "",

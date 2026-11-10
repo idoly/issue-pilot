@@ -419,3 +419,35 @@ test("retains listen and cleanup failures and removes signal handlers", async (c
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("normal startup and close release process handlers and reuse saved model selection without discovery", async (context) => {
+  const fixture = await createApiFixture();
+  await fixture.stop();
+  const before = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+  const listen = Server.prototype.listen;
+  context.mock.method(Server.prototype, "listen", function (this: Server, ...args: Parameters<Server["listen"]>) {
+    if (typeof args[0] === "object" && args[0] && "port" in args[0]) args[0] = { ...args[0], port: 0 };
+    return Reflect.apply(listen, this, args);
+  });
+  let app: FastifyInstance | undefined;
+  try {
+    app = await startApi({
+      stateRoot: fixture.root,
+      databaseFile: fixture.databaseFile,
+      engine: new StartupEngine(),
+      logger: false,
+      modelCatalog: {
+        list: async () => {
+          throw new Error("startup_must_not_discover_models");
+        },
+      },
+    });
+    assert.deepEqual((await app.inject("/health")).json(), { ok: true });
+    await app.close();
+    assert.deepEqual([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")], before);
+  } finally {
+    await app?.close();
+    context.mock.restoreAll();
+    await fixture.cleanup();
+  }
+});

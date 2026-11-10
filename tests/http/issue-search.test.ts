@@ -183,6 +183,55 @@ test("expands a legacy index to cover the end of long descriptions and ranks eac
   assert.equal((await legacy.client.execute("SELECT count(*) AS count FROM issue_vectors")).rows[0]?.count, 2);
 });
 
+test("search passes more than forty stale candidates without repeating embeddings or keeping its ranking", async (t) => {
+  let calls = 0;
+  const f = await createApiFixture({
+    issueSearchFetch: async () => {
+      calls++;
+      return output([vector(0)]);
+    },
+  });
+  const db = openDatabase(f.databaseFile);
+  const vectors = openDatabase(join(f.root, "vectors.db"));
+  t.after(async () => {
+    vectors.close();
+    db.close();
+    await f.cleanup();
+  });
+  await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } });
+  await createService(f.app, "Stale candidates");
+  for (let i = 0; i < 46; i++) await createIssue(f.app, "stale-candidates", "test", i === 45 ? "Still current" : "Changed issue");
+  await vectors.client.execute("CREATE TABLE issue_vectors (issue_id TEXT PRIMARY KEY, digest TEXT NOT NULL, embedding BLOB NOT NULL)");
+  const rows = await db.db.select().from(issues);
+  const valid = rows.find(({ title }) => title === "Still current")!;
+  await vectors.client.batch(
+    rows.map((row) => {
+      const embedding = Buffer.alloc(1024 * 4);
+      embedding.writeFloatLE(1, row.id === valid.id ? 4 : 0);
+      return { sql: "INSERT INTO issue_vectors VALUES (?, ?, ?)", args: [row.id, createHash("sha256").update([row.title, row.description].join("\n\n").trim()).digest("hex"), embedding] };
+    }),
+    "write",
+  );
+  await db.client.execute({ sql: "UPDATE issues SET description = 'Edited after indexing' WHERE id <> ?", args: [valid.id] });
+  const query = async () => {
+    const result = await f.app.inject({ method: "POST", url: search, headers: admin, payload: { query: "find current" } });
+    assert.equal(result.statusCode, 200, result.body);
+    assert.deepEqual(
+      result.json().map((hit: { key: string }) => hit.key),
+      [valid.key],
+    );
+  };
+  await query();
+  assert.equal(calls, 1);
+  await Promise.all([query(), query()]);
+  assert.equal(calls, 3);
+  assert.deepEqual(
+    (await vectors.client.execute("SELECT name FROM sqlite_master WHERE type = 'table'")).rows.map(({ name }) => name),
+    ["issue_vectors"],
+  );
+  assert.equal((await vectors.client.execute("SELECT count(*) AS total FROM issue_vectors")).rows[0]?.total, 46);
+});
+
 test("credential changes reuse the index, invalid responses keep existing vectors, and disabling aborts a query", async (t) => {
   let mode: "ok" | "invalid" | "wait" = "ok";
   const requests: Array<{ url: string; authorization: string | null }> = [];
@@ -254,6 +303,66 @@ test("credential changes reuse the index, invalid responses keep existing vector
   const cancelled = await pending;
   assert.equal(cancelled.statusCode, 408, cancelled.body);
   assert.deepEqual(await json(cancelled), { error: "issue_search_cancelled" });
+});
+
+test("a disconnected search does not spend an embedding request", { timeout: 10_000 }, async () => {
+  let enter!: () => void, disconnect!: () => void, release!: () => void, complete!: (status: number) => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const disconnected = new Promise<void>((resolve) => {
+    disconnect = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const completed = new Promise<number>((resolve) => {
+    complete = resolve;
+  });
+  let calls = 0;
+  const f = await createApiFixture({
+    issueSearchFetch: async () => {
+      calls++;
+      return output([vector(0)]);
+    },
+  });
+  f.app.addHook("preHandler", async (request, reply) => {
+    if (request.routeOptions.url !== search) return;
+    reply.raw.once("close", disconnect);
+    enter();
+    await gate;
+  });
+  f.app.addHook("onSend", async (request, reply) => {
+    if (request.routeOptions.url === search) complete(reply.statusCode);
+  });
+  const controller = new AbortController();
+  try {
+    assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } })).statusCode, 200);
+    await createService(f.app, "Cancelled search");
+    await createIssue(f.app, "cancelled-search");
+    assert.equal((await f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} })).statusCode, 200);
+    assert.equal(calls, 1);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    const request = fetch(address + search, {
+      method: "POST",
+      headers: { ...admin, "content-type": "application/json" },
+      body: JSON.stringify({ query: "test" }),
+      signal: controller.signal,
+    });
+    const cancelled = assert.rejects(request, { name: "AbortError" });
+    await entered;
+    controller.abort();
+    await cancelled;
+    await disconnected;
+    release();
+    const status = await completed;
+    assert.equal(calls, 1);
+    assert.equal(status, 408);
+  } finally {
+    controller.abort();
+    release();
+    await f.cleanup();
+  }
 });
 
 test("initial indexing resumes at the next Issue after each bounded provider batch", async (t) => {

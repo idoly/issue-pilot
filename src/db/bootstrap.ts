@@ -53,7 +53,11 @@ export async function openApplicationDatabase(file?: string, connect: typeof ope
     }
     return database;
   } catch (error) {
-    await database.close();
+    try {
+      await database.close();
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "database_startup_cleanup_failed");
+    }
     throw error;
   }
 }

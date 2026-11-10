@@ -96,7 +96,7 @@ Root defaults below are not the installation's effective values:
 
 [parameters.ts](../../src/configuration/parameters.ts) validates bounds: concurrency 1–64, retention one hour–365 days, nonzero maintenance at least one minute, nonzero high water greater than target, lists at most 100 with no duplicates. API units are integer milliseconds/bytes; display conversion must not round unchanged fields.
 
-Persist first, then replace the process snapshot and notify Engine/maintenance/network. Do not reserve every Issue, close every session or replay in-flight requests. MCP budgets use the [SDK getter patch](../../patches/README.md#service-mcp-request-budgets). Ports, state, time zone and hard budgets are not hot parameters. Regression: [application-parameters.test.ts](../../tests/http/application-parameters.test.ts).
+Persist first, then replace the process snapshot. Update the Engine limit, workspace policy or sandbox allowlist only when its effective values change. The sandbox reads network mode from the snapshot on each decision. An unrelated edit does not invalidate workspace measurements. Do not reserve every Issue, close every session or replay in-flight requests. MCP budgets use the [SDK getter patch](../../patches/README.md#service-mcp-request-budgets). Ports, state, time zone and hard budgets are not hot parameters. Regression: [application-parameters.test.ts](../../tests/http/application-parameters.test.ts).
 
 ## Issue network access
 

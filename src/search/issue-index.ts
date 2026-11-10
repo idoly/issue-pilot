@@ -190,28 +190,36 @@ export class IssueSearchIndex {
       signal.throwIfAborted();
       const [vector] = await issueEmbeddings(settings, { query }, signal, this.fetchEmbeddings);
       signal.throwIfAborted();
-      // Rank distinct Issues by their closest chunk; the same query also reads the original one-vector table.
-      const candidates = await client.execute({
-        sql: "SELECT issue_id, digest FROM issue_vectors GROUP BY issue_id, digest ORDER BY MIN(vector_distance_cos(embedding, ?)), issue_id LIMIT 40",
+      // Compute distances once. SQLite assigns consecutive rowids in SELECT order; only IDs/digests
+      // are materialized, and closing this connection removes the temporary ranking.
+      await client.execute({
+        sql: "CREATE TEMP TABLE ranked_issues AS SELECT issue_id, digest FROM issue_vectors GROUP BY issue_id, digest ORDER BY MIN(vector_distance_cos(embedding, ?)), issue_id, digest",
         args: [vector!],
       });
-      if (!candidates.rows.length) return [];
-      const rows = await this.database
-        .select({ ...documentFields, key: issues.key, status: issues.status, assignee: sql<string | null>`coalesce(${subjects.displayName}, ${issues.assigneeSubject})` })
-        .from(issues)
-        .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
-        .where(
-          inArray(
-            issues.id,
-            candidates.rows.map((row) => String(row.issue_id)),
-          ),
-        );
-      const current = new Map(rows.map((row) => [row.id, row]));
       const hits: IssueSearchHit[] = [];
-      for (const candidate of candidates.rows) {
-        const issue = current.get(String(candidate.issue_id));
-        if (issue && digest(document(issue)) === candidate.digest) hits.push({ key: issue.key, title: issue.title, status: issue.status, assignee: issue.assignee });
-        if (hits.length === 10) break;
+      let position = 0;
+      while (hits.length < 10) {
+        await verify();
+        signal.throwIfAborted();
+        const candidates = await client.execute({ sql: "SELECT rowid AS position, issue_id, digest FROM temp.ranked_issues WHERE rowid > ? ORDER BY rowid LIMIT 40", args: [position] });
+        if (!candidates.rows.length) break;
+        const rows = await this.database
+          .select({ ...documentFields, key: issues.key, status: issues.status, assignee: sql<string | null>`coalesce(${subjects.displayName}, ${issues.assigneeSubject})` })
+          .from(issues)
+          .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
+          .where(
+            inArray(
+              issues.id,
+              candidates.rows.map((row) => String(row.issue_id)),
+            ),
+          );
+        const current = new Map(rows.map((row) => [row.id, row]));
+        for (const candidate of candidates.rows) {
+          const issue = current.get(String(candidate.issue_id));
+          if (issue && digest(document(issue)) === candidate.digest) hits.push({ key: issue.key, title: issue.title, status: issue.status, assignee: issue.assignee });
+          if (hits.length === 10) break;
+        }
+        position = Number(candidates.rows.at(-1)!.position);
       }
       return hits;
     } finally {

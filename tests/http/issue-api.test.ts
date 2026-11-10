@@ -10,6 +10,71 @@ import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
 
+test("concurrent editors cannot overwrite metadata, CC or attachment changes with an old version", async () => {
+  const f = await createApiFixture();
+  const database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "Edit versions");
+    const created = await createIssue(f.app, "edit-versions");
+    await database.db
+      .update(issues)
+      .set({ status: "resolved", resolvedAt: new Date() })
+      .where(eq(issues.key, String(created.id)));
+    const url = `/api/issues/${created.id}`;
+    const detail = async () => (await f.app.inject({ url })).json();
+    const input = { title: "Edited", description: "Draft", priority: "p2", assigneeSubject: null, ccSubjects: [] };
+    const save = async (expectedEditVersion: string, extra: object = {}) => {
+      f.engine.running.clear();
+      return f.app.inject({ method: "PATCH", url, payload: { ...input, expectedEditVersion, ...extra } });
+    };
+    const initial = await detail();
+    assert.match(initial.editVersion, /^[0-9a-f]{64}$/);
+    f.engine.running.clear();
+    const writesBefore = f.engine.enqueued.length;
+    const results = await Promise.all([
+      f.app.inject({ method: "PATCH", url, payload: { ...input, expectedEditVersion: initial.editVersion, title: "First editor" } }),
+      f.app.inject({ method: "PATCH", url, payload: { ...input, expectedEditVersion: initial.editVersion, title: "Second editor" } }),
+    ]);
+    assert.deepEqual(results.map(({ statusCode }) => statusCode).sort(), [200, 409]);
+    assert.equal(results.find(({ statusCode }) => statusCode === 409)!.json().error, "issue_edit_conflict");
+    assert.equal(f.engine.enqueued.length, writesBefore);
+    assert.equal(f.engine.closedSessions.length, 1);
+    const current = await detail();
+    assert.notEqual(current.editVersion, initial.editVersion);
+    // Background progress/comments change timestamps, not the edited state.
+    await database.db
+      .update(issues)
+      .set({ updatedAt: new Date(1_000) })
+      .where(eq(issues.key, String(created.id)));
+    await f.app.inject({ method: "POST", url: url + "/comments", payload: { body: "Concurrent comment" } });
+    assert.equal((await detail()).editVersion, current.editVersion);
+    const ccSubject = current.reporter.subject;
+    assert.equal((await save(current.editVersion, { ccSubjects: [ccSubject] })).statusCode, 200);
+    const withCc = await detail();
+    assert.equal((await save(current.editVersion)).statusCode, 409);
+    assert.equal((await detail()).ccRecipients[0].subject, ccSubject);
+
+    const form = new FormData();
+    form.append("issue", JSON.stringify({ ...input, ccSubjects: [ccSubject], expectedEditVersion: withCc.editVersion }));
+    form.append("attachments", new Blob(["saved evidence"], { type: "text/plain" }), "evidence.txt");
+    const request = new Request("http://fixture.test", { method: "PATCH", body: form });
+    f.engine.running.clear();
+    const uploaded = await f.app.inject({ method: "PATCH", url, headers: { "content-type": request.headers.get("content-type")! }, payload: Buffer.from(await request.arrayBuffer()) });
+    assert.equal(uploaded.statusCode, 200, uploaded.body);
+    const withAttachment = await detail();
+    assert.notEqual(withAttachment.editVersion, withCc.editVersion);
+    const closedBefore = f.engine.closedSessions.length;
+    const conflict = await save(withCc.editVersion, { removedAttachmentIds: [withAttachment.attachments[0].id], resetSession: true });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.json().error, "issue_edit_conflict");
+    assert.equal(f.engine.closedSessions.length, closedBefore);
+    assert.deepEqual((await detail()).attachments, withAttachment.attachments);
+  } finally {
+    database.close();
+    await f.cleanup();
+  }
+});
+
 test("allocates numeric Issue sequences beyond three digits within the current date", async () => {
   const fixture = await createApiFixture();
   const database = openDatabase(fixture.databaseFile);

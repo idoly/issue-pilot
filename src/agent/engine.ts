@@ -21,7 +21,7 @@ import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { cancelPendingAgentMessages, appendQueuedAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage, type AgentMessageScope } from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
-import { createPrivateSessionManager, assertSessionFileComplete, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
+import { createPrivateSessionManager, assertSessionFileComplete, isIssueSessionPath, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
@@ -694,6 +694,7 @@ export class AgentEngine implements AgentController {
     if (active) return active;
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
     const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
+    if (binding && !isIssueSessionPath(binding.sessionFile, sessionDirectory)) throw new Error("agent_session_file_incomplete");
     const existingFile = binding && (await pathExists(binding.sessionFile));
     if (binding && !existingFile) throw new Error("agent_session_file_missing");
     if (existingFile) {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { eq } from "drizzle-orm";
+import { AgentEngine } from "../../src/agent/engine.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
@@ -9,6 +11,78 @@ import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues } from "../../src/db/schema.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
+
+test("history, SSE and MCP do not follow a replaced Issue directory", { timeout: 10_000 }, async () => {
+  const f = await createApiFixture();
+  const database = openDatabase(f.databaseFile);
+  const client = new Client({ name: "session-directory-fixture", version: "1" });
+  try {
+    await createService(f.app, "Session path");
+    const issue = await createIssue(f.app, "session-path");
+    const issueId = f.engine.enqueued.at(-1)!;
+    const root = issueRoot(f.root, String(issue.id));
+    const moved = join(f.root, "moved-issue");
+    const manager = await createPrivateSessionManager(root, root);
+    manager.appendCustomEntry("issue-pilot-user", { message: "Fixture transcript" });
+    const file = manager.getSessionFile()!;
+    await database.db.insert(agentSessions).values({ issueId, sessionFile: file, workspacePath: root });
+    await rename(root, moved);
+    await symlink(moved, root);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    const route = `${address}/api/issues/${issue.id}`;
+    const get = (suffix: string) => fetch(`${route}/${suffix}`, { signal: AbortSignal.timeout(3_000) });
+    for (const suffix of ["sessions", `sessions/${manager.getSessionId()}`, "agent-stream"]) {
+      const response = await get(suffix);
+      if (response.ok) await response.body?.cancel();
+      assert.equal(response.status, 500, suffix);
+      assert.deepEqual(await response.json(), { error: "agent_session_file_incomplete" });
+    }
+    await client.connect(new StreamableHTTPClientTransport(new URL(address + "/mcp")));
+    const result = await client.callTool({ name: "issue_conversation", arguments: { key: issue.id } });
+    assert.equal(result.isError, true);
+    assert.match(JSON.stringify(result.content), /agent_session_file_incomplete/);
+    assert.match(await readFile(join(moved, basename(file)), "utf8"), /Fixture transcript/);
+    await unlink(root);
+    await rename(moved, root);
+    const response = await get(`sessions/${manager.getSessionId()}`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Fixture transcript/);
+  } finally {
+    await client.close();
+    database.close();
+    await f.cleanup();
+  }
+});
+
+test("a cross-Issue session binding cannot be replayed or receive a message", { timeout: 10_000 }, async () => {
+  const f = await createApiFixture();
+  const database = openDatabase(f.databaseFile);
+  const engine = new AgentEngine(database.db, f.root);
+  try {
+    await createService(f.app, "Session binding");
+    const issue = await createIssue(f.app, "session-binding");
+    const issueId = f.engine.enqueued.at(-1)!;
+    const otherIssue = await createIssue(f.app, "session-binding");
+    const root = issueRoot(f.root, String(issue.id));
+    const otherRoot = issueRoot(f.root, String(otherIssue.id));
+    const manager = await createPrivateSessionManager(otherRoot, otherRoot);
+    const file = manager.getSessionFile()!;
+    const original = await readFile(file);
+    await database.db.insert(agentSessions).values({ issueId, sessionFile: file, workspacePath: root });
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: AbortSignal.timeout(3_000) });
+    if (response.ok) await response.body?.cancel();
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: "agent_session_file_incomplete" });
+    await assert.rejects(engine.send(issueId, "must not enter the other transcript"), { message: "agent_session_file_incomplete" });
+    assert.deepEqual(await readFile(file), original);
+    assert.equal((await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issueId)))[0]?.sessionFile, file);
+  } finally {
+    await engine.close();
+    database.close();
+    await f.cleanup();
+  }
+});
 
 for (const channel of ["MCP", "SSE"] as const)
   for (const damage of ["empty", "blank", "truncated", "malformed"] as const)

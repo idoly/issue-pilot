@@ -2,16 +2,18 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/te
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueDetail } from "../data/client";
-const state = vi.hoisted(() => ({ update: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
+const state = vi.hoisted(() => ({ update: vi.fn(), read: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   updateIssue: state.update,
+  getIssue: state.read,
 }));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({ currentUser: () => state.user(), people: () => [], peopleError: () => "", catalog: () => ({ environments: [], services: [] }) }),
 }));
 import { IssueWorkspace } from "./IssueWorkspace";
 const issue: IssueDetail = {
+  editVersion: "a".repeat(64),
   id: "ISSUE-20261018-001",
   title: "Synthetic scope",
   description: "",
@@ -30,6 +32,7 @@ const issue: IssueDetail = {
 };
 beforeEach(() => {
   state.update.mockResolvedValue(issue);
+  state.read.mockResolvedValue(issue);
 });
 afterEach(() => {
   cleanup();
@@ -64,7 +67,36 @@ it("preserves drafts and does not reset when saving fails", async () => {
   expect((await within(dialog).findByRole("alert")).textContent).toBe("保存失败");
   expect(within(dialog).getByLabelText("编辑工单标题")).toHaveProperty("value", "保留草稿");
 });
-it("reports partial success and retries without uploading saved attachments twice", async () => {
+
+it("keeps the editor version across background refresh and preserves a conflicted draft until explicit reload", async () => {
+  const latest = { ...issue, title: "Another editor's title", editVersion: "b".repeat(64) };
+  const [current, setCurrent] = createSignal(issue, { ownedWrite: true });
+  state.update.mockRejectedValueOnce(new Error("issue_edit_conflict"));
+  state.read.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(latest);
+  render(() => <IssueWorkspace issue={current()} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑工单" });
+  fireEvent.input(within(dialog).getByLabelText("编辑工单标题"), { target: { value: "My draft" } });
+  const file = new File(["draft evidence"], "draft.txt", { type: "text/plain" });
+  await fireEvent.change(within(dialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
+  setCurrent(latest);
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已被修改");
+  expect(state.update.mock.calls[0]?.[1]).toMatchObject({ title: "My draft", expectedEditVersion: issue.editVersion });
+  expect(within(dialog).getByLabelText("编辑工单标题")).toHaveProperty("value", "My draft");
+  expect(within(dialog).getByText("draft.txt")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "重新载入（放弃草稿）" }));
+  await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("读取失败"));
+  expect(within(dialog).getByText("draft.txt")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "重新载入（放弃草稿）" }));
+  await waitFor(() => expect(within(dialog).getByLabelText("编辑工单标题")).toHaveProperty("value", latest.title));
+  expect(within(dialog).queryByText("draft.txt")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.update).toHaveBeenCalledTimes(2));
+  expect(state.update.mock.calls[1]?.[1]).toMatchObject({ title: latest.title, expectedEditVersion: latest.editVersion });
+  expect(state.update.mock.calls[1]?.[3]).toEqual([]);
+});
+it("reloads after partial success without submitting the saved edit again", async () => {
   state.update.mockRejectedValueOnce(new Error("issue_saved_session_reset_failed"));
   const updated = vi.fn(async () => {}),
     dialog = await open(updated);
@@ -73,10 +105,13 @@ it("reports partial success and retries without uploading saved attachments twic
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存，但会话重置失败");
   expect(state.update.mock.calls[0]![3]).toEqual([file]);
-  // The server committed the edits, so the retry must not upload the same file again.
-  fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
+  expect(within(dialog).queryByRole("button", { name: "重置" })).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "保存" })).toBeNull();
+  expect(within(dialog).queryByLabelText("编辑工单选择附件")).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "重新读取" }));
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
-  expect(state.update.mock.calls[1]![3]).toEqual([]);
+  expect(state.update).toHaveBeenCalledOnce();
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
 });
 it("saves normally without reading or resetting the session", async () => {
   const updated = vi.fn(async () => {}),
@@ -93,13 +128,19 @@ for (const busy of [true, false])
     expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false);
   });
 it("reports a completed reset separately from a failed page refresh", async () => {
-  const updated = vi.fn(async () => {
-      throw new Error("刷新失败");
-    }),
+  const updated = vi.fn(async () => {}).mockRejectedValueOnce(new Error("网络错误")),
     dialog = await open(updated);
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存并重置，但刷新失败");
   expect(updated).toHaveBeenCalledOnce();
+  fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+  const reopened = await screen.findByRole("dialog", { name: "编辑工单" });
+  expect(within(reopened).queryByRole("button", { name: "保存" })).toBeNull();
+  fireEvent.click(within(reopened).getByRole("button", { name: "重新读取" }));
+  await waitFor(() => expect(updated).toHaveBeenCalledTimes(2));
+  expect(state.update).toHaveBeenCalledOnce();
 });
 for (const change of ["identity", "issue"] as const)
   for (const failure of ["partial save", "refresh"] as const)

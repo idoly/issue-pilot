@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { rename } from "node:fs/promises";
 import path from "node:path";
 
@@ -49,6 +49,26 @@ import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
+
+/** Version only the edited state; Agent progress and new comments must not invalidate a draft. */
+function issueEditVersion(issue: typeof issues.$inferSelect, attachments: readonly { id: string }[], ccSubjects: readonly string[]): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        issue.id,
+        issue.title,
+        issue.description,
+        issue.priority,
+        issue.assigneeSubject,
+        issue.serviceId,
+        issue.environmentId,
+        issue.type,
+        attachments.map(({ id }) => id).sort(),
+        [...ccSubjects].sort(),
+      ]),
+    )
+    .digest("hex");
+}
 
 function isoDate(value: Date | null | undefined): string | undefined {
   return value?.toISOString();
@@ -373,6 +393,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const { input, attachments: pendingAttachments } = await readIssueInput(request);
     const failures: unknown[] = [];
     try {
+      const expectedEditVersion = input.expectedEditVersion;
+      if (expectedEditVersion !== undefined && (typeof expectedEditVersion !== "string" || !/^[0-9a-f]{64}$/.test(expectedEditVersion))) throw new ApiError(400, "invalid_issue_edit_version");
       if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new ApiError(400, "invalid_reset_session");
       // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
       const resetSession = input.resetSession === true;
@@ -383,6 +405,19 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         runIssueExclusive(engine, [issue.id], async (reservation) => {
           const editorSubject = await ensureCurrentSubject(database, request);
           const currentIssue = await requireIssue(database, issue.key);
+          const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
+          if (expectedEditVersion !== undefined) {
+            const recipients = await database.db.select({ subject: issueCcRecipients.subject }).from(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
+            if (
+              expectedEditVersion !==
+              issueEditVersion(
+                currentIssue,
+                currentAttachments,
+                recipients.map(({ subject }) => subject),
+              )
+            )
+              throw new ApiError(409, "issue_edit_conflict");
+          }
           if (resetSession) {
             await requireDeveloper(database, request);
             if (currentIssue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
@@ -395,7 +430,6 @@ export function registerIssueRoutes(context: ApiRouteContext) {
             parseIssueMetadataInput(input),
           ]);
           if (!issueEnvironment || !issueService) throw new ApiError(409, "issue_scope_not_found");
-          const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
           const removedAttachmentIdSet = new Set(removedAttachmentIds);
           const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
           if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
@@ -587,6 +621,11 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const sourceAvailable = Boolean(workspace?.runtimeReady && repositoryState !== "invalid" && (await pathExists(issueRoot(stateRoot, issue.key))));
     return {
       ...summary,
+      editVersion: issueEditVersion(
+        issue,
+        attachmentRows,
+        ccRows.map(({ person }) => person.subject),
+      ),
       description: issue.description,
       repositories: repositoryRows.map((repository) => ({
         name: repositoryNames.get(repository.url) ?? "",

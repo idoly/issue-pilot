@@ -10,6 +10,7 @@ import {
   attachmentUrl,
   createIssue,
   errorMessage,
+  getIssue,
   isWorkspaceBusy,
   issueScopeForWorkMode,
   issueWorkMode,
@@ -45,7 +46,6 @@ const workspaceErrorMessages: Record<string, string> = {
   issue_already_running: "工单正在处理，请等待结束后重置。",
   invalid_subject: "处理人或抄送人包含已停用的用户，请重新选择后保存。",
   resolved_issue_cannot_reset_session: "请先重开工单。",
-  issue_saved_session_reset_failed: "工单已保存，但会话重置失败，请重试重置。",
   sls_credentials_not_configured: "尚未配置 SLS 凭据，请在用户配置中设置个人或共享 SLS 凭据后重试。",
   personal_sls_credentials_incomplete: "个人 SLS 凭据不完整，请重新设置完整凭据后重试。",
   model_api_key_not_configured: "尚未配置模型 API Key，请在用户配置中设置个人或共享 API Key 后重试。",
@@ -120,6 +120,8 @@ export function IssueWorkspace(props: {
 }) {
   const { catalog, people, currentUser, peopleError } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
+  const [editBase, setEditBase] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
+  const [editConflict, setEditConflict] = createSignal(false, { ownedWrite: true });
   const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
   const [editDescription, setEditDescription] = createSignal("", { ownedWrite: true });
   const [editPriority, setEditPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
@@ -129,6 +131,7 @@ export function IssueWorkspace(props: {
   const [removedAttachmentIds, setRemovedAttachmentIds] = createSignal<string[]>([], { ownedWrite: true });
   const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
   const [editResetting, setEditResetting] = createSignal(false, { ownedWrite: true });
+  const [editCommitted, setEditCommitted] = createSignal("", { ownedWrite: true });
   const [editError, setEditError] = createSignal("", { ownedWrite: true });
   const [retrying, setRetrying] = createSignal(false, { ownedWrite: true });
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
@@ -170,10 +173,13 @@ export function IssueWorkspace(props: {
       if (!previous || (context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role)) return;
       issueGeneration += 1;
       setEditOpen(false);
+      setEditBase(null);
+      setEditConflict(false);
       setEditAttachments([]);
       setRemovedAttachmentIds([]);
       setEditSaving(false);
       setEditResetting(false);
+      setEditCommitted("");
       setEditError("");
       setRetrying(false);
       setRetryError("");
@@ -198,29 +204,53 @@ export function IssueWorkspace(props: {
     },
   );
   // Navigation away discards the edit dialog; the host warns while these fields differ from the Issue.
-  const editDirty = () =>
-    editOpen() &&
-    (editTitle().trim() !== props.issue.title ||
-      editDescription().trim() !== props.issue.description ||
-      editPriority() !== props.issue.priority ||
-      editAssignee() !== props.issue.assigneeSubject ||
-      editCc().join("\0") !== (props.issue.ccRecipients ?? []).map((person) => person.subject).join("\0") ||
-      editAttachments().length > 0 ||
-      removedAttachmentIds().length > 0);
+  const editDirty = () => {
+    const base = editBase();
+    return Boolean(
+      editOpen() &&
+        !editCommitted() &&
+        base &&
+        (editTitle().trim() !== base.title ||
+          editDescription().trim() !== base.description ||
+          editPriority() !== base.priority ||
+          editAssignee() !== base.assigneeSubject ||
+          editCc().join("\0") !== (base.ccRecipients ?? []).map((person) => person.subject).join("\0") ||
+          editAttachments().length > 0 ||
+          removedAttachmentIds().length > 0),
+    );
+  };
   createEffect(editDirty, (dirty) => {
     props.onEditDirtyChange?.(dirty);
   });
   onCleanup(() => props.onEditDirtyChange?.(false));
-  const openEditor = () => {
-    setEditTitle(props.issue.title);
-    setEditDescription(props.issue.description);
-    setEditPriority(props.issue.priority);
-    setEditAssignee(props.issue.assigneeSubject);
-    setEditCc((props.issue.ccRecipients ?? []).map((person) => person.subject));
+  const initializeEditor = (issue: IssueDetail) => {
+    setEditBase(issue);
+    setEditConflict(false);
+    setEditTitle(issue.title);
+    setEditDescription(issue.description);
+    setEditPriority(issue.priority);
+    setEditAssignee(issue.assigneeSubject);
+    setEditCc((issue.ccRecipients ?? []).map((person) => person.subject));
     setEditAttachments([]);
     setRemovedAttachmentIds([]);
     setEditError("");
+  };
+  const openEditor = () => {
+    if (!editCommitted()) initializeEditor(props.issue);
     setEditOpen(true);
+  };
+  const reloadEditDraft = async () => {
+    if (editSaving()) return;
+    const generation = issueGeneration;
+    setEditSaving(true);
+    try {
+      const latest = await getIssue(props.issue.id);
+      if (generation === issueGeneration) initializeEditor(latest);
+    } catch (error) {
+      if (generation === issueGeneration) setEditError(`读取失败：${errorMessage(error)}。草稿仍保留。`);
+    } finally {
+      if (generation === issueGeneration) setEditSaving(false);
+    }
   };
   const resetDisabled = () => currentUser()?.role !== "developer" || Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status);
   const closeEditor = () => {
@@ -228,36 +258,64 @@ export function IssueWorkspace(props: {
     setRemovedAttachmentIds([]);
     setEditOpen(false);
   };
+  const markEditCommitted = (message: string) => {
+    setEditCommitted(message);
+    setRemovedAttachmentIds([]);
+    setEditAttachments([]);
+  };
+  const refreshSavedIssue = async (generation: number) => {
+    setEditError("");
+    try {
+      await props.onUpdated();
+      if (issueGeneration === generation) {
+        closeEditor();
+        setEditCommitted("");
+      }
+    } catch (error) {
+      if (issueGeneration === generation) setEditError(`但刷新失败：${errorMessage(error)}`);
+    }
+  };
+  const retryEditRefresh = async () => {
+    if (editSaving() || !editCommitted()) return;
+    const generation = issueGeneration;
+    setEditSaving(true);
+    try {
+      await refreshSavedIssue(generation);
+    } finally {
+      if (issueGeneration === generation) setEditSaving(false);
+    }
+  };
   const saveIssue = async (reset = false) => {
-    if (editSaving() || !editTitle().trim() || (reset && resetDisabled())) return;
+    if (editSaving() || editCommitted() || !editTitle().trim() || (reset && resetDisabled())) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
-    const input = { title: editTitle().trim(), description: editDescription().trim(), priority: editPriority(), assigneeSubject: editAssignee(), ccSubjects: [...editCc()] };
+    const input = {
+      title: editTitle().trim(),
+      description: editDescription().trim(),
+      priority: editPriority(),
+      assigneeSubject: editAssignee(),
+      ccSubjects: [...editCc()],
+      expectedEditVersion: editBase()?.editVersion,
+    };
     const removals = [...removedAttachmentIds()];
     const additions = [...editAttachments()];
     setEditSaving(true);
     setEditResetting(reset);
     setEditError("");
-    let saved = false;
     try {
       // Save and reset are one reservation on the server; sending them separately would queue a metadata round first.
       await updateIssue(issueId, input, removals, additions, reset);
-      saved = true;
       if (issueGeneration !== generation) return;
-      setRemovedAttachmentIds([]);
-      setEditAttachments([]);
-      await props.onUpdated();
-      if (issueGeneration === generation) setEditOpen(false);
+      markEditCommitted(reset ? "工单已保存并重置" : "工单已保存");
+      await refreshSavedIssue(generation);
     } catch (error) {
       if (issueGeneration !== generation) return;
       const code = errorMessage(error);
-      const message = workspaceErrorMessages[code] ?? code;
-      // A committed edit must not be resent with its files; the server already stored them.
-      if (saved || code === "issue_saved_session_reset_failed") {
-        setRemovedAttachmentIds([]);
-        setEditAttachments([]);
-      }
-      setEditError(saved ? `工单已保存${reset ? "并重置" : ""}，但刷新失败：${message}。请关闭编辑窗口后刷新页面。` : message);
+      if (code === "issue_saved_session_reset_failed") markEditCommitted("工单已保存，但会话重置失败");
+      else if (code === "issue_edit_conflict") {
+        setEditConflict(true);
+        setEditError("工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。");
+      } else setEditError(workspaceErrorMessages[code] ?? code);
     } finally {
       if (issueGeneration === generation) {
         setEditSaving(false);
@@ -878,100 +936,126 @@ export function IssueWorkspace(props: {
         footer={
           <>
             <Button disabled={editSaving()} onClick={closeEditor}>
-              取消
+              {editCommitted() ? "关闭" : "取消"}
             </Button>
-            <Button
-              danger
-              disabled={editSaving() || !editTitle().trim() || resetDisabled()}
-              loading={editSaving() && editResetting()}
-              onClick={() => {
-                void saveIssue(true);
-              }}
+            <Show
+              when={editCommitted()}
+              fallback={
+                <>
+                  <Button
+                    danger
+                    disabled={editSaving() || !editTitle().trim() || resetDisabled()}
+                    loading={editSaving() && editResetting()}
+                    onClick={() => {
+                      void saveIssue(true);
+                    }}
+                  >
+                    重置
+                  </Button>
+                  <Button
+                    type="primary"
+                    disabled={editSaving() || !editTitle().trim()}
+                    loading={editSaving() && !editResetting()}
+                    onClick={() => {
+                      void saveIssue();
+                    }}
+                  >
+                    保存
+                  </Button>
+                </>
+              }
             >
-              重置
-            </Button>
-            <Button
-              type="primary"
-              disabled={editSaving() || !editTitle().trim()}
-              loading={editSaving() && !editResetting()}
-              onClick={() => {
-                void saveIssue();
-              }}
-            >
-              保存
-            </Button>
+              <Button type="primary" disabled={editSaving()} loading={editSaving()} onClick={() => void retryEditRefresh()}>
+                重新读取
+              </Button>
+            </Show>
           </>
         }
       >
-        <div class="create-issue-form compact-issue-form edit-issue-form">
-          <Show when={editError() || peopleError()}>
-            <div class="create-error modal-form-error" role="alert">
-              {editError() || peopleError()}
-            </div>
-          </Show>
-          <label>
-            <span>优先级</span>
-            <Select
-              aria-label="编辑工单优先级"
-              value={editPriority()}
-              onChange={(value) => {
-                const selected = selectedChoice(
-                  value,
-                  priorityOptions.map((option) => option.value),
-                );
-                if (selected) setEditPriority(selected);
-              }}
-              options={priorityOptions}
-            />
-          </label>
-          <label>
-            <span>处理人</span>
-            <Select
-              aria-label="编辑工单处理人"
-              value={editAssignee() ?? undefined}
-              allowClear
-              onClear={() => setEditAssignee(null)}
-              onChange={(value) => {
-                if (typeof value === "string" && value) setEditAssignee(value);
-              }}
-              options={people()
-                .filter((person) => !currentWorkMode() || canUseIssueWorkMode(person.role, currentWorkMode()!))
-                .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
-            />
-          </label>
-          <label>
-            <span>抄送人</span>
-            <div class="multi-select-trigger">
+        <Show
+          when={!editCommitted()}
+          fallback={
+            <p role={editSaving() && !editError() ? "status" : "alert"}>
+              {editCommitted()}
+              {editError() ? `，${editError()}` : "。"}
+            </p>
+          }
+        >
+          <div class="create-issue-form compact-issue-form edit-issue-form">
+            <Show when={editError() || peopleError()}>
+              <div class="create-error modal-form-error" role="alert">
+                {editError() || peopleError()}
+                <Show when={editConflict()}>
+                  <Button size="small" disabled={editSaving()} onClick={() => void reloadEditDraft()}>
+                    重新载入（放弃草稿）
+                  </Button>
+                </Show>
+              </div>
+            </Show>
+            <label>
+              <span>优先级</span>
               <Select
-                mode="multiple"
-                aria-label="编辑工单抄送人"
-                value={editCc()}
-                onChange={setEditCc}
+                aria-label="编辑工单优先级"
+                value={editPriority()}
+                onChange={(value) => {
+                  const selected = selectedChoice(
+                    value,
+                    priorityOptions.map((option) => option.value),
+                  );
+                  if (selected) setEditPriority(selected);
+                }}
+                options={priorityOptions}
+              />
+            </label>
+            <label>
+              <span>处理人</span>
+              <Select
+                aria-label="编辑工单处理人"
+                value={editAssignee() ?? undefined}
+                allowClear
+                onClear={() => setEditAssignee(null)}
+                onChange={(value) => {
+                  if (typeof value === "string" && value) setEditAssignee(value);
+                }}
                 options={people()
-                  .filter((person) => person.subject !== editAssignee())
+                  .filter((person) => !currentWorkMode() || canUseIssueWorkMode(person.role, currentWorkMode()!))
                   .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
               />
-            </div>
-          </label>
-          <label>
-            <span>标题</span>
-            <Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} />
-          </label>
-          <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
-          <IssueSessionControls issue={props.issue} disabled={editSaving()} />
-          <AttachmentPicker
-            files={editAttachments}
-            existingFiles={() => props.issue.attachments.filter((attachment) => !removedAttachmentIds().includes(attachment.id))}
-            inputLabel="编辑工单选择附件"
-            onFilesChange={(files) => setEditAttachments(files)}
-            onRemoveExisting={(id) => {
-              setRemovedAttachmentIds((current) => [...current, id]);
-              setEditError("");
-            }}
-            onError={(message) => setEditError(message)}
-          />
-          <p class="edit-issue-reset-hint">重置会保存当前修改并创建新会话，旧对话可在历史中查看；新会话不会带入旧聊天，代码、附件和工作文件保留。</p>
-        </div>
+            </label>
+            <label>
+              <span>抄送人</span>
+              <div class="multi-select-trigger">
+                <Select
+                  mode="multiple"
+                  aria-label="编辑工单抄送人"
+                  value={editCc()}
+                  onChange={setEditCc}
+                  options={people()
+                    .filter((person) => person.subject !== editAssignee())
+                    .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
+                />
+              </div>
+            </label>
+            <label>
+              <span>标题</span>
+              <Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} />
+            </label>
+            <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
+            <IssueSessionControls issue={props.issue} disabled={editSaving()} />
+            <AttachmentPicker
+              files={editAttachments}
+              existingFiles={() => (editBase()?.attachments ?? []).filter((attachment) => !removedAttachmentIds().includes(attachment.id))}
+              inputLabel="编辑工单选择附件"
+              onFilesChange={(files) => setEditAttachments(files)}
+              onRemoveExisting={(id) => {
+                setRemovedAttachmentIds((current) => [...current, id]);
+                setEditError("");
+              }}
+              onError={(message) => setEditError(message)}
+            />
+            <p class="edit-issue-reset-hint">重置会保存当前修改并创建新会话，旧对话可在历史中查看；新会话不会带入旧聊天，代码、附件和工作文件保留。</p>
+          </div>
+        </Show>
       </Modal>
     </section>
   );

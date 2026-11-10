@@ -12,7 +12,7 @@ import { isStableErrorCode } from "../diagnostics.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
 import { sessionTranscript } from "../agent/events.ts";
-import { assertSessionFileComplete } from "../agent/pi-session.ts";
+import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { ensureCurrentSubject, requireIssue, type ApiRouteContext } from "../http/route-context.ts";
 
@@ -206,7 +206,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       const [binding] = await context.database.db.select().from(agentSessions).where(eq(agentSessions.issueId, row.id)).limit(1);
       let transcript = [] as ReturnType<typeof sessionTranscript>;
       if (binding) {
-        if (path.dirname(path.resolve(binding.sessionFile)) !== issueRoot(context.stateRoot, key)) throw new Error("mcp_session_path_invalid");
+        if (!isIssueSessionPath(binding.sessionFile, issueRoot(context.stateRoot, row.key))) throw new Error("mcp_session_path_invalid");
         if (!(await lstat(binding.sessionFile)).isFile()) throw new Error("mcp_session_path_invalid");
         await assertSessionFileComplete(binding.sessionFile);
         transcript = sessionTranscript(SessionManager.open(binding.sessionFile), row.id);

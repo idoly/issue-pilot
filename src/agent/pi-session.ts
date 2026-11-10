@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import path from "node:path";
-import { open, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { open, readlink, rm, writeFile, type FileHandle } from "node:fs/promises";
 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
@@ -63,6 +63,10 @@ export interface ManagedPiSession {
   setGitIdentity(identity: GitCommitIdentity): void;
   prompt(message: string, images?: ImageContent[], command?: string, signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;
+}
+
+export function isIssueSessionPath(file: string, root: string): boolean {
+  return path.dirname(file) === root && path.basename(file).startsWith(".session-");
 }
 
 export async function createPrivateSessionManager(cwd: string, sessionDirectory: string): Promise<SessionManager> {
@@ -140,6 +144,8 @@ export async function openRegularSessionFile(file: string) {
   try {
     const metadata = await descriptor.stat();
     if (!metadata.isFile() || !metadata.size) throw new Error("agent_session_file_incomplete");
+    // NOFOLLOW protects only the last component; check where the opened file actually lives.
+    if ((await readlink(`/proc/self/fd/${descriptor.fd}`)) !== path.resolve(file)) throw new Error("agent_session_file_incomplete");
     return { descriptor, metadata };
   } catch (error) {
     try {

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
 import { applicationParameterDefaults, applicationParameters } from "../../src/configuration/parameters.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 
@@ -86,6 +89,34 @@ test("applies saved application parameters without reserving Issues or closing s
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config/parameters", headers: developer })).statusCode, 200);
     assert.equal((await put({ expectedRevision: 2, overrides: { maxConcurrentIssues: 5 } }, developer)).statusCode, 403);
     assert.deepEqual((await get()).values, applicationParameterDefaults);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("unrelated hot parameters keep the workspace measurement cache and execution limit", async () => {
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Parameter sampling");
+    const issue = await createIssue(f.app, "parameter-sampling");
+    const stats = async () => {
+      const result = await f.app.inject({ url: "/api/workspaces/stats" });
+      assert.equal(result.statusCode, 200, result.body);
+      return result.json();
+    };
+    const save = async (expectedRevision: number, overrides: object) => {
+      const result = await f.app.inject({ method: "PUT", url: "/api/config/parameters", headers, payload: { expectedRevision, overrides } });
+      assert.equal(result.statusCode, 200, result.body);
+    };
+    const before = await stats();
+    await writeFile(join(issueRoot(f.root, String(issue.id)), "fixture-report.txt"), "a".repeat(4_096));
+    await save(0, { mcpExecutionMs: 60_000, dingtalkAttachmentHosts: ["files.example.test"] });
+    assert.deepEqual(await stats(), before);
+    assert.deepEqual(f.engine.concurrencyUpdates, []);
+    await save(1, { mcpExecutionMs: 60_000, workspaceRetentionMs: 7_200_000 });
+    const changed = await stats();
+    assert.equal(changed.policy.retentionHours, 2);
+    assert.equal(changed.totalBytes, before.totalBytes + 4_096);
   } finally {
     await f.cleanup();
   }

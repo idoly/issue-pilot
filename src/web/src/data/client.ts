@@ -187,6 +187,7 @@ export interface IssueScopeTransitionHistoryItem {
 }
 
 export interface IssueDetail extends IssueListItem {
+  editVersion: string;
   description: string;
   agentRunning?: boolean;
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
@@ -542,7 +543,13 @@ export function createIssue(input: IssueCreateInput, files: File[] = []): Promis
   appendFiles(form, files);
   return request("/api/issues", { method: "POST", body: form });
 }
-export function updateIssue(key: string, input: IssueMetadataInput, removedAttachmentIds: string[] = [], files: File[] = [], resetSession = false): Promise<IssueExecutionItem> {
+export function updateIssue(
+  key: string,
+  input: IssueMetadataInput & { expectedEditVersion?: string },
+  removedAttachmentIds: string[] = [],
+  files: File[] = [],
+  resetSession = false,
+): Promise<IssueExecutionItem> {
   const body = resetSession ? { ...input, resetSession } : input;
   if (!removedAttachmentIds.length && !files.length) return jsonRequest(issuePath(key), "PATCH", body);
   const form = new FormData();

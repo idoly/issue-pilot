@@ -40,6 +40,8 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
     const authorize = () => (refresh ? requireAdmin(database, request) : requireCurrentUser(database, request));
     await authorize();
     const state = await settings();
+    // A socket that closed before listener registration must not start a provider request.
+    if (request.raw.aborted || reply.raw.destroyed) throw new ApiError(408, "issue_search_cancelled");
     if (!state.enabled) throw new ApiError(503, "issue_search_disabled");
     if (!state.accountId || !state.apiToken) throw new ApiError(503, "issue_search_credentials_required");
     if (closing || active.size >= 4 || (refresh && refreshing)) throw new ApiError(409, "issue_search_busy");

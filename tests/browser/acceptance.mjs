@@ -699,19 +699,22 @@ try {
   const parameters = parametersPanel.getByRole("region", { name: "参数表单" });
   const saveParameters = parametersPanel.getByRole("button", { name: "保存参数" });
   await saveParameters.waitFor();
-  const savePosition = await saveParameters.boundingBox();
   await assertHiddenScrollbar(parametersPanel);
-  await scrollToEnd(parameters, false);
-  assert.deepEqual(await saveParameters.boundingBox(), savePosition);
+  const lastParameter = parameters.getByRole("combobox", { name: "工单搜索" });
+  for (const viewport of [settingsViewport, { width: 1280, height: 800 }]) {
+    await page.setViewportSize(viewport);
+    const savePosition = await saveParameters.boundingBox();
+    // The number of fields can grow; keep scrolling in the form and the save action fixed.
+    if (viewport === settingsViewport || (await parameters.evaluate((node) => node.scrollHeight > node.clientHeight))) await scrollToEnd(parameters, false);
+    await assertPanelFixed(parametersPanel);
+    assert.deepEqual(await saveParameters.boundingBox(), savePosition);
+    const formBounds = await parameters.boundingBox();
+    const lastParameterBounds = await lastParameter.boundingBox();
+    assert.ok(lastParameterBounds.y >= formBounds.y && lastParameterBounds.y + lastParameterBounds.height <= formBounds.y + formBounds.height + 1);
+  }
   const networkMode = parameters.getByRole("combobox", { name: "工单网络访问" });
   assert.equal(await networkMode.textContent(), "开放网络");
   assert.equal(await parameters.getByRole("textbox", { name: "Agent 网络基础白名单" }).count(), 0);
-  const lastParameter = parameters.getByRole("textbox", { name: "钉钉附件主机" });
-  const formBounds = await parameters.boundingBox();
-  const lastParameterBounds = await lastParameter.boundingBox();
-  assert.ok(lastParameterBounds.y >= formBounds.y && lastParameterBounds.y + lastParameterBounds.height <= formBounds.y + formBounds.height + 1);
-  await page.setViewportSize({ width: 1280, height: 800 });
-  assert.ok(await parameters.evaluate((node) => node.scrollHeight === node.clientHeight));
 
   await networkMode.click();
   await page.getByRole("option", { name: "域名白名单", exact: true }).click();

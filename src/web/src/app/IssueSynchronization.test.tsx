@@ -26,6 +26,7 @@ beforeEach(() => {
     id: "ISSUE-20261109-001",
     title: "Sync fixture",
     description: "",
+    editVersion: "a".repeat(64),
     priority: "p2",
     type: "smart_analysis",
     status: "pending",

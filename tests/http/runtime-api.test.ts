@@ -862,3 +862,51 @@ test("graceful shutdown ends open Agent streams instead of waiting for them", { 
     await fixture.cleanup();
   }
 });
+
+test("a stream still preparing when shutdown starts cannot become a long-lived connection", { timeout: 10_000 }, async () => {
+  let prepare = false;
+  let release!: () => void, entered!: () => void, closing!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const preClose = new Promise<void>((resolve) => {
+    closing = resolve;
+  });
+  const f = await createApiFixture({
+    modelCatalog: {
+      async list() {
+        if (prepare) {
+          entered();
+          await gate;
+        }
+        return modelCatalog.list();
+      },
+    },
+  });
+  f.app.addHook("preClose", async () => closing());
+  const request = new AbortController();
+  let stopped: Promise<void> | undefined;
+  try {
+    await createService(f.app, "Stream shutdown");
+    const issue = await createIssue(f.app, "stream-shutdown");
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    prepare = true;
+    const pending = fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: request.signal });
+    await ready;
+    stopped = f.stop();
+    await preClose;
+    release();
+    const response = await pending;
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: "agent_stream_closing" });
+    await stopped;
+  } finally {
+    release();
+    request.abort();
+    await stopped;
+    await f.cleanup();
+  }
+});

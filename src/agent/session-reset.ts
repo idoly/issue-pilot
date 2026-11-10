@@ -5,7 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Database } from "../db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../db/schema.ts";
 import { issueRoot } from "../workspace/state.ts";
-import { assertSessionFileComplete, createPrivateSessionManager, openRegularSessionFile } from "./pi-session.ts";
+import { assertSessionFileComplete, createPrivateSessionManager, isIssueSessionPath, openRegularSessionFile } from "./pi-session.ts";
 
 const resetEntry = "issue-pilot-session-reset";
 
@@ -21,7 +21,7 @@ async function ownSessionFile<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 async function readSession(file: string, root: string) {
-  if (path.dirname(file) !== root || !path.basename(file).startsWith(".session-")) throw new Error("agent_session_file_incomplete");
+  if (!isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
   await ownSessionFile(() => assertSessionFileComplete(file));
   return ownSessionFile(async () => SessionManager.open(file, root, root));
 }
@@ -31,7 +31,7 @@ async function readSession(file: string, root: string) {
  * listing history must not scan every tool result or treat later conversation content as a link.
  */
 async function readSessionSummary(file: string, root: string) {
-  if (path.dirname(file) !== root || !path.basename(file).startsWith(".session-")) throw new Error("agent_session_file_incomplete");
+  if (!isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
   const { descriptor } = await ownSessionFile(() => openRegularSessionFile(file));
   try {
     let header: { sessionId: string; createdAt: string } | undefined;

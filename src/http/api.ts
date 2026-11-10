@@ -262,6 +262,7 @@ export async function startApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const app = await buildApi(options);
   const removeShutdownHandlers = installShutdownHandlers(app);
   try {
+    app.addHook("onClose", async () => removeShutdownHandlers());
     await app.listen({ port: applicationConfig.http.port, host: options.listenHost ?? applicationConfig.http.host });
   } catch (error) {
     removeShutdownHandlers();

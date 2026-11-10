@@ -171,3 +171,21 @@ test("closes the database client when bootstrap initialization fails", async () 
   await assert.rejects(openApplicationDatabase("ignored.db", connect), (error) => error === failure);
   assert.equal(closed, true);
 });
+
+test("keeps the initialization error when database cleanup also fails", async () => {
+  const initialization = new Error("fixture_initialization_failed");
+  const cleanup = new Error("fixture_database_close_failed");
+  const connect = () =>
+    ({
+      client: {
+        execute: async () => {
+          throw initialization;
+        },
+      },
+      db: {},
+      close: () => {
+        throw cleanup;
+      },
+    }) as never;
+  await assert.rejects(openApplicationDatabase("ignored.db", connect), (error) => error instanceof AggregateError && error.errors.includes(initialization) && error.errors.includes(cleanup));
+});

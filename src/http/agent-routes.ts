@@ -8,11 +8,11 @@ import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../confi
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
 import { agentDisplayEvent } from "../agent/event-display.ts";
-import { assertSessionFileComplete } from "../agent/pi-session.ts";
+import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
 import { agentSessions, issues } from "../db/schema.ts";
-import { pathExists } from "../workspace/state.ts";
+import { issueRoot, pathExists } from "../workspace/state.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
 import { ApiError, record, text } from "./input.ts";
 import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
@@ -141,10 +141,13 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
 
   // Long-lived SSE streams keep a graceful stop from completing; end them when the server closes.
   const activeStreams = new Set<() => void>();
+  let closing = false;
   app.addHook("preClose", async () => {
+    closing = true;
     for (const end of [...activeStreams]) end();
   });
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
+    if (closing) throw new ApiError(503, "agent_stream_closing");
     // Validate an explicitly selected identity. Browser EventSource sends no subject header, so the
     // default active user applies; an inactive explicit subject is refused here like other routes.
     await requireCurrentUser(database, request);
@@ -159,6 +162,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const autoCompact = SettingsManager.inMemory(configured.runtime.settings).getCompactionEnabled();
     const models = await modelCatalog.list();
     const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
+    if (binding && !isIssueSessionPath(binding.sessionFile, issueRoot(stateRoot, issue.key))) throw new Error("agent_session_file_incomplete");
     const sessionReady = Boolean(binding && (await pathExists(binding.sessionFile)));
     if (reply.raw.destroyed) {
       reply.hijack();
@@ -209,6 +213,8 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         reply.hijack();
         return;
       }
+      // Preparation can overlap preClose; only a stream registered before that hook may start.
+      if (closing) throw new ApiError(503, "agent_stream_closing");
       if (!currentIssue) throw new ApiError(404, "issue_not_found");
       reply.hijack();
       hijacked = true;
