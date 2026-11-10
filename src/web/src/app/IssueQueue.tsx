@@ -18,7 +18,7 @@ export function IssueQueue(props: {
   issueList: IssueListResource;
   hidden?: boolean;
   keepExternalSelection?: boolean;
-  filterReset?: number;
+  reveal?: { key: string; subject: string };
   onSelect: (id: string) => void;
 }) {
   const { catalog, people, currentUser, catalogError, peopleError, refreshCatalog } = useApplicationResources();
@@ -33,8 +33,9 @@ export function IssueQueue(props: {
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
   createEffect(
-    () => props.filterReset,
-    () => {
+    () => props.reveal,
+    (reveal) => {
+      if (!reveal) return;
       setQuery("");
       setStatus("all");
       setEnvironmentFilter("all");
@@ -99,6 +100,26 @@ export function IssueQueue(props: {
         .finally(() => {
           if (currentRequest === pinRequest) setPinsLoading(false);
         });
+    },
+  );
+  let list: HTMLDivElement | undefined;
+  let revealed: typeof props.reveal;
+  createEffect(
+    () => {
+      const reveal = props.reveal;
+      if (!reveal || reveal === revealed || props.hidden || pinsLoading() || reveal.key !== props.selectedId || reveal.subject !== props.userSubject) return;
+      if (filtered().some((issue) => issue.id === reveal.key)) return reveal;
+    },
+    (reveal) => {
+      if (!reveal) return;
+      // Wait for the row and its pinned position to render. Only the queue should scroll.
+      const frame = window.requestAnimationFrame(() => {
+        const row = list?.querySelector('.queue-item[aria-current="true"]');
+        if (!list || !row) return;
+        list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientTop;
+        revealed = reveal;
+      });
+      return () => window.cancelAnimationFrame(frame);
     },
   );
   let appliedFilter: string | undefined;
@@ -298,7 +319,7 @@ export function IssueQueue(props: {
           />
         </div>
       </div>
-      <div class="queue-list" role="list">
+      <div class="queue-list" role="list" ref={list}>
         <Show
           when={!loading() || issues().length > 0}
           fallback={

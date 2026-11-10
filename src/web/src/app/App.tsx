@@ -151,7 +151,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueReloadToken, setIssueReloadToken] = createSignal(0, { ownedWrite: true });
   const [keepExternalSelection, setKeepExternalSelection] = createSignal(Boolean(linkedIssue), { ownedWrite: true });
-  const [queueFilterReset, setQueueFilterReset] = createSignal(0, { ownedWrite: true });
+  const [queueReveal, setQueueReveal] = createSignal<{ key: string; subject: string } | undefined>(undefined, { ownedWrite: true });
   const [dashboardTarget, setDashboardTarget] = createSignal(linkedIssue, { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
@@ -206,6 +206,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
     ({ id, active }) => {
       const currentGeneration = ++selectionGeneration;
       issueRefreshes.clear();
+      setQueueReveal(undefined);
       if (!active || searchNavigation?.key !== id) searchNavigation = undefined;
       const search = searchNavigation;
       const isCurrent = () => currentGeneration === selectionGeneration && selectedId() === id && view() === "issues";
@@ -229,7 +230,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
             if (canFollow() && knowsAssignee()) {
               if (assignee === search.subject || !agentDrafts.hasPending() || window.confirm("切换到该工单的处理人会清除当前用户未发送的 Agent 草稿。是否切换？")) {
                 if (assignee !== search.subject) selectCurrentUser(assignee);
-                setQueueFilterReset((value) => value + 1);
+                setQueueReveal({ key: id, subject: assignee });
               }
             }
           }
@@ -364,6 +365,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
             mayChange={() => {
               if (!mayNavigate()) return false;
               searchNavigation = undefined;
+              setQueueReveal(undefined);
               setSourceExpanded(false);
               setSourceDirty(false);
               return true;
@@ -391,7 +393,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
                 issueList={issueList}
                 hidden={sourceExpanded()}
                 keepExternalSelection={keepExternalSelection()}
-                filterReset={queueFilterReset()}
+                reveal={queueReveal()}
                 onSelect={(issueKey) => {
                   if (!untrack(mayNavigate)) return;
                   if (issueKey === untrack(selectedId)) {
