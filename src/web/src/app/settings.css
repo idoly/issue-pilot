@@ -554,10 +554,31 @@
   font: 14px / 20px var(--app-font);
 }
 .search-parameter-fields {
-  display: contents;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: end;
 }
-.search-parameter-fields input[type="checkbox"] {
-  justify-self: start;
+.parameters-grid .search-parameter-clear {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  gap: 8px;
+}
+.search-parameter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+}
+.search-parameter-actions p,
+.search-parameter-message {
+  margin: 0;
+}
+.search-parameter-message {
+  grid-column: 1 / -1;
 }
 .parameters-grid label > span {
   color: #526d5c;

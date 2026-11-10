@@ -3789,19 +3789,50 @@ summary.agent-tool-head > svg {
   }
 }
 
+.issue-search-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  color: #526d5c;
+  font-size: 13px;
+}
+.issue-search-error {
+  color: #a82f2f;
+}
+.issue-search-shortcuts {
+  color: #526d5c;
+}
 .issue-search-results {
   display: grid;
-  gap: 12px;
-  margin: 16px 0 0;
+  gap: 6px;
+  margin: 8px 0 0;
   padding: 0;
   list-style: none;
 }
-.issue-search-results li {
+.issue-search-results a {
   display: grid;
-  gap: 2px;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #dfe7e1;
+  border-radius: 8px;
+  color: #26322c;
+  text-decoration: none;
   overflow-wrap: anywhere;
 }
-.issue-search-results span {
+.issue-search-results a:hover,
+.issue-search-results a:focus-visible {
+  border-color: #96b5a1;
+  background: #f4f8f5;
+}
+.issue-search-title {
+  font-weight: 600;
+}
+.issue-search-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  align-items: center;
   font-size: 12px;
   color: #526d5c;
 }

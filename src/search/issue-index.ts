@@ -2,20 +2,44 @@ import { createHash } from "node:crypto";
 import { lstat, open, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createClient, type Client } from "@libsql/client";
-import { asc, gt, inArray, sql } from "drizzle-orm";
+import { createClient, type Client, type InStatement } from "@libsql/client";
+import { asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { readInBatches, type Database } from "../db/client.ts";
-import { issues } from "../db/schema.ts";
+import { issues, subjects } from "../db/schema.ts";
 import { EMBEDDING_BATCH_SIZE, EMBEDDING_DIMENSIONS, issueEmbeddings } from "./cloudflare.ts";
 import type { IssueSearchHit, IssueSearchSettings } from "./contracts.ts";
 
 const PAGE_SIZE = 256;
-const MAX_DESCRIPTION_CHARACTERS = 4_000;
-const description = sql<string>`substr(${issues.description}, 1, ${MAX_DESCRIPTION_CHARACTERS})`;
-const documentFields = { id: issues.id, title: issues.title, description };
+const CHUNK_BYTES = 7_000;
+const documentFields = { id: issues.id, title: issues.title, description: issues.description };
+const createVectors = `CREATE TABLE issue_vectors (
+  issue_id TEXT NOT NULL,
+  chunk INTEGER NOT NULL,
+  digest TEXT NOT NULL,
+  embedding F32_BLOB(${EMBEDDING_DIMENSIONS}) NOT NULL CHECK(length(embedding) = ${EMBEDDING_DIMENSIONS * 4}),
+  PRIMARY KEY (issue_id, chunk)
+)`;
 
 function document(row: { title: string; description: string }): string {
-  return Buffer.from([row.title, row.description].join("\n\n").trim()).subarray(0, 7_000).toString("utf8");
+  return [row.title, row.description].join("\n\n").trim();
+}
+
+function splitDocument(text: string): string[] {
+  const bytes = Buffer.from(text);
+  const chunks: string[] = [];
+  for (let start = 0; start < bytes.length; ) {
+    let end = Math.min(start + CHUNK_BYTES, bytes.length);
+    if (end < bytes.length) {
+      const preferred = start + CHUNK_BYTES / 2;
+      const newline = bytes.subarray(preferred, end).lastIndexOf(10);
+      if (newline >= 0) end = preferred + newline + 1;
+      else while ((bytes[end]! & 0xc0) === 0x80) end--;
+    }
+    const chunk = bytes.toString("utf8", start, end);
+    if (chunk.trim()) chunks.push(chunk);
+    start = end;
+  }
+  return chunks;
 }
 
 function digest(content: string): string {
@@ -55,9 +79,7 @@ export class IssueSearchIndex {
     let client: Client | undefined;
     try {
       client = createClient({ url: pathToFileURL(this.file).href, timeout: 5_000 });
-      await client.execute(
-        `CREATE TABLE issue_vectors (issue_id TEXT PRIMARY KEY, digest TEXT NOT NULL, embedding F32_BLOB(${EMBEDDING_DIMENSIONS}) NOT NULL CHECK(length(embedding) = ${EMBEDDING_DIMENSIONS * 4}))`,
-      );
+      await client.execute(createVectors);
       return client;
     } catch (error) {
       client?.close();
@@ -68,8 +90,20 @@ export class IssueSearchIndex {
     }
   }
 
+  private async upgradeStatements(client: Client): Promise<InStatement[]> {
+    const { rows } = await client.execute("PRAGMA table_info(issue_vectors)");
+    if (rows.some((column) => column.name === "chunk")) return [];
+    if (rows.map((column) => column.name).join(",") !== "issue_id,digest,embedding") throw new Error("invalid_issue_search_index");
+    return [
+      "ALTER TABLE issue_vectors RENAME TO previous_issue_vectors",
+      createVectors,
+      "INSERT INTO issue_vectors (issue_id, chunk, digest, embedding) SELECT issue_id, 0, digest, embedding FROM previous_issue_vectors",
+      "DROP TABLE previous_issue_vectors",
+    ];
+  }
+
   private async removeDeleted(client: Client, signal: AbortSignal, verify: () => Promise<void>): Promise<number> {
-    const { rows } = await client.execute("SELECT issue_id FROM issue_vectors");
+    const { rows } = await client.execute("SELECT DISTINCT issue_id FROM issue_vectors");
     const ids = rows.map((row) => String(row.issue_id));
     const live = new Set(await readInBatches(ids, (batch) => this.database.select({ id: issues.id }).from(issues).where(inArray(issues.id, batch))).then((rows) => rows.map(({ id }) => id)));
     const deleted = ids.filter((id) => !live.has(id));
@@ -97,33 +131,48 @@ export class IssueSearchIndex {
         .limit(PAGE_SIZE + 1);
       const page = rows.slice(0, PAGE_SIZE);
       const ids = page.map(({ id }) => id);
-      const saved = existing && ids.length ? await existing.execute({ sql: `SELECT issue_id, digest FROM issue_vectors WHERE issue_id IN (${ids.map(() => "?").join(",")})`, args: ids }) : undefined;
+      const saved =
+        existing && ids.length ? await existing.execute({ sql: `SELECT DISTINCT issue_id, digest FROM issue_vectors WHERE issue_id IN (${ids.map(() => "?").join(",")})`, args: ids }) : undefined;
       const indexed = new Map(saved?.rows.map((row) => [row.issue_id, row.digest]));
       let inspected = 0;
-      const changed: Array<{ id: string; text: string; hash: string }> = [];
+      let chunkCount = 0;
+      const changed: Array<{ id: string; chunks: string[]; hash: string }> = [];
       for (const row of page) {
-        inspected++;
         const text = document(row);
         const hash = digest(text);
-        if (indexed.get(row.id) !== hash) changed.push({ id: row.id, text, hash });
-        if (changed.length === EMBEDDING_BATCH_SIZE) break;
+        if (indexed.get(row.id) !== hash) {
+          const chunks = splitDocument(text);
+          if (chunkCount && chunkCount + chunks.length > EMBEDDING_BATCH_SIZE) break;
+          changed.push({ id: row.id, chunks, hash });
+          chunkCount += chunks.length;
+        }
+        inspected++;
+        if (chunkCount >= EMBEDDING_BATCH_SIZE) break;
       }
       if (changed.length || !existing) {
+        const documents = changed.flatMap(({ chunks }) => chunks);
+        const vectors: Buffer[] = [];
+        // A legacy record can be larger than today's input limit. Keep provider batches serial and replace the Issue atomically.
+        for (let offset = 0; offset < documents.length; offset += EMBEDDING_BATCH_SIZE) {
+          await verify();
+          signal.throwIfAborted();
+          vectors.push(...(await issueEmbeddings(settings, { documents: documents.slice(offset, offset + EMBEDDING_BATCH_SIZE) }, signal, this.fetchEmbeddings)));
+        }
         await verify();
         signal.throwIfAborted();
-        const vectors = changed.length ? await issueEmbeddings(settings, { documents: changed.map(({ text }) => text) }, signal, this.fetchEmbeddings) : [];
-        if (changed.length) await verify();
-        signal.throwIfAborted();
         client ??= await this.create();
-        signal.throwIfAborted();
-        if (changed.length)
-          await client.batch(
-            changed.map((row, index) => ({
-              sql: "INSERT INTO issue_vectors VALUES (?, ?, ?) ON CONFLICT (issue_id) DO UPDATE SET digest = excluded.digest, embedding = excluded.embedding",
-              args: [row.id, row.hash, vectors[index]!],
-            })),
-            "write",
-          );
+        if (changed.length) {
+          const statements = existing ? await this.upgradeStatements(existing) : [];
+          let vectorIndex = 0;
+          for (const row of changed) {
+            statements.push({ sql: "DELETE FROM issue_vectors WHERE issue_id = ?", args: [row.id] });
+            for (let chunk = 0; chunk < row.chunks.length; chunk++) {
+              statements.push({ sql: "INSERT INTO issue_vectors (issue_id, chunk, digest, embedding) VALUES (?, ?, ?, ?)", args: [row.id, chunk, row.hash, vectors[vectorIndex++]!] });
+            }
+          }
+          signal.throwIfAborted();
+          await client.batch(statements, "write");
+        }
       }
       const removed = !after && existing ? await this.removeDeleted(existing, signal, verify) : 0;
       return { indexed: changed.length, removed, nextCursor: rows.length > inspected ? rows[inspected - 1]!.id : null };
@@ -141,15 +190,16 @@ export class IssueSearchIndex {
       signal.throwIfAborted();
       const [vector] = await issueEmbeddings(settings, { query }, signal, this.fetchEmbeddings);
       signal.throwIfAborted();
-      // One bounded candidate read. Edits/deletions since the last refresh can reduce the number returned.
+      // Rank distinct Issues by their closest chunk; the same query also reads the original one-vector table.
       const candidates = await client.execute({
-        sql: "SELECT issue_id, digest FROM issue_vectors ORDER BY vector_distance_cos(embedding, ?), issue_id LIMIT 40",
+        sql: "SELECT issue_id, digest FROM issue_vectors GROUP BY issue_id, digest ORDER BY MIN(vector_distance_cos(embedding, ?)), issue_id LIMIT 40",
         args: [vector!],
       });
       if (!candidates.rows.length) return [];
       const rows = await this.database
-        .select({ ...documentFields, key: issues.key, status: issues.status })
+        .select({ ...documentFields, key: issues.key, status: issues.status, assignee: sql<string | null>`coalesce(${subjects.displayName}, ${issues.assigneeSubject})` })
         .from(issues)
+        .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
         .where(
           inArray(
             issues.id,
@@ -160,7 +210,7 @@ export class IssueSearchIndex {
       const hits: IssueSearchHit[] = [];
       for (const candidate of candidates.rows) {
         const issue = current.get(String(candidate.issue_id));
-        if (issue && digest(document(issue)) === candidate.digest) hits.push({ key: issue.key, title: issue.title, status: issue.status });
+        if (issue && digest(document(issue)) === candidate.digest) hits.push({ key: issue.key, title: issue.title, status: issue.status, assignee: issue.assignee });
         if (hits.length === 10) break;
       }
       return hits;

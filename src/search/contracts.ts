@@ -13,4 +13,5 @@ export interface IssueSearchHit {
   key: string;
   title: string;
   status: IssueStatus;
+  assignee: string | null;
 }

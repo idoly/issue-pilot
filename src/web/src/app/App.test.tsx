@@ -308,7 +308,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ ...user, isAdmin: true });
     const accountId = "a".repeat(32);
     vi.mocked(client.saveIssueSearchConfiguration).mockResolvedValueOnce({ enabled: true, accountId, tokenConfigured: true, revision: 1 });
-    const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const };
+    const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const, assignee: "刘宜展" };
     vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
     render(() => <App initialView="configuration" />);
     const shortcut = { key: "k", code: "KeyK", altKey: true };
@@ -316,8 +316,10 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "参数" }));
     const parameters = within(await screen.findByRole("region", { name: "参数表单" }));
-    const enabled = await parameters.findByLabelText("启用工单搜索");
-    await fireEvent.click(enabled);
+    expect(parameters.queryByLabelText("Cloudflare Account ID")).toBeNull();
+    const mode = await parameters.findByLabelText("工单搜索");
+    await fireEvent.click(mode);
+    await fireEvent.click(await screen.findByRole("option", { name: "启用" }));
     await fireEvent.input(parameters.getByLabelText("Cloudflare Account ID"), { target: { value: accountId } });
     const secret = parameters.getByLabelText("Cloudflare API Token") as HTMLInputElement;
     expect(secret.type).toBe("password");
@@ -341,7 +343,11 @@ describe("issue pilot workspace", () => {
     await fireEvent.keyDown(query, { key: "Enter" });
     const link = await screen.findByRole("link", { name: issue.title });
     expect(link.getAttribute("href")).toBe(`/?issue=${issue.key}`);
+    expect(within(link.closest("li")!).getByText(/处理人：刘宜展/)).toBeTruthy();
     expect(client.searchIssues).toHaveBeenLastCalledWith("审批一直转圈", expect.any(AbortSignal));
+    const requests = vi.mocked(client.searchIssues).mock.calls.length;
+    await fireEvent.keyDown(query, { key: "Enter" });
+    expect(client.searchIssues).toHaveBeenCalledTimes(requests);
     fireEvent.click(link);
     await screen.findByRole("heading", { name: issue.title });
     expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
@@ -356,7 +362,7 @@ describe("issue pilot workspace", () => {
   test("resets queue filters that would hide a search result", async () => {
     const client = await import("../data/client");
     vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
-    const issue = { key: "ISSUE-20260810-041", title: "客户导出的 CSV 缺少时区信息", status: "pending" as const };
+    const issue = { key: "ISSUE-20260810-041", title: "客户导出的 CSV 缺少时区信息", status: "pending" as const, assignee: "严欣" };
     vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
     render(() => <App initialView="issues" />);
     const queue = await screen.findByLabelText("工单队列");
@@ -381,7 +387,7 @@ describe("issue pilot workspace", () => {
   test("keeps the current account and its Agent draft when a search result's account switch is declined", async () => {
     const client = await import("../data/client");
     vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
-    const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const };
+    const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const, assignee: "刘宜展" };
     vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(() => <App initialView="issues" />);
@@ -424,11 +430,36 @@ describe("issue pilot workspace", () => {
     const signal = vi.mocked(client.searchIssues).mock.lastCall?.[1];
     await fireEvent.keyDown(query, { key: "Escape" });
     expect(signal?.aborted).toBe(true);
-    finish([{ key: "ISSUE-20260810-038", title: "不应出现的旧结果", status: "open" }]);
+    finish([{ key: "ISSUE-20260810-038", title: "不应出现的旧结果", status: "open", assignee: null }]);
     await response;
     fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
     expect(await screen.findByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
     expect(screen.queryByText("不应出现的旧结果")).toBeNull();
+  });
+
+  test("preserves the search text after a timeout and retries only on Enter", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
+    const searches = vi
+      .mocked(client.searchIssues)
+      .mockRejectedValueOnce(new Error("issue_search_cloudflare_timed_out"))
+      .mockResolvedValueOnce([{ key: "ISSUE-20260810-041", title: "超时后的结果", status: "open", assignee: null }]);
+    const calls = searches.mock.calls.length;
+    render(() => <App />);
+    await waitFor(() => {
+      fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
+      expect(screen.getByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
+    });
+    const query = screen.getByLabelText("工单搜索词");
+    await fireEvent.input(query, { target: { value: "导出超时" } });
+    await fireEvent.keyDown(query, { key: "Enter" });
+    expect((await screen.findByRole("alert")).textContent).toContain("已保留搜索词");
+    expect(query).toHaveProperty("value", "导出超时");
+    expect(searches).toHaveBeenCalledTimes(calls + 1);
+    await fireEvent.keyDown(query, { key: "Enter" });
+    const result = await screen.findByRole("link", { name: "超时后的结果" });
+    expect(within(result).getByText("处理人：未分配")).toBeTruthy();
+    expect(searches).toHaveBeenCalledTimes(calls + 2);
   });
 
   test("opens a linked Issue even when it is outside the current user's queue", async () => {

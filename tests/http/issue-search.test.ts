@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -38,7 +39,7 @@ test("optional global search projects no secret and refreshes only new or edited
     db.close();
     await f.cleanup();
   });
-  await db.db.insert(subjects).values({ subject: reader["x-issue-pilot-subject"], role: "product" });
+  await db.db.insert(subjects).values({ subject: reader["x-issue-pilot-subject"], displayName: "测试处理人", role: "product" });
   assert.deepEqual(await json(await f.app.inject({ url: "/health" })), { ok: true });
   assert.equal((await f.app.inject({ method: "POST", url: search, headers: reader, payload: { query: "扣款后未更新" } })).statusCode, 503);
   assert.ok(!(await readdir(f.root)).includes("vectors.db"));
@@ -61,7 +62,7 @@ test("optional global search projects no secret and refreshes only new or edited
   const payment = await createIssue(f.app, "payments", "prod", "支付回调未更新订单");
   await db.db
     .update(issues)
-    .set({ status: "resolved", resolvedAt: new Date() })
+    .set({ status: "resolved", resolvedAt: new Date(), assigneeSubject: reader["x-issue-pilot-subject"] })
     .where(eq(issues.key, String(payment.id)));
   const exportIssue = await f.app.inject({ method: "POST", url: "/api/issues", headers: reader, payload: issuePayload("payments", "test", "导出 CSV 乱码") });
   assert.equal(exportIssue.statusCode, 201, exportIssue.body);
@@ -74,7 +75,7 @@ test("optional global search projects no secret and refreshes only new or edited
   const query = async () => {
     const response = await f.app.inject({ method: "POST", url: search, headers: reader, payload: { query: "扣款后未更新" } });
     assert.equal(response.statusCode, 200, response.body);
-    return response.json<Array<{ key: string; title: string; status: string }>>();
+    return response.json<Array<{ key: string; title: string; status: string; assignee: string | null }>>();
   };
   assert.deepEqual(await index(), { indexed: 2, removed: 0, nextCursor: null });
   assert.equal((await stat(join(f.root, "vectors.db"))).mode & 0o777, 0o600);
@@ -83,13 +84,20 @@ test("optional global search projects no secret and refreshes only new or edited
   assert.deepEqual(await index(), { indexed: 0, removed: 0, nextCursor: null });
   assert.equal(calls.length, 1);
   assert.deepEqual(
-    (await query()).map(({ key, status }) => [key, status]),
+    (await query()).map(({ key, status, assignee }) => [key, status, assignee]),
     [
-      [payment.id, "resolved"],
-      [exportKey, "open"],
+      [payment.id, "resolved", "测试处理人"],
+      [exportKey, "open", null],
     ],
   );
   assert.equal(calls.at(-1)?.queries, "扣款后未更新");
+  await db.db
+    .update(issues)
+    .set({ assigneeSubject: null })
+    .where(eq(issues.key, String(payment.id)));
+  assert.equal((await query())[0]?.assignee, null);
+  assert.deepEqual(await index(), { indexed: 0, removed: 0, nextCursor: null });
+  assert.equal(calls.filter((call) => call.documents).length, 1);
 
   await db.db
     .update(issues)
@@ -114,6 +122,65 @@ test("optional global search projects no secret and refreshes only new or edited
   assert.equal(blocked.statusCode, 503);
   assert.deepEqual(await json(blocked), { error: "issue_search_disabled" });
   assert.equal(calls.length, callsBeforeDisable);
+});
+
+test("expands a legacy index to cover the end of long descriptions and ranks each Issue once", async (t) => {
+  const batches: string[][] = [];
+  const f = await createApiFixture({
+    issueSearchFetch: async (_url, init) => {
+      const { documents } = JSON.parse(String(init?.body)) as EmbeddingInput;
+      if (!documents) return output([vector(1)]);
+      batches.push(documents);
+      return output(documents.map((text) => vector(text.includes("最后一段验收结论") ? 1 : 0)));
+    },
+  });
+  const db = openDatabase(f.databaseFile);
+  const legacy = openDatabase(join(f.root, "vectors.db"));
+  t.after(async () => {
+    legacy.close();
+    db.close();
+    await f.cleanup();
+  });
+  await createService(f.app, "Chunks");
+  const short = await createIssue(f.app, "chunks", "test", "短工单");
+  const title = "长工单";
+  const description = `${"故障".repeat(4_000)}😀最后一段验收结论`;
+  const created = await f.app.inject({ method: "POST", url: "/api/issues", headers: admin, payload: { ...issuePayload("chunks", "test", title), description } });
+  assert.equal(created.statusCode, 201, created.body);
+  const longKey = created.json<{ id: string }>().id;
+  const rows = await db.db.select().from(issues);
+  const oldVector = Buffer.alloc(1024 * 4);
+  oldVector.writeFloatLE(1);
+  await legacy.client.execute("CREATE TABLE issue_vectors (issue_id TEXT PRIMARY KEY, digest TEXT NOT NULL, embedding F32_BLOB(1024) NOT NULL CHECK(length(embedding) = 4096))");
+  for (const issue of rows) {
+    const prefix = Buffer.from(`${issue.title}\n\n${issue.description.slice(0, 4_000)}`.trim())
+      .subarray(0, 7_000)
+      .toString("utf8");
+    await legacy.client.execute({ sql: "INSERT INTO issue_vectors VALUES (?, ?, ?)", args: [issue.id, createHash("sha256").update(prefix).digest("hex"), oldVector] });
+  }
+  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } })).statusCode, 200);
+  const index = () => f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} });
+  const query = async () => {
+    const response = await f.app.inject({ method: "POST", url: search, headers: admin, payload: { query: "最后一段验收结论" } });
+    assert.equal(response.statusCode, 200, response.body);
+    return response.json<Array<{ key: string }>>().map(({ key }) => key);
+  };
+  assert.deepEqual(await query(), [short.id]);
+  assert.deepEqual((await index()).json(), { indexed: 1, removed: 0, nextCursor: null });
+  assert.equal(batches.length, 1);
+  const chunks = batches[0]!;
+  assert.ok(chunks.length > 1 && chunks.length <= 16);
+  assert.ok(chunks.every((chunk) => Buffer.byteLength(chunk) <= 7_000));
+  assert.equal(chunks.join(""), `${title}\n\n${description}`);
+  assert.deepEqual(await query(), [longKey, short.id]);
+  assert.deepEqual((await index()).json(), { indexed: 0, removed: 0, nextCursor: null });
+  assert.equal(batches.length, 1);
+
+  await db.db.update(issues).set({ description: "更正后的短描述" }).where(eq(issues.key, longKey));
+  assert.deepEqual(await query(), [short.id]);
+  assert.deepEqual((await index()).json(), { indexed: 1, removed: 0, nextCursor: null });
+  assert.deepEqual(batches.at(-1), [`${title}\n\n更正后的短描述`]);
+  assert.equal((await legacy.client.execute("SELECT count(*) AS count FROM issue_vectors")).rows[0]?.count, 2);
 });
 
 test("credential changes reuse the index, invalid responses keep existing vectors, and disabling aborts a query", async (t) => {

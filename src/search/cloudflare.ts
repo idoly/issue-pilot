@@ -15,7 +15,7 @@ export async function issueEmbeddings(
   const { accountId, apiToken } = credentials;
   const count = "documents" in input ? input.documents.length : 1;
   const body = "documents" in input ? input : { queries: input.query, instruction: QUERY_INSTRUCTION };
-  const deadline = AbortSignal.timeout(12_000);
+  const deadline = AbortSignal.timeout("documents" in input ? 12_000 : 20_000);
   try {
     const response = await request(`https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${ISSUE_EMBEDDING_MODEL}`, {
       method: "POST",

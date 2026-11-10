@@ -1,7 +1,9 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
-import { Input, Modal } from "../ui";
+import { Badge, Input, Modal } from "../ui";
+import { Search } from "../ui/icons";
 import { currentUserSubject, errorMessage, searchIssues, type IssueSearchHit } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
+import { statusBadge, statusLabel } from "./model";
 
 const errors: Record<string, string> = {
   issue_search_index_required: "工单索引尚未准备好，请联系管理员更新索引。",
@@ -9,7 +11,8 @@ const errors: Record<string, string> = {
   issue_search_busy: "工单搜索繁忙，请稍后再试。",
   issue_search_cloudflare_access_denied: "Cloudflare 拒绝了请求，请联系管理员检查配置。",
   issue_search_cloudflare_rate_limited: "Cloudflare 暂时限制了请求，请稍后再试。",
-  issue_search_cloudflare_timed_out: "搜索请求超时，请重试。",
+  issue_search_cloudflare_timed_out: "语义搜索响应超时，已保留搜索词。按 Enter 可重试。",
+  issue_search_cloudflare_failed: "语义搜索服务暂时不可用，按 Enter 可重试。",
 };
 
 export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean }) {
@@ -53,7 +56,7 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
   const submit = async () => {
     const subject = enabled()?.subject;
     const value = query().trim();
-    if (!subject || !value || pending()) return;
+    if (!subject || !value || pending() || hits()) return;
     const controller = new AbortController();
     request = controller;
     const current = () => request === controller && !controller.signal.aborted && currentUserSubject() === subject && enabled()?.subject === subject;
@@ -73,10 +76,19 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
     }
   };
   return (
-    <Modal open={Boolean(enabled() && open())} title="搜索所有工单" footer={<small>Enter 搜索 · Esc 关闭</small>} onOk={() => void submit()} onCancel={close}>
+    <Modal
+      open={Boolean(enabled() && open())}
+      title="搜索所有工单"
+      width={620}
+      footer={<small class="issue-search-shortcuts">Enter 搜索 · Esc 关闭</small>}
+      onOk={() => void submit()}
+      onCancel={close}
+    >
       <Input
         aria-label="工单搜索词"
-        placeholder="描述你遇到的问题"
+        placeholder="例如：审批提交后一直转圈"
+        prefix={<Search size={16} />}
+        allowClear
         value={query()}
         maxlength={500}
         onInput={(event) => {
@@ -92,19 +104,38 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
         }}
       />
       <Show when={pending()}>
-        <p role="status">正在搜索…</p>
+        <p class="issue-search-feedback" role="status">
+          <span class="ui-spinner" aria-hidden="true" /> 正在搜索，按 Esc 可取消。
+        </p>
       </Show>
       <Show when={error()}>
-        <p role="alert">{error()}</p>
+        <p class="issue-search-feedback issue-search-error" role="alert">
+          {error()}
+        </p>
+      </Show>
+      <Show when={!pending() && !error() && !hits()}>
+        <p class="issue-search-feedback">可输入问题现象、报错或复现条件，按 Enter 搜索。</p>
       </Show>
       <Show when={hits()}>
         {(items) => (
-          <Show when={items().length} fallback={<p role="status">没有找到相关工单。</p>}>
+          <Show
+            when={items().length}
+            fallback={
+              <p class="issue-search-feedback" role="status">
+                没有找到相关工单。试试换一种描述。
+              </p>
+            }
+          >
+            <p class="issue-search-feedback" role="status">
+              显示 {items().length} 条相关工单
+            </p>
             <ul class="issue-search-results" aria-label="工单搜索结果">
               <For each={items()}>
                 {(issue) => (
                   <li>
                     <a
+                      aria-label={issue.title}
+                      aria-describedby={`issue-search-meta-${issue.key}`}
                       href={`/?issue=${encodeURIComponent(issue.key)}`}
                       onClick={(event) => {
                         if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -112,12 +143,13 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
                         if (props.onOpenIssue(issue.key)) close();
                       }}
                     >
-                      {issue.title}
+                      <span class="issue-search-title">{issue.title}</span>
+                      <span id={`issue-search-meta-${issue.key}`} class="issue-search-meta">
+                        <span>处理人：{issue.assignee ?? "未分配"}</span>
+                        <Badge status={statusBadge[issue.status]} text={statusLabel[issue.status]} />
+                        <span>{issue.key}</span>
+                      </span>
                     </a>
-                    <span>
-                      {" "}
-                      · {issue.key} · {issue.status === "resolved" ? "已解决" : "未解决"}
-                    </span>
                   </li>
                 )}
               </For>

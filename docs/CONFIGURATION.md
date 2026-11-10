@@ -68,11 +68,11 @@ API 的参数更新是带版本的完整覆盖，接入方应阅读[配置契约
 
 ### 工单语义搜索
 
-在「配置 → 参数」的运行参数中填写 Cloudflare Account ID 和具有 Workers AI Read 权限的 API Token，勾选「启用工单搜索」并保存。未配置凭据时默认关闭；保存即生效，无需重启。Token 只在后端保存，留空保留已存值；更换账号需填写新 Token。关闭并勾选清除可删除已存 Token。
+在「配置 → 参数 → 运行参数」中，将「工单搜索」选为「启用」，填写 Cloudflare Account ID 和具有 Workers AI Read 权限的 API Token，然后保存工单搜索配置。未配置凭据时默认关闭；保存即生效，无需重启。Token 只在后端保存，留空保留已存值；更换账号需填写新 Token。选为「关闭」后可清除已存 Token。
 
 [Cloudflare Workers AI 免费额度](https://developers.cloudflare.com/workers-ai/platform/pricing/)为每个账号每天 10,000 Neurons，UTC 00:00 重置。只用免费额度请保持 Workers Free，超额时 Cloudflare 会拒绝请求；Workers Paid 超额会计费。
 
-启用后，管理员显式更新索引。索引只发送工单标题和描述的前段给 Cloudflare Workers AI；搜索时只发送输入的查询。结果覆盖所有账户的开放和已解决工单，在本机 libSQL 排序。在输入框和编辑器外按 `Alt+K`（macOS 上 `⌥K`）打开弹窗，按回车搜索。其他已打开的页面可刷新以获得开关状态。
+启用后，管理员显式更新索引。索引只发送工单标题和完整描述给 Cloudflare Workers AI，长文本分段处理。搜索时只发送输入的查询，在本机 libSQL 按每张工单最相关的片段排序。结果覆盖所有账户的开放和已解决工单，并显示当前处理人。在输入框和编辑器外按 `Alt+K`（macOS 上 `⌥K`）打开弹窗，按回车搜索。其他已打开的页面可刷新以获得开关状态。
 
 更新索引走现有管理员 API。下面示例在应用主机通过受保护的本地监听执行；替换为管理员的工单系统账号。远程访问应使用现有的认证网关。命令不用 Cloudflare Token，服务端读取已保存的配置。
 
@@ -88,13 +88,13 @@ do {
   });
   const page = await response.json();
   if (!response.ok) throw new Error(page.error ?? `HTTP ${response.status}`);
-  console.log(`写入 ${page.indexed} 条，移除 ${page.removed} 条`);
+  console.log(`写入 ${page.indexed} 张工单，移除 ${page.removed} 张`);
   after = page.nextCursor;
 } while (after);
 NODE
 ```
 
-新增、编辑或删除工单后按需重跑。失败后可从头重跑，已写入且内容未变的向量不重复计算。保存配置本身不调用 Cloudflare，也不验证 Token；用受控工单先验证实际访问和检索质量。
+新增、编辑或删除工单后按需重跑。升级后也需执行一次更新：旧索引中已经覆盖全文的工单可复用，之前被截断的工单在重新建立索引后才会命中。失败后可从头重跑，已写入且内容未变的工单不重复计算。保存配置本身不调用 Cloudflare，也不验证 Token；用受控工单先验证实际访问和检索质量。
 
 ## MCP 与钉钉
 

@@ -1,5 +1,5 @@
 import { createSignal, onCleanup, Show } from "solid-js";
-import { Button, Input, PasswordInput } from "../ui";
+import { Button, Input, PasswordInput, Select } from "../ui";
 import { currentUserSubject, loadIssueSearchConfiguration, saveIssueSearchConfiguration, type IssueSearchConfiguration } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { settingsError } from "./settings-error";
@@ -17,6 +17,10 @@ function SearchSettingsForm(props: { subject: string }) {
   const lifetime = new AbortController();
   onCleanup(() => lifetime.abort());
   const isCurrent = () => !lifetime.signal.aborted && currentUserSubject() === props.subject;
+  const dirty = () => {
+    const current = state();
+    return current && (enabled() !== current.enabled || (enabled() && (accountId().trim() !== current.accountId || Boolean(token().trim()))) || clearToken());
+  };
   const apply = (value: IssueSearchConfiguration) => {
     setState(value);
     setEnabled(value.enabled);
@@ -34,7 +38,7 @@ function SearchSettingsForm(props: { subject: string }) {
   );
   const save = async () => {
     const current = state();
-    if (!current || saving() || !isCurrent()) return;
+    if (!current || !dirty() || saving() || !isCurrent()) return;
     setSaving(true);
     setError("");
     setSaved(false);
@@ -42,8 +46,8 @@ function SearchSettingsForm(props: { subject: string }) {
       const value = await saveIssueSearchConfiguration({
         expectedRevision: current.revision,
         enabled: enabled(),
-        accountId: accountId(),
-        ...(clearToken() ? { apiToken: null } : token().trim() ? { apiToken: token().trim() } : {}),
+        accountId: enabled() ? accountId() : current.accountId,
+        ...(!enabled() && clearToken() ? { apiToken: null } : enabled() && token().trim() ? { apiToken: token().trim() } : {}),
       });
       if (isCurrent()) {
         apply(value);
@@ -59,7 +63,7 @@ function SearchSettingsForm(props: { subject: string }) {
   return (
     <>
       <Show when={error()}>
-        <p class="user-management-error" role="alert">
+        <p class="user-management-error search-parameter-message" role="alert">
           {error()}
         </p>
       </Show>
@@ -67,8 +71,8 @@ function SearchSettingsForm(props: { subject: string }) {
         when={state()}
         fallback={
           <Show when={!error()}>
-            <p class="parameters-hint" role="status">
-              正在加载配置…
+            <p class="search-parameter-message" role="status">
+              正在加载工单搜索设置…
             </p>
           </Show>
         }
@@ -82,45 +86,59 @@ function SearchSettingsForm(props: { subject: string }) {
         >
           <label>
             <span>
-              启用工单搜索
-              <small id="search-data-note">（查询和索引所需文本发送给 Cloudflare）</small>
+              工单搜索
+              <small>（查询及索引文本发送给 Cloudflare）</small>
             </span>
-            <input
-              aria-label="启用工单搜索"
-              aria-describedby="search-data-note"
-              type="checkbox"
-              checked={enabled()}
+            <Select
+              aria-label="工单搜索"
+              value={enabled() ? "enabled" : "disabled"}
+              options={[
+                { value: "disabled", label: "关闭" },
+                { value: "enabled", label: "启用" },
+              ]}
               disabled={saving()}
-              onChange={(event) => setEnabled(event.currentTarget.checked)}
+              onChange={(value) => {
+                setEnabled(value === "enabled");
+                setClearToken(false);
+              }}
             />
           </label>
-          <label>
-            <span>Cloudflare Account ID</span>
-            <Input value={accountId()} maxlength={32} disabled={saving()} onInput={(event) => setAccountId(event.currentTarget.value)} />
-          </label>
-          <label>
-            <span>Cloudflare API Token</span>
-            <PasswordInput
-              value={token()}
-              disabled={saving() || clearToken()}
-              placeholder={state()?.tokenConfigured ? "已配置，留空保留" : "Workers AI Read Token"}
-              maxlength={1024}
-              onInput={(event) => setToken(event.currentTarget.value)}
-            />
-          </label>
-          <Show when={state()?.tokenConfigured}>
+          <Show when={enabled()}>
             <label>
-              <span>清除已保存的 Token</span>
-              <input type="checkbox" checked={clearToken()} disabled={saving()} onChange={(event) => setClearToken(event.currentTarget.checked)} />
+              <span>
+                Cloudflare Account ID
+                <small>（32 位十六进制）</small>
+              </span>
+              <Input aria-label="Cloudflare Account ID" value={accountId()} maxlength={32} disabled={saving()} onInput={(event) => setAccountId(event.currentTarget.value)} />
+            </label>
+            <label>
+              <span>
+                Cloudflare API Token
+                <small>（Workers AI Read 权限）</small>
+              </span>
+              <PasswordInput
+                aria-label="Cloudflare API Token"
+                value={token()}
+                disabled={saving()}
+                placeholder={state()?.tokenConfigured ? "已配置，留空保留" : "填写 API Token"}
+                maxlength={1024}
+                onInput={(event) => setToken(event.currentTarget.value)}
+              />
             </label>
           </Show>
-          <div>
-            <Button htmlType="submit" type="primary" loading={saving()}>
-              保存工单搜索配置
-            </Button>
-            <Show when={saved()}>
+          <Show when={!enabled() && state()?.tokenConfigured}>
+            <label class="search-parameter-clear">
+              <input type="checkbox" checked={clearToken()} disabled={saving()} onChange={(event) => setClearToken(event.currentTarget.checked)} />
+              <span>清除已保存的 Token</span>
+            </label>
+          </Show>
+          <div class="search-parameter-actions">
+            <Show when={saved() && !dirty()}>
               <p role="status">工单搜索配置已保存。</p>
             </Show>
+            <Button htmlType="submit" loading={saving()} disabled={!dirty()}>
+              保存工单搜索配置
+            </Button>
           </div>
         </form>
       </Show>
