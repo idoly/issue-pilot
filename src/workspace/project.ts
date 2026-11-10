@@ -8,7 +8,7 @@ import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment } from "./git-credentials.ts";
 import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from "./issue-services.ts";
 import type { loadDeploymentRepositories } from "./deployment.ts";
-import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
+import { issueRepositoryWorkspaceNames, repositoryStorePath, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareIssueRuntime, resolveRecordedRepository, type RelatedIssueRuntime } from "./runtime.ts";
 import { assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueRoot, pathExists } from "./state.ts";
 
@@ -25,10 +25,17 @@ export interface PreparedIssueProject {
   runtimeRoot: string;
   repositories: PreparedIssueRepository[];
   relatedIssueKeys: string[];
+  readRoots: string[];
   runtimeReady: boolean;
 }
 type ProjectIssue = { id: string; key: string; type: IssueType; serviceId: string; environmentId: string };
 type IssueRepository = typeof issueRepositories.$inferSelect;
+
+function allowRepositoryRead(readRoots: Set<string>, sharedStore: string, root: string, developmentStore?: string): void {
+  if (!developmentStore) readRoots.add(root);
+  // Isolated development stores only borrow baseline objects. Legacy linked worktrees still need their common directory.
+  readRoots.add(developmentStore && developmentStore !== sharedStore ? path.join(sharedStore, "objects") : sharedStore);
+}
 type DeploymentRepository = Awaited<ReturnType<typeof loadDeploymentRepositories>>["repositories"][number];
 
 export interface PreparedDevelopmentConversion {
@@ -176,7 +183,7 @@ export class IssueProjectManager {
     }
   }
 
-  private async prepareRelatedIssueRuntimes(issueId: string, forAgent = false): Promise<RelatedIssueRuntime[]> {
+  private async prepareRelatedIssueRuntimes(issueId: string, agent?: { readRoots: Set<string>; checkedCheckouts: Set<string> }): Promise<RelatedIssueRuntime[]> {
     const relations = await this.database.select().from(issueRelations).where(eq(issueRelations.issueId, issueId)).orderBy(asc(issueRelations.createdAt), asc(issueRelations.relatedIssueId));
     const relatedIssues: RelatedIssueRuntime[] = [];
     for (const relation of relations) {
@@ -191,13 +198,16 @@ export class IssueProjectManager {
       if (!related) throw new Error("related_issue_context_unavailable");
       const repositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, related.issue.id));
       const names = issueRepositoryWorkspaceNames(repositoryRows);
-      if (forAgent) {
+      if (agent) {
         try {
-          await assertIssueRoot(this.stateRoot, related.issue.key);
+          agent.readRoots.add(await assertIssueRoot(this.stateRoot, related.issue.key));
           const state = classifyRepositoryState(repositoryRows);
           if (repositoryRows.length && state === "invalid") throw new Error("source_repository_state_invalid");
           if (state !== "invalid") {
-            for (const repository of repositoryRows) await resolveRecordedRepository(this.stateRoot, related.issue.key, repository, names.get(repository.url)!, state);
+            for (const repository of repositoryRows) {
+              const { root, store } = await resolveRecordedRepository(this.stateRoot, related.issue.key, repository, names.get(repository.url)!, state, agent.checkedCheckouts);
+              allowRepositoryRead(agent.readRoots, repositoryStorePath(this.stateRoot, repository.url), root, store);
+            }
           }
         } catch (error) {
           throw new Error("related_issue_context_unavailable", { cause: error });
@@ -493,11 +503,13 @@ export class IssueProjectManager {
       );
     };
 
-    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id, true);
+    const readRoots = new Set<string>();
+    const checkedCheckouts = new Set<string>();
+    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id, { readRoots, checkedCheckouts });
     let prepared: PreparedWorktree[];
     if (shared) {
       prepared = [];
-      for (const { repository, baseBranch } of repositoryRows) prepared.push(await this.worktrees.prepareShared({ url: repository.url, baseBranch }));
+      for (const { repository, baseBranch } of repositoryRows) prepared.push(await this.worktrees.prepareShared({ url: repository.url, baseBranch }, checkedCheckouts));
       await saveRepositoryRows(prepared);
     } else {
       const mode = developmentWorktreeMode(issue.type);
@@ -541,8 +553,13 @@ export class IssueProjectManager {
       shared ? "read" : "write",
       relatedIssues,
     );
+    for (const [index, workspace] of prepared.entries()) {
+      const sharedStore = repositoryStorePath(this.stateRoot, repositoryRows[index]!.repository.url);
+      allowRepositoryRead(readRoots, sharedStore, workspace.workspacePath, shared ? undefined : workspace.cachePath);
+    }
     return {
       runtimeRoot,
+      readRoots: [...readRoots],
       repositories: prepared.map((workspace, index) => {
         const name = names.get(repositoryRows[index]!.repository.url)!;
         return {

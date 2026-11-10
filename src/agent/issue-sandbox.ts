@@ -234,7 +234,7 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
       ...(state ? [state] : []),
     ];
     const bridges = [SandboxManager.getLinuxHttpSocketPath(), SandboxManager.getLinuxSocksSocketPath()].filter((value): value is string => typeof value === "string");
-    const allowRead = [root, application, agent, ...bridges, ...(policy.readRoots ?? []), ...(state ? [path.join(state, "git")] : [])];
+    const allowRead = [root, application, agent, ...bridges, ...(policy.readRoots ?? [])];
     const entry = path.join(import.meta.dirname, "network-exec.ts");
     const invocation = [process.execPath, "--experimental-strip-types", entry, root, config, ...command];
     if (policy.networkDomains?.length) SandboxManager.registerCommandNetworkLists(id, { allowedDomains: [...policy.networkDomains] });

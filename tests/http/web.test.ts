@@ -7,6 +7,7 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 
 import { buildApi } from "../../src/http/api.ts";
+import { modelCatalog } from "./fixture.ts";
 
 const stateLease = { async start() {}, async close() {} };
 
@@ -31,7 +32,7 @@ test("serves the production Web and keeps unlisted files private", async (contex
       writeFile(path.join(webRoot, "assets", "app-icon.svg"), "<svg/>"),
       writeFile(path.join(webRoot, "private.txt"), "not public"),
     ]);
-    const app = await buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, stateLease, webRoot });
+    const app = await buildApi({ stateRoot, databaseFile: path.join(stateRoot, "issues.db"), logger: false, modelCatalog, stateLease, webRoot });
     try {
       const index = await app.inject({ method: "GET", url: "/" });
       assert.equal(index.statusCode, 200);

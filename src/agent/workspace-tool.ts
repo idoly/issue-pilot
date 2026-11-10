@@ -31,7 +31,7 @@ export async function createWorkspaceTool(
   projects: IssueProjectManager,
   runtimeRoot: string,
   gitEnvironment?: Record<string, string>,
-  onScopeChanged?: () => void,
+  onScopeChanged?: (readRoots?: string[]) => void,
 ) {
   const available = await listEnvironmentServices(database, issue.environmentId);
   // Development environments carry no investigation capability configuration of their own.
@@ -122,13 +122,17 @@ export async function createWorkspaceTool(
             else await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
             await tx.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
           });
-          // The live session's MCP tools and read roots were built for the old scope.
-          onScopeChanged?.();
-          // Persist intent before cross-media preparation. On failure, keep refs,
-          // rows and files so a repeat include/remove or the next round can retry.
-          const project = await projects.prepare(current, environmentKind, gitEnvironment);
-          signal?.throwIfAborted();
-          await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+          // Persist intent before cross-media preparation. A failed attempt retires the session too,
+          // but only completed preparation grants the new paths to native tools in this round.
+          let readRoots: string[] | undefined;
+          try {
+            const project = await projects.prepare(current, environmentKind, gitEnvironment);
+            signal?.throwIfAborted();
+            await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+            readRoots = project.readRoots;
+          } finally {
+            onScopeChanged?.(readRoots);
+          }
         }
         const rows = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
         const names = issueRepositoryWorkspaceNames(rows);

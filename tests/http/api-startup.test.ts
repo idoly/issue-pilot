@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Server } from "node:net";
@@ -126,6 +126,8 @@ test("serves recorded Issue code after restart without fetching or rebuilding hi
     await writeFile(path.join(remote, "README.md"), "advanced remote version");
     await commit("advance");
     const advanced = await new WorktreeManager(fixture.root).prepareShared({ url: remote, baseBranch: "main" });
+    const unrelatedEvidence = path.join(advanced.workspacePath, "untracked-evidence.txt");
+    await writeFile(unrelatedEvidence, "preserve unrelated snapshot evidence");
 
     const workspace = issueRoot(fixture.root, record!.key);
     const unrelatedManifest = path.join(issueRoot(fixture.root, other!.key), ".issue-runtime.json");
@@ -168,7 +170,21 @@ test("serves recorded Issue code after restart without fetching or rebuilding hi
     const [after] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, record!.id));
     assert.deepEqual(after, before);
 
+    assert.equal(await readFile(unrelatedEvidence, "utf8"), "preserve unrelated snapshot evidence");
+
     const entry = path.join(workspace, "remote");
+    const selectedEvidence = path.join(await realpath(entry), "untracked-evidence.txt");
+    const download = `/api/issues/${record!.key}/files/download?path=remote/README.md`;
+    assert.equal((await app.inject(download)).body, "recorded version");
+    await writeFile(selectedEvidence, "preserve selected snapshot evidence");
+    for (const response of [await readCode(), await app.inject(download)]) {
+      assert.equal(response.statusCode, 409, response.body);
+      assert.deepEqual(response.json(), { error: "source_git_binding_invalid" });
+    }
+    assert.equal(await readFile(selectedEvidence, "utf8"), "preserve selected snapshot evidence");
+    await unlink(selectedEvidence);
+    assert.equal((await readCode()).statusCode, 200);
+
     await unlink(entry);
     await symlink(advanced.workspacePath, entry);
     const mismatched = await readCode();
@@ -261,7 +277,7 @@ test("closes the database when Agent shutdown fails", async () => {
   const engine = new StartupEngine();
   engine.closeError = new Error("agent_close_failed");
   try {
-    const app = await buildApi({ stateRoot: root, databaseFile, engine, logger: false });
+    const app = await buildApi({ stateRoot: root, databaseFile, engine, modelCatalog, logger: false });
     await assert.rejects(app.close(), /agent_close_failed/);
     const database = openDatabase(databaseFile);
     assert.deepEqual((await database.client.execute("pragma integrity_check")).rows, [{ integrity_check: "ok" }]);
@@ -281,6 +297,7 @@ test("closes initialized resources when API assembly fails", async () => {
         stateRoot: root,
         databaseFile,
         engine,
+        modelCatalog,
         logger: false,
         workspacePolicy: { retentionMs: 0, highWaterBytes: 1, targetBytes: 1, maintenanceIntervalMs: 0, taskConcurrency: 1 },
       }),

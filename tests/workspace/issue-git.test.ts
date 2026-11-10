@@ -35,19 +35,26 @@ test("native Git stages and commits in its Issue while shared and other Issue st
     const other = await manager.prepare({ ...input, issueKey: "ISSUE-20261023-002" });
     const shared = repositoryStorePath(state, source);
     const before = await git(["-C", shared, "rev-parse", `refs/heads/${own.workingBranch}`]);
-    const bash = issueNativeTools({ writeRoot: path.dirname(own.workspacePath) }, () => ({
+    const bash = issueNativeTools({ writeRoot: path.dirname(own.workspacePath), stateRoot: state, readRoots: [path.join(shared, "objects")] }, () => ({
       GIT_AUTHOR_NAME: "Fixture",
       GIT_AUTHOR_EMAIL: "fixture@example.test",
       GIT_COMMITTER_NAME: "Fixture",
       GIT_COMMITTER_EMAIL: "fixture@example.test",
     })).find((tool) => tool.name === "bash")!;
     const run = (command: string) => bash.execute("fixture", { command }, undefined, undefined, {} as never);
+    const baseline = await run(`test "$(git -C repo show HEAD:file.txt)" = before && test ! -r ${shellQuote(path.join(shared, "config"))}`);
+    assert.equal(exitCode(baseline), 0, JSON.stringify(baseline));
     const result = await run("printf after > repo/file.txt && git -C repo add file.txt && git -C repo commit -m change");
     assert.equal(exitCode(result), 0, JSON.stringify(result));
     const after = await git(["-C", own.workspacePath, "rev-parse", "HEAD"]);
     assert.notEqual(after, before);
     assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${own.workingBranch}`]), before);
-    for (const file of [path.join(shared, "config"), path.join(other.cachePath, "config"), path.join(own.cachePath, "config"), path.join(own.cachePath, "hooks", "pre-commit")]) {
+    const sharedConfig = path.join(shared, "config");
+    const configBefore = await readFile(sharedConfig, "utf8");
+    // The sandbox may create an ephemeral file at a hidden path; it cannot modify the host file.
+    await run(`printf compromised >> ${shellQuote(sharedConfig)}`);
+    assert.equal(await readFile(sharedConfig, "utf8"), configBefore);
+    for (const file of [path.join(shared, "objects", "unexpected"), path.join(other.cachePath, "config"), path.join(own.cachePath, "config"), path.join(own.cachePath, "hooks", "pre-commit")]) {
       const denied = await run(`printf compromised >> ${shellQuote(file)}`);
       assert.notEqual(exitCode(denied), 0, file);
     }

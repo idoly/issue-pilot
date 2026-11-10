@@ -60,7 +60,7 @@ Tests: [state.test.ts](../../tests/workspace/state.test.ts), [message-admission.
 
 Ordinary startup does not compare all Issue records with filesystem entries. Creation still refuses a target occupied in the current or legacy layout. Root validation and lifecycle mutations refuse legacy contents for the selected Issue. No operation adopts or removes unowned directories as a result of the audit.
 
-[check-issue-state.ts](../../scripts/check-issue-state.ts) opens SQLite read-only and checks required Workspace rows, resolution state and directory ownership. Use the [runbook](../RUNBOOK.md#工单状态审计) command when investigating storage drift, with writers stopped for a consistent comparison. Missing roots and Git bindings are also checked by the operations that require them; the audit is not a full integrity or Git check. The migration that adds indexed recovery validates existing Issue relations before applying it; this migration can take time proportional to the database size once.
+[check-issue-state.ts](../../scripts/check-issue-state.ts) opens SQLite read-only and checks required Workspace rows, resolution state and directory ownership. Use the [runbook](../RUNBOOK.md#工单状态审计) command when investigating storage drift, with writers stopped for a consistent comparison. Add `--shared-git` to also audit every shared snapshot. This does not audit private Issue Git stores. Operations that use a root or Git binding also check it on access. The migration that adds indexed recovery validates existing Issue relations before applying it; this migration can take time proportional to the database size once.
 
 ## Attachments
 
@@ -91,7 +91,7 @@ Shared bare stores retain baseline objects/refs; shared snapshots are detached. 
 | development_snapshot | All null | All non-null |
 | invalid | Empty, mixed or other combination | Refuse and preserve |
 
-Startup verifies shared snapshot integrity without rebuilding Issue views. Code access checks the selected binding against its recorded prod/test commit or local dev working branch. Read-only recovery checks related context before starting Git work. Recovery checks HEAD, common directory, pointers and branch. Resolve baselines using full refs. Restore dev only from valid recorded local branches: no reset, remote fallback or guessed rebinding. Ref publication uses compare-and-swap and rejects unexpected external changes.
+Code reads validate the selected binding against its recorded prod/test commit or local dev working branch. Before exposing a shared snapshot to the code browser, work-file reader or Agent, check reciprocal Git pointers, detached HEAD and cleanliness, including ignored files. Preserve a changed snapshot and refuse access to it; unrelated snapshots do not block startup or other reads. Read-only recovery checks related context before starting Git work. Recovery checks HEAD, common directory, pointers and branch. Resolve baselines using full refs. Restore dev only from valid recorded local branches: no reset, remote fallback or guessed rebinding. Ref publication uses compare-and-swap and rejects unexpected external changes.
 
 Release requires resolved, idle, correctly bound and clean state, including staged/untracked/ignored content. Remove only registered code; retain Issue root, conversations, originals, work files and private branches. Missing roots cannot be released/reopened.
 

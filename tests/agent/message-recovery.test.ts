@@ -39,7 +39,7 @@ async function fixture(t: TestContext, blockFirst = false) {
   await database.db.insert(agentSessions).values({ issueId: issue.id, sessionFile: manager.getSessionFile()!, workspacePath: work });
   const engine = new AgentEngine(database.db, root);
   const internal = engine as unknown as { projectManager: IssueProjectManager; piRuntime: PiSessionRuntime };
-  const project: PreparedIssueProject = { runtimeRoot: work, repositories: [], relatedIssueKeys: [], runtimeReady: true };
+  const project: PreparedIssueProject = { runtimeRoot: work, repositories: [], relatedIssueKeys: [], readRoots: [], runtimeReady: true };
   t.mock.method(internal.projectManager, "prepare", async () => project);
   let started!: () => void;
   let release = () => {};

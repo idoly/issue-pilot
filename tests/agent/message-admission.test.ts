@@ -151,7 +151,7 @@ test("keeps admissions and executed rounds on the same branch during session sta
     await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, "admit-owner"));
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {}, apiKey: "fixture-key" });
     const work = issueRoot(root, issue.key);
-    const project: PreparedIssueProject = { runtimeRoot: work, repositories: [], relatedIssueKeys: [], runtimeReady: true };
+    const project: PreparedIssueProject = { runtimeRoot: work, repositories: [], relatedIssueKeys: [], readRoots: [], runtimeReady: true };
     t.mock.method(internal.projectManager, "prepare", async () => project);
     t.mock.method(internal.piRuntime, "start", async (options: StartPiSessionOptions) => {
       options.manager.appendCustomEntry("fixture-start", {});

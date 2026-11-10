@@ -20,7 +20,7 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 | 卡在哪 | 应检查什么 |
 | --- | --- |
 | 旧进程停止 | 是否仍在处理工单、等待工具或执行失败收尾；最多等待 1800 秒，不强杀 |
-| 新进程启动 | 查看数据库初始化（Opened application database）和共享 Git 校验（Validated shared Git snapshots）的耗时；普通重启不扫描历史工单 |
+| 新进程启动 | 查看数据库初始化（Opened application database）耗时；普通重启不扫描历史工单或共享 Git 快照 |
 | 等待健康 | 每轮检查，通过即返回；600 秒是上限，不是固定延迟 |
 | 超时或发现未知进程 | 保留现场，先查身份和日志，不重复启动、不按端口杀进程 |
 
@@ -94,7 +94,7 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 node --experimental-strip-types scripts/check-issue-state.ts --state-root /absolute/path/to/state
 ```
 
-检查工单关联的工作区记录、解决状态以及新旧目录的归属。遇到异常先保留现场；审计不修复、不清理，常规重启也不需要执行它。
+检查工单关联的工作区记录、解决状态以及新旧目录的归属。排查共享 Git 时可追加 `--shared-git`，校验全部共享快照的 Git 指针、提交与工作树。遇到异常先保留现场；审计不修复、不清理，常规重启也不需要执行它。
 
 ## 工单删除失败边界
 

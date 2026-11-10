@@ -18,7 +18,6 @@ import { WorkspaceLifecycleManager, workspaceLifecyclePolicy, type WorkspaceLife
 import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import { ApplicationStateLease } from "../workspace/state-lease.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
-import { WorktreeManager } from "../workspace/git.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
 import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
@@ -122,9 +121,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const parameters = (await loadApplicationParameterState(database.db)).values;
     installApplicationParameters(parameters);
     app.log.info({ durationMs: Math.round(performance.now() - databaseStartedAt) }, "Opened application database");
-    const sharedGitStartedAt = performance.now();
-    await WorktreeManager.assertSharedState(stateRoot);
-    app.log.info({ durationMs: Math.round(performance.now() - sharedGitStartedAt) }, "Validated shared Git snapshots");
 
     const sharedModelRuntime = () => (modelRuntime ??= createPiModelRuntime());
     const modelCatalog = options.modelCatalog ?? new PiAgentModelCatalog(sharedModelRuntime());

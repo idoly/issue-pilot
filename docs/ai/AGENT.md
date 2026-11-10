@@ -80,7 +80,7 @@ Pi owns registration, discovery, connection, cancellation and shutdown. The appl
 
 ## Files, host tools and resources
 
-The Issue root is the only persistently writable model directory; related Issues are read-only. Preparation reads attachment originals without automatic editable copies; explicit edits create ordinary work files. Pasted images belong to Pi messages. Query exports and SDK large outputs use ordinary files; no second publication/snapshot layer.
+The Issue root is the only persistently writable model directory; related Issues are read-only. Local tools can read only the validated shared snapshots and required Git storage for the current and explicitly related Issues. A successful workspace include/remove updates the native tool read roots immediately; stdio connections retain their launch policy until the session is retired. Preparation reads attachment originals without automatic editable copies; explicit edits create ordinary work files. Pasted images belong to Pi messages. Query exports and SDK large outputs use ordinary files; no second publication/snapshot layer.
 
 Node/npm, Java/Maven and Python use host PATH/shared libraries. Do not inject a project .venv or create an Issue environment by default. Host tools are read-only; administrators install shared dependencies. Project dependencies and writable .npm-cache/.maven-cache remain Issue-local. [network-exec.ts](../../src/agent/network-exec.ts) redirects Java temporary files and caches to the Issue. Use normal programs/libraries for formats, not format-specific executors, nested sandboxes or selectable runtime frameworks.
 

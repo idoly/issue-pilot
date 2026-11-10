@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
@@ -12,8 +14,8 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
-import { repositoryStorePath } from "../../src/workspace/git.ts";
-import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { repositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
+import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 
 test("browses only registered Issue repository content", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-source-browser-"));
@@ -284,14 +286,18 @@ test("browses only registered Issue repository content", async () => {
         reporterSubject: "source-tester",
       })
       .returning();
-    const readOnlyRepository = path.join(sharedCheckoutsRoot(root), path.basename(store), "c".repeat(40));
-    await mkdir(path.join(readOnlyRepository, ".git"), { recursive: true, mode: 0o700 });
-    await writeFile(path.join(readOnlyRepository, "README.md"), "# Snapshot\n", "utf8");
+    const remote = path.join(root, "read-only-remote");
+    const git = promisify(execFile);
+    await git("git", ["init", "-b", "main", remote]);
+    await writeFile(path.join(remote, "README.md"), "# Snapshot\n", "utf8");
+    await git("git", ["-C", remote, "add", "README.md"]);
+    await git("git", ["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=test@example.test", "commit", "-m", "snapshot"]);
+    const { workspacePath: readOnlyRepository, baseCommit } = await new WorktreeManager(root).prepareShared({ url: remote, baseBranch: "main" });
     await database.db.insert(issueRepositories).values({
       issueId: readOnlyIssue!.id,
-      url: "https://git.example.test/application.git",
+      url: remote,
       baseBranch: "main",
-      commitBefore: "c".repeat(40),
+      commitBefore: baseCommit,
       workspaceName: "application",
     });
     await database.db.insert(issueWorkspaces).values({ issueId: readOnlyIssue!.id, status: "ready", runtimeReady: true });

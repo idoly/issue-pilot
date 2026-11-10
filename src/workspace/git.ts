@@ -1,11 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, rmdir } from "node:fs/promises";
+import { lstat, mkdir, realpath, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-
-import pMap from "p-map";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
@@ -155,21 +153,34 @@ export function issueRepositoryWorkspaceNames(repositories: Array<{ url: string;
   );
 }
 
+/** New Git directories may be absent, but never create through a redirected ancestor. */
+async function managedGitDirectoryExists(directory: string): Promise<boolean> {
+  const info = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!info) {
+    await managedGitDirectoryExists(dirname(directory));
+    return false;
+  }
+  if (!info.isDirectory() || (await realpath(directory)) !== directory) throw new Error("shared_git_path_invalid");
+  return true;
+}
+
 const repositoryQueue = new KeyedSerialQueue();
 
 export class WorktreeManager {
   private readonly gitEnvironment = new AsyncLocalStorage<Record<string, string>>();
 
-  /** Agent sandboxes can read the shared Git directory, so validate it before admitting requests. */
+  /** Explicit offline audit. Normal reads validate only the selected checkout. */
   static async assertSharedState(stateRoot: string): Promise<void> {
     const manager = new WorktreeManager(stateRoot);
-    try {
-      await pMap(await listSharedCheckouts(manager.stateRoot), ({ checkout, commit, commonDirectory }) => manager.assertSharedCheckout(checkout, commit, commonDirectory), {
-        concurrency: issuePilotConfig.workspace.taskConcurrency,
-        stopOnError: false,
-      });
-    } catch (error) {
-      throw new Error("shared_checkout_changed", { cause: error });
+    for (const { checkout, commit, commonDirectory } of await listSharedCheckouts(manager.stateRoot)) {
+      try {
+        await manager.assertSharedCheckout(checkout, commit, commonDirectory);
+      } catch (error) {
+        throw new Error(`shared_checkout_changed:${relative(manager.stateRoot, checkout)}`, { cause: error });
+      }
     }
   }
 
@@ -343,10 +354,10 @@ export class WorktreeManager {
     }
   }
 
-  async prepareShared(input: PrepareSharedCheckoutInput): Promise<PreparedWorktree> {
+  async prepareShared(input: PrepareSharedCheckoutInput, checkedCheckouts?: Set<string>): Promise<PreparedWorktree> {
     this.validateRepositoryInput(input);
     const repositoryKey = repositoryHash(input.url, 20);
-    return this.serialized(repositoryKey, () => this.prepareSharedLocked(input, repositoryKey));
+    return this.serialized(repositoryKey, () => this.prepareSharedLocked(input, repositoryKey, checkedCheckouts));
   }
 
   async prepareBranchSnapshot(input: PrepareBranchSnapshotInput): Promise<PreparedWorktree> {
@@ -366,9 +377,9 @@ export class WorktreeManager {
 
   private async updateCache(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<string> {
     await this.assertBranchReference(input.baseBranch);
-    await mkdir(this.repositoriesRoot, { recursive: true });
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-    if (!(await pathExists(cachePath))) {
+    if (!(await managedGitDirectoryExists(cachePath))) {
+      await mkdir(this.repositoriesRoot, { recursive: true });
       await this.git(["init", "--bare", "--object-format=sha1", cachePath]);
       await this.git(["-C", cachePath, "remote", "add", "origin", input.url]);
     }
@@ -381,16 +392,16 @@ export class WorktreeManager {
     return cachePath;
   }
 
-  private async prepareSharedLocked(input: PrepareSharedCheckoutInput, repositoryKey: string): Promise<PreparedWorktree> {
+  private async prepareSharedLocked(input: PrepareSharedCheckoutInput, repositoryKey: string, checkedCheckouts?: Set<string>): Promise<PreparedWorktree> {
     const cachePath = await this.updateCache(input, repositoryKey);
     const baseCommit = (await this.git(["-C", cachePath, "rev-parse", `refs/remotes/origin/${input.baseBranch}`])).trim();
-    const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
+    const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit, checkedCheckouts);
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
   }
 
   private async prepareBranchSnapshotLocked(input: PrepareBranchSnapshotInput, repositoryKey: string): Promise<PreparedWorktree> {
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-    if (!(await pathExists(cachePath))) throw new Error("repository_cache_not_found");
+    if (!(await managedGitDirectoryExists(cachePath))) throw new Error("repository_cache_not_found");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
     const isolated = issueRepositoryStorePath(this.stateRoot, input.issueKey, input.url);
     let baseCommit: string;
@@ -404,23 +415,25 @@ export class WorktreeManager {
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: input.workingBranch, baseCommit };
   }
 
-  private async prepareCommitCheckout(cachePath: string, repositoryKey: string, commit: string): Promise<string> {
+  private async prepareCommitCheckout(cachePath: string, repositoryKey: string, commit: string, checkedCheckouts?: Set<string>): Promise<string> {
     const checkoutParent = resolve(this.sharedCheckoutsRoot, repositoryKey);
     const workspacePath = resolve(checkoutParent, commit);
     if (dirname(workspacePath) !== checkoutParent) throw new Error("shared_checkout_path_invalid");
 
-    const exists = await pathExists(workspacePath);
-    if (exists) {
+    if (await managedGitDirectoryExists(workspacePath)) {
       if (!(await pathExists(resolve(workspacePath, ".git")))) throw new Error("shared_checkout_is_not_git_worktree");
-      await this.assertSharedCheckout(workspacePath, commit, cachePath);
+      await this.assertSharedCheckout(workspacePath, commit, cachePath, checkedCheckouts);
     } else {
       await mkdir(checkoutParent, { recursive: true });
       await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
+      checkedCheckouts?.add(workspacePath);
     }
     return workspacePath;
   }
 
-  private async assertSharedCheckout(checkout: string, commit: string, cachePath: string): Promise<void> {
+  /** Share successful checks only within one preparation operation. */
+  async assertSharedCheckout(checkout: string, commit: string, cachePath: string, checkedCheckouts?: Set<string>): Promise<void> {
+    if (checkedCheckouts?.has(checkout)) return;
     const head = await readLinkedWorktreeHead(cachePath, checkout).catch((error) => {
       throw new Error("shared_checkout_changed", { cause: error });
     });
@@ -429,6 +442,7 @@ export class WorktreeManager {
     const status = await this.git(["--no-optional-locks", "-C", checkout, "status", "--porcelain=v2", "--branch", "--untracked-files=all", "--ignored=matching"]);
     const lines = status.trimEnd().split("\n");
     if (!lines.includes(`# branch.oid ${commit}`) || !lines.includes("# branch.head (detached)") || lines.some((line) => !line.startsWith("# "))) throw new Error("shared_checkout_changed");
+    checkedCheckouts?.add(checkout);
   }
 
   private async restoreLocalLocked(input: RestoreWorktreeInput, issueKey: string): Promise<void> {

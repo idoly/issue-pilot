@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { issueRepositoryWorkspaceNames, repositoryWorkspaceNames, WorktreeManager, WorktreeRemovalFailure } from "../../src/workspace/git.ts";
+import { issueRepositoryWorkspaceNames, repositoryStorePath, repositoryWorkspaceNames, WorktreeManager, WorktreeRemovalFailure } from "../../src/workspace/git.ts";
 import { sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -256,6 +256,24 @@ test("refuses to reuse a shared checkout containing ignored files and preserves 
     assert.equal(await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]), prepared.baseCommit);
     await rm(join(prepared.workspacePath, "private-cache"), { recursive: true });
     assert.equal((await manager.prepareShared({ url: remote, baseBranch: "main" })).workspacePath, prepared.workspacePath);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to create a shared checkout through a redirected parent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-shared-redirect-"));
+  try {
+    const remote = join(root, "remote");
+    const state = join(root, "state");
+    const preserved = join(root, "preserved");
+    await git(["init", "-b", "main", remote]);
+    await git(["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "baseline"]);
+    await mkdir(preserved);
+    await mkdir(sharedCheckoutsRoot(state), { recursive: true });
+    await symlink(preserved, join(sharedCheckoutsRoot(state), basename(repositoryStorePath(state, remote))));
+    await assert.rejects(new WorktreeManager(state).prepareShared({ url: remote, baseBranch: "main" }), /shared_git_path_invalid/);
+    assert.deepEqual(await readdir(preserved), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -587,7 +587,9 @@ export class AgentEngine implements AgentController {
       environmentKind,
       repositoryAccess: project.repositories.map((repository) => repository.access),
     });
-    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env, () => {
+    let readRoots = project.readRoots;
+    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env, (updatedRoots) => {
+      if (updatedRoots) readRoots = updatedRoots;
       const current = this.sessions.get(issue.id);
       if (current) this.scopeChangedSessions.add(current);
     });
@@ -605,7 +607,9 @@ export class AgentEngine implements AgentController {
         workspaceTool,
         mcpConfigurations,
         manager,
-        readRoots: project.relatedIssueKeys.map((key) => issueRoot(this.stateRoot, key)),
+        get readRoots() {
+          return readRoots;
+        },
         gitAccess: environmentKind === "dev" ? "write" : "read",
         gitIdentity: owner.user.role === "developer" ? personGitIdentity(owner.user) : gitIdentity,
         modelApiKey,

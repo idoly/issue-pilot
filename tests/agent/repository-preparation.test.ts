@@ -18,6 +18,7 @@ import {
   globalAgentConfiguration,
   issueAttachments,
   issueRepositories,
+  issueRelations,
   issues,
   issueWorkspaces,
   mcpServices,
@@ -28,8 +29,10 @@ import {
   subjects,
   userCredentials,
 } from "../../src/db/schema.ts";
+import { issueNativeTools } from "../../src/agent/native-tools.ts";
+import { shellQuote } from "../../src/agent/issue-sandbox.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
-import { repositoryWorkspaceNames } from "../../src/workspace/git.ts";
+import { repositoryWorkspaceNames, WorktreeManager } from "../../src/workspace/git.ts";
 import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -204,7 +207,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-engine-repositories-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
-  const starts: Array<Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpConfigurations">> = [];
+  const starts: StartPiSessionOptions[] = [];
   let sessionStops = 0;
   try {
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
@@ -219,7 +222,14 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     await database.db.insert(mcpServices).values({ name: "Global tools", url: "https://tools.example.test/mcp", transport: "streamable_http", enabled: true }).returning();
     await database.db.insert(mcpServices).values({ name: "Disabled tools", url: "https://disabled.example.test/mcp", transport: "streamable_http", enabled: false });
     const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
-    await registerTestRepositories(database.db, remotes);
+    const extraRemote = path.join(root, "extra.git");
+    await git(["clone", "--bare", source, extraRemote]);
+    await registerTestRepositories(database.db, [...remotes, extraRemote]);
+    const [extra] = await database.db.insert(services).values({ key: "extra", name: "Extra" }).returning();
+    const [extraRepository] = await database.db.insert(serviceRepositories).values({ serviceId: extra!.id, alias: "extra", url: extraRemote }).returning();
+    const [extraDeployment] = await database.db.insert(serviceDeployments).values({ serviceId: extra!.id, environmentId: prod.id, config: {} }).returning();
+    await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: extraDeployment!.id, repositoryId: extraRepository!.id, baseBranch: "prod" });
+    const { workspacePath: extraCheckout } = await new WorktreeManager(stateRoot).prepareShared({ url: extraRemote, baseBranch: "prod" });
     const repositories = await database.db
       .insert(serviceRepositories)
       .values([
@@ -255,9 +265,25 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     await claimIssueRoot(stateRoot, devIssue!.key);
     await database.db.insert(issueWorkspaces).values([{ issueId: prodIssue!.id }, { issueId: devIssue!.id }]);
 
+    await database.db.insert(issueRelations).values({ issueId: devIssue!.id, relatedIssueId: prodIssue!.id });
+    const bashFor = (options: StartPiSessionOptions) => {
+      const bash = issueNativeTools({
+        writeRoot: options.workspaceRoot,
+        stateRoot,
+        gitAccess: options.gitAccess!,
+        get readRoots() {
+          return options.readRoots ?? [];
+        },
+      }).find(({ name }) => name === "bash")!;
+      return async (command: string) => {
+        const result = await bash.execute("git-scope", { command }, undefined, undefined, {} as never);
+        assert.match(JSON.stringify(result.content), /SCOPE_OK/);
+      };
+    };
+
     const engine = new AgentEngine(database.db, stateRoot);
     const internal = engine as unknown as {
-      piRuntime: { start(options: Pick<StartPiSessionOptions, "context" | "workspaceRoot" | "mcpConfigurations">): Promise<unknown>; close(): Promise<void> };
+      piRuntime: { start(options: StartPiSessionOptions): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
     };
     internal.piRuntime = {
@@ -266,7 +292,16 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
         return {
           session: {},
           streaming: false,
-          async prompt() {},
+          async prompt() {
+            if (starts.length !== 1) return;
+            const bash = bashFor(options);
+            const direct = shellQuote(path.join(extraCheckout, "README.md"));
+            await bash(`test ! -r ${direct} && printf SCOPE_OK`);
+            await options.workspaceTool!.execute("include", { operation: "include", service: "extra" }, undefined, undefined, {} as never);
+            await bash('test "$(git -C extra show HEAD:README.md)" = "production baseline" && printf SCOPE_OK');
+            await options.workspaceTool!.execute("remove", { operation: "remove", service: "extra" }, undefined, undefined, {} as never);
+            await bash(`test ! -r ${direct} && printf SCOPE_OK`);
+          },
           async stop() {
             sessionStops += 1;
           },
@@ -334,6 +369,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       false,
     );
     await access(issueRoot(stateRoot, prodIssue!.key));
+    const oldCheckout = await git(["-C", path.join(prodRoot, prodRuntimeName), "rev-parse", "--show-toplevel"]);
 
     const firstProdCommit = prodRepository.commitBefore;
     const firstSecondaryCommit = prodRepositoryByUrl.get(remotes[1])!.commitBefore;
@@ -369,6 +405,16 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     assert.equal(await git(["-C", devRepository!.localPath!, "branch", "--show-current"]), devRepository!.workingBranch);
     assert.equal(devWorkspace!.runtimeReady, true);
     assert.equal(starts[2]!.context.canModifyCode, true);
+    const relatedCode = shellQuote(`.related-${prodIssue!.key.toLowerCase()}/${prodRuntimeName}`);
+    const oldFile = shellQuote(path.join(oldCheckout, "README.md"));
+    await bashFor(starts[2]!)(`test "$(git -C ${relatedCode} show HEAD:README.md)" = "new production snapshot" && test ! -r ${oldFile} && printf SCOPE_OK`);
+
+    const currentCheckout = await git(["-C", path.join(prodRoot, prodRuntimeName), "rev-parse", "--show-toplevel"]);
+    const evidence = path.join(currentCheckout, "unexpected.txt");
+    await writeFile(evidence, "preserve related checkout evidence");
+    await assert.rejects(internal.run(devIssue!.id), /related_issue_context_unavailable/);
+    assert.equal(await readFile(evidence, "utf8"), "preserve related checkout evidence");
+    await rm(evidence);
 
     await database.db
       .update(serviceDeploymentRepositories)

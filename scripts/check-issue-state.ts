@@ -3,10 +3,16 @@ import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { applicationConfig } from "../src/config.ts";
 import { assertIssueStateLayout } from "../src/workspace/state.ts";
+import { WorktreeManager } from "../src/workspace/git.ts";
 
-const { values } = parseArgs({ options: { "state-root": { type: "string" } } });
+const { values } = parseArgs({ options: { "state-root": { type: "string" }, "shared-git": { type: "boolean" } } });
 const root = values["state-root"];
 if (!root || !path.isAbsolute(root)) throw new Error("absolute_state_root_required");
+
+if (values["shared-git"]) {
+  await WorktreeManager.assertSharedState(root);
+  console.log("Checked shared Git snapshots");
+}
 
 const database = new DatabaseSync(path.join(root, applicationConfig.state.databaseFile), { readOnly: true });
 try {

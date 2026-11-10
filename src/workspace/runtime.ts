@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { issueRepositories } from "../db/schema.ts";
-import { developmentRepositoryStorePath, repositoryStorePath } from "./git.ts";
+import { developmentRepositoryStorePath, repositoryStorePath, WorktreeManager } from "./git.ts";
 import { readIssueBranchCommit, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { assertIssueRoot, issueRoot, sharedCheckoutsRoot, type RepositoryState } from "./state.ts";
 
@@ -24,6 +24,7 @@ export async function resolveRecordedRepository(
   repository: typeof issueRepositories.$inferSelect,
   name: string,
   state: Exclude<RepositoryState, "invalid">,
+  checkedCheckouts?: Set<string>,
 ): Promise<{ root: string; store?: string }> {
   const entry = path.join(await assertIssueRoot(stateRoot, issueKey), entryName(name));
   const metadata = await lstat(entry);
@@ -43,6 +44,7 @@ export async function resolveRecordedRepository(
     // commitBefore is the baseline for dev. A released view represents the recorded local working branch.
     const commit = state === "read_only" ? repository.commitBefore : await readIssueBranchCommit(await developmentRepositoryStorePath(stateRoot, issueKey, repository.url), repository.workingBranch!);
     if (path.basename(root) !== commit) throw new Error("source_runtime_invalid");
+    await new WorktreeManager(stateRoot).assertSharedCheckout(root, commit, store, checkedCheckouts);
     return { root };
   } catch (error) {
     if (error instanceof Error && error.message === "source_runtime_invalid") throw error;

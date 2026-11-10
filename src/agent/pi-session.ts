@@ -309,7 +309,9 @@ function sessionTools(options: StartPiSessionOptions, identityEnvironment: () =>
         writeRoot: workspaceRoot,
         ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
         gitAccess: options.gitAccess ?? (context.canModifyCode ? "write" : "read"),
-        readRoots: [...(options.readRoots ?? []), ...(options.gitReadRoots ?? []), options.agentDirectory ?? getAgentDir()],
+        get readRoots() {
+          return [...(options.readRoots ?? []), ...(options.gitReadRoots ?? []), options.agentDirectory ?? getAgentDir()];
+        },
         networkDomains: options.runtime?.networkAllowedDomains ?? [],
       },
       () => ({
