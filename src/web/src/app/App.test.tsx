@@ -301,7 +301,7 @@ describe("issue pilot workspace", () => {
     window.history.replaceState(null, "", window.location.pathname);
   });
 
-  test("configures search and opens an Issue outside the queue with Alt+K", async () => {
+  test("configures search and opens an Issue in its assignee's queue with Alt+K", async () => {
     const client = await import("../data/client");
     const user = await client.loadCurrentUser();
     const catalog = await client.loadCatalog();
@@ -345,7 +345,64 @@ describe("issue pilot workspace", () => {
     fireEvent.click(link);
     await screen.findByRole("heading", { name: issue.title });
     expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
-    expect(client.currentUserSubject()).toBe(user.subject);
+    expect(client.currentUserSubject()).toBe("second-user");
+    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test");
+    const queue = screen.getByLabelText("工单队列");
+    const row = (await within(queue).findByText(issue.key)).closest('[role="listitem"]');
+    expect(row?.getAttribute("aria-current")).toBe("true");
+    expect(within(queue).queryByText("ISSUE-20260810-042")).toBeNull();
+  });
+
+  test("resets queue filters that would hide a search result", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
+    const issue = { key: "ISSUE-20260810-041", title: "客户导出的 CSV 缺少时区信息", status: "pending" as const };
+    vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
+    render(() => <App initialView="issues" />);
+    const queue = await screen.findByLabelText("工单队列");
+    await within(queue).findByText(issue.key);
+    const filter = within(queue).getByLabelText("搜索工单");
+    await fireEvent.input(filter, { target: { value: "订单状态" } });
+    expect(within(queue).queryByText(issue.key)).toBeNull();
+
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
+    const query = await screen.findByLabelText("工单搜索词");
+    await fireEvent.input(query, { target: { value: "导出时间不对" } });
+    await fireEvent.keyDown(query, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("link", { name: issue.title }));
+
+    await screen.findByRole("heading", { name: issue.title });
+    expect(client.currentUserSubject()).toBe("fixture-user");
+    expect(filter).toHaveProperty("value", "");
+    const row = within(queue).getByText(issue.key).closest('[role="listitem"]');
+    expect(row?.getAttribute("aria-current")).toBe("true");
+  });
+
+  test("keeps the current account and its Agent draft when a search result's account switch is declined", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
+    const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const };
+    vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(() => <App initialView="issues" />);
+    const queue = await screen.findByLabelText("工单队列");
+    const source = await within(queue).findByText("ISSUE-20260810-041");
+    fireEvent.click(source);
+    const composer = await screen.findByRole("region", { name: "ISSUE-20260810-041 Agent 会话" });
+    await fireEvent.input(within(composer).getByLabelText("发送给 Agent"), { target: { value: "保留草稿" } });
+
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
+    const query = await screen.findByLabelText("工单搜索词");
+    await fireEvent.input(query, { target: { value: "审批超时" } });
+    await fireEvent.keyDown(query, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("link", { name: issue.title }));
+
+    await screen.findByRole("heading", { name: issue.title });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(client.currentUserSubject()).toBe("fixture-user");
+    fireEvent.click(source);
+    const restored = await screen.findByRole("region", { name: "ISSUE-20260810-041 Agent 会话" });
+    expect(within(restored).getByLabelText("发送给 Agent")).toHaveProperty("value", "保留草稿");
   });
 
   test("rejects a response that arrives after the search popup is dismissed", async () => {

@@ -12,7 +12,15 @@ import type { IssueListResource } from "./issue-list";
 
 type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
 
-export function IssueQueue(props: { selectedId: string; userSubject: string; issueList: IssueListResource; hidden?: boolean; keepExternalSelection?: boolean; onSelect: (id: string) => void }) {
+export function IssueQueue(props: {
+  selectedId: string;
+  userSubject: string;
+  issueList: IssueListResource;
+  hidden?: boolean;
+  keepExternalSelection?: boolean;
+  filterReset?: number;
+  onSelect: (id: string) => void;
+}) {
   const { catalog, people, currentUser, catalogError, peopleError, refreshCatalog } = useApplicationResources();
   const { items: issues, error: loadError, refresh: loadIssues } = props.issueList;
   const loading = () => props.issueList.loading() || props.issueList.refreshing();
@@ -24,6 +32,15 @@ export function IssueQueue(props: { selectedId: string; userSubject: string; iss
   const [status, setStatus] = createSignal<QueueStatusFilter>("all", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
+  createEffect(
+    () => props.filterReset,
+    () => {
+      setQuery("");
+      setStatus("all");
+      setEnvironmentFilter("all");
+      setServiceFilter("all");
+    },
+  );
   const filtered = createMemo(() => {
     const subject = props.userSubject;
     if (!subject) return [];

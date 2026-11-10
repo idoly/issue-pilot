@@ -98,20 +98,6 @@ function CurrentUserIdentity(props: { mayChange: () => boolean }) {
   );
 }
 
-function ResourceBackedIssueQueue(props: { selectedId: string; issueList: IssueListResource; hidden: boolean; keepExternalSelection: boolean; onSelect: (id: string) => void }) {
-  const { currentUser } = useApplicationResources();
-  return (
-    <IssueQueue
-      selectedId={props.selectedId}
-      userSubject={currentUser()?.subject ?? ""}
-      issueList={props.issueList}
-      hidden={props.hidden}
-      keepExternalSelection={props.keepExternalSelection}
-      onSelect={props.onSelect}
-    />
-  );
-}
-
 function ResourceBackedOverview(props: { issueList: IssueListResource; onSelectIssue: (issueKey: string) => void }) {
   const { people, selectCurrentUser, refreshPeople } = useApplicationResources();
   let generation = 0,
@@ -148,6 +134,15 @@ function linkedIssueFromUrl(): string {
 }
 
 export function App(props: { initialView?: AppView } = {}) {
+  return (
+    <ApplicationResourcesProvider>
+      <AppWorkspace initialView={props.initialView} />
+    </ApplicationResourcesProvider>
+  );
+}
+
+function AppWorkspace(props: { initialView?: AppView }) {
+  const { currentUser, people, refreshPeople, selectCurrentUser, agentDrafts } = useApplicationResources();
   const linkedIssue = linkedIssueFromUrl();
   const [view, setView] = createSignal<AppView>(props.initialView ?? (linkedIssue ? "issues" : "dashboard"), { ownedWrite: true });
   const [selectedId, setSelectedId] = createSignal(linkedIssue, { ownedWrite: true });
@@ -156,6 +151,7 @@ export function App(props: { initialView?: AppView } = {}) {
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueReloadToken, setIssueReloadToken] = createSignal(0, { ownedWrite: true });
   const [keepExternalSelection, setKeepExternalSelection] = createSignal(Boolean(linkedIssue), { ownedWrite: true });
+  const [queueFilterReset, setQueueFilterReset] = createSignal(0, { ownedWrite: true });
   const [dashboardTarget, setDashboardTarget] = createSignal(linkedIssue, { ownedWrite: true });
   const [sourceExpanded, setSourceExpanded] = createSignal(false, { ownedWrite: true });
   const [sourceAgentOpen, setSourceAgentOpen] = createSignal(true, { ownedWrite: true });
@@ -171,6 +167,7 @@ export function App(props: { initialView?: AppView } = {}) {
   let navigationIndex = typeof initialNavigationIndex === "number" && Number.isSafeInteger(initialNavigationIndex) ? initialNavigationIndex : 0;
   let acceptedUrl = window.location.href;
   let restoringHistory = false;
+  let searchNavigation: { key: string; subject: string | undefined } | undefined;
   const onHistoryNavigation = (event: PopStateEvent) => {
     if (restoringHistory) {
       restoringHistory = false;
@@ -186,6 +183,7 @@ export function App(props: { initialView?: AppView } = {}) {
     }
     if (typeof nextIndex === "number" && Number.isSafeInteger(nextIndex)) navigationIndex = nextIndex;
     const key = linkedIssueFromUrl();
+    searchNavigation = undefined;
     setSourceExpanded(false);
     setSourceDirty(false);
     setKeepExternalSelection(Boolean(key));
@@ -208,6 +206,9 @@ export function App(props: { initialView?: AppView } = {}) {
     ({ id, active }) => {
       const currentGeneration = ++selectionGeneration;
       issueRefreshes.clear();
+      if (!active || searchNavigation?.key !== id) searchNavigation = undefined;
+      const search = searchNavigation;
+      const isCurrent = () => currentGeneration === selectionGeneration && selectedId() === id && view() === "issues";
       if (!active) return;
       setSourceExpanded(false);
       setSourceDirty(false);
@@ -219,16 +220,30 @@ export function App(props: { initialView?: AppView } = {}) {
       setLoading(true);
       setIssueError("");
       void getIssue(id)
-        .then((value) => {
-          if (currentGeneration === selectionGeneration) setIssue(value);
+        .then(async (value) => {
+          if (search && isCurrent() && value.assigneeSubject) {
+            const assignee = value.assigneeSubject;
+            const canFollow = () => isCurrent() && searchNavigation === search && currentUser()?.subject === search.subject;
+            const knowsAssignee = () => people().some((person) => person.subject === assignee);
+            if (canFollow() && !knowsAssignee()) await refreshPeople().catch(() => undefined);
+            if (canFollow() && knowsAssignee()) {
+              if (assignee === search.subject || !agentDrafts.hasPending() || window.confirm("切换到该工单的处理人会清除当前用户未发送的 Agent 草稿。是否切换？")) {
+                if (assignee !== search.subject) selectCurrentUser(assignee);
+                setQueueFilterReset((value) => value + 1);
+              }
+            }
+          }
+          if (isCurrent()) setIssue(value);
         })
         .catch((error) => {
-          if (currentGeneration !== selectionGeneration) return;
+          if (!isCurrent()) return;
           setIssue(null);
           setIssueError(error instanceof Error ? error.message : "工单加载失败");
         })
         .finally(() => {
-          if (currentGeneration === selectionGeneration) setLoading(false);
+          if (!isCurrent()) return;
+          if (searchNavigation === search) searchNavigation = undefined;
+          setLoading(false);
         });
     },
   );
@@ -284,10 +299,12 @@ export function App(props: { initialView?: AppView } = {}) {
     });
     if (untrack(issueError) || changed) void refreshIssue(current.id, false).catch(() => undefined);
   });
-  const openIssueLink = (key: string) => {
+  const openIssueLink = (key: string, origin?: "search") => {
     if (!mayNavigate()) return false;
+    searchNavigation = origin === "search" ? { key, subject: currentUser()?.subject } : undefined;
     if (view() === "issues" && selectedId() === key) {
-      if (!issue() || issueError()) setIssueReloadToken((value) => value + 1);
+      if (searchNavigation) setKeepExternalSelection(true);
+      if (searchNavigation || !issue() || issueError()) setIssueReloadToken((value) => value + 1);
       return true;
     }
     const url = new URL(`/?issue=${encodeURIComponent(key)}`, window.location.origin);
@@ -301,8 +318,8 @@ export function App(props: { initialView?: AppView } = {}) {
     return true;
   };
   return (
-    <ApplicationResourcesProvider>
-      <IssueSearchDialog onOpenIssue={openIssueLink} />
+    <>
+      <IssueSearchDialog onOpenIssue={(key) => openIssueLink(key, "search")} />
       <div class="app-shell">
         <a
           class="skip-link"
@@ -346,6 +363,7 @@ export function App(props: { initialView?: AppView } = {}) {
           <CurrentUserIdentity
             mayChange={() => {
               if (!mayNavigate()) return false;
+              searchNavigation = undefined;
               setSourceExpanded(false);
               setSourceDirty(false);
               return true;
@@ -367,11 +385,13 @@ export function App(props: { initialView?: AppView } = {}) {
               <ResourceBackedOverview issueList={issueList} onSelectIssue={openIssueLink} />
             </Match>
             <Match when={view() === "issues"}>
-              <ResourceBackedIssueQueue
+              <IssueQueue
                 selectedId={selectedId()}
+                userSubject={currentUser()?.subject ?? ""}
                 issueList={issueList}
                 hidden={sourceExpanded()}
                 keepExternalSelection={keepExternalSelection()}
+                filterReset={queueFilterReset()}
                 onSelect={(issueKey) => {
                   if (!untrack(mayNavigate)) return;
                   if (issueKey === untrack(selectedId)) {
@@ -468,6 +488,6 @@ export function App(props: { initialView?: AppView } = {}) {
           </Switch>
         </div>
       </div>
-    </ApplicationResourcesProvider>
+    </>
   );
 }
