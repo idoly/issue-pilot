@@ -313,7 +313,7 @@ describe("issue pilot workspace", () => {
     render(() => <App initialView="configuration" />);
     const shortcut = { key: "k", code: "KeyK", altKey: true };
     fireEvent.keyDown(window, shortcut);
-    expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "查找相似工单" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "参数" }));
     const parameters = within(await screen.findByRole("region", { name: "参数表单" }));
     expect(parameters.queryByLabelText("Cloudflare Account ID")).toBeNull();
@@ -331,12 +331,12 @@ describe("issue pilot workspace", () => {
     expect(secret.value).toBe("");
     await waitFor(async () => {
       await fireEvent.keyDown(window, shortcut);
-      expect(screen.getByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "查找相似工单" })).toBeTruthy();
     });
     await fireEvent.click(screen.getByRole("button", { name: "关闭弹窗" }));
     await fireEvent.keyDown(window, { key: "k", code: "KeyK", ctrlKey: true });
     await fireEvent.keyDown(secret, shortcut);
-    expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "查找相似工单" })).toBeNull();
     await fireEvent.keyDown(window, { ...shortcut, key: "˚" });
     const query = await screen.findByLabelText("工单搜索词");
     await fireEvent.input(query, { target: { value: "审批一直转圈" } });
@@ -350,7 +350,7 @@ describe("issue pilot workspace", () => {
     expect(client.searchIssues).toHaveBeenCalledTimes(requests);
     fireEvent.click(link);
     await screen.findByRole("heading", { name: issue.title });
-    expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "查找相似工单" })).toBeNull();
     expect(client.currentUserSubject()).toBe("second-user");
     expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test");
     const queue = screen.getByLabelText("工单队列");
@@ -422,7 +422,7 @@ describe("issue pilot workspace", () => {
     render(() => <App />);
     await waitFor(() => {
       fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
-      expect(screen.getByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "查找相似工单" })).toBeTruthy();
     });
     const query = screen.getByLabelText("工单搜索词");
     await fireEvent.input(query, { target: { value: "旧查询" } });
@@ -433,7 +433,7 @@ describe("issue pilot workspace", () => {
     finish([{ key: "ISSUE-20260810-038", title: "不应出现的旧结果", status: "open", assignee: null }]);
     await response;
     fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
-    expect(await screen.findByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "查找相似工单" })).toBeTruthy();
     expect(screen.queryByText("不应出现的旧结果")).toBeNull();
   });
 
@@ -448,7 +448,7 @@ describe("issue pilot workspace", () => {
     render(() => <App />);
     await waitFor(() => {
       fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
-      expect(screen.getByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "查找相似工单" })).toBeTruthy();
     });
     const query = screen.getByLabelText("工单搜索词");
     await fireEvent.input(query, { target: { value: "导出超时" } });

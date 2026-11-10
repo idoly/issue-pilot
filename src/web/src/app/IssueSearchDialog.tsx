@@ -78,7 +78,7 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
   return (
     <Modal
       open={Boolean(enabled() && open())}
-      title="搜索所有工单"
+      title="查找相似工单"
       width={620}
       footer={<small class="issue-search-shortcuts">Enter 搜索 · Esc 关闭</small>}
       onOk={() => void submit()}
