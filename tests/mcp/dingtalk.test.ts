@@ -38,7 +38,7 @@ test("an explicitly cleared column is skipped instead of falling back to auto-de
     { id: "description", name: "描述", type: "text" },
     { id: "attachments", name: "附件", type: "attachment" },
   ];
-  assert.deepEqual(resolveDingtalkColumns(fields, { title: "序号" }), { title: "title", description: "description", number: "title", attachments: "attachments" });
+  assert.deepEqual(resolveDingtalkColumns(fields, { title: "序号" }), { title: "title", description: "description", number: "title", attachments: "attachments", reporterNote: "" });
   assert.equal(resolveDingtalkColumns(fields, { description: "", attachments: "" }).description, "");
   assert.equal(resolveDingtalkColumns(fields, { description: "", attachments: "" }).attachments, "");
   assert.equal(resolveDingtalkColumns(fields, { description: "", attachments: "" }).title, "title");

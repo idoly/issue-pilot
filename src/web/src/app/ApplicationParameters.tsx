@@ -1,6 +1,6 @@
-import { createEffect, createSignal, For, onCleanup, Show, type ParentProps } from "solid-js";
-import { Button, Input, Select, Skeleton } from "../ui";
-import { errorMessage, loadApplicationParameters, updateApplicationParameters, type ApplicationParameterKey, type ApplicationParameterState, type ApplicationParameters } from "../data/client";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { Button, Input, PasswordInput, Select, Skeleton } from "../ui";
+import { errorMessage, loadApplicationParameters, updateApplicationParameters, type ApplicationParameterEditorState, type ApplicationParameterKey, type ApplicationParameters } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { settingsError } from "./settings-error";
 
@@ -30,10 +30,8 @@ const numberFields: Array<{ key: NumberKey; label: string; unit: keyof typeof un
   { key: "dmsExecutionMs", label: "DMS 查询超时", unit: "seconds", note: "单次 MCP 查询" },
   { key: "slsExecutionMs", label: "SLS 查询超时", unit: "seconds", note: "单次 CLI 查询" },
 ];
-const listFields: Array<{ key: ListKey; label: string; note: string }> = [
-  { key: "dingtalkAttachmentHosts", label: "钉钉附件主机", note: "每行一个 HTTPS 主机" },
-  { key: "networkAllowedDomains", label: "Agent 网络基础白名单", note: "每行一个域名，全局 Agent 配置可追加" },
-];
+const listKeys = ["dingtalkAttachmentHosts", "networkAllowedDomains"] as const satisfies readonly ListKey[];
+const emptySearchDraft = { enabled: false, accountId: "", token: "", clearToken: false };
 
 function parse(text: string, divisor: number, bounds: { minimum: number; maximum: number }): number | null {
   const match = /^(\d+)(?:\.(\d+))?$/.exec(text.trim());
@@ -48,30 +46,39 @@ function parse(text: string, divisor: number, bounds: { minimum: number; maximum
 }
 
 /** Admin view of the parameters that apply without restart. Values save together so cross-field rules stay consistent. */
-export function ApplicationParametersView(props: ParentProps) {
-  const { currentUser } = useApplicationResources();
-  const [state, setState] = createSignal<ApplicationParameterState | null>(null, { ownedWrite: true });
+export function ApplicationParametersView() {
+  const { currentUser, refreshCatalog } = useApplicationResources();
+  const [state, setState] = createSignal<ApplicationParameterEditorState | null>(null, { ownedWrite: true });
   const [numbers, setNumbers] = createSignal<Partial<Record<NumberKey, string>>>({}, { ownedWrite: true });
   const [lists, setLists] = createSignal<Partial<Record<ListKey, string>>>({}, { ownedWrite: true });
   const [networkMode, setNetworkMode] = createSignal<ApplicationParameters["networkMode"]>("open", { ownedWrite: true });
+  const [searchDraft, setSearchDraft] = createSignal(emptySearchDraft, { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [conflict, setConflict] = createSignal(false, { ownedWrite: true });
+  const [saved, setSaved] = createSignal(false, { ownedWrite: true });
   let generation = 0;
+  let loadRequest: AbortController | undefined;
   const isAdmin = () => currentUser()?.isAdmin === true;
-  const apply = (value: ApplicationParameterState) => {
+  const busy = () => loading() || saving();
+  const apply = (value: ApplicationParameterEditorState) => {
     setState(value);
     setNumbers(Object.fromEntries(numberFields.map((field) => [field.key, String(value.values[field.key] / units[field.unit].divisor)])) as Partial<Record<NumberKey, string>>);
-    setLists(Object.fromEntries(listFields.map((field) => [field.key, value.values[field.key].join("\n")])) as Partial<Record<ListKey, string>>);
+    setLists(Object.fromEntries(listKeys.map((key) => [key, value.values[key].join("\n")])) as Partial<Record<ListKey, string>>);
     setNetworkMode(value.values.networkMode);
+    setSearchDraft({ ...emptySearchDraft, enabled: value.issueSearch.enabled, accountId: value.issueSearch.accountId });
   };
   const load = async () => {
     const owner = ++generation;
+    loadRequest?.abort();
+    const controller = new AbortController();
+    loadRequest = controller;
     setLoading(true);
     setError("");
+    setSaved(false);
     try {
-      const value = await loadApplicationParameters();
+      const value = await loadApplicationParameters(controller.signal);
       if (owner === generation) {
         apply(value);
         setConflict(false);
@@ -79,12 +86,16 @@ export function ApplicationParametersView(props: ParentProps) {
     } catch (cause) {
       if (owner === generation) setError(errorMessage(cause));
     } finally {
-      if (owner === generation) setLoading(false);
+      if (owner === generation) {
+        loadRequest = undefined;
+        setLoading(false);
+      }
     }
   };
   const save = async () => {
     const current = state();
-    if (!isAdmin() || !current || saving() || loading()) return;
+    if (!isAdmin() || !current || busy()) return;
+    setSaved(false);
     const overrides: Partial<ApplicationParameters> = {};
     if (networkMode() !== current.defaults.networkMode) overrides.networkMode = networkMode();
     for (const field of numberFields) {
@@ -101,21 +112,41 @@ export function ApplicationParametersView(props: ParentProps) {
       // Unchanged fields stay as the project default so later configuration changes still reach them.
       if (value !== current.defaults[field.key]) (overrides as Record<string, unknown>)[field.key] = value;
     }
-    for (const field of listFields) {
-      const entries = (lists()[field.key] ?? "")
+    for (const key of listKeys) {
+      const entries = (lists()[key] ?? "")
         .split("\n")
         .map((entry) => entry.trim())
         .filter(Boolean);
       // Same rule as the numbers: an unchanged list keeps following the project default.
-      if (entries.join("\n") !== current.defaults[field.key].join("\n")) (overrides as Record<string, unknown>)[field.key] = entries;
+      if (entries.join("\n") !== current.defaults[key].join("\n")) (overrides as Record<string, unknown>)[key] = entries;
     }
+    const { enabled, accountId, token, clearToken } = searchDraft();
+    const search = current.issueSearch;
+    const searchChanged = enabled !== search.enabled || (enabled && (accountId.trim() !== search.accountId || Boolean(token.trim()))) || clearToken;
     setSaving(true);
     setError("");
     setConflict(false);
     const owner = generation;
     try {
-      const value = await updateApplicationParameters({ expectedRevision: current.revision, overrides });
-      if (owner === generation) apply(value);
+      const value = await updateApplicationParameters({
+        expectedRevision: current.revision,
+        overrides,
+        ...(searchChanged
+          ? {
+              issueSearch: {
+                expectedRevision: search.revision,
+                enabled,
+                accountId: enabled ? accountId : search.accountId,
+                apiToken: enabled ? token.trim() || undefined : clearToken ? null : undefined,
+              },
+            }
+          : {}),
+      });
+      if (owner === generation) {
+        apply(value);
+        setSaved(true);
+        if (search.enabled !== value.issueSearch.enabled) void refreshCatalog().catch(() => undefined);
+      }
     } catch (cause) {
       if (owner === generation) {
         setError(settingsError(cause));
@@ -130,29 +161,46 @@ export function ApplicationParametersView(props: ParentProps) {
     (identity, previous) => {
       if (identity.subject === previous?.subject && identity.admin === previous?.admin) return;
       generation++;
+      loadRequest?.abort();
+      loadRequest = undefined;
       setState(null);
+      setSearchDraft(emptySearchDraft);
       setSaving(false);
       setError("");
       setConflict(false);
+      setSaved(false);
       if (identity.subject && identity.admin) void load();
       else setLoading(false);
     },
   );
   onCleanup(() => {
     generation++;
+    loadRequest?.abort();
   });
   return (
-    <section class="user-management-card parameters-card" aria-label="运行参数">
+    <form
+      class="user-management-card parameters-card"
+      aria-label="运行参数"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
+    >
       <header class="user-management-header parameters-header">
         <div>
           <strong>运行参数</strong>
           <span>（保存即生效，不中断运行中的工单）</span>
         </div>
-        <Show when={isAdmin() && state()}>
-          <Button type="primary" loading={saving()} disabled={loading()} onClick={() => void save()}>
-            保存参数
-          </Button>
-        </Show>
+        <div class="parameters-actions">
+          <Show when={saved()}>
+            <span role="status">参数已保存</span>
+          </Show>
+          <Show when={isAdmin() && state()}>
+            <Button type="primary" htmlType="submit" loading={saving()} disabled={loading()}>
+              保存参数
+            </Button>
+          </Show>
+        </div>
       </header>
       <Show when={!isAdmin()}>
         <p class="parameters-hint">只有管理人员可以查看和修改运行参数。</p>
@@ -161,7 +209,7 @@ export function ApplicationParametersView(props: ParentProps) {
         <Show when={error()}>
           <div role="alert" class="user-management-error">
             {error()}
-            <Show when={conflict()}>
+            <Show when={conflict() || !state()}>
               <Button size="small" onClick={() => void load()}>
                 重新加载
               </Button>
@@ -176,7 +224,7 @@ export function ApplicationParametersView(props: ParentProps) {
             </Show>
           }
         >
-          <div class="parameters-grid" role="region" aria-label="参数表单" tabindex={0}>
+          <div class="parameters-grid" role="region" aria-label="参数表单" tabindex={0} onInput={() => setSaved(false)}>
             <For each={numberFields}>
               {(field) => (
                 <label>
@@ -192,53 +240,131 @@ export function ApplicationParametersView(props: ParentProps) {
                     inputmode={field.unit === "count" ? "numeric" : "decimal"}
                     value={numbers()[field.key] ?? ""}
                     placeholder={`例如 ${units[field.unit].example}`}
-                    disabled={loading() || saving()}
+                    disabled={busy()}
                     onInput={(event) => setNumbers((current) => ({ ...current, [field.key]: event.currentTarget.value }))}
                   />
                 </label>
               )}
             </For>
-            <label>
-              <span>
-                工单网络访问
-                <small>（保存后新连接生效）</small>
-              </span>
-              <Select
-                aria-label="工单网络访问"
-                value={networkMode()}
-                options={[
-                  { value: "open", label: "开放网络" },
-                  { value: "allowlist", label: "域名白名单" },
-                ]}
-                disabled={loading() || saving()}
-                onChange={setNetworkMode}
-              />
-            </label>
-            <For each={listFields}>
-              {(field) => (
-                <Show when={field.key !== "networkAllowedDomains" || networkMode() === "allowlist"}>
+            <section class="parameter-section" aria-labelledby="parameter-network-title">
+              <div class="parameter-description">
+                <h3 id="parameter-network-title">工单网络访问</h3>
+                <p>控制工单 Agent 可以访问的网络。保存后对新连接生效。</p>
+              </div>
+              <div class="parameter-controls">
+                <Select
+                  aria-label="工单网络访问"
+                  value={networkMode()}
+                  options={[
+                    { value: "open", label: "开放网络" },
+                    { value: "allowlist", label: "域名白名单" },
+                  ]}
+                  disabled={busy()}
+                  onChange={(mode) => {
+                    setSaved(false);
+                    setNetworkMode(mode);
+                  }}
+                />
+                <Show when={networkMode() === "allowlist"}>
                   <label>
-                    <span>
-                      {field.label}
-                      <small id={`parameter-note-${field.key}`}>（{field.note}）</small>
-                    </span>
+                    <span>Agent 网络基础白名单</span>
                     <textarea
                       class="parameters-textarea"
-                      aria-label={field.label}
-                      aria-describedby={`parameter-note-${field.key}`}
+                      aria-describedby="parameter-network-note"
                       rows={3}
-                      value={lists()[field.key] ?? ""}
-                      disabled={loading() || saving()}
-                      onInput={(event) => setLists((current) => ({ ...current, [field.key]: event.currentTarget.value }))}
+                      value={lists().networkAllowedDomains ?? ""}
+                      placeholder="例如 packages.example.com"
+                      disabled={busy()}
+                      onInput={(event) => setLists((current) => ({ ...current, networkAllowedDomains: event.currentTarget.value }))}
                     />
                   </label>
+                  <small id="parameter-network-note">每行一个域名。全局 Agent 配置可追加域名。</small>
                 </Show>
-              )}
-            </For>
-            {props.children}
+              </div>
+            </section>
+            <section class="parameter-section" aria-labelledby="parameter-attachment-title">
+              <div class="parameter-description">
+                <h3 id="parameter-attachment-title">钉钉附件主机</h3>
+                <p>导入时，只从列表中的 HTTPS 主机下载附件。</p>
+              </div>
+              <div class="parameter-controls">
+                <textarea
+                  class="parameters-textarea"
+                  aria-labelledby="parameter-attachment-title"
+                  aria-describedby="parameter-attachment-note"
+                  rows={3}
+                  value={lists().dingtalkAttachmentHosts ?? ""}
+                  placeholder="例如 files.example.com"
+                  disabled={busy()}
+                  onInput={(event) => setLists((current) => ({ ...current, dingtalkAttachmentHosts: event.currentTarget.value }))}
+                />
+                <small id="parameter-attachment-note">每行一个主机名，无需填写 https:// 或路径。</small>
+              </div>
+            </section>
+            <section class="parameter-section" aria-labelledby="parameter-search-title">
+              <div class="parameter-description">
+                <h3 id="parameter-search-title">工单搜索</h3>
+                <p>启用「查找相似工单」。搜索词，以及用于索引的工单标题和描述，会发送给 Cloudflare。</p>
+              </div>
+              <div class="parameter-controls">
+                <Select
+                  aria-label="工单搜索"
+                  value={searchDraft().enabled ? "enabled" : "disabled"}
+                  options={[
+                    { value: "disabled", label: "关闭" },
+                    { value: "enabled", label: "启用" },
+                  ]}
+                  disabled={busy()}
+                  onChange={(value) => {
+                    setSaved(false);
+                    setSearchDraft((current) => ({ ...current, enabled: value === "enabled", clearToken: false }));
+                  }}
+                />
+                <Show when={searchDraft().enabled}>
+                  <label>
+                    <span>Cloudflare Account ID</span>
+                    <Input
+                      aria-label="Cloudflare Account ID"
+                      placeholder="32 位十六进制"
+                      value={searchDraft().accountId}
+                      maxlength={32}
+                      disabled={busy()}
+                      onInput={(event) => setSearchDraft((current) => ({ ...current, accountId: event.currentTarget.value }))}
+                    />
+                  </label>
+                  <label>
+                    <span>Cloudflare API Token</span>
+                    <PasswordInput
+                      aria-label="Cloudflare API Token"
+                      aria-describedby="parameter-search-token-note"
+                      value={searchDraft().token}
+                      placeholder={state()?.issueSearch.tokenConfigured ? "已配置，留空保留" : "填写 API Token"}
+                      maxlength={1024}
+                      disabled={busy()}
+                      onInput={(event) => setSearchDraft((current) => ({ ...current, token: event.currentTarget.value }))}
+                    />
+                  </label>
+                  <small id="parameter-search-token-note">需要 Workers AI Read 权限。更换账号时请同时填写新 Token。</small>
+                </Show>
+                <Show when={!searchDraft().enabled && state()?.issueSearch.tokenConfigured}>
+                  <label class="parameter-check">
+                    <input
+                      type="checkbox"
+                      checked={searchDraft().clearToken}
+                      disabled={busy()}
+                      onChange={(event) => {
+                        setSaved(false);
+                        setSearchDraft((current) => ({ ...current, clearToken: event.currentTarget.checked }));
+                      }}
+                    />
+                    <span>清除已保存的 Token</span>
+                  </label>
+                </Show>
+              </div>
+            </section>
           </div>
         </Show>
       </Show>
-    </section>
+    </form>
   );
 }

@@ -1,6 +1,5 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { ApplicationParametersView } from "./ApplicationParameters";
-import { IssueSearchSettings } from "./IssueSearchSettings";
 import { ConfigurationView } from "./ConfigurationView";
 import { useApplicationResources } from "./ApplicationResources";
 import { EndpointConfiguration } from "./EndpointConfiguration";
@@ -80,9 +79,7 @@ export function SettingsView() {
           tabindex={0}
           hidden={selectedPanel() !== "parameters"}
         >
-          <ApplicationParametersView>
-            <IssueSearchSettings />
-          </ApplicationParametersView>
+          <ApplicationParametersView />
         </div>
       </Show>
       <Show when={visitedPanels().includes("services")}>

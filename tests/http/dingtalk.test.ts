@@ -74,18 +74,23 @@ async function fixture() {
   };
 }
 
-test("direct record import skips preview, ignores personnel and uses only the requested record", async () => {
+test("direct record import includes the reporter note, ignores personnel and uses only the requested record", async () => {
   const f = await fixture();
   try {
+    f.state.fields = [...fields, { fieldId: "note", fieldName: "提出人备注", type: "text" }];
+    f.state.row.cells.note = [{ text: "仅在批量审批时出现" }, { text: "请核对审批记录" }];
     assert.equal((await f.app.inject({ method: "POST", url: "/api/dingtalk/preview", payload: {} })).statusCode, 404);
     const result = await f.submit();
     assert.equal(result.statusCode, 200, result.body);
     assert.equal(result.json().status, "created");
     assert.equal(f.state.calls.filter((call) => call.name === "query_records").length, 1);
-    assert.deepEqual(f.state.calls.find((call) => call.name === "query_records")!.input.recordIds, ["one"]);
+    const recordInput = f.state.calls.find((call) => call.name === "query_records")!.input;
+    assert.deepEqual(recordInput.recordIds, ["one"]);
+    assert.ok((recordInput.fieldIds as string[]).includes("note"));
     const [issue] = await f.database.db.select().from(issues);
     assert.equal(issue!.title, "EXT-one");
     assert.equal(issue!.assigneeSubject, f.user.subject);
+    assert.match(issue!.description, /^Description\n\n### 提出人备注\n\n仅在批量审批时出现\n请核对审批记录\n\n钉钉来源：/);
     assert.doesNotMatch(issue!.description, /viewId|fixture-private/);
     assert.equal(f.engine.enqueued.length, 0);
     assert.equal(f.state.closed, 1);

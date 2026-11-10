@@ -100,9 +100,9 @@ vi.mock("../data/client", async (importOriginal) => {
       values: applicationParameterDefaults,
       defaults: applicationParameterDefaults,
       bounds: applicationParameterBounds,
+      issueSearch: { enabled: false, accountId: "", tokenConfigured: false, revision: 0 },
     })),
-    loadIssueSearchConfiguration: vi.fn(async () => ({ enabled: false, accountId: "", tokenConfigured: false, revision: 0 })),
-    saveIssueSearchConfiguration: vi.fn<typeof actual.saveIssueSearchConfiguration>(),
+    updateApplicationParameters: vi.fn<typeof actual.updateApplicationParameters>(),
     searchIssues: vi.fn<typeof actual.searchIssues>(),
     loadApplicationEndpoints: vi.fn(async () => ({
       endpoints: [
@@ -307,7 +307,14 @@ describe("issue pilot workspace", () => {
     const catalog = await client.loadCatalog();
     vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ ...user, isAdmin: true });
     const accountId = "a".repeat(32);
-    vi.mocked(client.saveIssueSearchConfiguration).mockResolvedValueOnce({ enabled: true, accountId, tokenConfigured: true, revision: 1 });
+    const savedHosts = ["files.example.test"];
+    const originalParameters = await client.loadApplicationParameters();
+    vi.mocked(client.updateApplicationParameters).mockResolvedValueOnce({
+      ...originalParameters,
+      revision: 1,
+      values: { ...originalParameters.values, dingtalkAttachmentHosts: savedHosts },
+      issueSearch: { enabled: true, accountId, tokenConfigured: true, revision: 1 },
+    });
     const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const, assignee: "刘宜展" };
     vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
     render(() => <App initialView="configuration" />);
@@ -317,17 +324,23 @@ describe("issue pilot workspace", () => {
     fireEvent.click(screen.getByRole("tab", { name: "参数" }));
     const parameters = within(await screen.findByRole("region", { name: "参数表单" }));
     expect(parameters.queryByLabelText("Cloudflare Account ID")).toBeNull();
-    const mode = await parameters.findByLabelText("工单搜索");
+    const mode = await parameters.findByRole("combobox", { name: "工单搜索" });
     await fireEvent.click(mode);
     await fireEvent.click(await screen.findByRole("option", { name: "启用" }));
     await fireEvent.input(parameters.getByLabelText("Cloudflare Account ID"), { target: { value: accountId } });
     const secret = parameters.getByLabelText("Cloudflare API Token") as HTMLInputElement;
     expect(secret.type).toBe("password");
     await fireEvent.input(secret, { target: { value: "fixture-token" } });
+    await fireEvent.input(parameters.getByRole("textbox", { name: "钉钉附件主机" }), { target: { value: savedHosts.join("\n") } });
     vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...catalog, issueSearchEnabled: true });
-    fireEvent.submit(secret.form!);
-    await screen.findByText("工单搜索配置已保存。");
-    expect(client.saveIssueSearchConfiguration).toHaveBeenLastCalledWith({ expectedRevision: 0, enabled: true, accountId, apiToken: "fixture-token" });
+    expect(screen.queryByRole("button", { name: "保存工单搜索配置" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await screen.findByText("参数已保存");
+    expect(client.updateApplicationParameters).toHaveBeenLastCalledWith({
+      expectedRevision: 0,
+      overrides: { dingtalkAttachmentHosts: savedHosts },
+      issueSearch: { expectedRevision: 0, enabled: true, accountId, apiToken: "fixture-token" },
+    });
     expect(secret.value).toBe("");
     await waitFor(async () => {
       await fireEvent.keyDown(window, shortcut);

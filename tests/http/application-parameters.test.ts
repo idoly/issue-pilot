@@ -4,6 +4,7 @@ import { createApiFixture, createIssue, createService, modelCatalog } from "./fi
 import { applicationParameterDefaults, applicationParameters } from "../../src/configuration/parameters.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { buildApi } from "../../src/http/api.ts";
+import { openDatabase } from "../../src/db/client.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 
@@ -86,6 +87,65 @@ test("applies saved application parameters without reserving Issues or closing s
     assert.equal((await put({ expectedRevision: 2, overrides: { maxConcurrentIssues: 5 } }, developer)).statusCode, 403);
     assert.deepEqual((await get()).values, applicationParameterDefaults);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("parameter editor protects the search configuration and saves both revisions atomically", async () => {
+  const f = await createApiFixture();
+  const database = openDatabase(f.databaseFile);
+  const url = "/api/config/parameters";
+  const editorUrl = `${url}?include=issueSearch`;
+  const reader = { "x-issue-pilot-subject": "parameter-reader" };
+  const accountId = "a".repeat(32);
+  const token = "fixture-parameter-token";
+  const read = async () => {
+    const response = await f.app.inject({ url: editorUrl, headers });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.ok(!response.body.includes(token));
+    return response.json();
+  };
+  const put = (payload: object, actor: Record<string, string> = headers) => f.app.inject({ method: "PUT", url, headers: actor, payload });
+  const overrides = { maxConcurrentIssues: 4 };
+  const issueSearch = { expectedRevision: 0, enabled: true, accountId, apiToken: token };
+  try {
+    const user = await f.app.inject({
+      method: "POST",
+      url: "/api/users",
+      headers,
+      payload: { subject: reader["x-issue-pilot-subject"], name: "Reader", email: "reader@example.test", role: "product" },
+    });
+    assert.equal(user.statusCode, 201, user.body);
+    assert.equal((await f.app.inject({ url: editorUrl, headers: reader })).statusCode, 403);
+    assert.equal((await put({ expectedRevision: 0, overrides, issueSearch }, reader)).statusCode, 403);
+    const initial = await read();
+
+    for (const [payload, status] of [
+      [{ expectedRevision: 1, overrides, issueSearch }, 409],
+      [{ expectedRevision: 0, overrides, issueSearch: { ...issueSearch, expectedRevision: 1 } }, 409],
+      [{ expectedRevision: 0, overrides, issueSearch: { ...issueSearch, accountId: "" } }, 400],
+    ] as const) {
+      assert.equal((await put(payload)).statusCode, status);
+      assert.deepEqual(await read(), initial);
+    }
+    await database.client.execute("CREATE TRIGGER reject_parameters BEFORE UPDATE OF parameters ON application_settings BEGIN SELECT RAISE(ABORT, 'fixture'); END");
+    assert.equal((await put({ expectedRevision: 0, overrides, issueSearch })).statusCode, 500);
+    assert.deepEqual(await read(), initial);
+    assert.deepEqual(f.engine.concurrencyUpdates, []);
+    await database.client.execute("DROP TRIGGER reject_parameters");
+
+    const saved = await put({ expectedRevision: 0, overrides, issueSearch });
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.ok(!saved.body.includes(token));
+    assert.equal(saved.json().revision, 1);
+    assert.deepEqual(saved.json().overrides, overrides);
+    assert.deepEqual(saved.json().issueSearch, { enabled: true, accountId, tokenConfigured: true, revision: 1 });
+    assert.deepEqual(await read(), saved.json());
+    const ordinary = await f.app.inject({ url, headers: reader });
+    assert.equal(ordinary.statusCode, 200);
+    assert.equal(ordinary.json().issueSearch, undefined);
+  } finally {
+    database.close();
     await f.cleanup();
   }
 });

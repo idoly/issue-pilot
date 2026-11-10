@@ -241,7 +241,16 @@ test("credential changes reuse the index, invalid responses keep existing vector
   mode = "wait";
   const pending = query();
   await started;
-  assert.equal((await configure({ enabled: false, accountId: secondAccount, apiToken: null, expectedRevision: 2 })).statusCode, 200);
+  const disabled = await f.app.inject({
+    method: "PUT",
+    url: "/api/config/parameters",
+    headers: admin,
+    payload: { expectedRevision: 0, overrides: {}, issueSearch: { enabled: false, accountId: secondAccount, apiToken: null, expectedRevision: 2 } },
+  });
+  assert.equal(disabled.statusCode, 200, disabled.body);
+  assert.equal(disabled.json().revision, 0);
+  assert.deepEqual(disabled.json().issueSearch, { enabled: false, accountId: secondAccount, tokenConfigured: false, revision: 3 });
+  assert.deepEqual(f.engine.concurrencyUpdates, []);
   const cancelled = await pending;
   assert.equal(cancelled.statusCode, 408, cancelled.body);
   assert.deepEqual(await json(cancelled), { error: "issue_search_cancelled" });

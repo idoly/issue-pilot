@@ -11,8 +11,8 @@ export interface DingtalkField {
   name: string;
   type: string;
 }
-export const DINGTALK_COLUMNS = ["title", "description", "number", "attachments"] as const;
-export type DingtalkColumns = Record<Exclude<(typeof DINGTALK_COLUMNS)[number], "attachments">, string> & { attachments?: string };
+export const DINGTALK_COLUMNS = ["title", "description", "number", "attachments", "reporterNote"] as const;
+export type DingtalkColumns = Record<"title" | "description" | "number", string> & Partial<Record<"attachments" | "reporterNote", string>>;
 export interface DingtalkRecord {
   recordId: string;
   cells: Record<string, unknown>;

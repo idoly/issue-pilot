@@ -4,6 +4,8 @@ export function settingsError(error: unknown): string {
   const code = errorMessage(error);
   const messages: Record<string, string> = {
     configuration_changed: "配置已被更新，请重新加载后再保存。当前输入已保留。",
+    "invalid_application_parameter:dingtalkAttachmentHosts": "钉钉附件主机每行填一个主机名，不含协议、端口或路径，最多 100 个且不能重复。",
+    "invalid_application_parameter:networkAllowedDomains": "Agent 网络基础白名单包含无效或重复的域名，最多填写 100 个。",
     invalid_issue_search_account_id: "请填写 32 位十六进制的 Cloudflare Account ID。",
     invalid_issue_search_token: "请填写有效的 Cloudflare API Token。",
     issue_search_account_token_required: "更换 Cloudflare 账号需要填写新 Token，或关闭搜索并清除旧 Token。",

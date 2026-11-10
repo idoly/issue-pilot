@@ -1,6 +1,7 @@
 import { resolveDmsScope } from "../capabilities/dms.ts";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { eq, inArray } from "drizzle-orm";
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
 import {
@@ -19,6 +20,7 @@ import { selectDmsCredentials } from "../configuration/user-credentials.ts";
 import { applicationSettings, userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
 import { agentModelSelection, ApiError, checkRevision, optionalText, record, text } from "./input.ts";
+import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "./issue-search-configuration.ts";
 import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
 
@@ -36,7 +38,7 @@ function uniqueServiceKey(name: string, existingKeys: Set<string>): string {
   return `${base}-${suffix}`;
 }
 
-export function registerConfigurationRoutes(context: ApiRouteContext): void {
+export function registerConfigurationRoutes(context: ApiRouteContext, cancelActiveSearches: () => void): void {
   const { app, database, engine, modelCatalog, runScopeExclusive, workspaces } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
 
@@ -162,15 +164,21 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
       }
     });
   });
-  app.get("/api/config/parameters", async (_request, _reply) => {
-    return runScopeExclusive(() => loadApplicationParameterState(database.db));
-  });
+  app.get<{ Querystring: { include?: string } }>("/api/config/parameters", (request) =>
+    runScopeExclusive(async () => {
+      if (request.query.include !== "issueSearch") return loadApplicationParameterState(database.db);
+      await requireAdmin(database, request);
+      const parameters = await loadApplicationParameterState(database.db);
+      return { ...parameters, issueSearch: projectIssueSearchSettings(await loadIssueSearchSettings(database.db)) };
+    }),
+  );
   // Parameters are budgets read when an operation starts, so saving neither reserves Issues nor closes sessions.
-  app.put("/api/config/parameters", async (request) =>
+  app.put("/api/config/parameters", { logLevel: "silent" }, (request) =>
     runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const input = record(request.body);
-      if (input.expectedRevision === undefined || Object.keys(input).some((key) => key !== "expectedRevision" && key !== "overrides")) throw new ApiError(400, "invalid_application_parameters");
+      if (input.expectedRevision === undefined || Object.keys(input).some((key) => !["expectedRevision", "overrides", "issueSearch"].includes(key)))
+        throw new ApiError(400, "invalid_application_parameters");
       let overrides;
       try {
         overrides = parseApplicationParameterOverrides(input.overrides);
@@ -178,16 +186,25 @@ export function registerConfigurationRoutes(context: ApiRouteContext): void {
         if (error instanceof ApplicationParameterError) throw new ApiError(400, error.message);
         throw error;
       }
-      const current = await loadApplicationParameterState(database.db);
-      checkRevision(input.expectedRevision, current.revision);
-      await saveApplicationParameters(database.db, overrides, current.revision + 1);
-      const values = resolveApplicationParameters(overrides);
-      installApplicationParameters(values);
-      engine.setMaxConcurrentIssues?.(values.maxConcurrentIssues);
-      workspaces.updatePolicy({ ...workspaceLifecyclePolicy(values), taskConcurrency: workspaces.policy.taskConcurrency });
-      // A failed sync is retried when the sandbox is next acquired; the saved values stay authoritative.
-      await applyIssueSandboxNetwork();
-      return loadApplicationParameterState(database.db);
+      const { parameters, parametersChanged, search } = await database.db.transaction(async (transaction) => {
+        const current = await loadApplicationParameterState(transaction);
+        checkRevision(input.expectedRevision, current.revision);
+        const search = input.issueSearch === undefined ? { settings: await loadIssueSearchSettings(transaction), changed: false } : await updateIssueSearchSettings(transaction, input.issueSearch);
+        if (isDeepStrictEqual(overrides, current.overrides)) return { parameters: current, parametersChanged: false, search };
+        const revision = current.revision + 1;
+        await saveApplicationParameters(transaction, overrides, revision);
+        return { parameters: { ...current, revision, overrides, values: resolveApplicationParameters(overrides) }, parametersChanged: true, search };
+      });
+      if (search.changed) cancelActiveSearches();
+      if (parametersChanged) {
+        const { values } = parameters;
+        installApplicationParameters(values);
+        engine.setMaxConcurrentIssues?.(values.maxConcurrentIssues);
+        workspaces.updatePolicy({ ...workspaceLifecyclePolicy(values), taskConcurrency: workspaces.policy.taskConcurrency });
+        // A failed sync is retried when the sandbox is next acquired; the saved values stay authoritative.
+        await applyIssueSandboxNetwork();
+      }
+      return { ...parameters, issueSearch: projectIssueSearchSettings(search.settings) };
     }),
   );
   app.get("/api/config/agent/resources", { logLevel: "silent" }, async (request, _reply) => {

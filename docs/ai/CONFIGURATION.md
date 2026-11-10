@@ -77,7 +77,7 @@ Owners: [user-routes.ts](../../src/http/user-routes.ts), [configuration-routes.t
 
 ## Runtime parameters
 
-GET /api/config/parameters returns revision, overrides, values, defaults and bounds. Admin PUT takes { expectedRevision, overrides }. Overrides is a complete snapshot: omitted fields use root defaults; {} clears all overrides. A stale revision yields configuration_changed. Do not submit a one-field patch as the whole snapshot.
+GET /api/config/parameters returns revision, overrides, values, defaults and bounds. Admin GET with ?include=issueSearch and admin PUT also return the projected issueSearch configuration. Admin PUT takes { expectedRevision, overrides, issueSearch? }. Overrides is a complete snapshot: omitted fields use root defaults; {} clears all overrides. Do not submit a one-field patch as the whole snapshot. An included issueSearch update uses its [own revision and credential rules](HTTP.md#issue-vector-search); both updates commit in one SQLite transaction. A stale revision yields configuration_changed. Unchanged parameter overrides do not reset runtime budgets or the maintenance timer.
 
 Root defaults below are not the installation's effective values:
 
@@ -125,7 +125,7 @@ Service MCP supports HTTPS Streamable HTTP, SSE and stdio. Connections require d
 
 Global connection management, private reads and testing are admin-only. Discovery and close must both succeed for a successful test. Read-only hints are descriptive, not authorization; preserve budgets, cancellation and input/result checks.
 
-DingTalk preferences hold only source and field mappings; personal values override shared values, not gateway credentials. Import deduplicates exact source records first. A valid new record may match a manual same-title or external-number Issue only in the requested service and work mode environment. Multiple matching manual Issues return dingtalk_manual_match_ambiguous (409) without choosing one. An invalid service/work mode target cannot succeed through manual matching.
+DingTalk preferences hold only source and field mappings; personal values override shared values, not gateway credentials. The optional reporterNote mapping defaults to a unique 提出人备注 column; nonempty text is appended to the description of a newly created Issue and counts toward the import description limit. Import deduplicates exact source records first. A valid new record may match a manual same-title or external-number Issue only in the requested service and work mode environment. Multiple matching manual Issues return dingtalk_manual_match_ambiguous (409) without choosing one. An invalid service/work mode target cannot succeed through manual matching.
 
 Attachments require allowed HTTPS hosts, no redirects and no forwarded MCP key. Stream/staging cleanup failures must not become ordinary cancellation. Start defaults are documented in [Protocols](HTTP.md#dingtalk-import). Owners: [dingtalk-routes.ts](../../src/http/dingtalk-routes.ts), [dingtalk-attachments.ts](../../src/http/dingtalk-attachments.ts).
 

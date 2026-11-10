@@ -1,15 +1,12 @@
-import { eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { applicationSettings } from "../db/schema.ts";
 import { WorkersAiError } from "../search/cloudflare.ts";
-import type { IssueSearchConfiguration, IssueSearchSettings } from "../search/contracts.ts";
+import type { IssueSearchSettings } from "../search/contracts.ts";
 import { IssueSearchIndex, IssueSearchIndexRequired } from "../search/issue-index.ts";
-import { ApiError, checkRevision, record, text } from "./input.ts";
+import { ApiError, record, text } from "./input.ts";
+import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "./issue-search-configuration.ts";
 import { requireAdmin, requireCurrentUser, type ApiRouteContext } from "./route-context.ts";
 
-const defaultSettings: IssueSearchSettings = { revision: 0, enabled: false, accountId: "", apiToken: "" };
 const configurationPath = "/api/config/issue-search";
-const project = ({ apiToken, ...state }: IssueSearchSettings): IssueSearchConfiguration => ({ ...state, tokenConfigured: Boolean(apiToken) });
 
 export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" | "database" | "stateRoot" | "runScopeExclusive">, fetchEmbeddings: typeof fetch = fetch) {
   const { app, database, stateRoot, runScopeExclusive } = context;
@@ -25,46 +22,19 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
     cancelActive();
   });
 
-  const settings = async () => {
-    const [row] = await database.db.select({ search: applicationSettings.issueSearch }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
-    return row?.search ?? defaultSettings;
-  };
+  const settings = () => loadIssueSearchSettings(database.db);
   app.get(configurationPath, { logLevel: "silent" }, async (request) => {
     await requireAdmin(database, request);
-    return project(await settings());
+    return projectIssueSearchSettings(await settings());
   });
-  app.put(configurationPath, { logLevel: "silent" }, async (request) => {
-    await requireAdmin(database, request);
-    const input = record(request.body);
-    if (
-      Object.keys(input).some((key) => !["expectedRevision", "enabled", "accountId", "apiToken"].includes(key)) ||
-      typeof input.enabled !== "boolean" ||
-      typeof input.accountId !== "string" ||
-      input.expectedRevision === undefined
-    )
-      throw new ApiError(400, "invalid_issue_search_configuration");
-    const enabled = input.enabled;
-    const accountId = input.accountId.trim().toLowerCase();
-    if (accountId && !/^[0-9a-f]{32}$/.test(accountId)) throw new ApiError(400, "invalid_issue_search_account_id");
-    const token = input.apiToken === undefined || input.apiToken === null ? input.apiToken : text(input.apiToken, "issue_search_token", 1024);
-    if (typeof token === "string" && !/^[!-~]+$/.test(token)) throw new ApiError(400, "invalid_issue_search_token");
-    return runScopeExclusive(async () => {
+  app.put(configurationPath, { logLevel: "silent" }, (request) =>
+    runScopeExclusive(async () => {
       await requireAdmin(database, request);
-      const current = await settings();
-      checkRevision(input.expectedRevision, current.revision);
-      if (token === undefined && accountId !== current.accountId && current.apiToken) throw new ApiError(400, "issue_search_account_token_required");
-      const apiToken = token === undefined && accountId === current.accountId ? current.apiToken : (token ?? "");
-      if ((enabled && (!accountId || !apiToken)) || (apiToken && !accountId)) throw new ApiError(400, "issue_search_credentials_required");
-      if (enabled === current.enabled && accountId === current.accountId && apiToken === current.apiToken) return project(current);
-      const search = { enabled, accountId, apiToken, revision: current.revision + 1 };
-      await database.db
-        .insert(applicationSettings)
-        .values({ id: 1, issueSearch: search })
-        .onConflictDoUpdate({ target: applicationSettings.id, set: { issueSearch: search } });
-      cancelActive();
-      return project(search);
-    });
-  });
+      const result = await updateIssueSearchSettings(database.db, request.body);
+      if (result.changed) cancelActive();
+      return projectIssueSearchSettings(result.settings);
+    }),
+  );
 
   const run = async <T>(request: FastifyRequest, reply: FastifyReply, refresh: boolean, operation: (state: IssueSearchSettings, signal: AbortSignal, verify: () => Promise<void>) => Promise<T>) => {
     const authorize = () => (refresh ? requireAdmin(database, request) : requireCurrentUser(database, request));
@@ -115,4 +85,5 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
     const after = input.after as string | undefined;
     return run(request, reply, true, (state, signal, verify) => index.refresh(state, after, signal, verify));
   });
+  return cancelActive;
 }

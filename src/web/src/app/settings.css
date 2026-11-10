@@ -537,6 +537,11 @@
 .parameters-header .ui-button {
   flex: none;
 }
+.parameters-header .parameters-actions {
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
 .parameters-grid {
   display: grid;
   min-height: 0;
@@ -553,37 +558,43 @@
   gap: 4px;
   font: 14px / 20px var(--app-font);
 }
-.search-parameter-fields {
+.parameter-section {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px 20px;
+  border-top: 1px solid #e4eae6;
+  padding: 12px 0 0;
 }
-.parameters-grid .search-parameter-clear {
-  display: flex;
-  align-items: center;
-  min-height: 38px;
-  gap: 8px;
+.parameter-description {
+  display: grid;
+  gap: 4px;
 }
-.search-parameter-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  min-height: 38px;
-}
-.search-parameter-actions p,
-.search-parameter-message {
+.parameter-description h3 {
   margin: 0;
+  color: #26322c;
+  font: 600 14px / 20px var(--app-font);
 }
-.search-parameter-message {
-  grid-column: 1 / -1;
+.parameter-description p {
+  margin: 0;
+  color: #526d5c;
+  font: 13px / 19px var(--app-font);
+}
+.parameter-controls {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+.parameters-grid .parameter-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .parameters-grid label > span {
   color: #526d5c;
 }
-.parameters-grid label small {
+.parameters-grid small {
   color: #718079;
   font-size: 12px;
   line-height: 16px;
@@ -609,7 +620,8 @@
   font: 14px / 20px var(--app-font);
 }
 @media (max-width: 720px) {
-  .parameters-grid {
+  .parameters-grid,
+  .parameter-section {
     grid-template-columns: minmax(0, 1fr);
   }
 }

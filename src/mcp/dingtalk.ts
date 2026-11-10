@@ -87,6 +87,7 @@ const suggested: Record<keyof DingtalkColumns, string[]> = {
   description: ["工单描述", "任务描述", "问题描述", "描述", "详情"],
   number: ["序号", "工单编号", "编号"],
   attachments: ["附件"],
+  reporterNote: ["提出人备注"],
 };
 export function resolveDingtalkColumns(fields: DingtalkField[], requested: Partial<DingtalkColumns>): DingtalkColumns {
   return Object.fromEntries(
@@ -201,7 +202,8 @@ export function dingtalkIssueRecord(record: DingtalkRecord, columns: DingtalkCol
       .replace(/[\\[\]]/g, "\\$&");
     return `- [${label}](<${link.url}>)`;
   });
-  const description = [value("description"), ...(linkLines.length ? [`### 附件链接\n\n${linkLines.join("\n")}`] : [])].filter(Boolean).join("\n\n");
+  const note = columns.reporterNote === columns.description ? "" : value("reporterNote");
+  const description = [value("description"), note && `### 提出人备注\n\n${note}`, linkLines.length ? `### 附件链接\n\n${linkLines.join("\n")}` : ""].filter(Boolean).join("\n\n");
   const reason = !title ? "记录标题为空" : title.length > 300 ? "标题超过 300 字符" : description.length > limits.descriptionCharacters ? "描述超过导入上限，请调整描述字段" : undefined;
   const attachments = decoded.files.map(({ id, fileName, size }) => ({ id, fileName, size }));
   return {

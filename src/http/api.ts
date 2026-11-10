@@ -230,8 +230,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerCapabilityRoutes(routeContext);
     registerMcpRoutes(routeContext);
     registerApplicationMcp(routeContext);
-    registerConfigurationRoutes(routeContext);
-    registerIssueSearchRoutes(routeContext, options.issueSearchFetch);
+    const cancelActiveSearches = registerIssueSearchRoutes(routeContext, options.issueSearchFetch);
+    registerConfigurationRoutes(routeContext, cancelActiveSearches);
     const { createIssue, resolveCreationScope } = registerIssueRoutes(routeContext);
     registerDingtalkRoutes(routeContext, createIssue, resolveCreationScope, options.dingtalkConnector);
     registerAttachmentRoutes(routeContext);

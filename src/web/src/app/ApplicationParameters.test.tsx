@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ApplicationParameters, ApplicationParameterState, Person } from "../data/client";
+import type { ApplicationParameterEditorState, ApplicationParameters, Person } from "../data/client";
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown,
@@ -32,17 +32,18 @@ const defaults: ApplicationParameters = {
   networkAllowedDomains: ["registry.example.test"],
   networkMode: "open",
 };
-const parameterState = (overrides: Partial<typeof defaults> = {}, revision = 0): ApplicationParameterState => ({
+const parameterState = (overrides: Partial<typeof defaults> = {}, revision = 0): ApplicationParameterEditorState => ({
   revision,
   overrides,
   values: { ...defaults, ...overrides },
   defaults,
+  issueSearch: { enabled: false, accountId: "", tokenConfigured: false, revision: 0 },
   bounds: {
     numbers: Object.fromEntries(
       Object.keys(defaults)
         .filter((key) => typeof defaults[key as keyof typeof defaults] === "number")
         .map((key) => [key, { minimum: 0, maximum: key === "maxConcurrentIssues" ? 64 : 10 ** 12 }]),
-    ) as ApplicationParameterState["bounds"]["numbers"],
+    ) as ApplicationParameterEditorState["bounds"]["numbers"],
     listEntries: 100,
   },
 });
@@ -65,7 +66,7 @@ test("shows defaults in their display units and saves only values that differ fr
   expect((screen.getByLabelText("工作区保留时长") as HTMLInputElement).value).toBe("168");
   expect((screen.getByLabelText("磁盘高水位") as HTMLInputElement).value).toBe("20480");
   expect((screen.getByLabelText("MCP 调用超时") as HTMLInputElement).value).toBe("60");
-  expect((screen.getByLabelText("钉钉附件主机") as HTMLTextAreaElement).value).toBe("files.example.test");
+  expect(screen.getByRole("textbox", { name: "钉钉附件主机" })).toHaveProperty("value", "files.example.test");
   expect(screen.getByRole("combobox", { name: "工单网络访问" }).textContent).toBe("开放网络");
   expect(screen.queryByLabelText("Agent 网络基础白名单")).toBeNull();
 

@@ -1,5 +1,6 @@
 import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
 import type { AgentConfiguration, AgentModelDefinition, CapabilityConfiguration, CapabilityName, DmsScope, SlsScope } from "../domain/contracts.ts";
+import type { IssueSearchConfiguration, IssueSearchConfigurationUpdate } from "../search/contracts.ts";
 
 export const CAPABILITY_CREDENTIAL_FIELDS = {
   dms: ["url", "authorization"],
@@ -109,4 +110,6 @@ export interface ApplicationParameterState {
 export interface ApplicationParameterUpdate {
   expectedRevision: number;
   overrides: ApplicationParameterOverrides;
+  issueSearch?: IssueSearchConfigurationUpdate;
 }
+export type ApplicationParameterEditorState = ApplicationParameterState & { issueSearch: IssueSearchConfiguration };

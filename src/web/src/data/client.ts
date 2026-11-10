@@ -1,5 +1,5 @@
-import type { IssueSearchConfiguration, IssueSearchConfigurationUpdate, IssueSearchHit } from "../../../search/contracts";
-export type { IssueSearchConfiguration, IssueSearchHit } from "../../../search/contracts";
+import type { IssueSearchHit } from "../../../search/contracts";
+export type { IssueSearchHit } from "../../../search/contracts";
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { DingtalkSourceResponse, DingtalkImportInput, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
@@ -56,9 +56,7 @@ import {
 } from "../../../domain/contracts";
 import type {
   AgentModelOption,
-  ApplicationParameterKey,
-  ApplicationParameters,
-  ApplicationParameterState,
+  ApplicationParameterEditorState,
   ApplicationParameterUpdate,
   Configuration,
   ConfigurationCatalog,
@@ -69,19 +67,8 @@ export type { RunEvent } from "../../../agent/events";
 
 export { mergeAgentCostSource, AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
 export type { AgentConfiguration, AgentModelSelection, AgentRunState, CapabilityName } from "../../../domain/contracts";
-export type {
-  AgentCostSource,
-  AgentFooterStats,
-  AgentModelOption,
-  ApplicationParameters,
-  ApplicationParameterKey,
-  ApplicationParameterState,
-  ApplicationParameterUpdate,
-  IssuePriority,
-  IssueStatus,
-  IssueType,
-  IssueWorkMode,
-};
+export type { AgentCostSource, AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
+export type { ApplicationParameters, ApplicationParameterKey, ApplicationParameterEditorState } from "../../../configuration/contracts";
 export type Config = Configuration;
 export type ConfigCatalog = ConfigurationCatalog;
 export type Service = ServiceConfiguration;
@@ -337,8 +324,8 @@ export const loadUsers = () => request<Person[]>("/api/users");
 export const loadCurrentUser = () => request<Person>("/api/me");
 export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
 export const loadConfig = () => request<Config>("/api/config");
-export const loadApplicationParameters = () => request<ApplicationParameterState>("/api/config/parameters");
-export const updateApplicationParameters = (input: ApplicationParameterUpdate) => jsonRequest<ApplicationParameterState>("/api/config/parameters", "PUT", input);
+export const loadApplicationParameters = (signal?: AbortSignal) => request<ApplicationParameterEditorState>("/api/config/parameters?include=issueSearch", { signal });
+export const updateApplicationParameters = (input: ApplicationParameterUpdate) => jsonRequest<ApplicationParameterEditorState>("/api/config/parameters", "PUT", input);
 export const loadDingtalkSource = (signal?: AbortSignal) => request<DingtalkSourceResponse>("/api/dingtalk/source", { signal });
 export const importDingtalkRecords = (input: DingtalkImportInput, signal?: AbortSignal) =>
   request<DingtalkImportResponse>("/api/dingtalk/import", { method: "POST", body: JSON.stringify(input), signal });
@@ -493,8 +480,6 @@ export async function loadSourceDiffFile(key: string, repository: string, path: 
 
 const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE" | "PUT", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
 
-export const loadIssueSearchConfiguration = (signal: AbortSignal) => request<IssueSearchConfiguration>("/api/config/issue-search", { signal });
-export const saveIssueSearchConfiguration = (input: IssueSearchConfigurationUpdate) => jsonRequest<IssueSearchConfiguration>("/api/config/issue-search", "PUT", input);
 export const searchIssues = (query: string, signal: AbortSignal) => request<IssueSearchHit[]>("/api/issue-search", { method: "POST", body: JSON.stringify({ query }), signal });
 
 function appendFiles(form: FormData, files: File[]): void {
