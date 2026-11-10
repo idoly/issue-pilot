@@ -6,7 +6,7 @@ The lockfile fixes package versions. [postinstall](../scripts/apply-pi-sdk-patch
 
 ## Pi output persistence
 
-Patch: [pi-coding-agent 1.5.0](@earendil-works+pi-coding-agent+1.5.0.patch).
+Patch: [pi-coding-agent 1.5.1](@earendil-works+pi-coding-agent+1.5.1.patch).
 
 Codemode/MCP extensions accept optional saveOutput(data, extension), including read_mcp_resource. The Issue work-file owner persists images, binary and truncated output through 0600 temporary files and atomic replacement. Without the callback, SDK behavior is unchanged.
 

@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const project = fileURLToPath(new URL("../../", import.meta.url));
 const probe = fileURLToPath(new URL("../helpers/zod-security-probe.mjs", import.meta.url));
-const patchFiles = ["@earendil-works+pi-coding-agent+1.5.0.patch", "zod+4.6.7.patch", "monaco-editor+0.57.0.patch"];
+const patchFiles = ["@earendil-works+pi-coding-agent+1.5.1.patch", "zod+4.6.7.patch", "monaco-editor+0.57.0.patch"];
 const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent", "monaco-editor"];
 
 async function patchedPaths(): Promise<string[]> {

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const patches = [
-  { name: "@earendil-works/pi-coding-agent", version: "1.5.0", file: "patches/@earendil-works+pi-coding-agent+1.5.0.patch" },
+  { name: "@earendil-works/pi-coding-agent", version: "1.5.1", file: "patches/@earendil-works+pi-coding-agent+1.5.1.patch" },
   { name: "zod", version: "4.6.7", file: "patches/zod+4.6.7.patch" },
   { name: "monaco-editor", version: "0.57.0", file: "patches/monaco-editor+0.57.0.patch", buildOnly: true },
 ];

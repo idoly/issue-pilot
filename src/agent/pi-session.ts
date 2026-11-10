@@ -453,6 +453,8 @@ export class PiSessionRuntime {
     const globalSettings = SettingsManager.create(agentDirectory, agentDirectory, { projectTrusted: false }).getSettings();
     const settingsManager = SettingsManager.inMemory(
       {
+        // Keep idle cache requests opt-in; Pi 1.5.1 enables them by default.
+        cacheWarming: "streaming",
         ...globalSettings,
         ...configuration.settings,
         codemode: { ...globalSettings.codemode, ...configuration.settings?.codemode, mode: context.codemode === "only" ? "only" : "on" },
