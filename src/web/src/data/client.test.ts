@@ -159,7 +159,7 @@ describe("API client", () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const file = new File(["new evidence"], "new.txt", { type: "text/plain" });
-    const input = { title: "Updated", description: "Details", priority: "p2" as const, assigneeSubject: null, ccSubjects: [] };
+    const input = { title: "Updated", description: "Details", priority: "p2" as const, assigneeSubject: null, ccSubjects: [], expectedEditVersion: "a".repeat(64) };
 
     await updateIssue("ISSUE-20260810-001", input, ["attachment-1"], [file]);
 

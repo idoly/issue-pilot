@@ -9,7 +9,8 @@ import { openDatabase } from "../../src/db/client.ts";
 import { issues, subjects } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
 
-const config = "/api/config/issue-search";
+const config = "/api/config/parameters";
+const parameterInput = (issueSearch: Record<string, unknown>) => ({ expectedRevision: 0, overrides: {}, issueSearch });
 const search = "/api/issue-search";
 const refresh = "/api/issue-search/refresh";
 const reader = { "x-issue-pilot-subject": "search-reader@example.test" };
@@ -43,15 +44,19 @@ test("optional global search projects no secret and refreshes only new or edited
   assert.deepEqual(await json(await f.app.inject({ url: "/health" })), { ok: true });
   assert.equal((await f.app.inject({ method: "POST", url: search, headers: reader, payload: { query: "扣款后未更新" } })).statusCode, 503);
   assert.ok(!(await readdir(f.root)).includes("vectors.db"));
-  assert.equal((await f.app.inject({ url: config, headers: reader })).statusCode, 403);
-  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: reader, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } })).statusCode, 403);
-  const saved = await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } });
+  assert.equal((await f.app.inject({ url: `${config}?include=issueSearch`, headers: reader })).statusCode, 403);
+  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: reader, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) })).statusCode, 403);
+  const saved = await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) });
   assert.equal(saved.statusCode, 200, saved.body);
-  assert.deepEqual(await json(saved), { enabled: true, accountId, tokenConfigured: true, revision: 1 });
-  for (const url of [config, "/api/catalog", "/api/config", "/api/me/credentials"]) {
+  assert.deepEqual(saved.json().issueSearch, { enabled: true, accountId, tokenConfigured: true, revision: 1 });
+  for (const url of [`${config}?include=issueSearch`, "/api/catalog", "/api/config", "/api/me/credentials"]) {
     const response = await f.app.inject({ url, headers: admin });
     assert.equal(response.statusCode, 200, response.body);
     assert.ok(!response.body.includes(token));
+  }
+  for (const method of ["GET", "PUT"] as const) {
+    const retired = await f.app.inject({ method, url: "/api/config/issue-search", headers: admin });
+    assert.equal(retired.statusCode, 404);
   }
   assert.equal((await json(await f.app.inject({ url: "/api/catalog" }))).issueSearchEnabled, true);
   assert.equal((await f.app.inject({ method: "POST", url: search, headers: reader, payload: { query: "扣款后未更新" } })).json().error, "issue_search_index_required");
@@ -113,9 +118,9 @@ test("optional global search projects no secret and refreshes only new or edited
     ["支付状态同步延迟"],
   );
 
-  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: false, accountId, expectedRevision: 0 } })).statusCode, 409);
-  const disabled = await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: false, accountId, expectedRevision: 1 } });
-  assert.deepEqual(await json(disabled), { enabled: false, accountId, tokenConfigured: true, revision: 2 });
+  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: false, accountId, expectedRevision: 0 }) })).statusCode, 409);
+  const disabled = await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: false, accountId, expectedRevision: 1 }) });
+  assert.deepEqual(disabled.json().issueSearch, { enabled: false, accountId, tokenConfigured: true, revision: 2 });
   assert.equal((await json(await f.app.inject({ url: "/api/catalog" }))).issueSearchEnabled, undefined);
   const callsBeforeDisable = calls.length;
   const blocked = await f.app.inject({ method: "POST", url: search, headers: reader, payload: { query: "扣款后未更新" } });
@@ -124,7 +129,7 @@ test("optional global search projects no secret and refreshes only new or edited
   assert.equal(calls.length, callsBeforeDisable);
 });
 
-test("expands a legacy index to cover the end of long descriptions and ranks each Issue once", async (t) => {
+test("indexes complete long descriptions, reuses unchanged chunks and ranks each Issue once", async (t) => {
   const batches: string[][] = [];
   const f = await createApiFixture({
     issueSearchFetch: async (_url, init) => {
@@ -135,31 +140,21 @@ test("expands a legacy index to cover the end of long descriptions and ranks eac
     },
   });
   const db = openDatabase(f.databaseFile);
-  const legacy = openDatabase(join(f.root, "vectors.db"));
   t.after(async () => {
-    legacy.close();
     db.close();
     await f.cleanup();
   });
   await createService(f.app, "Chunks");
   const short = await createIssue(f.app, "chunks", "test", "短工单");
+  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) })).statusCode, 200);
+  const index = () => f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} });
+  assert.deepEqual((await index()).json(), { indexed: 1, removed: 0, nextCursor: null });
+  batches.length = 0;
   const title = "长工单";
   const description = `${"故障".repeat(4_000)}😀最后一段验收结论`;
   const created = await f.app.inject({ method: "POST", url: "/api/issues", headers: admin, payload: { ...issuePayload("chunks", "test", title), description } });
   assert.equal(created.statusCode, 201, created.body);
   const longKey = created.json<{ id: string }>().id;
-  const rows = await db.db.select().from(issues);
-  const oldVector = Buffer.alloc(1024 * 4);
-  oldVector.writeFloatLE(1);
-  await legacy.client.execute("CREATE TABLE issue_vectors (issue_id TEXT PRIMARY KEY, digest TEXT NOT NULL, embedding F32_BLOB(1024) NOT NULL CHECK(length(embedding) = 4096))");
-  for (const issue of rows) {
-    const prefix = Buffer.from(`${issue.title}\n\n${issue.description.slice(0, 4_000)}`.trim())
-      .subarray(0, 7_000)
-      .toString("utf8");
-    await legacy.client.execute({ sql: "INSERT INTO issue_vectors VALUES (?, ?, ?)", args: [issue.id, createHash("sha256").update(prefix).digest("hex"), oldVector] });
-  }
-  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } })).statusCode, 200);
-  const index = () => f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} });
   const query = async () => {
     const response = await f.app.inject({ method: "POST", url: search, headers: admin, payload: { query: "最后一段验收结论" } });
     assert.equal(response.statusCode, 200, response.body);
@@ -180,7 +175,12 @@ test("expands a legacy index to cover the end of long descriptions and ranks eac
   assert.deepEqual(await query(), [short.id]);
   assert.deepEqual((await index()).json(), { indexed: 1, removed: 0, nextCursor: null });
   assert.deepEqual(batches.at(-1), [`${title}\n\n更正后的短描述`]);
-  assert.equal((await legacy.client.execute("SELECT count(*) AS count FROM issue_vectors")).rows[0]?.count, 2);
+  const vectors = openDatabase(join(f.root, "vectors.db"));
+  try {
+    assert.equal((await vectors.client.execute("SELECT count(*) AS count FROM issue_vectors")).rows[0]?.count, 2);
+  } finally {
+    vectors.close();
+  }
 });
 
 test("search passes more than forty stale candidates without repeating embeddings or keeping its ranking", async (t) => {
@@ -198,17 +198,17 @@ test("search passes more than forty stale candidates without repeating embedding
     db.close();
     await f.cleanup();
   });
-  await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } });
+  await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) });
   await createService(f.app, "Stale candidates");
   for (let i = 0; i < 46; i++) await createIssue(f.app, "stale-candidates", "test", i === 45 ? "Still current" : "Changed issue");
-  await vectors.client.execute("CREATE TABLE issue_vectors (issue_id TEXT PRIMARY KEY, digest TEXT NOT NULL, embedding BLOB NOT NULL)");
+  await vectors.client.execute("CREATE TABLE issue_vectors (issue_id TEXT NOT NULL, chunk INTEGER NOT NULL, digest TEXT NOT NULL, embedding BLOB NOT NULL, PRIMARY KEY(issue_id, chunk))");
   const rows = await db.db.select().from(issues);
   const valid = rows.find(({ title }) => title === "Still current")!;
   await vectors.client.batch(
     rows.map((row) => {
       const embedding = Buffer.alloc(1024 * 4);
       embedding.writeFloatLE(1, row.id === valid.id ? 4 : 0);
-      return { sql: "INSERT INTO issue_vectors VALUES (?, ?, ?)", args: [row.id, createHash("sha256").update([row.title, row.description].join("\n\n").trim()).digest("hex"), embedding] };
+      return { sql: "INSERT INTO issue_vectors VALUES (?, 0, ?, ?)", args: [row.id, createHash("sha256").update([row.title, row.description].join("\n\n").trim()).digest("hex"), embedding] };
     }),
     "write",
   );
@@ -258,7 +258,7 @@ test("credential changes reuse the index, invalid responses keep existing vector
     db.close();
     await f.cleanup();
   });
-  const configure = (payload: Record<string, unknown>) => f.app.inject({ method: "PUT", url: config, headers: admin, payload });
+  const configure = (payload: Record<string, unknown>) => f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput(payload) });
   const index = () => f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} });
   const query = () => f.app.inject({ method: "POST", url: search, headers: admin, payload: { query: "test" } });
   assert.equal((await configure({ enabled: true, accountId, apiToken: token, expectedRevision: 0 })).statusCode, 200);
@@ -337,7 +337,7 @@ test("a disconnected search does not spend an embedding request", { timeout: 10_
   });
   const controller = new AbortController();
   try {
-    assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } })).statusCode, 200);
+    assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) })).statusCode, 200);
     await createService(f.app, "Cancelled search");
     await createIssue(f.app, "cancelled-search");
     assert.equal((await f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} })).statusCode, 200);
@@ -394,7 +394,7 @@ test("initial indexing resumes at the next Issue after each bounded provider bat
       reporterSubject: sample.reporterSubject,
     })),
   );
-  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: { enabled: true, accountId, apiToken: token, expectedRevision: 0 } })).statusCode, 200);
+  assert.equal((await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) })).statusCode, 200);
   const page = async (after?: string) => {
     const response = await f.app.inject({ method: "POST", url: refresh, headers: admin, payload: after ? { after } : {} });
     assert.equal(response.statusCode, 200, response.body);

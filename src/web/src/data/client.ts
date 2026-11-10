@@ -545,7 +545,7 @@ export function createIssue(input: IssueCreateInput, files: File[] = []): Promis
 }
 export function updateIssue(
   key: string,
-  input: IssueMetadataInput & { expectedEditVersion?: string },
+  input: IssueMetadataInput & { expectedEditVersion: string },
   removedAttachmentIds: string[] = [],
   files: File[] = [],
   resetSession = false,

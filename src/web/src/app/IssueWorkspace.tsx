@@ -286,7 +286,8 @@ export function IssueWorkspace(props: {
     }
   };
   const saveIssue = async (reset = false) => {
-    if (editSaving() || editCommitted() || !editTitle().trim() || (reset && resetDisabled())) return;
+    const base = editBase();
+    if (!base || editSaving() || editCommitted() || !editTitle().trim() || (reset && resetDisabled())) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
     const input = {
@@ -295,7 +296,7 @@ export function IssueWorkspace(props: {
       priority: editPriority(),
       assigneeSubject: editAssignee(),
       ccSubjects: [...editCc()],
-      expectedEditVersion: editBase()?.editVersion,
+      expectedEditVersion: base.editVersion,
     };
     const removals = [...removedAttachmentIds()];
     const additions = [...editAttachments()];

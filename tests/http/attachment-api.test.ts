@@ -14,7 +14,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import { registerAttachmentRoutes } from "../../src/http/attachment-routes.ts";
 import type { ApiRouteContext } from "../../src/http/route-context.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
-import { createApiFixture, createIssue, createService, issueMetadataPayload, issuePayload, json } from "./fixture.ts";
+import { issueEditVersion, createApiFixture, createIssue, createService, issueMetadataPayload, issuePayload, json } from "./fixture.ts";
 
 function issueMultipart(boundary: string, issue: Record<string, unknown>, fileName: string, content: string): Buffer {
   return Buffer.from(
@@ -86,7 +86,7 @@ for (const state of ["missing", "symlink"] as const)
         method: "PATCH",
         url: `/api/issues/${issue.id}`,
         headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-        payload: issueMultipart(boundary, issueMetadataPayload("Must not persist"), "new.txt", "new evidence"),
+        payload: issueMultipart(boundary, { ...issueMetadataPayload("Must not persist"), expectedEditVersion: await issueEditVersion(fixture.app, issue.id) }, "new.txt", "new evidence"),
       });
       assert.equal(response.statusCode, 500, response.body);
       const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).json<{ title: string; attachments: unknown[] }>();
@@ -107,7 +107,7 @@ for (const state of ["missing", "symlink"] as const)
         method: "PATCH",
         url: `/api/issues/${issue.id}`,
         headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-        payload: issueMultipart(boundary, issueMetadataPayload("Saved after restoration"), "new.txt", "new evidence"),
+        payload: issueMultipart(boundary, { ...issueMetadataPayload("Saved after restoration"), expectedEditVersion: await issueEditVersion(fixture.app, issue.id) }, "new.txt", "new evidence"),
       });
       assert.equal(retry.statusCode, 200, retry.body);
       const saved = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).json<{ attachments: Array<{ id: string }> }>();
@@ -312,7 +312,15 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
     const issueId = fixture.engine.enqueued.at(-1)!;
     fixture.engine.running.delete(issueId);
     const created = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { attachments: Array<{ id: string }> };
-    const edit = { title: "Updated", description: "Atomic edit", priority: "p2", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] };
+    const edit = {
+      expectedEditVersion: await issueEditVersion(fixture.app, issue.id),
+      title: "Updated",
+      description: "Atomic edit",
+      priority: "p2",
+      assigneeSubject: null,
+      ccSubjects: [],
+      removedAttachmentIds: [created.attachments[0]!.id],
+    };
     const boundary = "replace-attachment";
     const updated = await fixture.app.inject({
       method: "PATCH",
@@ -336,7 +344,12 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
       headers: { "content-type": `multipart/form-data; boundary=${failedBoundary}` },
-      payload: issueMultipart(failedBoundary, { ...edit, title: "Must roll back", removedAttachmentIds: [current.attachments[0]!.id] }, "must-not-persist.txt", "failed replacement"),
+      payload: issueMultipart(
+        failedBoundary,
+        { ...edit, expectedEditVersion: await issueEditVersion(fixture.app, issue.id), title: "Must roll back", removedAttachmentIds: [current.attachments[0]!.id] },
+        "must-not-persist.txt",
+        "failed replacement",
+      ),
     });
     assert.equal(failed.statusCode, 500);
     await failingDatabase.client.execute("DROP TRIGGER fail_atomic_attachment_insert");
@@ -402,7 +415,7 @@ test("streams Issue attachments larger than the former application limit", async
     const issue = await json(created);
     fixture.engine.running.clear();
     const boundary = "oversized-attachment";
-    const edit = { title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [] };
+    const edit = { expectedEditVersion: await issueEditVersion(fixture.app, issue.id), title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [] };
     const response = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
@@ -452,7 +465,15 @@ test("a committed edit stays successful and enqueues the update when quarantine 
     const updated = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
-      payload: { title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [], removedAttachmentIds: [created.attachments[0]!.id] },
+      payload: {
+        expectedEditVersion: await issueEditVersion(fixture.app, issue.id),
+        title: "Updated",
+        description: "",
+        priority: "p2",
+        assigneeSubject: null,
+        ccSubjects: [],
+        removedAttachmentIds: [created.attachments[0]!.id],
+      },
     });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.equal(fixture.engine.messages.length, messages + 1);
@@ -554,7 +575,12 @@ test("an attachment edit closes the Issue session before any original is written
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-      payload: issueMultipart(boundary, { title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [] }, "late.txt", "late evidence"),
+      payload: issueMultipart(
+        boundary,
+        { expectedEditVersion: await issueEditVersion(fixture.app, issue.id), title: "Updated", description: "", priority: "p2", assigneeSubject: null, ccSubjects: [] },
+        "late.txt",
+        "late evidence",
+      ),
     });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.deepEqual(originalsAtClose, []);

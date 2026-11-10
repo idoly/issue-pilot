@@ -177,6 +177,14 @@ export function issueMetadataPayload(title = "Test issue") {
   };
 }
 
+export async function issueEditVersion(app: FastifyInstance, key: unknown): Promise<string> {
+  const response = await app.inject({ url: `/api/issues/${key}` });
+  assert.equal(response.statusCode, 200, response.body);
+  const { editVersion } = response.json<{ editVersion: string }>();
+  assert.match(editVersion, /^[0-9a-f]{64}$/);
+  return editVersion;
+}
+
 export function issuePayload(serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
   const workMode: IssueWorkMode = environmentKey === "dev" ? "development_fix" : environmentKey === "prod" ? "production_analysis" : "test_analysis";
   return { ...issueMetadataPayload(title), workMode, serviceKey };

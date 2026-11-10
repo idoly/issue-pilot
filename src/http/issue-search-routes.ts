@@ -3,13 +3,11 @@ import { WorkersAiError } from "../search/cloudflare.ts";
 import type { IssueSearchSettings } from "../search/contracts.ts";
 import { IssueSearchIndex, IssueSearchIndexRequired } from "../search/issue-index.ts";
 import { ApiError, record, text } from "./input.ts";
-import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "./issue-search-configuration.ts";
+import { loadIssueSearchSettings } from "./issue-search-configuration.ts";
 import { requireAdmin, requireCurrentUser, type ApiRouteContext } from "./route-context.ts";
 
-const configurationPath = "/api/config/issue-search";
-
-export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" | "database" | "stateRoot" | "runScopeExclusive">, fetchEmbeddings: typeof fetch = fetch) {
-  const { app, database, stateRoot, runScopeExclusive } = context;
+export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" | "database" | "stateRoot">, fetchEmbeddings: typeof fetch = fetch) {
+  const { app, database, stateRoot } = context;
   const index = new IssueSearchIndex(database.db, stateRoot, fetchEmbeddings);
   const active = new Set<AbortController>();
   let refreshing = false;
@@ -23,19 +21,6 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
   });
 
   const settings = () => loadIssueSearchSettings(database.db);
-  app.get(configurationPath, { logLevel: "silent" }, async (request) => {
-    await requireAdmin(database, request);
-    return projectIssueSearchSettings(await settings());
-  });
-  app.put(configurationPath, { logLevel: "silent" }, (request) =>
-    runScopeExclusive(async () => {
-      await requireAdmin(database, request);
-      const result = await updateIssueSearchSettings(database.db, request.body);
-      if (result.changed) cancelActive();
-      return projectIssueSearchSettings(result.settings);
-    }),
-  );
-
   const run = async <T>(request: FastifyRequest, reply: FastifyReply, refresh: boolean, operation: (state: IssueSearchSettings, signal: AbortSignal, verify: () => Promise<void>) => Promise<T>) => {
     const authorize = () => (refresh ? requireAdmin(database, request) : requireCurrentUser(database, request));
     await authorize();

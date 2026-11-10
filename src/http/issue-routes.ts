@@ -394,7 +394,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const failures: unknown[] = [];
     try {
       const expectedEditVersion = input.expectedEditVersion;
-      if (expectedEditVersion !== undefined && (typeof expectedEditVersion !== "string" || !/^[0-9a-f]{64}$/.test(expectedEditVersion))) throw new ApiError(400, "invalid_issue_edit_version");
+      if (typeof expectedEditVersion !== "string" || !/^[0-9a-f]{64}$/.test(expectedEditVersion)) throw new ApiError(400, "invalid_issue_edit_version");
       if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new ApiError(400, "invalid_reset_session");
       // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
       const resetSession = input.resetSession === true;
@@ -406,18 +406,16 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           const editorSubject = await ensureCurrentSubject(database, request);
           const currentIssue = await requireIssue(database, issue.key);
           const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
-          if (expectedEditVersion !== undefined) {
-            const recipients = await database.db.select({ subject: issueCcRecipients.subject }).from(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
-            if (
-              expectedEditVersion !==
-              issueEditVersion(
-                currentIssue,
-                currentAttachments,
-                recipients.map(({ subject }) => subject),
-              )
+          const recipients = await database.db.select({ subject: issueCcRecipients.subject }).from(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
+          if (
+            expectedEditVersion !==
+            issueEditVersion(
+              currentIssue,
+              currentAttachments,
+              recipients.map(({ subject }) => subject),
             )
-              throw new ApiError(409, "issue_edit_conflict");
-          }
+          )
+            throw new ApiError(409, "issue_edit_conflict");
           if (resetSession) {
             await requireDeveloper(database, request);
             if (currentIssue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");

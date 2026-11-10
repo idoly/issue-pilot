@@ -9,6 +9,7 @@ vi.mock("../data/client", async (importOriginal) => {
   const service = { key: "srm", name: "SRM" };
   const issue = (id: string, title: string, status: string, retryable = false) => ({
     id,
+    editVersion: "a".repeat(64),
     title,
     description: `${title}描述`,
     priority: "p1",

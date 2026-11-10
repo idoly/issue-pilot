@@ -90,18 +90,6 @@ export class IssueSearchIndex {
     }
   }
 
-  private async upgradeStatements(client: Client): Promise<InStatement[]> {
-    const { rows } = await client.execute("PRAGMA table_info(issue_vectors)");
-    if (rows.some((column) => column.name === "chunk")) return [];
-    if (rows.map((column) => column.name).join(",") !== "issue_id,digest,embedding") throw new Error("invalid_issue_search_index");
-    return [
-      "ALTER TABLE issue_vectors RENAME TO previous_issue_vectors",
-      createVectors,
-      "INSERT INTO issue_vectors (issue_id, chunk, digest, embedding) SELECT issue_id, 0, digest, embedding FROM previous_issue_vectors",
-      "DROP TABLE previous_issue_vectors",
-    ];
-  }
-
   private async removeDeleted(client: Client, signal: AbortSignal, verify: () => Promise<void>): Promise<number> {
     const { rows } = await client.execute("SELECT DISTINCT issue_id FROM issue_vectors");
     const ids = rows.map((row) => String(row.issue_id));
@@ -152,7 +140,7 @@ export class IssueSearchIndex {
       if (changed.length || !existing) {
         const documents = changed.flatMap(({ chunks }) => chunks);
         const vectors: Buffer[] = [];
-        // A legacy record can be larger than today's input limit. Keep provider batches serial and replace the Issue atomically.
+        // A document may span multiple provider batches; replace all its chunks atomically.
         for (let offset = 0; offset < documents.length; offset += EMBEDDING_BATCH_SIZE) {
           await verify();
           signal.throwIfAborted();
@@ -162,7 +150,7 @@ export class IssueSearchIndex {
         signal.throwIfAborted();
         client ??= await this.create();
         if (changed.length) {
-          const statements = existing ? await this.upgradeStatements(existing) : [];
+          const statements: InStatement[] = [];
           let vectorIndex = 0;
           for (const row of changed) {
             statements.push({ sql: "DELETE FROM issue_vectors WHERE issue_id = ?", args: [row.id] });

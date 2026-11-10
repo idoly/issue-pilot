@@ -8,7 +8,37 @@ import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
-import { createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
+import { issueEditVersion, createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
+
+test("every edit requires a valid version before metadata, attachments or session state can change", async () => {
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Required version");
+    const issue = await createIssue(f.app, "required-version");
+    f.engine.running.clear();
+    const url = `/api/issues/${issue.id}`;
+    const original = (await f.app.inject({ url })).json();
+    const enqueued = [...f.engine.enqueued];
+    const metadata = { title: "Must not persist", description: "Changed", priority: "p2", resetSession: true };
+    for (const expectedEditVersion of [undefined, null, 1, "", "a".repeat(63), "A".repeat(64)]) {
+      const response = await f.app.inject({ method: "PATCH", url, payload: { ...metadata, expectedEditVersion } });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.equal(response.json().error, "invalid_issue_edit_version");
+    }
+    const form = new FormData();
+    form.append("issue", JSON.stringify(metadata));
+    form.append("files", new Blob(["Must not be stored"]), "rejected.txt");
+    const request = new Request("http://fixture.test", { method: "PATCH", body: form });
+    const response = await f.app.inject({ method: "PATCH", url, headers: { "content-type": request.headers.get("content-type")! }, payload: Buffer.from(await request.arrayBuffer()) });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.equal(response.json().error, "invalid_issue_edit_version");
+    assert.deepEqual((await f.app.inject({ url })).json(), original);
+    assert.deepEqual(f.engine.enqueued, enqueued);
+    assert.deepEqual(f.engine.closedSessions, []);
+  } finally {
+    await f.cleanup();
+  }
+});
 
 test("concurrent editors cannot overwrite metadata, CC or attachment changes with an old version", async () => {
   const f = await createApiFixture();
@@ -113,7 +143,7 @@ test("treats whitespace-only optional Issue fields as empty", async () => {
     const updated = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${created.id}`,
-      payload: { title: "Optional fields", description: " \t ", priority: "p2", assigneeSubject: " \t ", ccSubjects: [] },
+      payload: { expectedEditVersion: await issueEditVersion(fixture.app, created.id), title: "Optional fields", description: " \t ", priority: "p2", assigneeSubject: " \t ", ccSubjects: [] },
     });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.equal((await json(updated)).assigneeSubject, null);
@@ -402,7 +432,14 @@ test("serializes Issue assignee changes with user deactivation", async () => {
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
       headers,
-      payload: { title: "Assign to next owner", description: "Keep owner valid", priority: "p1", assigneeSubject: "next-owner", ccSubjects: [] },
+      payload: {
+        expectedEditVersion: await issueEditVersion(fixture.app, issue.id),
+        title: "Assign to next owner",
+        description: "Keep owner valid",
+        priority: "p1",
+        assigneeSubject: "next-owner",
+        ccSubjects: [],
+      },
     });
     await started;
     const disable = fixture.app
@@ -437,7 +474,11 @@ test("edits only Issue metadata and rejects scope fields", async () => {
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, issueId));
     await database.close();
 
-    const scopeUpdate = await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}`, payload: issuePayload("beta", "prod", "Continue in Beta") });
+    const scopeUpdate = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      payload: { ...issuePayload("beta", "prod", "Continue in Beta"), expectedEditVersion: await issueEditVersion(fixture.app, issue.id) },
+    });
     assert.equal(scopeUpdate.statusCode, 400);
     assert.equal((await json(scopeUpdate)).error, "issue_scope_update_not_allowed");
 
@@ -446,6 +487,7 @@ test("edits only Issue metadata and rejects scope fields", async () => {
       url: `/api/issues/${issue.id}`,
       payload: {
         title: "Updated investigation",
+        expectedEditVersion: await issueEditVersion(fixture.app, issue.id),
         description: "Preserve scope",
         priority: "p2",
         assigneeSubject: null,

@@ -2,7 +2,7 @@ import type { InjectOptions } from "fastify";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { createApiFixture, createService, issuePayload, modelCatalog } from "./fixture.ts";
+import { createApiFixture, createService, issueEditVersion, issuePayload, modelCatalog } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import Fastify from "fastify";
 import { eq } from "drizzle-orm";
@@ -326,7 +326,7 @@ test("development Issue edits require an active developer owner when the assigne
       await database.close();
     }
     const headers = { "x-issue-pilot-subject": second };
-    const metadata = { title: "Owner fallback", description: "", priority: "p1", ccSubjects: [] };
+    const metadata = { title: "Owner fallback", description: "", priority: "p1", ccSubjects: [], expectedEditVersion: await issueEditVersion(f.app, key) };
     const fallback = await inject({ method: "PATCH", url: `/api/issues/${key}`, headers, payload: { ...metadata, assigneeSubject: null } });
     assert.equal(fallback.statusCode, 400, fallback.body);
     assert.equal(JSON.parse(fallback.body).error, "issue_developer_owner_required");
