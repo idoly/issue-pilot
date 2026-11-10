@@ -293,7 +293,7 @@ describe("issue pilot workspace", () => {
     window.history.replaceState(null, "", window.location.pathname);
   });
 
-  test("configures search under parameters and opens an Issue outside the queue with Ctrl+K", async () => {
+  test("configures search and opens an Issue outside the queue with Alt+K", async () => {
     const client = await import("../data/client");
     const user = await client.loadCurrentUser();
     const catalog = await client.loadCatalog();
@@ -303,7 +303,8 @@ describe("issue pilot workspace", () => {
     const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const };
     vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
     render(() => <App initialView="configuration" />);
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const shortcut = { key: "k", code: "KeyK", altKey: true };
+    fireEvent.keyDown(window, shortcut);
     expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "参数" }));
     const enabled = await screen.findByLabelText("启用工单搜索");
@@ -317,11 +318,16 @@ describe("issue pilot workspace", () => {
     await screen.findByText("工单搜索配置已保存。");
     expect(client.saveIssueSearchConfiguration).toHaveBeenLastCalledWith({ expectedRevision: 0, enabled: true, accountId, apiToken: "fixture-token" });
     expect(secret.value).toBe("");
-    await waitFor(() => {
-      fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    await waitFor(async () => {
+      await fireEvent.keyDown(window, shortcut);
       expect(screen.getByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
     });
-    const query = screen.getByLabelText("工单搜索词");
+    await fireEvent.click(screen.getByRole("button", { name: "关闭弹窗" }));
+    await fireEvent.keyDown(window, { key: "k", code: "KeyK", ctrlKey: true });
+    await fireEvent.keyDown(secret, shortcut);
+    expect(screen.queryByRole("dialog", { name: "搜索所有工单" })).toBeNull();
+    await fireEvent.keyDown(window, { ...shortcut, key: "˚" });
+    const query = await screen.findByLabelText("工单搜索词");
     await fireEvent.input(query, { target: { value: "审批一直转圈" } });
     await fireEvent.keyDown(query, { key: "Enter" });
     const link = await screen.findByRole("link", { name: issue.title });
@@ -343,7 +349,7 @@ describe("issue pilot workspace", () => {
     vi.mocked(client.searchIssues).mockReturnValueOnce(response);
     render(() => <App />);
     await waitFor(() => {
-      fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+      fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
       expect(screen.getByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
     });
     const query = screen.getByLabelText("工单搜索词");
@@ -354,7 +360,7 @@ describe("issue pilot workspace", () => {
     expect(signal?.aborted).toBe(true);
     finish([{ key: "ISSUE-20260810-038", title: "不应出现的旧结果", status: "open" }]);
     await response;
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
     expect(await screen.findByRole("dialog", { name: "搜索所有工单" })).toBeTruthy();
     expect(screen.queryByText("不应出现的旧结果")).toBeNull();
   });

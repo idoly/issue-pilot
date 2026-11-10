@@ -34,7 +34,8 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
     setError("");
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!enabled() || event.defaultPrevented || event.repeat || event.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.code !== "KeyK" || event.defaultPrevented || event.repeat || event.isComposing || !enabled()) return;
+    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
     event.preventDefault();
     setOpen(true);
   };
