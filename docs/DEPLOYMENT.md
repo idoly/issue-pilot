@@ -45,7 +45,7 @@ curl -fsS http://127.0.0.1:3000/health
 
 健康检查通过前会恢复数据库，并用索引处理未收尾的工单。普通启动不遍历工单记录、目录或共享 Git 快照，也不拉取远端或重建历史代码视图。读取代码时才校验所选快照。监听后等到配置的维护周期再运行容量采样和自动回收；周期为 0 时停用自动维护。
 
-Node 使用运行用户的私有编译缓存加快后续启动，默认位于 `~/.cache/issue-pilot/node-compile-cache`，设置 `XDG_CACHE_HOME` 时使用该缓存根。缓存独立于业务数据，首次运行或缓存不可用时正常编译。
+Node 使用运行用户的私有编译缓存加快后续启动，默认位于 `~/.cache/issue-pilot/node-compile-cache`，设置 `XDG_CACHE_HOME` 时使用该缓存根。服务加载后将缓存写盘，本地工具通过 Node 的 `NODE_COMPILE_CACHE_READONLY=1` 只读复用，沙箱仍禁止修改宿主缓存。缓存独立于业务数据，首次运行或缓存不可用时正常编译；`NODE_DISABLE_COMPILE_CACHE=1` 同时禁用服务和本地工具的缓存。
 
 ## 访问与认证
 

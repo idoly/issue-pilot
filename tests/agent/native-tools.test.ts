@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile, rm, symlink, link } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, symlink, link } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import { assertIssueHardlinks, issueNativeTools } from "../../src/agent/native-tools.ts";
 import { shellQuote } from "../../src/agent/issue-sandbox.ts";
 async function fixture() {
@@ -22,6 +25,60 @@ async function fixture() {
   };
 }
 const invoke = (tool: ReturnType<typeof issueNativeTools>[number], input: unknown) => tool.execute("guard", input as never, undefined, undefined, {} as never);
+test("native tools reuse the host compile cache read-only and tolerate missing or disabled caches", async () => {
+  const f = await fixture();
+  const cache = path.join(f.other, "cache");
+  const original = { NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE, NODE_DISABLE_COMPILE_CACHE: process.env.NODE_DISABLE_COMPILE_CACHE };
+  try {
+    const seedEnvironment: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: path.join(f.root, "agent"), NODE_COMPILE_CACHE: cache };
+    delete seedEnvironment.NODE_DISABLE_COMPILE_CACHE;
+    delete seedEnvironment.NODE_COMPILE_CACHE_READONLY;
+    await promisify(execFile)(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(import.meta.resolve("@earendil-works/pi-coding-agent"))})`], {
+      env: seedEnvironment,
+    });
+    const fingerprint = async () => {
+      const hash = createHash("sha256");
+      for (const entry of (await readdir(cache, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile()).sort((a, b) => a.name.localeCompare(b.name))) {
+        hash.update(path.join(entry.parentPath, entry.name));
+        hash.update(await readFile(path.join(entry.parentPath, entry.name)));
+      }
+      return hash.digest("hex");
+    };
+    const before = await fingerprint();
+    process.env.NODE_COMPILE_CACHE = cache;
+    delete process.env.NODE_DISABLE_COMPILE_CACHE;
+    const tools = issueNativeTools({ writeRoot: f.own, readRoots: [cache] });
+    const bash = tools.find((tool) => tool.name === "bash")!,
+      read = tools.find((tool) => tool.name === "read")!;
+    const run = async (code: string) => {
+      const result = await invoke(bash, { command: `${shellQuote(process.execPath)} -e ${shellQuote(code)}` });
+      return result.content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .join("\n")
+        .trimEnd();
+    };
+    const status = JSON.parse(await run("console.log(JSON.stringify({directory:require('node:module').getCompileCacheDir(),readOnly:process.env.NODE_COMPILE_CACHE_READONLY}))"));
+    assert.ok(status.directory.startsWith(cache + path.sep));
+    assert.equal(status.readOnly, "1");
+    assert.equal(await run(`try { require('node:fs').writeFileSync(${JSON.stringify(path.join(cache, "untrusted"))}, 'poison'); } catch { console.log('blocked'); }`), "blocked");
+    await writeFile(path.join(f.own, "note.txt"), "cached tool still reads");
+    assert.match(JSON.stringify(await invoke(read, { path: "note.txt" })), /cached tool still reads/);
+    assert.equal(await fingerprint(), before, "sandboxed tools must not change the service's compile cache");
+
+    process.env.NODE_COMPILE_CACHE = path.join(cache, "missing");
+    assert.match(JSON.stringify(await invoke(read, { path: "note.txt" })), /cached tool still reads/);
+    await assert.rejects(readFile(path.join(cache, "missing")), { code: "ENOENT" });
+    process.env.NODE_COMPILE_CACHE = cache;
+    process.env.NODE_DISABLE_COMPILE_CACHE = "1";
+    assert.equal(await run("console.log(String(require('node:module').getCompileCacheDir()))"), "undefined");
+  } finally {
+    for (const [name, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await f.close();
+  }
+});
 test("native write and edit can change this Issue's files but reject absolute, parent and symlink escapes", async () => {
   const f = await fixture();
   try {

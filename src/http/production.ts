@@ -1,5 +1,5 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
-import { enableCompileCache, getCompileCacheDir } from "node:module";
+import { enableCompileCache, flushCompileCache, getCompileCacheDir } from "node:module";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
@@ -13,7 +13,10 @@ async function enableLocalCompileCache(): Promise<void> {
   try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const info = await lstat(directory);
-    if (info.isDirectory() && info.uid === process.getuid?.() && (info.mode & 0o077) === 0 && (await realpath(directory)) === directory) enableCompileCache(directory);
+    if (info.isDirectory() && info.uid === process.getuid?.() && (info.mode & 0o077) === 0 && (await realpath(directory)) === directory) {
+      const cache = enableCompileCache(directory);
+      if (cache.directory) process.env.NODE_COMPILE_CACHE = cache.directory;
+    }
   } catch {
     // Compiled modules are disposable. A missing or unusable cache must not block startup.
   }
@@ -22,6 +25,8 @@ async function enableLocalCompileCache(): Promise<void> {
 try {
   await enableLocalCompileCache();
   const { startApi } = await import("./api.ts");
+  // Publish loaded SDK modules before serving tools; Node otherwise saves them only at exit.
+  flushCompileCache();
   await startApi({ webRoot: applicationConfig.webRoot });
 } catch (error) {
   // Startup failures may embed SQL parameters; log the sanitized diagnostic and exit non-zero.

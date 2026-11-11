@@ -38,7 +38,21 @@ export async function assertIssueHardlinks(root: string): Promise<void> {
 }
 function environment(extra: Record<string, string> = {}): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const name of ["PATH", "HOME", "LANG", "LANGUAGE", "LC_ALL", "TZ", "JAVA_HOME", "MAVEN_HOME", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"])
+  for (const name of [
+    "PATH",
+    "HOME",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "TZ",
+    "JAVA_HOME",
+    "MAVEN_HOME",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_COMPILE_CACHE",
+    "NODE_DISABLE_COMPILE_CACHE",
+  ])
     if (process.env[name] !== undefined) result[name] = process.env[name]!;
   assertIssueLaunchEnvironment(extra);
   const gitConfigCount = Number(extra.GIT_CONFIG_COUNT ?? "0");
@@ -49,6 +63,8 @@ function environment(extra: Record<string, string> = {}): Record<string, string>
     ...result,
     NODE_PATH: path.resolve(import.meta.dirname, "../../node_modules"),
     ...extra,
+    // Reuse the host's compiled SDK without letting tools populate a cache trusted by the service.
+    NODE_COMPILE_CACHE_READONLY: "1",
     ...(extra.GIT_SSH_COMMAND ? { ISSUE_PILOT_PERSONAL_GIT_SSH: extra.GIT_SSH_COMMAND } : {}),
     ...(gitConfig.length ? { ISSUE_PILOT_GIT_CONFIG: JSON.stringify(gitConfig) } : {}),
   };
