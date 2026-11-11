@@ -533,6 +533,9 @@ test("a committed Issue stays created when removing its upload staging directory
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
+    // Keep the deliberately unremoved upload inside the fixture so its final cleanup owns it.
+    const createDirectory = fsPromises.mkdtemp;
+    context.mock.method(fsPromises, "mkdtemp", () => createDirectory(path.join(fixture.root, "issue-pilot-attachment-")));
     const remove = fsPromises.rm;
     context.mock.method(fsPromises, "rm", async (target: string, options?: Parameters<typeof remove>[1]) => {
       if (path.basename(String(target)).startsWith("issue-pilot-attachment-")) throw Object.assign(new Error("simulated_staging_remove_failure"), { code: "EBUSY" });
@@ -549,6 +552,7 @@ test("a committed Issue stays created when removing its upload staging directory
     assert.equal(create.statusCode, 201, create.body);
     const listed = (await fixture.app.inject({ method: "GET", url: "/api/issues" })).json() as unknown[];
     assert.equal(listed.length, 1);
+    assert.equal((await readdir(fixture.root)).filter((name) => name.startsWith("issue-pilot-attachment-")).length, 1);
   } finally {
     context.mock.restoreAll();
     syncBuiltinESMExports();
