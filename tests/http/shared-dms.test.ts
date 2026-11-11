@@ -58,7 +58,7 @@ test("services save DMS targets without requiring or storing connection credenti
     const service = await createService(f.app, "Scope", ["prod", "test"]);
     const input = servicePayload("Scope", ["prod", "test"]);
     const definition = { ...input, deployments: input.deployments.map((row) => ({ ...row, capabilities: ["dms"], dms: scope })) };
-    const saved = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: definition });
+    const saved = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 1, ...definition } });
     assert.equal(saved.statusCode, 200, saved.body);
     const rows = await db.db.select().from(serviceDeployments);
     assert.ok(rows.every((row) => JSON.stringify(row.config.dms) === JSON.stringify(unresolvedScope)));
@@ -67,7 +67,7 @@ test("services save DMS targets without requiring or storing connection credenti
         method: "PATCH",
         url: `/api/services/${service.key}`,
         headers,
-        payload: { ...definition, deployments: definition.deployments.map((row) => ({ ...row, dms: { ...scope, ...extra } })) },
+        payload: { expectedRevision: 2, ...definition, deployments: definition.deployments.map((row) => ({ ...row, dms: { ...scope, ...extra } })) },
       });
       assert.equal(result.statusCode, 400, result.body);
     }

@@ -195,7 +195,7 @@ describe("API client", () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
 
-    await updateService("orders", { name: "Orders", description: "", repositories: [], deployments: [] });
+    await updateService("orders", { expectedRevision: 0, name: "Orders", description: "", repositories: [], deployments: [] });
     await deleteService("orders");
 
     expect(fetch.mock.calls[0]![1]).toMatchObject({ method: "PATCH" });

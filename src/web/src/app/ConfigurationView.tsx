@@ -511,7 +511,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const { currentUser, configuration, configurationLoaded, refreshCatalog, refreshConfiguration, configurationError: resourceError } = useApplicationResources();
   const canConfigure = () => currentUser()?.role === "developer";
   let editorGeneration = 0,
-    serviceRevisionDraft: number | undefined;
+    serviceRevisionDraft = 0;
   const [dbhubLoading, setDbHubLoading] = createSignal(false, { ownedWrite: true });
   const [saveConflict, setSaveConflict] = createSignal(false, { ownedWrite: true });
   const [serviceOpen, setServiceOpen] = createSignal(false, { ownedWrite: true });
@@ -586,7 +586,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
           };
     });
   const resetServiceForm = () => {
-    serviceRevisionDraft = undefined;
+    serviceRevisionDraft = 0;
     setDbHubLoading(false);
     setSaveConflict(false);
     setServiceName("");
@@ -723,14 +723,13 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     setConfigurationError("");
     try {
       const definition = {
-        expectedRevision: serviceRevisionDraft,
         name: serviceName().trim(),
         description: description().trim(),
         repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), alias: repository.alias.trim(), url: repository.url.trim() })),
         deployments: serviceDeployments.map((deployment) => serializeServiceDeployment(deployment, serviceRepositories())),
       };
       const editingKey = editingServiceKey();
-      if (editingKey) await updateService(editingKey, definition);
+      if (editingKey) await updateService(editingKey, { ...definition, expectedRevision: serviceRevisionDraft });
       else await createService(definition);
       if (owner !== editorGeneration) return;
       closeServiceEditor();

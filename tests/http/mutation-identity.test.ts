@@ -106,7 +106,7 @@ for (const mode of ["queued", "steering", "steering-to-queued"] as const)
           method: "PATCH",
           url: `/api/users/${sender}`,
           headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
-          payload: { active: false },
+          payload: { expectedRevision: 0, active: false },
         });
         assert.equal(disabled.statusCode, 200, disabled.body);
         release();
@@ -434,7 +434,7 @@ for (const explicit of [false, true])
         method: "PATCH",
         url: `/api/users/${sender}`,
         headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
-        payload: { active: false },
+        payload: { expectedRevision: 0, active: false },
       });
       assert.equal(disabled.statusCode, 200, disabled.body);
       release();

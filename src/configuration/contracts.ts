@@ -60,7 +60,6 @@ export interface Configuration extends ConfigurationCatalog {
 }
 
 export interface ServiceConfigurationInput {
-  expectedRevision?: number;
   name: string;
   description: string;
   repositories: Array<{ id?: string; alias: string; url: string }>;

@@ -70,6 +70,7 @@ test("service configuration and generated descriptions share one source without 
       url: "/api/services/other",
       headers,
       payload: {
+        expectedRevision: 1,
         ...input,
         description: "按 order_no 关联网关日志。",
         deployments: input.deployments.map((deployment: { environmentKey: string }) => ({
@@ -153,7 +154,7 @@ test("formal/test changes reserve development Issues that inherit those capabili
     await createService(f.app, "Other", ["prod"]);
     const input = await serviceInput(f);
     await createIssue(f.app, "entry", "dev");
-    const save = () => f.app.inject({ method: "PATCH", url: "/api/services/other", headers, payload: { ...input, description: "new notes" } });
+    const save = () => f.app.inject({ method: "PATCH", url: "/api/services/other", headers, payload: { expectedRevision: 1, ...input, description: "new notes" } });
     assert.equal((await save()).statusCode, 409);
     const createdWhileRunning = await f.app.inject({
       method: "POST",
@@ -172,10 +173,16 @@ test("formal/test changes reserve development Issues that inherit those capabili
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "product", name: "Product", email: "product@example.test", role: "product" } });
     assert.equal((await f.app.inject({ method: "GET", url: "/api/services/other/configuration-description", headers: { "x-issue-pilot-subject": "product" } })).statusCode, 403);
     assert.equal((await f.app.inject({ method: "GET", url: "/api/services/missing/configuration-description", headers })).statusCode, 404);
-    assert.equal((await f.app.inject({ method: "PATCH", url: "/api/services/other", headers: { "x-issue-pilot-subject": "product" }, payload: input })).statusCode, 403);
+    assert.equal((await f.app.inject({ method: "PATCH", url: "/api/services/other", headers: { "x-issue-pilot-subject": "product" }, payload: { expectedRevision: 1, ...input } })).statusCode, 403);
     assert.equal(
-      (await f.app.inject({ method: "PATCH", url: "/api/services/other", headers, payload: { ...input, deployments: input.deployments.map((row: object) => ({ ...row, mcpServices: ["missing"] })) } }))
-        .statusCode,
+      (
+        await f.app.inject({
+          method: "PATCH",
+          url: "/api/services/other",
+          headers,
+          payload: { expectedRevision: 2, ...input, deployments: input.deployments.map((row: object) => ({ ...row, mcpServices: ["missing"] })) },
+        })
+      ).statusCode,
       400,
     );
     const dev = await serviceInput(f, "entry");
@@ -185,7 +192,11 @@ test("formal/test changes reserve development Issues that inherit those capabili
           method: "PATCH",
           url: "/api/services/entry",
           headers,
-          payload: { ...dev, deployments: dev.deployments.map((row: object) => ({ ...row, capabilities: ["redis"], redis: { host: "wrong", credentialUpdate: { mode: "clear" } } })) },
+          payload: {
+            expectedRevision: 1,
+            ...dev,
+            deployments: dev.deployments.map((row: object) => ({ ...row, capabilities: ["redis"], redis: { host: "wrong", credentialUpdate: { mode: "clear" } } })),
+          },
         })
       ).statusCode,
       400,

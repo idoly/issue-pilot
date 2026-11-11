@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { eq } from "drizzle-orm";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { applicationSettings, mcpServices, serviceDeploymentRepositories, serviceDeployments, services, userPreferences } from "../../src/db/schema.ts";
+import { applicationSettings, mcpServices, repositories, serviceDeploymentRepositories, serviceDeployments, services, subjects, userCredentials, userPreferences } from "../../src/db/schema.ts";
 import { loadDeploymentRepositories } from "../../src/workspace/deployment.ts";
 import { loadDingtalkUserSettings } from "../../src/configuration/user-preferences.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -49,7 +49,7 @@ test("page configuration persists across restart and old files never overwrite i
       method: "PUT",
       url: "/api/me/credentials",
       headers,
-      payload: { model: { mode: "replace", provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high", codemode: "off", apiKey: "page-owned-key" } },
+      payload: { expectedRevision: 0, model: { mode: "replace", provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "high", codemode: "off", apiKey: "page-owned-key" } },
     });
     assert.equal(credentials.statusCode, 200, credentials.body);
     assert.doesNotMatch(credentials.body, /page-owned-key/);
@@ -93,7 +93,7 @@ test("development baselines derive only from production and reject independent o
       await database.close();
     }
     input.deployments.find((row) => row.environmentKey === "dev")!.repositoryBranches = [{ repositoryAlias: input.repositories[0]!.alias, baseBranch: "forbidden" }];
-    const override = await f.app.inject({ method: "PATCH", url: "/api/services/branches", headers, payload: input });
+    const override = await f.app.inject({ method: "PATCH", url: "/api/services/branches", headers, payload: { expectedRevision: 1, ...input } });
     assert.equal(override.statusCode, 400);
     assert.equal(override.json().error, "development_branches_inherited");
   } finally {
@@ -144,7 +144,7 @@ test("DBHub MySQL targets save atomically with deployment-owned MCP connections 
     }
     const clear = await f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: { ...input, expectedRevision: selected.json().revision } });
     assert.equal(clear.statusCode, 200, clear.body);
-    const repeated = await f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: input });
+    const repeated = await f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: { expectedRevision: 2, ...input } });
     assert.equal(repeated.statusCode, 200, repeated.body);
     const check = openDatabase(f.databaseFile);
     try {
@@ -239,7 +239,7 @@ test("saving current deployment settings preserves opaque archived development d
         .set({ config: { archivedDevelopment: archive } })
         .where(eq(serviceDeployments.id, String(row.id)));
       const input = servicePayload("Archive", ["prod", "dev"]);
-      const saved = await f.app.inject({ method: "PATCH", url: "/api/services/archive", headers, payload: input });
+      const saved = await f.app.inject({ method: "PATCH", url: "/api/services/archive", headers, payload: { expectedRevision: 1, ...input } });
       assert.equal(saved.statusCode, 200, saved.body);
       const [current] = await database.db
         .select()
@@ -277,6 +277,67 @@ test("service API retains structural validation after removing redundant UI chec
     assert.deepEqual((await f.app.inject({ method: "GET", url: "/api/config" })).json().services, []);
     assert.deepEqual(f.engine.closedSessions, []);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("configuration updates require a current revision before mutation or session disposal", async (t) => {
+  const f = await createApiFixture();
+  const database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "Revision");
+    await createIssue(f.app, "revision");
+    f.engine.running.clear();
+    const [repository] = (await f.app.inject({ url: "/api/repositories" })).json();
+    const snapshot = () =>
+      Promise.all([
+        database.db.select().from(services),
+        database.db.select().from(serviceDeployments),
+        database.db.select().from(repositories),
+        database.db.select().from(subjects),
+        database.db.select().from(userCredentials),
+        database.db.select().from(applicationSettings),
+      ]);
+    const cases = [
+      {
+        method: "PATCH",
+        url: "/api/services/revision",
+        revision: (await f.app.inject({ url: "/api/config" })).json().services[0].revision,
+        payload: { ...servicePayload("Revision"), description: "Edited service" },
+      },
+      { method: "PATCH", url: `/api/repositories/${repository.id}`, payload: { group: repository.group, url: repository.url, name: "Edited repository" } },
+      { method: "PATCH", url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`, payload: { name: "Edited user" } },
+      { method: "PUT", url: "/api/me/credentials", payload: { production: { sls: { mode: "replace", accessKeyId: "personal-id", accessKeySecret: "personal-secret" } } } },
+      { method: "PUT", url: "/api/config/shared-dms-credentials", payload: { mode: "replace", url: "https://dms.example.test/sse", authorization: "Bearer shared-secret" } },
+      { method: "PUT", url: "/api/config/shared-sls-credentials", payload: { mode: "replace", accessKeyId: "shared-id", accessKeySecret: "shared-secret" } },
+    ] as const;
+    for (const entry of cases) {
+      await t.test(entry.url, async () => {
+        const before = await snapshot();
+        const closedBefore = [...f.engine.closedSessions];
+        for (const expectedRevision of [undefined, null, "0", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+          const payload = { ...entry.payload, ...(expectedRevision === undefined ? {} : { expectedRevision }) };
+          const rejected = await f.app.inject({ method: entry.method, url: entry.url, headers, payload });
+          assert.equal(rejected.statusCode, 400, rejected.body);
+          assert.equal(rejected.json().error, "invalid_configuration_revision");
+          assert.deepEqual(await snapshot(), before);
+          assert.deepEqual(f.engine.closedSessions, closedBefore);
+          assert.equal(f.engine.reservations.size, 0);
+        }
+        const payload = { ...entry.payload, expectedRevision: "revision" in entry ? entry.revision : 0 };
+        const saved = await f.app.inject({ method: entry.method, url: entry.url, headers, payload });
+        assert.equal(saved.statusCode, 200, saved.body);
+        const after = await snapshot();
+        const closedAfter = [...f.engine.closedSessions];
+        const repeated = await f.app.inject({ method: entry.method, url: entry.url, headers, payload });
+        assert.equal(repeated.statusCode, 409, repeated.body);
+        assert.equal(repeated.json().error, "configuration_changed");
+        assert.deepEqual(await snapshot(), after);
+        assert.deepEqual(f.engine.closedSessions, closedAfter);
+      });
+    }
+  } finally {
+    await database.close();
     await f.cleanup();
   }
 });

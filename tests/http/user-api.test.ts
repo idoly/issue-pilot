@@ -57,11 +57,7 @@ test("manages active users in SQLite without rewriting historical identities", a
       method: "PATCH",
       url: "/api/users/operator%40example.test",
       headers: bootstrapHeaders,
-      payload: {
-        name: "Operations",
-        email: "operations@example.test",
-        active: false,
-      },
+      payload: { expectedRevision: 0, name: "Operations", email: "operations@example.test", active: false },
     });
     assert.equal(disabled.statusCode, 200, disabled.body);
     assert.deepEqual(await json(disabled), {
@@ -104,11 +100,7 @@ test("manages active users in SQLite without rewriting historical identities", a
       method: "PATCH",
       url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`,
       headers: bootstrapHeaders,
-      payload: {
-        name: issuePilotConfig.bootstrapUser.name,
-        email: issuePilotConfig.bootstrapUser.email,
-        active: false,
-      },
+      payload: { expectedRevision: 0, name: issuePilotConfig.bootstrapUser.name, email: issuePilotConfig.bootstrapUser.email, active: false },
     });
     assert.equal(lastActive.statusCode, 409);
     assert.equal((await json(lastActive)).error, "last_active_user");
@@ -129,15 +121,15 @@ test("patches only provided user fields without restoring stale profile values",
     assert.equal(created.statusCode, 201, created.body);
     const patch = (payload: Record<string, unknown>, subject = "partial-user") =>
       fixture.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(subject)}`, headers: bootstrapHeaders, payload });
-    assert.equal((await patch({ name: "Current", email: "current@example.test", role: "developer", active: true })).statusCode, 200);
-    const disabled = await patch({ active: false });
+    assert.equal((await patch({ expectedRevision: 0, name: "Current", email: "current@example.test", role: "developer", active: true })).statusCode, 200);
+    const disabled = await patch({ expectedRevision: 1, active: false });
     assert.equal(disabled.statusCode, 200, disabled.body);
     const values = await json(disabled);
     assert.equal(values.name, "Current");
     assert.equal(values.email, "current@example.test");
     assert.equal(values.role, "developer");
     assert.equal(values.active, false);
-    const renamed = await patch({ name: "Renamed" });
+    const renamed = await patch({ expectedRevision: 2, name: "Renamed" });
     assert.equal(renamed.statusCode, 200, renamed.body);
     const renamedValues = await json(renamed);
     assert.equal(renamedValues.name, "Renamed");
@@ -149,7 +141,7 @@ test("patches only provided user fields without restoring stale profile values",
       [{ role: "product" }, "last_active_developer"],
       [{ isAdmin: false }, "last_active_admin"],
     ] as const) {
-      const protectedUser = await patch(payload, issuePilotConfig.bootstrapUser.subject);
+      const protectedUser = await patch({ expectedRevision: 0, ...payload }, issuePilotConfig.bootstrapUser.subject);
       assert.equal(protectedUser.statusCode, 409, protectedUser.body);
       assert.equal((await json(protectedUser)).error, error);
     }
@@ -173,7 +165,7 @@ test("validates provided user fields before closing their Issue sessions", async
         method: "PATCH",
         url: `/api/users/${encodeURIComponent(issuePilotConfig.bootstrapUser.subject)}`,
         headers: bootstrapHeaders,
-        payload: { name: issuePilotConfig.bootstrapUser.name, email: issuePilotConfig.bootstrapUser.email, active: true, ...invalid },
+        payload: { expectedRevision: 0, name: issuePilotConfig.bootstrapUser.name, email: issuePilotConfig.bootstrapUser.email, active: true, ...invalid },
       });
       assert.equal(response.statusCode, 400, response.body);
       assert.deepEqual(fixture.engine.closedSessions, []);
@@ -214,7 +206,7 @@ test("rejects a user change when the actor loses the developer role while queued
     assert.equal(created.statusCode, 201, created.body);
     fixture.engine.running.clear();
     const response = app
-      .inject({ method: "PATCH", url: "/api/users/other-developer", headers: bootstrapHeaders, payload: { name: "Changed", email: "other@example.test", active: true } })
+      .inject({ method: "PATCH", url: "/api/users/other-developer", headers: bootstrapHeaders, payload: { expectedRevision: 0, name: "Changed", email: "other@example.test", active: true } })
       .then((result) => result);
     await waiting;
     // Simulate the earlier scope operation committing a role change before this request acquires it.
@@ -246,7 +238,12 @@ test("validates managed user input and preserves immutable subjects", async () =
       assert.equal(response.statusCode, 400);
       assert.equal((await json(response)).error, error);
     }
-    const missing = await fixture.app.inject({ method: "PATCH", url: "/api/users/missing-user", headers: bootstrapHeaders, payload: { name: "Missing", email: "missing@example.test", active: true } });
+    const missing = await fixture.app.inject({
+      method: "PATCH",
+      url: "/api/users/missing-user",
+      headers: bootstrapHeaders,
+      payload: { expectedRevision: 0, name: "Missing", email: "missing@example.test", active: true },
+    });
     assert.equal(missing.statusCode, 404);
     const duplicate = await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { ...issuePilotConfig.bootstrapUser } });
     assert.equal(duplicate.statusCode, 409);

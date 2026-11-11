@@ -41,13 +41,23 @@ test("developers cannot grant global management and the last active manager is p
   try {
     await f.app.inject({ method: "POST", url: "/api/users", headers: admin, payload: { subject: "dev@example.test", name: "Dev", email: "dev@example.test", role: "developer" } });
     const headers = { "x-issue-pilot-subject": "dev@example.test" };
-    const self = await f.app.inject({ method: "PATCH", url: "/api/users/dev@example.test", headers, payload: { name: "Dev", email: "dev@example.test", active: true, isAdmin: true } });
+    const self = await f.app.inject({
+      method: "PATCH",
+      url: "/api/users/dev@example.test",
+      headers,
+      payload: { expectedRevision: 0, name: "Dev", email: "dev@example.test", active: true, isAdmin: true },
+    });
     assert.equal(self.statusCode, 403, self.body);
     assert.equal(self.json().error, "admin_role_required");
     const create = await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "elevated@example.test", name: "Elevated", email: "elevated@example.test", isAdmin: true } });
     assert.equal(create.statusCode, 403, create.body);
     for (const actor of [headers, admin]) {
-      const response = await f.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, headers: actor, payload: { name: "Owner", email: owner, active: true, isAdmin: false } });
+      const response = await f.app.inject({
+        method: "PATCH",
+        url: `/api/users/${encodeURIComponent(owner)}`,
+        headers: actor,
+        payload: { expectedRevision: 0, name: "Owner", email: owner, active: true, isAdmin: false },
+      });
       assert.equal(response.statusCode, actor === admin ? 409 : 403, response.body);
     }
     const me = await f.app.inject({ method: "GET", url: "/api/me", headers: admin });
@@ -77,17 +87,17 @@ for (const change of ["role", "management", "active"] as const)
       });
       assert.equal(independent.statusCode, 201, independent.body);
       const payload = { name: "Owner", email: owner, active: change !== "active", role: change === "role" ? "product" : "developer", isAdmin: change !== "management" };
-      const denied = await f.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, headers: admin, payload });
+      const denied = await f.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, headers: admin, payload: { expectedRevision: 0, ...payload } });
       assert.equal(denied.statusCode, 409, denied.body);
       assert.equal(denied.json().error, "last_active_admin");
       const promoted = await f.app.inject({
         method: "PATCH",
         url: "/api/users/dev@example.test",
         headers: admin,
-        payload: { name: "Dev", email: "dev@example.test", active: true, role: "developer", isAdmin: true },
+        payload: { expectedRevision: 0, name: "Dev", email: "dev@example.test", active: true, role: "developer", isAdmin: true },
       });
       assert.equal(promoted.statusCode, 200, promoted.body);
-      const allowed = await f.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, headers: admin, payload });
+      const allowed = await f.app.inject({ method: "PATCH", url: `/api/users/${encodeURIComponent(owner)}`, headers: admin, payload: { expectedRevision: 0, ...payload } });
       assert.equal(allowed.statusCode, 200, allowed.body);
     } finally {
       await f.cleanup();

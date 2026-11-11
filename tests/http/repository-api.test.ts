@@ -27,10 +27,10 @@ test("manages a shared repository catalog and cascades config URLs without rewri
     connection.close();
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/repositories/${id}`, headers })).statusCode, 409);
     const next = "git@git.example.test:team/renamed.git";
-    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { group: "other", name: "Shared", url: next } });
+    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { expectedRevision: 0, group: "other", name: "Shared", url: next } });
     assert.equal(blocked.statusCode, 409, blocked.body);
     f.engine.running.clear();
-    const update = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { group: "other", name: "Shared", url: next } });
+    const update = await f.app.inject({ method: "PATCH", url: `/api/repositories/${id}`, headers, payload: { expectedRevision: 0, group: "other", name: "Shared", url: next } });
     assert.equal(update.statusCode, 200, update.body);
     const config = JSON.parse((await f.app.inject({ method: "GET", url: "/api/config" })).body);
     assert.deepEqual(
@@ -122,7 +122,7 @@ test("repository address changes reserve only entry and included services that u
     const catalog = (await f.app.inject({ method: "GET", url: "/api/repositories" })).json() as Array<{ id: string; url: string }>;
     const repository = catalog.find((row) => row.url === original)!;
     const next = "git@git.example.test:team/scoped-next.git";
-    const updated = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { group: "other", name: "Scoped", url: next } });
+    const updated = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { expectedRevision: 0, group: "other", name: "Scoped", url: next } });
     assert.equal(updated.statusCode, 200, updated.body);
     assert.equal(f.engine.running.has(unrelatedIssueId), true);
     assert.deepEqual(f.engine.closedSessions, []);
@@ -134,10 +134,10 @@ test("repository address changes reserve only entry and included services that u
       await database.close();
     }
     const final = "git@git.example.test:team/scoped-final.git";
-    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { group: "other", name: "Scoped", url: final } });
+    const blocked = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { expectedRevision: 1, group: "other", name: "Scoped", url: final } });
     assert.equal(blocked.statusCode, 409, blocked.body);
     f.engine.running.clear();
-    const applied = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { group: "other", name: "Scoped", url: final } });
+    const applied = await f.app.inject({ method: "PATCH", url: `/api/repositories/${repository.id}`, headers, payload: { expectedRevision: 1, group: "other", name: "Scoped", url: final } });
     assert.equal(applied.statusCode, 200, applied.body);
     assert.deepEqual(f.engine.closedSessions, [unrelatedIssueId]);
   } finally {
@@ -184,7 +184,7 @@ test("catalog URL changes invalidate service drafts even when the original URL i
       200,
     );
     assert.equal((await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Original upstream", url: repository.url } })).statusCode, 201);
-    const oldDraft: ServiceConfigurationInput = {
+    const oldDraft: ServiceConfigurationInput & { expectedRevision: number } = {
       name: prior.name,
       description: prior.description,
       expectedRevision: prior.revision,

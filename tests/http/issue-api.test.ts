@@ -443,7 +443,7 @@ test("serializes Issue assignee changes with user deactivation", async () => {
     });
     await started;
     const disable = fixture.app
-      .inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { name: "Next Owner", email: "next@example.test", role: "developer", active: false } })
+      .inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { expectedRevision: 0, name: "Next Owner", email: "next@example.test", role: "developer", active: false } })
       .then((response) => response);
     const disabledBeforeEdit = await Promise.race([disable.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 100))]);
     release();

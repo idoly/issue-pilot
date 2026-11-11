@@ -17,6 +17,7 @@ test("personal production credentials are private and override each configured p
       url: "/api/me/credentials",
       headers,
       payload: {
+        expectedRevision: 0,
         production: {
           dms: { mode: "replace", url: "https://personal.example.test/sse", authorization: "Bearer personal-token" },
           sls: { mode: "replace", accessKeyId: "personal-id", accessKeySecret: "personal-secret" },
@@ -43,7 +44,7 @@ test("personal production credentials are private and override each configured p
     assert.equal(personal.sls!.accessKeySecret, "personal-secret");
     assert.equal(personal.sls!.project, "orders");
     assert.equal(config.dms!.authorization, "Bearer service-token");
-    assert.equal((await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { production: { dms: { mode: "clear" } } } })).statusCode, 200);
+    assert.equal((await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers, payload: { expectedRevision: 1, production: { dms: { mode: "clear" } } } })).statusCode, 200);
     const [cleared] = await db.db.select().from(userCredentials);
     const mixed = applyIssueCredentials(config, cleared, { dms: sharedDms });
     assert.equal(mixed.dms!.authorization, "Bearer service-token");
@@ -52,7 +53,7 @@ test("personal production credentials are private and override each configured p
       method: "PUT",
       url: "/api/me/credentials",
       headers,
-      payload: { production: { dms: { mode: "replace", url: "http://unsafe.example.test", authorization: "Bearer token" } } },
+      payload: { expectedRevision: 2, production: { dms: { mode: "replace", url: "http://unsafe.example.test", authorization: "Bearer token" } } },
     });
     assert.equal(invalid.statusCode, 400);
     for (const role of ["product", "test"]) {
@@ -63,12 +64,12 @@ test("personal production credentials are private and override each configured p
         method: "PUT",
         url: "/api/me/credentials",
         headers: personalHeaders,
-        payload: { production: { sls: { mode: "replace", accessKeyId: `${role}-id`, accessKeySecret: `${role}-secret` } } },
+        payload: { expectedRevision: 0, production: { sls: { mode: "replace", accessKeyId: `${role}-id`, accessKeySecret: `${role}-secret` } } },
       });
       assert.equal(response.statusCode, 200, response.body);
       assert.equal(JSON.parse(response.body).productionSlsConfigured, true);
       assert.doesNotMatch(response.body, new RegExp(`${role}-secret|${role}-id`));
-      assert.equal((await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers: personalHeaders, payload: { git: { mode: "clear" } } })).statusCode, 403);
+      assert.equal((await f.app.inject({ method: "PUT", url: "/api/me/credentials", headers: personalHeaders, payload: { expectedRevision: 1, git: { mode: "clear" } } })).statusCode, 403);
     }
     const read = await f.app.inject({ method: "GET", url: "/api/me/credentials", headers });
     assert.doesNotMatch(read.body, /personal-token|personal-id|personal-secret/);

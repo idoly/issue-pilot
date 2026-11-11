@@ -11,7 +11,6 @@ export class ApiError extends Error {
 }
 
 export function checkRevision(value: unknown, actual: number): void {
-  if (value === undefined) return;
   if (!Number.isSafeInteger(value) || Number(value) < 0) throw new ApiError(400, "invalid_configuration_revision");
   if (value !== actual) throw new ApiError(409, "configuration_changed");
 }

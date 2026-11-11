@@ -31,7 +31,7 @@ test("adds missing IQS test deployment and persists every selected branch withou
       method: "PATCH",
       url: "/api/services/iqs",
       headers,
-      payload: { name: service.name, description: service.description, repositories: service.repositories, deployments },
+      payload: { expectedRevision: 1, name: service.name, description: service.description, repositories: service.repositories, deployments },
     });
     assert.equal(response.statusCode, 200, response.body);
     const saved = JSON.parse((await f.app.inject({ method: "GET", url: "/api/config" })).body).services[0];

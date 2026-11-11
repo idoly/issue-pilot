@@ -109,10 +109,10 @@ export interface ManagedUserUpdate {
   active?: boolean;
   role?: UserRole;
   isAdmin?: boolean;
-  expectedRevision?: number;
+  expectedRevision: number;
 }
 export interface PersonalCredentialUpdate {
-  expectedRevision?: number;
+  expectedRevision: number;
   model?: ({ mode: "replace"; apiKey?: string } & AgentModelSelection) | { mode: "clear" };
   git?: { mode: "replace"; type: "ssh"; privateKey: string } | { mode: "clear" };
   production?: { dms?: { mode: "replace"; url: string; authorization: string } | { mode: "clear" }; sls?: { mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" } };
@@ -505,7 +505,7 @@ export const loadApplicationEndpoints = (signal?: AbortSignal) => request<{ endp
 
 type RepositoryInput = Pick<ManagedRepository, "name" | "url" | "group">;
 export const registerRepository = (input: RepositoryInput) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
-export const updateRepository = (id: string, input: RepositoryInput & { expectedRevision?: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
+export const updateRepository = (id: string, input: RepositoryInput & { expectedRevision: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
 export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const loadServiceDbHubTargets = (key: string) =>
   request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
@@ -525,7 +525,7 @@ export const loadRepositories = () => request<ManagedRepository[]>("/api/reposit
 export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) =>
   request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);
 export const createService = (input: ServiceInput) => jsonRequest<{ key: string; name: string }>("/api/services", "POST", input);
-export const updateService = (key: string, input: ServiceInput) => request<void>(servicePath(key), { method: "PATCH", body: JSON.stringify(input) });
+export const updateService = (key: string, input: ServiceInput & { expectedRevision: number }) => request<void>(servicePath(key), { method: "PATCH", body: JSON.stringify(input) });
 export const deleteService = (key: string) => request<void>(servicePath(key), { method: "DELETE" });
 
 export function attachmentUrl(key: string, attachmentId: string): string {

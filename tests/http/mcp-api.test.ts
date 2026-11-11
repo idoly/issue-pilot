@@ -74,6 +74,7 @@ test("unowned MCP entries and historical bindings do not leak into service descr
       url: "/api/services/global",
       headers,
       payload: {
+        expectedRevision: 1,
         name: projected.name,
         description: projected.description,
         repositories: projected.repositories,

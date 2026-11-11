@@ -24,6 +24,7 @@ test("resolves DMS scope with a saved server-side token without returning it to 
       method: "PATCH",
       url: "/api/services/saved-dms",
       payload: {
+        expectedRevision: 1,
         name: service.name,
         description: service.description,
         repositories: service.repositories,

@@ -24,7 +24,7 @@ test("DMS scope resolution selects the caller's personal credentials and never f
       method: "PUT",
       url: "/api/me/credentials",
       headers,
-      payload: { production: { dms: { mode: "replace", url: "https://personal.example.test/sse", authorization: "Bearer personal-secret" } } },
+      payload: { expectedRevision: 0, production: { dms: { mode: "replace", url: "https://personal.example.test/sse", authorization: "Bearer personal-secret" } } },
     });
     assert.equal(personal.statusCode, 200, personal.body);
     globalThis.fetch = async (input, init) => {

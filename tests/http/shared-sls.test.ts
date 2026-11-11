@@ -54,14 +54,14 @@ test("services save only SLS scope without requiring or storing connection crede
     const service = await createService(f.app, "Scope", ["prod", "test"]);
     const input = servicePayload("Scope", ["prod", "test"]);
     const definition = { ...input, deployments: input.deployments.map((row) => ({ ...row, capabilities: ["sls"], sls: scope })) };
-    const saved = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: definition });
+    const saved = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 1, ...definition } });
     assert.equal(saved.statusCode, 200, saved.body);
     const rows = await db.db.select().from(serviceDeployments);
     assert.ok(rows.every((row) => JSON.stringify(row.config.sls) === JSON.stringify(scope)));
     const publicConfig = await f.app.inject({ method: "GET", url: "/api/config" });
     assert.doesNotMatch(publicConfig.body, /accessKeyId|accessKeySecret/);
     const invalid = { ...definition, deployments: definition.deployments.map((row) => ({ ...row, sls: { ...scope, credentialUpdate: { mode: "replace", values: shared } } })) };
-    const rejected = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: invalid });
+    const rejected = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 2, ...invalid } });
     assert.equal(rejected.statusCode, 400, rejected.body);
     assert.equal(rejected.json().error, "service_sls_credentials_not_allowed");
     assert.deepEqual(await db.db.select().from(serviceDeployments), rows);

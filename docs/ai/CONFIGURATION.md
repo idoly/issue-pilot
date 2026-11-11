@@ -14,6 +14,8 @@ AI reference. [Index](README.md) · [Human configuration guide](../CONFIGURATION
 
 bootstrapUser inserts only into an empty user table; changing it does not rename existing users. Bootstrap synchronizes default environment names. SQLite remains authoritative; deployment model overrides and retired YAML import/export must not return.
 
+Service, repository and user edits, personal credentials and shared DMS/SLS credential updates require a nonnegative safe-integer expectedRevision from their current read projection. Missing or invalid revisions return invalid_configuration_revision (400); stale revisions return configuration_changed (409), before writes or session disposal. Creation does not require a revision. Keep drafts on conflict and reread before merging; never omit the revision to force a save. Owner: [input.ts](../../src/http/input.ts).
+
 ## Operator model catalog
 
 Pi getAgentDir() defaults to ~/.pi/agent. SDK PI_CODING_AGENT_DIR changes resources, not application state. Verify the actual process user, HOME and permissions; another shell's configuration is not equivalent.
