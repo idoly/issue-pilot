@@ -7,8 +7,8 @@ import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { readInBatches } from "../db/client.ts";
 import { errorCode } from "../diagnostics.ts";
+import { readSnapshot, type DatabaseReader } from "../db/client.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { issueSessionHistory, resetIssueSession } from "../agent/session-reset.ts";
 import {
@@ -195,75 +195,63 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     return keys.map((key) => byKey.get(key)!);
   };
   const parseRelatedIssues = (input: Record<string, unknown>) => validateRelatedIssues(parseRelatedIssueKeys(input));
-  // Summaries need no large text columns; callers may select a narrower row than the full Issue.
-  type IssueSummaryRow = Pick<
-    typeof issues.$inferSelect,
-    "id" | "key" | "title" | "priority" | "type" | "status" | "serviceId" | "environmentId" | "assigneeSubject" | "reporterSubject" | "resolvedAt" | "createdAt" | "updatedAt"
-  >;
-  const serializeIssueSummaries = async (selectedIssues: IssueSummaryRow[]) => {
-    const assigneeSubjects = [...new Set(selectedIssues.flatMap((issue) => (issue.assigneeSubject ? [issue.assigneeSubject] : [])))];
-    const serviceIds = [...new Set(selectedIssues.map((issue) => issue.serviceId))];
-    const environmentIds = [...new Set(selectedIssues.map((issue) => issue.environmentId))];
-    const issueIds = selectedIssues.map((issue) => issue.id);
-    const [assigneeRows, serviceRows, environmentRows, workspaceRows] = await Promise.all([
-      readInBatches(assigneeSubjects, (batch) => database.db.select().from(subjects).where(inArray(subjects.subject, batch))),
-      readInBatches(serviceIds, (batch) => database.db.select({ id: services.id, key: services.key, name: services.name }).from(services).where(inArray(services.id, batch))),
-      readInBatches(environmentIds, (batch) => database.db.select({ id: environments.id, key: environments.key }).from(environments).where(inArray(environments.id, batch))),
-      readInBatches(issueIds, (batch) => database.db.select({ issueId: issueWorkspaces.issueId, status: issueWorkspaces.status }).from(issueWorkspaces).where(inArray(issueWorkspaces.issueId, batch))),
-    ]);
-    const assignees = new Map(assigneeRows.map((assignee) => [assignee.subject, assignee]));
-    const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
-    const environmentById = new Map(environmentRows.map((environment) => [environment.id, environment]));
-    const workspaceByIssueId = new Map(workspaceRows.map((workspace) => [workspace.issueId, workspace]));
-    return selectedIssues.map((issue) => {
-      const assignee = issue.assigneeSubject ? assignees.get(issue.assigneeSubject) : undefined;
-      const service = serviceById.get(issue.serviceId);
-      const environment = environmentById.get(issue.environmentId);
-      const workspace = workspaceByIssueId.get(issue.id);
-      if (!service) throw new Error("issue_service_not_found");
-      if (!environment) throw new Error("issue_environment_not_found");
-      if (!workspace) throw new Error("issue_workspace_not_found");
-      return {
-        id: issue.key,
-        title: issue.title,
-        priority: issue.priority,
-        type: issue.type,
-        status: issue.status,
-        assignee: assignee?.displayName ?? null,
-        assigneeSubject: issue.assigneeSubject,
-        service: { key: service.key, name: service.name },
-        environmentKey: environment.key,
-        workspaceStatus: workspace.status,
-        agentRunning: engine.isRunning(issue.id),
-        resolvedAt: isoDate(issue.resolvedAt) ?? null,
-        createdAt: isoDate(issue.createdAt),
-        updatedAt: issue.updatedAt.toISOString(),
-      };
-    });
-  };
-  const serializeIssueSummary = async (issue: IssueSummaryRow) => (await serializeIssueSummaries([issue]))[0]!;
-  app.get("/api/issues", async (_request, _reply) => {
-    // The list is polled; summaries never read the (large) description column.
-    return serializeIssueSummaries(
-      await database.db
-        .select({
+  const serviceSummary = { key: services.key, name: services.name };
+  const issueSummaryQuery = (reader: DatabaseReader = database.db) =>
+    reader
+      .select({
+        issue: {
           id: issues.id,
           key: issues.key,
           title: issues.title,
           priority: issues.priority,
           type: issues.type,
           status: issues.status,
-          serviceId: issues.serviceId,
-          environmentId: issues.environmentId,
           assigneeSubject: issues.assigneeSubject,
-          reporterSubject: issues.reporterSubject,
           resolvedAt: issues.resolvedAt,
           createdAt: issues.createdAt,
           updatedAt: issues.updatedAt,
-        })
-        .from(issues)
-        .orderBy(desc(issues.createdAt), desc(issues.key)),
-    );
+        },
+        assignee: subjects.displayName,
+        service: serviceSummary,
+        environmentKey: environments.key,
+        workspaceStatus: issueWorkspaces.status,
+      })
+      .from(issues)
+      .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
+      .leftJoin(services, eq(services.id, issues.serviceId))
+      .leftJoin(environments, eq(environments.id, issues.environmentId))
+      .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id));
+  type IssueSummaryRow = Awaited<ReturnType<typeof issueSummaryQuery>>[number];
+  const serializeIssueSummaryRow = ({ issue, assignee, service, environmentKey, workspaceStatus }: IssueSummaryRow) => {
+    if (!service) throw new Error("issue_service_not_found");
+    if (environmentKey === null) throw new Error("issue_environment_not_found");
+    if (workspaceStatus === null) throw new Error("issue_workspace_not_found");
+    return {
+      id: issue.key,
+      title: issue.title,
+      priority: issue.priority,
+      type: issue.type,
+      status: issue.status,
+      assignee,
+      assigneeSubject: issue.assigneeSubject,
+      service,
+      environmentKey,
+      workspaceStatus,
+      agentRunning: engine.isRunning(issue.id),
+      resolvedAt: isoDate(issue.resolvedAt) ?? null,
+      createdAt: isoDate(issue.createdAt),
+      updatedAt: issue.updatedAt.toISOString(),
+    };
+  };
+  const readIssueSummary = async (issueId: string, reader?: DatabaseReader) => {
+    const row = (await issueSummaryQuery(reader).where(eq(issues.id, issueId)))[0];
+    if (!row) throw new ApiError(404, "issue_not_found");
+    return serializeIssueSummaryRow(row);
+  };
+  app.get("/api/issues", async () => {
+    // A single SQLite snapshot for the polled list, without large description columns.
+    const rows = await issueSummaryQuery().orderBy(desc(issues.createdAt), desc(issues.key));
+    return rows.map(serializeIssueSummaryRow);
   });
 
   app.get("/api/issue-pins", async (request, _reply) => {
@@ -373,7 +361,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           return issue;
         });
       });
-      return { issue: await serializeIssueSummary(createdIssue), created };
+      return { issue: await readIssueSummary(createdIssue.id), created };
     } catch (error) {
       failures.push(error);
       throw error;
@@ -492,7 +480,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
               }),
             );
           }
-          return serializeIssueSummary(await requireIssue(database, issue.key));
+          return readIssueSummary(issue.id);
         }),
       );
     } catch (error) {
@@ -551,7 +539,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const targetStatus = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     if (targetStatus === "open") {
       try {
-        return serializeIssueSummary(await workspaces.reopenIssue(issue.id, () => ensureCurrentSubject(database, request)));
+        const reopened = await workspaces.reopenIssue(issue.id, () => ensureCurrentSubject(database, request));
+        return readIssueSummary(reopened.id);
       } catch (error) {
         if (error instanceof WorkspaceRestoreRefusal) throwRefusal(error);
         throw error;
@@ -568,43 +557,38 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         .where(and(eq(issues.id, issue.id), eq(issues.status, "pending")))
         .returning();
       if (!updatedIssue) throw new ApiError(409, "invalid_issue_status_transition");
-      return serializeIssueSummary(updatedIssue);
+      return readIssueSummary(updatedIssue.id);
     });
   });
 
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request, _reply) => {
-    const issue = await requireIssue(database, request.params.key);
-    const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relationRows, scopeHistory] = await Promise.all([
-      serializeIssueSummary(issue),
-      database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
-      database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
-      database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
-      database.db.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)),
-      database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
-      database.db.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)),
-      database.db
-        .select({ comment: issueComments, person: subjects })
-        .from(issueComments)
-        .innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject))
-        .where(eq(issueComments.issueId, issue.id))
-        .orderBy(asc(issueComments.createdAt)),
-      database.db.select().from(issueRelations).where(eq(issueRelations.issueId, issue.id)).orderBy(asc(issueRelations.createdAt), asc(issueRelations.relatedIssueId)),
-      scopeTransitions.history(issue.id),
-    ]);
-    const relatedIssueRows = relationRows.length
-      ? await database.db
-          .select()
-          .from(issues)
-          .where(
-            inArray(
-              issues.id,
-              relationRows.map(({ relatedIssueId }) => relatedIssueId),
-            ),
-          )
-      : [];
-    const relatedIssueById = new Map(relatedIssueRows.map((relatedIssue) => [relatedIssue.id, relatedIssue]));
-    const relatedIssues = await serializeIssueSummaries(
-      relationRows.map(({ relatedIssueId }) => relatedIssueById.get(relatedIssueId)).filter((relatedIssue): relatedIssue is typeof issues.$inferSelect => Boolean(relatedIssue)),
+    const { issue, summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relatedIssueRows, scopeHistory, collaboratingServices } = await readSnapshot(
+      database.db,
+      async (reader) => {
+        const issue = await requireIssue({ db: reader }, request.params.key);
+        const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relatedIssueRows, scopeHistory, collaboratingServices] = await Promise.all([
+          readIssueSummary(issue.id, reader),
+          reader.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
+          reader.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
+          reader.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)),
+          reader.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)),
+          reader.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
+          reader.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)),
+          reader
+            .select({ comment: issueComments, person: subjects })
+            .from(issueComments)
+            .innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject))
+            .where(eq(issueComments.issueId, issue.id))
+            .orderBy(asc(issueComments.createdAt)),
+          issueSummaryQuery(reader)
+            .innerJoin(issueRelations, eq(issueRelations.relatedIssueId, issues.id))
+            .where(eq(issueRelations.issueId, issue.id))
+            .orderBy(asc(issueRelations.createdAt), asc(issueRelations.relatedIssueId)),
+          scopeTransitions.history(issue.id, reader),
+          participatingServices(reader, issue),
+        ]);
+        return { issue, summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relatedIssueRows, scopeHistory, collaboratingServices };
+      },
     );
     const workspace = workspaceRows[0];
     const sessionBinding = sessionRows[0];
@@ -631,15 +615,15 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       })),
       workingDirectory: issueRoot(stateRoot, issue.key),
       attachments: attachmentRows.map(serializeAttachment),
-      collaboratingServices: await participatingServices(database.db, issue),
-      relatedIssues,
+      collaboratingServices,
+      relatedIssues: relatedIssueRows.map(serializeIssueSummaryRow),
       scopeTransitions: scopeHistory,
       workspace: {
         status: workspaceStatus,
         sourceAvailable,
         lastError: workspace?.lastError ?? null,
         retryable:
-          issue.status !== "resolved" && !engine.isRunning(issue.id) && (workspaceStatus !== "ready" || !workspace?.runtimeReady || (!sessionReady && ["open", "in_progress"].includes(issue.status))),
+          issue.status !== "resolved" && !summary.agentRunning && (workspaceStatus !== "ready" || !workspace?.runtimeReady || (!sessionReady && ["open", "in_progress"].includes(issue.status))),
       },
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),

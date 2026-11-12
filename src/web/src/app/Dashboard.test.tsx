@@ -53,7 +53,7 @@ describe("Dashboard focus ranking", () => {
     expect(issues).toEqual(before);
   });
 
-  it("recomputes ranking when status or update time changes and preserves the selected identity", async () => {
+  it("opens the selected Issue after recomputing the ranking", async () => {
     const [issues, setIssues] = createSignal(
       [issue("ISSUE-20261101-001", { workspaceStatus: "failed", assigneeSubject: "developer", assignee: "Developer" }), issue("ISSUE-20261101-002", { updatedAt: "2026-11-03T00:00:00.000Z" })],
       { ownedWrite: true },
@@ -64,7 +64,7 @@ describe("Dashboard focus ranking", () => {
     setIssues((rows) => rows.map((row) => (row.id.endsWith("001") ? { ...row, workspaceStatus: "ready" } : row)));
     await waitFor(() => expect(order()).toEqual(["ISSUE-20261101-002", "ISSUE-20261101-001"]));
     fireEvent.click(within(screen.getAllByRole("listitem")[1]!).getByRole("button"));
-    expect(selected).toHaveBeenCalledWith("ISSUE-20261101-001", "developer");
+    expect(selected).toHaveBeenCalledWith("ISSUE-20261101-001");
   });
 });
 

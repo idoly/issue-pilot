@@ -1,5 +1,5 @@
 import { asc, eq, inArray } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
+import type { Database, DatabaseReader } from "../db/client.ts";
 import { issueServiceScopes, environments, services, serviceDeployments } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
@@ -40,7 +40,7 @@ export async function loadServiceRepositorySet(database: Database, serviceIds: s
 export async function loadIssueDeployments(database: Database, issue: IssueScope) {
   return loadServiceRepositorySet(database, await issueServiceIds(database, issue), issue.environmentId);
 }
-export async function participatingServices(database: Database, issue: IssueScope) {
+export async function participatingServices(database: DatabaseReader, issue: IssueScope) {
   const rows = await database
     .select({ id: services.id, key: services.key, name: services.name })
     .from(issueServiceScopes)

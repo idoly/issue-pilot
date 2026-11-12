@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
-import type { Database } from "../db/client.ts";
+import type { Database, DatabaseReader } from "../db/client.ts";
 import { environments, issueRepositories, issueScopeTransitions, issues, issueWorkspaces, serviceRepositories, services, subjects } from "../db/schema.ts";
 import { issueScopeForWorkMode, issueWorkMode, type IssueWorkMode } from "../domain/contracts.ts";
 import { loadIssueDeployments } from "./issue-services.ts";
@@ -189,8 +189,8 @@ export class IssueScopeTransitionManager {
     return { planHash: hashPlan(planWithoutHash), ...planWithoutHash };
   }
 
-  async history(issueId: string) {
-    const rows = await this.database
+  async history(issueId: string, reader: DatabaseReader = this.database) {
+    const rows = await reader
       .select({ transition: issueScopeTransitions, actor: subjects })
       .from(issueScopeTransitions)
       .innerJoin(subjects, eq(subjects.subject, issueScopeTransitions.actorSubject))

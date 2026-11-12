@@ -165,7 +165,7 @@ test("credential popup opens directly, preserves blanks and reports stale writes
   expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, git: { mode: "replace", type: "ssh", privateKey } });
 });
 
-test("personal API key reuses the model dialog, starts from the stored group and preserves its key", async () => {
+test("personal model preserves its key and cannot save a stale draft until reloaded", async () => {
   state.user = () => personalOnly;
   state.saveCredentials.mockRejectedValueOnce(new Error("configuration_changed"));
   render(() => <PersonalCredentials />);
@@ -173,15 +173,26 @@ test("personal API key reuses the model dialog, starts from the stored group and
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
   const dialog = await screen.findByRole("dialog", { name: "更新 API Key" });
   expect(within(dialog).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("off");
-  // Another tab saved meanwhile; the conflict reloads the revision so the next save can succeed.
-  state.credentials.mockResolvedValue({ ...status, revision: 4 });
+  const latest = { ...status, revision: 4, model: { ...status.model!, codemode: "on" as const } };
+  state.credentials.mockResolvedValue(latest);
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("配置已被更新");
   expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "replace", provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off" } });
   expect(screen.getByRole("dialog")).toBe(dialog);
-  await waitFor(() => expect(state.credentials).toHaveBeenCalledTimes(2));
-  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(state.saveCredentials).toHaveBeenLastCalledWith(expect.objectContaining({ expectedRevision: 4 })));
+  const save = within(dialog).getByRole("button", { name: "保存" });
+  expect(save).toHaveProperty("disabled", true);
+  expect(within(dialog).getByRole("button", { name: "清除凭据" })).toHaveProperty("disabled", true);
+  await fireEvent.click(save);
+  expect(state.saveCredentials).toHaveBeenCalledTimes(1);
+  expect(state.credentials).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "重新加载" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click((await screen.findAllByRole("button", { name: "更新凭证" }))[0]!);
+  const reopened = await screen.findByRole("dialog", { name: "更新 API Key" });
+  await waitFor(() => expect(within(reopened).getByLabelText("Codemode").closest(".ui-select")?.textContent).toContain("on"));
+  fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.saveCredentials).toHaveBeenLastCalledWith({ expectedRevision: 4, model: { mode: "replace", ...latest.model } }));
 });
 
 test("a new personal group starts from the shared model and switching providers requires a key", async () => {

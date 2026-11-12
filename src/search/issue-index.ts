@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { lstat, open, unlink } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createClient, type Client, type InStatement } from "@libsql/client";
@@ -64,26 +64,37 @@ export class IssueSearchIndex {
     this.file = join(stateRoot, "vectors.db");
   }
 
-  private async openExisting(): Promise<Client | undefined> {
-    const info = await lstat(this.file).catch((error: NodeJS.ErrnoException) => {
+  private indexInfo() {
+    return lstat(this.file).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
       throw error;
     });
+  }
+
+  private async openExisting(): Promise<Client | undefined> {
+    const info = await this.indexInfo();
     if (!info) return undefined;
     if (!info.isFile() || info.nlink !== 1 || (info.mode & 0o077) !== 0) throw new Error("invalid_issue_search_index");
     return createClient({ url: pathToFileURL(this.file).href, timeout: 5_000 });
   }
 
-  private async create(): Promise<Client> {
-    await (await open(this.file, "ax", 0o600)).close();
-    let client: Client | undefined;
+  private async publishFirstPage(statements: InStatement[], signal: AbortSignal, verify: () => Promise<void>): Promise<void> {
+    const staged = `${this.file}.${randomUUID()}.tmp`;
+    await (await open(staged, "ax", 0o600)).close();
     try {
-      client = createClient({ url: pathToFileURL(this.file).href, timeout: 5_000 });
-      await client.execute(createVectors);
-      return client;
+      const client = createClient({ url: pathToFileURL(staged).href, timeout: 5_000 });
+      try {
+        await client.batch([createVectors, ...statements], "write");
+      } finally {
+        client.close();
+      }
+      await verify();
+      // Refreshes are serialized under the API's state lease. Refuse an unexpected file.
+      if (await this.indexInfo()) throw new Error("issue_search_index_already_exists");
+      signal.throwIfAborted();
+      await rename(staged, this.file);
     } catch (error) {
-      client?.close();
-      await unlink(this.file).catch((cleanup) => {
+      await unlink(staged).catch((cleanup) => {
         throw new AggregateError([error, cleanup], "issue_search_index_cleanup_failed");
       });
       throw error;
@@ -108,7 +119,6 @@ export class IssueSearchIndex {
 
   async refresh(settings: IssueSearchSettings, after: string | undefined, signal: AbortSignal, verify: () => Promise<void>) {
     const existing = await this.openExisting();
-    let client = existing;
     try {
       if (after && !existing) throw new IssueSearchIndexRequired();
       const rows = await this.database
@@ -148,24 +158,21 @@ export class IssueSearchIndex {
         }
         await verify();
         signal.throwIfAborted();
-        client ??= await this.create();
-        if (changed.length) {
-          const statements: InStatement[] = [];
-          let vectorIndex = 0;
-          for (const row of changed) {
-            statements.push({ sql: "DELETE FROM issue_vectors WHERE issue_id = ?", args: [row.id] });
-            for (let chunk = 0; chunk < row.chunks.length; chunk++) {
-              statements.push({ sql: "INSERT INTO issue_vectors (issue_id, chunk, digest, embedding) VALUES (?, ?, ?, ?)", args: [row.id, chunk, row.hash, vectors[vectorIndex++]!] });
-            }
+        const statements: InStatement[] = [];
+        let vectorIndex = 0;
+        for (const row of changed) {
+          statements.push({ sql: "DELETE FROM issue_vectors WHERE issue_id = ?", args: [row.id] });
+          for (let chunk = 0; chunk < row.chunks.length; chunk++) {
+            statements.push({ sql: "INSERT INTO issue_vectors (issue_id, chunk, digest, embedding) VALUES (?, ?, ?, ?)", args: [row.id, chunk, row.hash, vectors[vectorIndex++]!] });
           }
-          signal.throwIfAborted();
-          await client.batch(statements, "write");
         }
+        if (existing) await existing.batch(statements, "write");
+        else await this.publishFirstPage(statements, signal, verify);
       }
       const removed = !after && existing ? await this.removeDeleted(existing, signal, verify) : 0;
       return { indexed: changed.length, removed, nextCursor: rows.length > inspected ? rows[inspected - 1]!.id : null };
     } finally {
-      client?.close();
+      existing?.close();
     }
   }
 

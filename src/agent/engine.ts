@@ -130,7 +130,7 @@ export class AgentEngine implements AgentController {
     this.assertOpen();
     const reserved = [...new Set(issueIds)].sort();
     const reservedSet = new Set(reserved);
-    if (reserved.some((issueId) => this.isRunning(issueId) || this.reservations.has(issueId) || this.aborts.has(issueId))) throw new Error("issue_already_running");
+    if (reserved.some((issueId) => this.isRunning(issueId) || this.steerQueue.has(issueId) || this.reservations.has(issueId) || this.aborts.has(issueId))) throw new Error("issue_already_running");
     for (const issueId of reserved) this.reservations.add(issueId);
     let active = true;
     const assertReserved = (issueId: string) => {
@@ -256,7 +256,6 @@ export class AgentEngine implements AgentController {
   async messageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, authorize: () => Promise<unknown>) {
     this.assertOpen();
     this.assertNotReserved(issue.id);
-    this.beginActivity(issue.id);
     try {
       return await this.steerQueue.run(issue.id, async () => {
         await authorize();
@@ -264,7 +263,7 @@ export class AgentEngine implements AgentController {
         return { state: receipt?.state ?? "unknown" };
       });
     } finally {
-      this.endActivity(issue.id);
+      this.notifyIdle();
     }
   }
 
@@ -378,14 +377,18 @@ export class AgentEngine implements AgentController {
   }
 
   private async waitForIdle(): Promise<void> {
-    if (!this.runCounts.size && !this.reservations.size && !this.aborts.size) return;
+    if (!this.hasPendingWork()) return;
     await new Promise<void>((resolve) => {
       this.idleWaiters.add(resolve);
     });
   }
 
+  private hasPendingWork(): boolean {
+    return Boolean(this.runCounts.size || this.steerQueue.size || this.reservations.size || this.aborts.size);
+  }
+
   private notifyIdle(): void {
-    if (this.runCounts.size || this.reservations.size || this.aborts.size) return;
+    if (this.hasPendingWork()) return;
     for (const resolve of this.idleWaiters) resolve();
     this.idleWaiters.clear();
   }

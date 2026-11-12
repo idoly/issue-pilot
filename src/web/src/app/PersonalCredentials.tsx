@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
 import {
   loadPersonalCredentials,
@@ -144,17 +144,7 @@ export function PersonalCredentials() {
     try {
       value = await updatePersonalCredentials({ expectedRevision: credentials.revision, model });
     } catch (error) {
-      // The model dialog has no reload action; refresh the revision so the next save is not stale forever.
-      if (owner === generation && error instanceof Error && error.message === "configuration_changed")
-        void loadPersonalCredentials().then(
-          (value) => {
-            // Keep the open dialog's model object so its draft and error stay; take the new revision and statuses.
-            if (owner !== generation) return;
-            const current = untrack(status);
-            setStatus(current ? { ...value, model: current.model } : value);
-          },
-          () => undefined,
-        );
+      if (owner === generation && error instanceof Error && error.message === "configuration_changed") setConflict(true);
       throw error;
     }
     if (owner === generation) {
@@ -223,6 +213,10 @@ export function PersonalCredentials() {
       if (owner === generation) setSaving(false);
     }
   };
+  const reloadCredentials = () => {
+    close();
+    void load(isAdmin());
+  };
   const title = (group: Group | null) => {
     const label = groups.find((row) => row.key === group)?.label ?? "";
     return shared() ? `共享 ${label}` : `${group && configured(group) ? "更新" : "设置"} ${label}`;
@@ -284,6 +278,7 @@ export function PersonalCredentials() {
           initial={modelInitial()}
           keyConfigured={targetConfigured("model")}
           onClose={close}
+          onReload={conflict() ? reloadCredentials : undefined}
           onSave={(selection, apiKey) => saveModel(selection, apiKey)}
           onClear={() => saveModel(null, undefined)}
         >
@@ -307,13 +302,7 @@ export function PersonalCredentials() {
               <div role="alert" class="user-management-error">
                 {saveError()}
                 <Show when={conflict()}>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      close();
-                      void load(isAdmin());
-                    }}
-                  >
+                  <Button size="small" onClick={reloadCredentials}>
                     重新加载
                   </Button>
                 </Show>

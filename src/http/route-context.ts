@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import type { AgentController, AgentReservation } from "../agent/engine.ts";
 import type { AgentEventBus } from "../agent/events.ts";
-import type { DatabaseConnection } from "../db/client.ts";
+import type { DatabaseConnection, DatabaseReader } from "../db/client.ts";
 import { issues, subjects } from "../db/schema.ts";
 import { parseIssueKey, canUseIssueWorkMode, type IssueWorkMode } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../agent/model-runtime.ts";
@@ -87,7 +87,7 @@ export async function authorizeWorkMode(database: ApiRouteContext["database"], r
   return user.subject;
 }
 
-export async function requireIssue(database: ApiRouteContext["database"], key: string) {
+export async function requireIssue(database: { db: DatabaseReader }, key: string) {
   const normalized = parseIssueKey(key);
   const issue = normalized ? (await database.db.select().from(issues).where(eq(issues.key, normalized)).limit(1))[0] : undefined;
   if (!issue) throw new ApiError(404, "issue_not_found");

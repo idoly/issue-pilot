@@ -399,11 +399,13 @@ describe("issue pilot workspace", () => {
     expect(row?.getAttribute("aria-current")).toBe("true");
   });
 
-  test("keeps the current account and its Agent draft when a search result's account switch is declined", async () => {
+  test.each(["search", "overview", "account selector"] as const)("keeps the current account and its Agent draft when switching from %s is declined", async (origin) => {
     const client = await import("../data/client");
-    vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
     const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const, assignee: "刘宜展" };
-    vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
+    if (origin === "search") {
+      vi.mocked(client.loadCatalog).mockResolvedValueOnce({ ...(await client.loadCatalog()), issueSearchEnabled: true });
+      vi.mocked(client.searchIssues).mockResolvedValueOnce([issue]);
+    }
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(() => <App initialView="issues" />);
     const queue = await screen.findByLabelText("工单队列");
@@ -412,16 +414,24 @@ describe("issue pilot workspace", () => {
     const composer = await screen.findByRole("region", { name: "ISSUE-20260810-041 Agent 会话" });
     await fireEvent.input(within(composer).getByLabelText("发送给 Agent"), { target: { value: "保留草稿" } });
 
-    fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
-    const query = await screen.findByLabelText("工单搜索词");
-    await fireEvent.input(query, { target: { value: "审批超时" } });
-    await fireEvent.keyDown(query, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("link", { name: issue.title }));
-
-    await screen.findByRole("heading", { name: issue.title });
+    if (origin === "search") {
+      fireEvent.keyDown(window, { key: "k", code: "KeyK", altKey: true });
+      const query = await screen.findByLabelText("工单搜索词");
+      await fireEvent.input(query, { target: { value: "审批超时" } });
+      await fireEvent.keyDown(query, { key: "Enter" });
+      fireEvent.click(await screen.findByRole("link", { name: issue.title }));
+    } else if (origin === "overview") {
+      fireEvent.click(screen.getByRole("radio", { name: "首页" }));
+      const attention = await screen.findByRole("region", { name: "团队工单动态" });
+      fireEvent.click(within(attention).getByText(issue.title).closest("button")!);
+    } else {
+      fireEvent.click(screen.getByLabelText("当前用户"));
+      fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
+    }
+    if (origin !== "account selector") await screen.findByRole("heading", { name: issue.title });
     expect(confirm).toHaveBeenCalledOnce();
     expect(client.currentUserSubject()).toBe("fixture-user");
-    fireEvent.click(source);
+    fireEvent.click(await within(screen.getByLabelText("工单队列")).findByText("ISSUE-20260810-041"));
     const restored = await screen.findByRole("region", { name: "ISSUE-20260810-041 Agent 会话" });
     expect(within(restored).getByLabelText("发送给 Agent")).toHaveProperty("value", "保留草稿");
   });
@@ -987,9 +997,12 @@ describe("issue pilot workspace", () => {
     expect(within(developmentSource).getByRole("button", { name: "Agent面板" }).getAttribute("aria-pressed")).toBe("true");
     expect(within(developmentSource).getByRole("button", { name: "工单详情" }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(within(developmentSource).getByRole("button", { name: "关闭代码浏览器" }));
+    const switchAccount = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     fireEvent.click(screen.getByLabelText("当前用户"));
     fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
     await waitFor(() => expect(currentUserSelect.closest(".ui-select")?.textContent).toContain("lyz@example.test"));
+    expect(switchAccount).toHaveBeenCalledOnce();
+    switchAccount.mockRestore();
     await waitFor(() => expect(screen.getByText("ISSUE-20260810-038")).toBeTruthy());
     expect(screen.queryByLabelText("添加评论或备注")).toBeNull();
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));

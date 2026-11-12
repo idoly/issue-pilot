@@ -18,6 +18,14 @@ export class SerialQueue {
 export class KeyedSerialQueue {
   private readonly tails = new Map<string, Promise<void>>();
 
+  get size(): number {
+    return this.tails.size;
+  }
+
+  has(key: string): boolean {
+    return this.tails.has(key);
+  }
+
   async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
     const result = (this.tails.get(key) ?? Promise.resolve()).then(operation);
     const tail = result.then(

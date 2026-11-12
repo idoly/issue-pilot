@@ -26,6 +26,21 @@ export function openDatabase(file = applicationConfig.databaseFile) {
 export type DatabaseConnection = ReturnType<typeof openDatabase>;
 export type Database = DatabaseConnection["db"];
 
+export type DatabaseReader = Pick<Database, "select">;
+
+export async function readSnapshot<T>(database: Database, project: (reader: DatabaseReader) => Promise<T>): Promise<T> {
+  // Drizzle's libSQL adapter ignores transaction options. Use native read mode
+  // so a read snapshot does not reserve the SQLite writer.
+  const client = new Proxy(database.$client, {
+    get(target, property) {
+      if (property === "transaction") return () => target.transaction("read");
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return drizzle(client, { schema }).transaction((transaction) => project(transaction));
+}
+
 /** Leave room for other bound values and stay below SQLite's variable limit. */
 export async function readInBatches<Input, Row>(values: readonly Input[], select: (batch: Input[]) => PromiseLike<Row[]>): Promise<Row[]> {
   const rows: Row[] = [];

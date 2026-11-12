@@ -20,14 +20,7 @@ function attentionRank(issue: IssueExecutionItem): number {
   return state === "failed" ? 0 : state === "running" || state === "preparing" ? 1 : 2;
 }
 
-export function Dashboard(props: {
-  issues: IssueExecutionItem[];
-  loading: boolean;
-  loadError: string;
-  refreshing: boolean;
-  onRefresh: () => void;
-  onSelectIssue: (issueKey: string, userSubject?: string) => void;
-}) {
+export function Dashboard(props: { issues: IssueExecutionItem[]; loading: boolean; loadError: string; refreshing: boolean; onRefresh: () => void; onSelectIssue: (issueKey: string) => void }) {
   const { catalog } = useApplicationResources();
   const activeIssues = createMemo(() => props.issues.filter((issue) => issue.status !== "resolved"));
   const focusIssues = createMemo(() =>
@@ -91,7 +84,7 @@ export function Dashboard(props: {
                     const state = () => executionState(issue());
                     return (
                       <div role="listitem">
-                        <button type="button" class="dashboard-attention-item" onClick={() => props.onSelectIssue(issue().id, issue().assigneeSubject ?? undefined)}>
+                        <button type="button" class="dashboard-attention-item" onClick={() => props.onSelectIssue(issue().id)}>
                           <span class={`execution-state ${state().key}`}>
                             <i />
                             {state().label}

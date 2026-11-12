@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { InStatement, TransactionMode } from "@libsql/client";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
@@ -20,6 +21,54 @@ const token = "fixture-workers-ai-token";
 const vector = (dimension: number) => Array.from({ length: 1024 }, (_, index) => Number(index === dimension));
 const output = (data: number[][]) => Response.json({ success: true, result: { data, shape: [data.length, 1024] } });
 type EmbeddingInput = { documents?: string[]; queries?: string; instruction?: string };
+
+test("first refresh publishes the index only after committing its first page", async (t) => {
+  const f = await createApiFixture({ issueSearchFetch: async () => output([vector(0)]) });
+  const db = openDatabase(f.databaseFile);
+  let entered!: () => void, resume!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  let indexing: PromiseLike<{ statusCode: number; body: string }> | undefined;
+  try {
+    await createService(f.app, "First page");
+    const issue = await createIssue(f.app, "first-page");
+    const saved = await f.app.inject({ method: "PUT", url: config, headers: admin, payload: parameterInput({ enabled: true, accountId, apiToken: token, expectedRevision: 0 }) });
+    assert.equal(saved.statusCode, 200, saved.body);
+    const prototype = Object.getPrototypeOf(db.client) as typeof db.client;
+    const batch = prototype.batch;
+    t.mock.method(prototype, "batch", async function (this: typeof db.client, statements: InStatement[], mode?: TransactionMode) {
+      if (statements.some((statement) => typeof statement !== "string" && statement.sql.startsWith("INSERT INTO issue_vectors"))) {
+        entered();
+        await released;
+      }
+      return batch.call(this, statements, mode);
+    });
+    indexing = Promise.resolve(f.app.inject({ method: "POST", url: refresh, headers: admin, payload: {} }));
+    await Promise.race([writing, indexing.then((response) => assert.fail(response.body))]);
+    const query = () => f.app.inject({ method: "POST", url: search, headers: admin, payload: { query: "first Issue" } });
+    const during = await query();
+    assert.equal(during.statusCode, 409, during.body);
+    assert.deepEqual(during.json(), { error: "issue_search_index_required" });
+    resume();
+    const done = await indexing;
+    assert.equal(done.statusCode, 200, done.body);
+    assert.deepEqual(
+      (await query()).json().map(({ key }: { key: string }) => key),
+      [issue.id],
+    );
+    assert.ok(!(await readdir(f.root)).some((name) => name.endsWith(".tmp")));
+  } finally {
+    resume();
+    await Promise.resolve(indexing).catch(() => undefined);
+    t.mock.restoreAll();
+    db.close();
+    await f.cleanup();
+  }
+});
 
 test("optional global search projects no secret and refreshes only new or edited documents", async (t) => {
   const calls: EmbeddingInput[] = [];

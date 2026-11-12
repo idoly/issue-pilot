@@ -1,9 +1,8 @@
 import { dbHubConnections } from "./dbhub.ts";
-import { drizzle } from "drizzle-orm/libsql";
 import { asc, eq, inArray, sql } from "drizzle-orm";
 
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey } from "./agent.ts";
-import type { Database } from "../db/client.ts";
+import { readSnapshot, type Database, type DatabaseReader } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
 import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
@@ -33,9 +32,7 @@ function serviceContext(description: string, entries: readonly ServiceContextEnt
     .join("\n\n");
 }
 
-type ConfigurationReader = Pick<Database, "select">;
-
-async function projectConfigurationCatalog(database: ConfigurationReader): Promise<ConfigurationCatalog> {
+async function projectConfigurationCatalog(database: DatabaseReader): Promise<ConfigurationCatalog> {
   const [environmentRows, serviceRows, deploymentRows, [search]] = await Promise.all([
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
     database.select({ id: services.id, key: services.key, name: services.name }).from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
@@ -64,24 +61,11 @@ async function projectConfigurationCatalog(database: ConfigurationReader): Promi
   };
 }
 
-async function readSnapshot<T>(database: Database, project: (reader: ConfigurationReader) => Promise<T>): Promise<T> {
-  // Drizzle's libSQL adapter ignores transaction options. Use native read mode
-  // so a configuration snapshot does not reserve the SQLite writer.
-  const client = new Proxy(database.$client, {
-    get(target, property) {
-      if (property === "transaction") return () => target.transaction("read");
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  return drizzle(client, { schema }).transaction((transaction) => project(transaction));
-}
-
 export function loadConfigurationCatalog(database: Database): Promise<ConfigurationCatalog> {
   return readSnapshot(database, projectConfigurationCatalog);
 }
 
-async function projectConfiguration(database: ConfigurationReader, agentModels: AgentModelDefinition[]): Promise<Configuration> {
+async function projectConfiguration(database: DatabaseReader, agentModels: AgentModelDefinition[]): Promise<Configuration> {
   const [agent, apiKey, environmentRows, serviceRows, deploymentRows, repositoryRows, deploymentRepositoryRows, mcp] = await Promise.all([
     loadGlobalAgentConfiguration(database),
     loadSharedAgentApiKey(database),

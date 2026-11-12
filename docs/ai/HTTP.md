@@ -24,8 +24,8 @@ Native browser EventSource does not send the page-selected subject header. Witho
 | --- | --- |
 | GET /health | {"ok":true}; no model/external-service health guarantee |
 | GET /api/me, /api/catalog | Current user and service/environment catalog |
-| GET /api/issues | Full summaries sorted by creation/key descending; no server filtering/paging |
-| GET /api/issues/:key | Details, workspace, attachments, repositories, relations and scope history |
+| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging |
+| GET /api/issues/:key | Details, workspace, attachments, repositories, relations and scope history from one SQLite read snapshot. Live Agent state and filesystem availability are sampled separately. |
 | POST /api/issues | 201, persisted and scheduled, not model completion |
 | PATCH /api/issues/:key | 200, complete metadata form, not arbitrary partial merge |
 | POST .../agent-messages | 202, empty body, input admitted |

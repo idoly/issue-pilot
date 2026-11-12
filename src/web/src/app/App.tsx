@@ -13,7 +13,7 @@ import { IssueQueue } from "./IssueQueue";
 import { IssueWorkspace } from "./IssueWorkspace";
 import type { SourcePanel } from "./CodeBrowser";
 
-import { createIssueList, type IssueListResource } from "./issue-list";
+import { createIssueList } from "./issue-list";
 
 function summaryChanged(detail: IssueDetail | IssueExecutionItem, summary: IssueExecutionItem): boolean {
   const fields = ["title", "priority", "type", "status", "assignee", "assigneeSubject", "environmentKey", "updatedAt"] as const;
@@ -78,8 +78,8 @@ function AgentWorkspace(props: {
   );
 }
 
-function CurrentUserIdentity(props: { mayChange: () => boolean }) {
-  const { currentUser, selectCurrentUser, people } = useApplicationResources();
+function CurrentUserIdentity(props: { onChange: (subject: string) => void }) {
+  const { currentUser, people } = useApplicationResources();
   const name = () => currentUser()?.name || currentUser()?.subject || "本地用户";
   return (
     <div class="identity" title={`${name()} · ${currentUser()?.email ?? ""}`}>
@@ -91,41 +91,10 @@ function CurrentUserIdentity(props: { mayChange: () => boolean }) {
         labelRender={(selected) => people().find((user) => user.subject === selected.value)?.email ?? selected.label}
         popupMatchSelectWidth={320}
         onChange={(subject) => {
-          if (typeof subject === "string" && subject !== currentUser()?.subject && props.mayChange()) selectCurrentUser(subject);
+          if (typeof subject === "string" && subject !== currentUser()?.subject) props.onChange(subject);
         }}
       />
     </div>
-  );
-}
-
-function ResourceBackedOverview(props: { issueList: IssueListResource; onSelectIssue: (issueKey: string) => void }) {
-  const { people, selectCurrentUser, refreshPeople } = useApplicationResources();
-  let generation = 0,
-    disposed = false;
-  onCleanup(() => {
-    disposed = true;
-    generation++;
-  });
-  const open = async (issueKey: string, subject?: string) => {
-    const owner = ++generation;
-    if (subject && !people().some((user) => user.subject === subject)) {
-      try {
-        await refreshPeople();
-      } catch {
-        /* the Issue can still open with the current user */
-      }
-    }
-    if (disposed || owner !== generation) return;
-    if (subject) selectCurrentUser(subject);
-    props.onSelectIssue(issueKey);
-  };
-  return (
-    <OverviewView
-      issues={props.issueList}
-      onSelectIssue={(issueKey, subject) => {
-        void open(issueKey, subject);
-      }}
-    />
   );
 }
 
@@ -163,11 +132,12 @@ function AppWorkspace(props: { initialView?: AppView }) {
     const dirty = (sourceExpanded() && sourceDirty()) || issueEditDirty();
     return !dirty || window.confirm("有未保存的修改，是否放弃这些修改？");
   };
+  const maySwitchUser = (subject: string) => subject === currentUser()?.subject || !agentDrafts.hasPending() || window.confirm("切换用户会清除当前用户的 Agent 草稿和未确认的发送记录。是否切换？");
   const initialNavigationIndex: unknown = window.history.state?.issuePilotNavigationIndex;
   let navigationIndex = typeof initialNavigationIndex === "number" && Number.isSafeInteger(initialNavigationIndex) ? initialNavigationIndex : 0;
   let acceptedUrl = window.location.href;
   let restoringHistory = false;
-  let searchNavigation: { key: string; subject: string | undefined } | undefined;
+  let assigneeNavigation: { key: string; subject: string | undefined } | undefined;
   const onHistoryNavigation = (event: PopStateEvent) => {
     if (restoringHistory) {
       restoringHistory = false;
@@ -183,7 +153,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
     }
     if (typeof nextIndex === "number" && Number.isSafeInteger(nextIndex)) navigationIndex = nextIndex;
     const key = linkedIssueFromUrl();
-    searchNavigation = undefined;
+    assigneeNavigation = undefined;
     setSourceExpanded(false);
     setSourceDirty(false);
     setKeepExternalSelection(Boolean(key));
@@ -207,8 +177,8 @@ function AppWorkspace(props: { initialView?: AppView }) {
       const currentGeneration = ++selectionGeneration;
       issueRefreshes.clear();
       setQueueReveal(undefined);
-      if (!active || searchNavigation?.key !== id) searchNavigation = undefined;
-      const search = searchNavigation;
+      if (!active || assigneeNavigation?.key !== id) assigneeNavigation = undefined;
+      const navigation = assigneeNavigation;
       const isCurrent = () => currentGeneration === selectionGeneration && selectedId() === id && view() === "issues";
       if (!active) return;
       setSourceExpanded(false);
@@ -222,16 +192,14 @@ function AppWorkspace(props: { initialView?: AppView }) {
       setIssueError("");
       void getIssue(id)
         .then(async (value) => {
-          if (search && isCurrent() && value.assigneeSubject) {
+          if (navigation && isCurrent() && value.assigneeSubject) {
             const assignee = value.assigneeSubject;
-            const canFollow = () => isCurrent() && searchNavigation === search && currentUser()?.subject === search.subject;
+            const canFollow = () => isCurrent() && assigneeNavigation === navigation && (navigation.subject === undefined || currentUser()?.subject === navigation.subject);
             const knowsAssignee = () => people().some((person) => person.subject === assignee);
             if (canFollow() && !knowsAssignee()) await refreshPeople().catch(() => undefined);
-            if (canFollow() && knowsAssignee()) {
-              if (assignee === search.subject || !agentDrafts.hasPending() || window.confirm("切换到该工单的处理人会清除当前用户未发送的 Agent 草稿。是否切换？")) {
-                if (assignee !== search.subject) selectCurrentUser(assignee);
-                setQueueReveal({ key: id, subject: assignee });
-              }
+            if (canFollow() && knowsAssignee() && maySwitchUser(assignee)) {
+              if (assignee !== currentUser()?.subject) selectCurrentUser(assignee);
+              setQueueReveal({ key: id, subject: assignee });
             }
           }
           if (isCurrent()) setIssue(value);
@@ -243,7 +211,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
         })
         .finally(() => {
           if (!isCurrent()) return;
-          if (searchNavigation === search) searchNavigation = undefined;
+          if (assigneeNavigation === navigation) assigneeNavigation = undefined;
           setLoading(false);
         });
     },
@@ -300,12 +268,12 @@ function AppWorkspace(props: { initialView?: AppView }) {
     });
     if (untrack(issueError) || changed) void refreshIssue(current.id, false).catch(() => undefined);
   });
-  const openIssueLink = (key: string, origin?: "search") => {
+  const openIssueLink = (key: string, followAssignee = false) => {
     if (!mayNavigate()) return false;
-    searchNavigation = origin === "search" ? { key, subject: currentUser()?.subject } : undefined;
+    assigneeNavigation = followAssignee ? { key, subject: currentUser()?.subject } : undefined;
     if (view() === "issues" && selectedId() === key) {
-      if (searchNavigation) setKeepExternalSelection(true);
-      if (searchNavigation || !issue() || issueError()) setIssueReloadToken((value) => value + 1);
+      if (followAssignee) setKeepExternalSelection(true);
+      if (followAssignee || !issue() || issueError()) setIssueReloadToken((value) => value + 1);
       return true;
     }
     const url = new URL(`/?issue=${encodeURIComponent(key)}`, window.location.origin);
@@ -320,7 +288,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
   };
   return (
     <>
-      <IssueSearchDialog onOpenIssue={(key) => openIssueLink(key, "search")} />
+      <IssueSearchDialog onOpenIssue={(key) => openIssueLink(key, true)} />
       <div class="app-shell">
         <a
           class="skip-link"
@@ -362,13 +330,13 @@ function AppWorkspace(props: { initialView?: AppView }) {
             />
           </div>
           <CurrentUserIdentity
-            mayChange={() => {
-              if (!mayNavigate()) return false;
-              searchNavigation = undefined;
+            onChange={(subject) => {
+              if (!mayNavigate() || !maySwitchUser(subject)) return;
+              assigneeNavigation = undefined;
               setQueueReveal(undefined);
               setSourceExpanded(false);
               setSourceDirty(false);
-              return true;
+              selectCurrentUser(subject);
             }}
           />
         </header>
@@ -384,7 +352,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
         >
           <Switch>
             <Match when={view() === "dashboard"}>
-              <ResourceBackedOverview issueList={issueList} onSelectIssue={openIssueLink} />
+              <OverviewView issues={issueList} onSelectIssue={(key) => openIssueLink(key, true)} />
             </Match>
             <Match when={view() === "issues"}>
               <IssueQueue

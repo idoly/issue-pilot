@@ -482,6 +482,49 @@ test("durable request receipts deduplicate concurrent sends and survive process 
   }
 });
 
+test("receipt reads protect session state without announcing an Agent run", async () => {
+  const { root, database, issue } = await fixture();
+  const runStates: string[] = [];
+  const engine = new AgentEngine(database.db, root, ({ event }) => {
+    if (event.type === "issue_run_state") runStates.push(event.state);
+  });
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const receipt = engine.messageReceipt(issue, { id: "missing", subject: "admit-owner" }, async () => {
+    enter();
+    await released;
+  });
+  try {
+    await entered;
+    assert.equal(engine.getRunState(issue.id), "idle");
+    await assert.rejects(
+      engine.runExclusive([issue.id], async () => assert.fail("session mutation overlapped receipt lookup")),
+      /issue_already_running/,
+    );
+    let closed = false;
+    const closing = engine.close().then(() => {
+      closed = true;
+    });
+    // Give close time to finish if it forgot to wait for the admission queue.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(closed, false);
+    release();
+    assert.deepEqual(await receipt, { state: "unknown" });
+    await closing;
+    assert.deepEqual(runStates, []);
+  } finally {
+    release();
+    await Promise.allSettled([receipt, engine.close()]);
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("HTTP receipts preserve sender identity and admission across session reset and resolution", async () => {
   const { root, file, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);

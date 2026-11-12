@@ -18,6 +18,7 @@ export function ModelCredentialDialog(props: {
   /** A key is stored for `initial.provider`; it is preserved only while that provider stays selected. */
   keyConfigured: boolean;
   onClose: () => void;
+  onReload?: () => void;
   onSave: (selection: AgentModelSelection, apiKey: string | undefined) => Promise<void>;
   onClear: () => Promise<void>;
   /** Controls shown above the fields, such as the shared/personal target switch. */
@@ -69,7 +70,7 @@ export function ModelCredentialDialog(props: {
     if (levels.length && !levels.includes(thinkingLevel())) setThinkingLevel(levels[0]!);
   };
   const run = async (operation: () => Promise<void>) => {
-    if (saving()) return;
+    if (saving() || props.onReload) return;
     const owner = generation;
     setSaving(true);
     props.onSavingChange(true);
@@ -101,12 +102,27 @@ export function ModelCredentialDialog(props: {
     void run(() => props.onSave({ provider: provider(), model: model(), thinkingLevel: thinkingLevel(), codemode: codemode() }, apiKey() || undefined));
   };
   return (
-    <Modal width={460} open={props.open} title={props.title} okText="保存" cancelText="取消" confirmLoading={saving()} onCancel={props.onClose} onOk={save}>
+    <Modal
+      width={460}
+      open={props.open}
+      title={props.title}
+      okText="保存"
+      cancelText="取消"
+      confirmLoading={saving()}
+      okButtonProps={{ disabled: Boolean(props.onReload) }}
+      onCancel={props.onClose}
+      onOk={save}
+    >
       <div class="settings-form">
         {props.children}
         <Show when={error()}>
           <div role="alert" class="user-management-error">
             {error()}
+            <Show when={props.onReload}>
+              <Button size="small" onClick={() => props.onReload?.()}>
+                重新加载
+              </Button>
+            </Show>
           </div>
         </Show>
         <Show when={providers().length} fallback={<div class="settings-target-feedback">全局 Pi models.json 未提供可用 provider。</div>}>
@@ -151,7 +167,7 @@ export function ModelCredentialDialog(props: {
             danger
             type="text"
             size="small"
-            disabled={saving()}
+            disabled={saving() || Boolean(props.onReload)}
             onClick={() => {
               void run(props.onClear);
             }}

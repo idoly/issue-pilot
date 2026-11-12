@@ -81,14 +81,18 @@ test("DBHub connections derive from authoritative deployment targets without dup
     assert.deepEqual(await loadMcpConnections(database.db), connections);
     const repeated = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 2, ...withTargets } });
     assert.equal(repeated.statusCode, 200, repeated.body);
-    assert.deepEqual(await loadMcpConnections(database.db), connections);
     const deploymentsBeforeFailure = await database.db.select().from(serviceDeployments);
+    const repeatedConnections = await loadMcpConnections(database.db);
+    assert.deepEqual(
+      repeatedConnections,
+      connections.map((connection) => ({ ...connection, updatedAt: deploymentsBeforeFailure.find(({ id }) => id === connection.deploymentId)!.updatedAt })),
+    );
     await database.client.execute("CREATE TRIGGER fail_dbhub_insert BEFORE UPDATE ON service_deployments BEGIN SELECT RAISE(ABORT, 'fixture_failure'); END");
     const changed = structuredClone(withTargets);
     changed.deployments.find((row) => row.environmentKey === "prod")!.dbhub![0]!.port = 5433;
     const failed = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 3, ...changed } });
     assert.equal(failed.statusCode, 500);
-    assert.deepEqual(await loadMcpConnections(database.db), connections);
+    assert.deepEqual(await loadMcpConnections(database.db), repeatedConnections);
     assert.deepEqual(await database.db.select().from(serviceDeployments), deploymentsBeforeFailure);
     await database.client.execute("DROP TRIGGER fail_dbhub_insert");
     const cleared = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 3, ...input } });

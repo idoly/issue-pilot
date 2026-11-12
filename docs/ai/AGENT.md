@@ -12,7 +12,7 @@ Prod/test analysis keeps its environment's code/evidence scope. Dev code belongs
 
 HTTP 201/202 does not mean model completion. Persist input and bind the session inside the per-Issue scope; preparation failures must not lose admitted messages. Pin the request sender and reauthorize after steering/session waits without switching identity.
 
-Running-session input is durably admitted with a conservative started marker before steering. A sole undelivered steer can return to queued only after Pi removes it; the same entry is reused, never appended as another message. Request IDs and sender identity live in this admission entry, not a second delivery database. Receipt lookup and sends share the per-Issue admission queue. Earlier pending inputs cannot be bypassed. Queued work must not use a disposed or replaced instance.
+Running-session input is durably admitted with a conservative started marker before steering. A sole undelivered steer can return to queued only after Pi removes it; the same entry is reused, never appended as another message. Request IDs and sender identity live in this admission entry, not a second delivery database. Receipt lookup and sends share the per-Issue admission queue. Receipt reads hold off session mutations and shutdown without reporting Agent activity. Earlier pending inputs cannot be bypassed. Queued work must not use a disposed or replaced instance.
 
 [message-delivery.ts](../../src/agent/message-delivery.ts) owns durable delivery metadata:
 

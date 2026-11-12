@@ -1,10 +1,65 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { InArgs, InStatement, TransactionMode } from "@libsql/client";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { environments, services } from "../../src/db/schema.ts";
-import { createApiFixture, createService } from "./fixture.ts";
+import { createApiFixture, createIssue, createService } from "./fixture.ts";
+
+for (const endpoint of ["list", "detail"] as const) {
+  test(`${endpoint} reads Issue and Workspace status from the same committed state`, async (t) => {
+    const fixture = await createApiFixture();
+    const database = openDatabase(fixture.databaseFile);
+    try {
+      await createService(fixture.app, "Snapshot", ["test"]);
+      const created = await createIssue(fixture.app, "snapshot");
+      const prototype = Object.getPrototypeOf(database.client) as typeof database.client;
+      const execute = prototype.execute;
+      const transaction: (mode?: TransactionMode) => ReturnType<typeof prototype.transaction> = prototype.transaction;
+      let committed = false;
+      // Commit a state transition as soon as the first Issue query reads its result.
+      const afterRead = async (statement: InStatement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (committed || !/\bfrom "issues"/i.test(sql)) return;
+        committed = true;
+        await database.client.batch(["UPDATE issues SET status = 'resolved', resolved_at = unixepoch()", "UPDATE issue_workspaces SET status = 'stopped'"], "write");
+      };
+      t.mock.method(prototype, "execute", async function (this: typeof database.client, statement: InStatement, args?: InArgs) {
+        const result = await (typeof statement === "string" ? execute.call(this, statement, args) : execute.call(this, statement.sql, statement.args));
+        await afterRead(statement);
+        return result;
+      });
+      t.mock.method(prototype, "transaction", async function (this: typeof database.client, mode?: TransactionMode) {
+        const snapshot = await transaction.call(this, mode);
+        const read = snapshot.execute.bind(snapshot);
+        snapshot.execute = async (statement) => {
+          const result = await read(statement);
+          await afterRead(statement);
+          return result;
+        };
+        return snapshot;
+      });
+
+      type IssueState = { status: string; workspaceStatus: string; workspace?: { status: string } };
+      const url = endpoint === "list" ? "/api/issues" : `/api/issues/${created.id}`;
+      const readState = async () => {
+        const response = await fixture.app.inject({ method: "GET", url });
+        assert.equal(response.statusCode, 200, response.body);
+        const issue = endpoint === "list" ? response.json<IssueState[]>()[0]! : response.json<IssueState>();
+        if (endpoint === "detail") assert.equal(issue.workspace?.status, issue.workspaceStatus);
+        return [issue.status, issue.workspaceStatus];
+      };
+      assert.deepEqual(await readState(), ["open", "not_created"]);
+      assert.equal(committed, true);
+      assert.deepEqual(await readState(), ["resolved", "stopped"]);
+    } finally {
+      t.mock.restoreAll();
+      database.close();
+      await fixture.cleanup();
+    }
+  });
+}
 
 test("lists more Issues than SQLite permits in one parameter list", async () => {
   const fixture = await createApiFixture();
