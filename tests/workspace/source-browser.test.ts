@@ -2,7 +2,7 @@ import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -16,8 +16,9 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
-import { issueRepositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
+import { issueRepositoryStorePath, withSharedCheckout, WorktreeManager } from "../../src/workspace/git.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
+import { openIssueWorkFile } from "../../src/workspace/work-files.ts";
 
 test("browses only registered Issue repository content", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-source-browser-"));
@@ -317,7 +318,8 @@ test("browses only registered Issue repository content", async () => {
     await writeFile(path.join(remote, "README.md"), "# Snapshot\n", "utf8");
     await git("git", ["-C", remote, "add", "README.md"]);
     await git("git", ["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=test@example.test", "commit", "-m", "snapshot"]);
-    const { workspacePath: readOnlyRepository, baseCommit } = await new WorktreeManager(root).prepareShared({ url: remote, baseBranch: "main" });
+    const worktrees = new WorktreeManager(root);
+    const { workspacePath: readOnlyRepository, cachePath, baseCommit } = await worktrees.prepareShared({ url: remote, baseBranch: "main" });
     await database.db.insert(issueRepositories).values({
       issueId: readOnlyIssue!.id,
       url: remote,
@@ -336,6 +338,23 @@ test("browses only registered Issue repository content", async () => {
     await assert.rejects(browser.createFile(readOnlyIssue!, "application", "new.txt", "new\n"), /source_read_only/);
     await assert.rejects(browser.stage(readOnlyIssue!, "application", ["README.md"]), /source_read_only/);
     await assert.rejects(browser.createCommit(readOnlyIssue!, "application", "Not allowed", { name: "Test User", email: "test@example.test" }), /source_read_only/);
+    const realBrowser = new SourceBrowser(database.db, root);
+    const snapshotTree = await realBrowser.tree(readOnlyIssue!, "application");
+    const snapshotHistory = await realBrowser.history(readOnlyIssue!, "application");
+    assert.equal(await worktrees.evictSharedCheckout({ checkout: readOnlyRepository, commonDirectory: cachePath, commit: baseCommit }), true);
+    assert.deepEqual(await realBrowser.tree(readOnlyIssue!, "application"), snapshotTree);
+    assert.deepEqual(await realBrowser.file(readOnlyIssue!, "application", "README.md"), snapshot);
+    assert.deepEqual(await realBrowser.history(readOnlyIssue!, "application"), snapshotHistory);
+    await assert.rejects(access(readOnlyRepository), { code: "ENOENT" });
+    await withSharedCheckout(async () => {
+      const file = await openIssueWorkFile(root, readOnlyIssue!.key, "application/README.md", { repositories: await realBrowser.workFileRepositories(readOnlyIssue!) });
+      try {
+        assert.equal(await file.handle.readFile("utf8"), snapshot.content);
+        assert.equal(await worktrees.evictSharedCheckout({ checkout: readOnlyRepository, commonDirectory: cachePath, commit: baseCommit }), false);
+      } finally {
+        await file.handle.close();
+      }
+    });
 
     await database.db.update(issueWorkspaces).set({ runtimeReady: false }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(browser.repositories(issue!), /source_browser_unavailable/);

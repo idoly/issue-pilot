@@ -6,7 +6,15 @@ import { basename, join, relative } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { issueRepositoryWorkspaceNames, repositoryStorePath, repositoryWorkspaceNames, WorktreeManager, WorktreeRemovalFailure } from "../../src/workspace/git.ts";
+import {
+  issueRepositoryWorkspaceNames,
+  repositoryStorePath,
+  repositoryWorkspaceNames,
+  retainedSnapshotRef,
+  SharedCheckoutLease,
+  WorktreeManager,
+  WorktreeRemovalFailure,
+} from "../../src/workspace/git.ts";
 import { sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -278,10 +286,67 @@ test("refuses to reuse a shared checkout containing ignored files and preserves 
     await writeFile(evidence, "preserve ignored evidence\n");
     assert.equal(await git(["-C", prepared.workspacePath, "status", "--porcelain"]), "");
     await assert.rejects(manager.prepareShared({ url: remote, baseBranch: "main" }), /shared_checkout_changed/);
+    await assert.rejects(manager.evictSharedCheckout({ checkout: prepared.workspacePath, commonDirectory: prepared.cachePath, commit: prepared.baseCommit }), /shared_checkout_changed/);
     assert.equal(await readFile(evidence, "utf8"), "preserve ignored evidence\n");
     assert.equal(await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]), prepared.baseCommit);
     await rm(join(prepared.workspacePath, "private-cache"), { recursive: true });
     assert.equal((await manager.prepareShared({ url: remote, baseBranch: "main" })).workspacePath, prepared.workspacePath);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("evicts only idle shared checkouts and restores the exact commit without the upstream", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-eviction-"));
+  try {
+    const remote = join(root, "origin");
+    await git(["init", "-b", "main", remote]);
+    await writeFile(join(remote, "fixture.txt"), "original snapshot\n");
+    await git(["-C", remote, "add", "."]);
+    await git(["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "snapshot"]);
+    const state = join(root, "state");
+    const manager = new WorktreeManager(state);
+    const lease = new SharedCheckoutLease();
+    const { workspacePath: checkout, cachePath: commonDirectory, baseCommit: commit } = await lease.run(() => manager.prepareShared({ url: remote, baseBranch: "main" }));
+    const fail = (error: unknown) => {
+      throw error;
+    };
+    await manager.reclaimSharedCheckouts(1, 0, fail, () => false);
+    assert.equal(await readFile(join(checkout, "fixture.txt"), "utf8"), "original snapshot\n");
+    lease.close();
+    await mkdir(join(checkout, "untracked-empty-directory"));
+    await assert.rejects(manager.evictSharedCheckout({ checkout, commonDirectory, commit }), /shared_checkout_not_reproducible/);
+    await access(join(checkout, "untracked-empty-directory"));
+    await rm(join(checkout, "untracked-empty-directory"), { recursive: true });
+    await rename(remote, join(root, "unavailable-origin"));
+    await manager.reclaimSharedCheckouts(1, 0, fail, () => false);
+    await assert.rejects(access(checkout), { code: "ENOENT" });
+    assert.equal(await git(["-C", commonDirectory, "show-ref", "--hash", retainedSnapshotRef(commit)]), commit);
+    const afterRestart = new WorktreeManager(state);
+    assert.equal(await afterRestart.openSharedCheckout(remote, commit), checkout);
+    assert.equal(await readFile(join(checkout, "fixture.txt"), "utf8"), "original snapshot\n");
+    const blob = await git(["-C", commonDirectory, "rev-parse", `${commit}:fixture.txt`]);
+    const object = join(commonDirectory, "objects", blob.slice(0, 2), blob.slice(2));
+    await rename(object, join(root, "object-under-test"));
+    await assert.rejects(afterRestart.evictSharedCheckout({ checkout, commonDirectory, commit }));
+    assert.equal(await readFile(join(checkout, "fixture.txt"), "utf8"), "original snapshot\n");
+    await rename(join(root, "object-under-test"), object);
+    const wrapper = join(root, "fake-bin");
+    await mkdir(wrapper);
+    await writeFile(join(wrapper, "git"), '#!/bin/sh\ncase "$*" in *"worktree remove "*/shared-checkout-eviction-*/checkout) exit 42;; esac\nexec "$ISSUE_TEST_REAL_GIT" "$@"\n', { mode: 0o700 });
+    const realGit = (await execFileAsync("sh", ["-c", "command -v git"])).stdout.trim();
+    await assert.rejects(
+      afterRestart.withGitEnvironment({ PATH: `${wrapper}:${process.env.PATH}`, ISSUE_TEST_REAL_GIT: realGit }, () => afterRestart.evictSharedCheckout({ checkout, commonDirectory, commit })),
+      { code: 42 },
+    );
+    await assert.rejects(access(checkout), { code: "ENOENT" });
+    const [quarantine] = await readdir(join(state, "control"));
+    assert.equal(await readFile(join(state, "control", quarantine!, "checkout", "fixture.txt"), "utf8"), "original snapshot\n");
+    assert.equal(await afterRestart.openSharedCheckout(remote, commit), checkout);
+    await git(["-C", commonDirectory, "update-ref", "-d", retainedSnapshotRef(commit)]);
+    await git(["-C", commonDirectory, "worktree", "remove", checkout]);
+    await assert.rejects(afterRestart.openSharedCheckout(remote, commit));
+    await assert.rejects(access(checkout), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

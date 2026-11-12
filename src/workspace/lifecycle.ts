@@ -202,8 +202,10 @@ export class WorkspaceLifecycleManager {
       timer.handle = undefined;
       const startedAt = performance.now();
       timer.active = this.maintain()
-        .then((result) => {
+        .then(async (result) => {
           for (const failure of result.failures) timer.report(new Error(`workspace_maintenance_failed:${failure.issueKey}`, { cause: failure.error }));
+          const { sharedCheckoutHighWaterBytes, sharedCheckoutTargetBytes } = issuePilotConfig.workspace;
+          await this.worktrees.reclaimSharedCheckouts(sharedCheckoutHighWaterBytes, sharedCheckoutTargetBytes, timer.report, () => this.stopping);
           timer.completed(Math.round(performance.now() - startedAt));
         })
         .catch(timer.report)

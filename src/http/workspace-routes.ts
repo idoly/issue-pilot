@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { create as contentDisposition } from "content-disposition";
 import { issueRelations, issues } from "../db/schema.ts";
+import { withSharedCheckout } from "../workspace/git.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
@@ -72,7 +73,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path, true);
     try {
-      return await listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue));
+      return await withSharedCheckout(async () => listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue)));
     } catch (error) {
       return workFileError(error);
     }
@@ -81,7 +82,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path);
     try {
-      const file = await openIssueWorkFile(context.stateRoot, issue.key, relative, await fileAccess(issue));
+      const file = await withSharedCheckout(async () => openIssueWorkFile(context.stateRoot, issue.key, relative, await fileAccess(issue)));
       reply.header("Content-Type", "application/octet-stream");
       reply.header("X-Content-Type-Options", "nosniff");
       reply.header("Content-Length", file.size);

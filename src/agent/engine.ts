@@ -11,6 +11,7 @@ import { loadEnabledCapabilities } from "../configuration/capability-switches.ts
 import { stableErrorReason } from "../diagnostics.ts";
 import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
+import { SharedCheckoutLease } from "../workspace/git.ts";
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, selectAgentConfiguration } from "../configuration/agent.ts";
 import { dingtalkMcpNames, loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
@@ -76,6 +77,7 @@ export class AgentEngine implements AgentController {
   private readonly publish: ((event: RunEvent) => void) | undefined;
   private readonly onError: (error: unknown) => void;
   private readonly sessions = new Map<string, ManagedPiSession>();
+  private readonly checkoutLeases = new Map<string, SharedCheckoutLease>();
   // Sessions whose service scope changed during a round; they are retired when that round ends.
   private readonly scopeChangedSessions = new WeakSet<ManagedPiSession>();
   private readonly personalGit = new Map<string, PersonalGitEnvironment>();
@@ -331,7 +333,7 @@ export class AgentEngine implements AgentController {
     this.closing = true;
     await this.waitForIdle();
     const failures: unknown[] = [];
-    for (const issueId of new Set([...this.sessions.keys(), ...this.personalGit.keys()])) {
+    for (const issueId of new Set([...this.sessions.keys(), ...this.personalGit.keys(), ...this.checkoutLeases.keys()])) {
       try {
         await this.stopSession(issueId);
       } catch (error) {
@@ -581,7 +583,9 @@ export class AgentEngine implements AgentController {
 
     const workDirectory = await assertIssueRoot(this.stateRoot, issue.key);
     this.roundSignal(issue.id);
-    const project = await this.projectManager.prepare(issue, environmentKind, personalGit?.env);
+    const checkoutLease = new SharedCheckoutLease();
+    this.checkoutLeases.set(issue.id, checkoutLease);
+    const project = await checkoutLease.run(() => this.projectManager.prepare(issue, environmentKind, personalGit?.env));
     this.roundSignal(issue.id);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
     await chmod(workDirectory, 0o700);
@@ -644,6 +648,7 @@ export class AgentEngine implements AgentController {
       ...(personalGit ? { personalGit } : {}),
       commitEnvironment: gitIdentityEnvironment(commitIdentity),
       networkDomains: agentConfiguration.runtime.networkAllowedDomains ?? [],
+      checkoutLease,
       onScopeChanged: (updatedRoots) => {
         if (updatedRoots) readRoots = updatedRoots;
         const current = this.sessions.get(issue.id);
@@ -909,10 +914,13 @@ export class AgentEngine implements AgentController {
     this.personalSessions.delete(issueId);
     const personalGit = this.personalGit.get(issueId);
     this.personalGit.delete(issueId);
+    const checkoutLease = this.checkoutLeases.get(issueId);
+    this.checkoutLeases.delete(issueId);
     this.sessions.delete(issueId);
     const failures: unknown[] = [];
     try {
       await managed?.stop();
+      checkoutLease?.close();
     } catch (error) {
       failures.push(error);
     }

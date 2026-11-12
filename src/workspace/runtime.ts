@@ -17,7 +17,21 @@ export interface RelatedIssueRuntime {
   workDirectory: string;
 }
 export type IssueRuntimeAccess = "read" | "write";
-/** Resolve the recorded code entry without changing the view, branch, or remote refs. */
+type RecordedRepository = typeof issueRepositories.$inferSelect;
+
+export async function recordedSharedSnapshot(stateRoot: string, issueKey: string, repository: RecordedRepository, name: string, state: "read_only" | "development_snapshot") {
+  const root = await assertIssueRoot(stateRoot, issueKey);
+  const entry = path.join(root, entryName(name));
+  const store = repositoryStorePath(stateRoot, repository.url);
+  if (!(await lstat(entry)).isSymbolicLink() || !(await lstat(store)).isDirectory() || (await realpath(store)) !== store) throw new Error("source_runtime_invalid");
+  const commit = state === "read_only" ? repository.commitBefore : await readIssueBranchCommit(await developmentRepositoryStorePath(stateRoot, issueKey, repository.url), repository.workingBranch!);
+  if (!commit || !/^[a-f0-9]{40}$/.test(commit)) throw new Error("source_runtime_invalid");
+  const checkout = path.join(sharedCheckoutsRoot(stateRoot), path.basename(store), commit);
+  if (path.resolve(root, await readlink(entry)) !== checkout) throw new Error("source_runtime_invalid");
+  return { store, commit, checkout };
+}
+
+/** Resolve the recorded code entry without changing the branch or remote refs. */
 export async function resolveRecordedRepository(
   stateRoot: string,
   issueKey: string,
@@ -26,28 +40,20 @@ export async function resolveRecordedRepository(
   state: Exclude<RepositoryState, "invalid">,
   checkedCheckouts?: Set<string>,
 ): Promise<{ root: string; store?: string }> {
-  const entry = path.join(await assertIssueRoot(stateRoot, issueKey), entryName(name));
-  const metadata = await lstat(entry);
-  const development = state === "development_workspace";
-  if (development ? !metadata.isDirectory() : !metadata.isSymbolicLink()) throw new Error("source_runtime_invalid");
-  const root = await realpath(entry);
-  if (development && (!repository.localPath || path.resolve(repository.localPath) !== entry || root !== entry)) throw new Error("source_runtime_invalid");
   try {
-    if (development) {
+    if (state === "development_workspace") {
+      const entry = path.join(await assertIssueRoot(stateRoot, issueKey), entryName(name));
+      const metadata = await lstat(entry);
+      const root = await realpath(entry);
+      if (!metadata.isDirectory() || !repository.localPath || path.resolve(repository.localPath) !== entry || root !== entry) throw new Error("source_runtime_invalid");
       const store = await developmentRepositoryStorePath(stateRoot, issueKey, repository.url);
       await validateIssueWorktreeBinding(store, root, repository.workingBranch!);
       return { root, store };
     }
-    const store = repositoryStorePath(stateRoot, repository.url);
-    const parent = path.join(sharedCheckoutsRoot(stateRoot), path.basename(store));
-    if (path.dirname(root) !== parent || !/^[a-f0-9]{40}$/.test(path.basename(root))) throw new Error("source_runtime_invalid");
-    // commitBefore is the baseline for dev. A released view represents the recorded local working branch.
-    const commit = state === "read_only" ? repository.commitBefore : await readIssueBranchCommit(await developmentRepositoryStorePath(stateRoot, issueKey, repository.url), repository.workingBranch!);
-    if (path.basename(root) !== commit) throw new Error("source_runtime_invalid");
-    await new WorktreeManager(stateRoot).assertSharedCheckout(root, commit, store, checkedCheckouts);
-    return { root };
+    const { commit } = await recordedSharedSnapshot(stateRoot, issueKey, repository, name, state);
+    return { root: await new WorktreeManager(stateRoot).openSharedCheckout(repository.url, commit, checkedCheckouts) };
   } catch (error) {
-    if (error instanceof Error && error.message === "source_runtime_invalid") throw error;
+    if (error instanceof Error && (error.message === "source_runtime_invalid" || (error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
     throw new Error("source_git_binding_invalid", { cause: error });
   }
 }

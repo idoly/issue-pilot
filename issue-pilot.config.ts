@@ -41,6 +41,9 @@ export const issuePilotConfig = Object.freeze({
   }),
   workspace: Object.freeze({
     taskConcurrency: 4,
+    // Leave disabled until the operator has verified local snapshot recovery.
+    sharedCheckoutHighWaterBytes: 0,
+    sharedCheckoutTargetBytes: 4 * gibibyte,
   }),
   // Defaults for parameters admins change under 配置 → 参数; saved values live in SQLite and apply without restart.
   parameters: Object.freeze({

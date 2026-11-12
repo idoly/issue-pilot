@@ -10,8 +10,8 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
-import { issueRepositoryWorkspaceNames } from "./git.ts";
-import { resolveRecordedRepository } from "./runtime.ts";
+import { issueRepositoryWorkspaceNames, retainedSnapshotRef } from "./git.ts";
+import { recordedSharedSnapshot, resolveRecordedRepository } from "./runtime.ts";
 import type { WorkFileRepository } from "./work-files.ts";
 import { classifyRepositoryState, issueRoot } from "./state.ts";
 
@@ -37,6 +37,7 @@ type IssueReference = { id: string; key: string };
 type SourceContext = {
   root: string;
   workingBranch: string | null;
+  head?: string;
   /** Validated isolated store of a development workspace; writes reuse it instead of rescanning. */
   store?: string;
 };
@@ -46,6 +47,7 @@ type SourceRevisionContext = {
   revision: string;
   parent: string | null;
 };
+type ColdSnapshot = Awaited<ReturnType<typeof recordedSharedSnapshot>>;
 
 function normalizedRelativePath(value: string): string {
   if (value.length > 4096 || value.includes("\0") || path.isAbsolute(value)) throw new Error("invalid_source_path");
@@ -124,7 +126,31 @@ export class SourceBrowser {
   }
 
   async tree(issue: IssueReference, repositoryName: string, relativePath = ""): Promise<SourceTree> {
-    const context = await this.context(issue, repositoryName);
+    const parent = sourcePath(normalizedRelativePath(relativePath));
+    const selection = await this.selectRepository(issue, repositoryName);
+    const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
+    if (snapshot) {
+      const entries = await this.snapshotEntries(snapshot, parent ? `${snapshot.commit}:${parent}` : snapshot.commit);
+      if (entries) {
+        const limit = issuePilotConfig.limits.sourceBrowser.directoryEntries;
+        const visible = entries
+          .filter((entry) => entry.name !== ".git")
+          .map(
+            (entry): SourceTreeEntry => ({
+              name: entry.name,
+              path: path.posix.join(parent, entry.name),
+              type: entry.mode === "040000" || entry.mode === "160000" ? "directory" : entry.mode === "120000" ? "symlink" : "file",
+              size: entry.mode.startsWith("100") ? entry.size : null,
+            }),
+          )
+          .sort(
+            (left, right) =>
+              Number(right.type === "directory") - Number(left.type === "directory") || Number(right.type === "file") - Number(left.type === "file") || left.name.localeCompare(right.name),
+          );
+        return { path: parent, entries: visible.slice(0, limit), truncated: visible.length > limit };
+      }
+    }
+    const context = await this.context(issue, repositoryName, selection);
     const directory = await this.resolvePath(context.root, relativePath);
     const metadata = await stat(directory);
     if (!metadata.isDirectory()) throw new Error("source_path_not_directory");
@@ -141,7 +167,6 @@ export class SourceBrowser {
           return leftRank - rightRank || left.name.localeCompare(right.name);
         });
       const selected = visible.slice(0, issuePilotConfig.limits.sourceBrowser.directoryEntries);
-      const parent = normalizedRelativePath(relativePath);
       const results = await Promise.allSettled(
         selected.map(async (entry): Promise<SourceTreeEntry> => {
           const entryPath = sourcePath(path.join(parent, entry.name));
@@ -162,7 +187,55 @@ export class SourceBrowser {
   }
 
   async file(issue: IssueReference, repositoryName: string, relativePath: string): Promise<SourceFile> {
-    return this.workingFile(await this.context(issue, repositoryName), relativePath);
+    const selected = sourcePath(normalizedRelativePath(relativePath));
+    const selection = await this.selectRepository(issue, repositoryName);
+    const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
+    if (snapshot && selected) {
+      const entries = await this.snapshotEntries(snapshot, snapshot.commit, selected);
+      if (entries?.length === 1 && entries[0]?.mode.startsWith("100")) {
+        const content = await this.gitFile({ root: snapshot.store, workingBranch: null }, `${snapshot.commit}:${selected}`, "source_history_timeout", "source_path_not_found");
+        const bytes = Buffer.from(content);
+        return { path: selected, content, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+      }
+    }
+    return this.workingFile(await this.context(issue, repositoryName, selection), relativePath);
+  }
+
+  private async coldSnapshot(issue: IssueReference, repositoryName: string, { repository, state }: Awaited<ReturnType<SourceBrowser["selectRepository"]>>): Promise<ColdSnapshot | undefined> {
+    if (state === "development_workspace") return undefined;
+    const snapshot = await recordedSharedSnapshot(this.stateRoot, issue.key, repository, repositoryName, state).catch(missingPathError);
+    if (
+      await lstat(snapshot.checkout).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      })
+    )
+      return undefined;
+    const retained = await this.executor.execute(
+      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
+      ["-C", snapshot.store, "show-ref", "--verify", "--hash", "--", retainedSnapshotRef(snapshot.commit)],
+      this.commandOptions(),
+    );
+    if (retained.killed || retained.code !== 0 || retained.stdout.trim() !== snapshot.commit) throw new Error("source_git_binding_invalid");
+    return snapshot;
+  }
+
+  private async snapshotEntries(snapshot: ColdSnapshot, tree: string, selected?: string) {
+    const result = await this.executor.execute(
+      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
+      ["-C", snapshot.store, "ls-tree", "-lz", tree, "--", ...(selected ? [selected] : [])],
+      this.commandOptions(),
+    );
+    if (result.killed) throw new Error("source_history_timeout");
+    if (result.code !== 0) return undefined;
+    return result.stdout
+      .split("\0")
+      .filter(Boolean)
+      .map((record) => {
+        const match = /^(100644|100755|120000|040000|160000) (?:blob|tree|commit) [0-9a-f]{40} +([0-9]+|-)\t([\s\S]+)$/.exec(record);
+        if (!match) throw new Error("invalid_source_tree_response");
+        return { mode: match[1]!, size: match[2] === "-" ? null : Number(match[2]), name: match[3]! };
+      });
   }
 
   async writeFile(issue: IssueReference, repositoryName: string, relativePath: string, content: string, expectedSha256: string): Promise<SourceFile> {
@@ -514,9 +587,9 @@ export class SourceBrowser {
   async history(issue: IssueReference, repositoryName: string, relativePath = "", cursor?: SourceHistoryCursor, signal?: AbortSignal): Promise<SourceHistoryPage> {
     if (cursor && (!/^[a-f0-9]{40}$/.test(cursor.revision) || !Number.isSafeInteger(cursor.offset) || cursor.offset <= 0)) throw new Error("invalid_source_history_cursor");
     signal?.throwIfAborted();
-    const context = cursor ? (await this.revisionContext(issue, repositoryName, cursor.revision)).source : await this.context(issue, repositoryName);
+    const context = cursor ? (await this.revisionContext(issue, repositoryName, cursor.revision)).source : await this.committedContext(issue, repositoryName);
     const selected = normalizedRelativePath(relativePath);
-    let revision = cursor?.revision;
+    let revision = cursor?.revision ?? context.head;
     if (!revision) {
       const head = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "rev-parse", "--verify", "HEAD"], {
         ...this.commandOptions(),
@@ -645,14 +718,18 @@ export class SourceBrowser {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes,
-      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" } as Record<string, string>,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1", GIT_NO_LAZY_FETCH: "1" } as Record<string, string>,
     };
   }
 
   private async revisionContext(issue: IssueReference, repositoryName: string, revision: string): Promise<SourceRevisionContext> {
     if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("invalid_source_revision");
-    const source = await this.context(issue, repositoryName);
-    const ancestor = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", source.root, "merge-base", "--is-ancestor", revision, "HEAD"], this.commandOptions());
+    const source = await this.committedContext(issue, repositoryName);
+    const ancestor = await this.executor.execute(
+      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
+      ["-C", source.root, "merge-base", "--is-ancestor", revision, source.head ?? "HEAD"],
+      this.commandOptions(),
+    );
     if (ancestor.killed) throw new Error("source_history_timeout");
     if (ancestor.code === 1) throw new Error("source_commit_not_found");
     if (ancestor.code !== 0) throw new Error("source_history_failed");
@@ -877,12 +954,23 @@ export class SourceBrowser {
     if (result.code !== 0) throw new Error(failure);
   }
 
-  private async context(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
+  private async selectRepository(issue: IssueReference, repositoryName: string) {
     if (!repositoryNamePattern.test(repositoryName)) throw new Error("source_repository_not_found");
     const { rows, state } = await this.repositorySet(issue);
     const names = issueRepositoryWorkspaceNames(rows);
     const repository = rows.find((candidate) => names.get(candidate.url) === repositoryName);
     if (!repository) throw new Error("source_repository_not_found");
+    return { repository, state };
+  }
+
+  private async committedContext(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
+    const selection = await this.selectRepository(issue, repositoryName);
+    const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
+    return snapshot ? { root: snapshot.store, head: snapshot.commit, workingBranch: null } : this.context(issue, repositoryName, selection);
+  }
+
+  private async context(issue: IssueReference, repositoryName: string, selection?: Awaited<ReturnType<SourceBrowser["selectRepository"]>>): Promise<SourceContext> {
+    const { repository, state } = selection ?? (await this.selectRepository(issue, repositoryName));
     const view = await resolveRecordedRepository(this.stateRoot, issue.key, repository, repositoryName, state).catch(missingPathError);
     return { ...view, workingBranch: repository.workingBranch };
   }

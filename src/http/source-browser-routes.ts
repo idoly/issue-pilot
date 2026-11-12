@@ -1,6 +1,7 @@
 import type { FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
+import { withSharedCheckout } from "../workspace/git.ts";
 import { ApiError } from "./input.ts";
 import { requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
@@ -81,7 +82,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
       reply.raw.once("close", closed);
       try {
         const issue = await requireIssue(database, request.params.key);
-        return await sourceOperation(() => operation(issue, request, controller.signal));
+        return await sourceOperation(() => withSharedCheckout(() => operation(issue, request, controller.signal)));
       } catch (error) {
         if (controller.signal.aborted) {
           reply.hijack();

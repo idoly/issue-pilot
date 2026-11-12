@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, realpath, rmdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, mkdtemp, open, readdir, readlink, realpath, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -171,6 +172,91 @@ async function managedGitDirectoryExists(directory: string): Promise<boolean> {
 }
 
 const repositoryQueue = new KeyedSerialQueue();
+
+const checkoutUsers = new Map<string, number>();
+const checkoutLease = new AsyncLocalStorage<SharedCheckoutLease>();
+const checkoutUseTime = new Map<string, number>();
+
+/** Keep materialized paths available through the owning request or Agent session. */
+export class SharedCheckoutLease {
+  private readonly paths = new Set<string>();
+  private closed = false;
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    return checkoutLease.run(this, operation);
+  }
+
+  pin(path: string): void {
+    if (this.closed) throw new Error("shared_checkout_lease_closed");
+    if (this.paths.has(path)) return;
+    this.paths.add(path);
+    checkoutUsers.set(path, (checkoutUsers.get(path) ?? 0) + 1);
+  }
+
+  close(): void {
+    this.closed = true;
+    for (const path of this.paths) {
+      const remaining = checkoutUsers.get(path)! - 1;
+      if (remaining) checkoutUsers.set(path, remaining);
+      else checkoutUsers.delete(path);
+    }
+    this.paths.clear();
+  }
+}
+
+export async function withSharedCheckout<T>(operation: () => Promise<T>): Promise<T> {
+  const lease = new SharedCheckoutLease();
+  try {
+    return await lease.run(operation);
+  } finally {
+    lease.close();
+  }
+}
+
+export const retainedSnapshotRef = (commit: string) => `refs/issue-pilot/snapshots/${commit}`;
+
+/** A clean index alone does not prove a sole copy is reproducible: Git can skip stat-matched files and empty directories. */
+async function assertCheckoutMatchesObjects(checkout: string, tree: string): Promise<void> {
+  const expected = new Map<string, { mode: string; object: string }>();
+  for (const record of tree.split("\0").filter(Boolean)) {
+    const match = /^(040000|100644|100755|120000) (?:blob|tree) ([a-f0-9]{40})\t([\s\S]+)$/.exec(record);
+    if (!match) throw new Error("shared_checkout_not_reproducible");
+    expected.set(match[3]!, { mode: match[1]!, object: match[2]! });
+  }
+  async function verify(directory: string, prefix: string): Promise<void> {
+    for (const name of await readdir(directory)) {
+      if (!prefix && name === ".git") continue;
+      const key = prefix + name;
+      const entry = expected.get(key);
+      if (!entry) throw new Error("shared_checkout_not_reproducible");
+      expected.delete(key);
+      const file = resolve(directory, name);
+      const metadata = await lstat(file);
+      if (entry.mode === "040000" && metadata.isDirectory()) {
+        await verify(file, key + "/");
+        continue;
+      }
+      const hash = createHash("sha1");
+      if (entry.mode === "120000" && metadata.isSymbolicLink()) {
+        const bytes = await readlink(file, { encoding: "buffer" });
+        hash.update(`blob ${bytes.length}\0`).update(bytes);
+      } else if (metadata.isFile() && metadata.nlink === 1 && (entry.mode === "100755" ? Boolean(metadata.mode & 0o100) : entry.mode === "100644" && !(metadata.mode & 0o111))) {
+        const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          const opened = await handle.stat();
+          if (opened.dev !== metadata.dev || opened.ino !== metadata.ino || opened.size !== metadata.size) throw new Error("shared_checkout_not_reproducible");
+          hash.update(`blob ${opened.size}\0`);
+          for await (const bytes of handle.createReadStream({ autoClose: false })) hash.update(bytes);
+        } finally {
+          await handle.close();
+        }
+      } else throw new Error("shared_checkout_not_reproducible");
+      if (hash.digest("hex") !== entry.object) throw new Error("shared_checkout_not_reproducible");
+    }
+  }
+  await verify(checkout, "");
+  if (expected.size) throw new Error("shared_checkout_not_reproducible");
+}
 
 export class WorktreeManager {
   private readonly gitEnvironment = new AsyncLocalStorage<Record<string, string>>();
@@ -374,6 +460,112 @@ export class WorktreeManager {
     return this.serialized(repositoryKey, () => this.prepareBranchSnapshotLocked(input, repositoryKey));
   }
 
+  /** Recreate only a checkout explicitly evicted by this owner, at its exact recorded commit. */
+  async openSharedCheckout(url: string, commit: string, checkedCheckouts?: Set<string>): Promise<string> {
+    if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("shared_checkout_changed");
+    const repositoryKey = repositoryHash(url, 20);
+    const store = resolve(this.repositoriesRoot, repositoryKey);
+    return this.serialized(repositoryKey, async () => {
+      const checkout = resolve(this.sharedCheckoutsRoot, repositoryKey, commit);
+      if (!(await managedGitDirectoryExists(store))) throw new Error("repository_cache_not_found");
+      if (!(await managedGitDirectoryExists(checkout))) {
+        const retained = (await this.git(["-C", store, "show-ref", "--verify", "--hash", "--", retainedSnapshotRef(commit)])).trim();
+        if (retained !== commit) throw new Error("shared_checkout_changed");
+      }
+      return this.prepareCommitCheckout(store, repositoryKey, commit, checkedCheckouts);
+    });
+  }
+
+  /** Remove only a clean, detached cache copy; preserve its exact commit against Git maintenance. */
+  async evictSharedCheckout({ checkout, commit, commonDirectory }: Awaited<ReturnType<typeof listSharedCheckouts>>[number]): Promise<boolean> {
+    const repositoryKey = basename(commonDirectory);
+    if (
+      !/^[a-f0-9]{20}$/.test(repositoryKey) ||
+      !/^[a-f0-9]{40}$/.test(commit) ||
+      resolve(this.repositoriesRoot, repositoryKey) !== commonDirectory ||
+      resolve(this.sharedCheckoutsRoot, repositoryKey, commit) !== checkout
+    )
+      throw new Error("shared_checkout_changed");
+    return this.serialized(repositoryKey, async () => {
+      if (checkoutUsers.has(checkout) || !(await managedGitDirectoryExists(checkout))) return false;
+      if (!(await managedGitDirectoryExists(commonDirectory))) throw new Error("repository_cache_not_found");
+      await this.assertSharedCheckout(checkout, commit, commonDirectory);
+      const local = ["--no-lazy-fetch", "-c", "core.hooksPath=/dev/null", "-C", commonDirectory];
+      await this.git([...local, "rev-list", "--objects", "--missing=error", "--quiet", "--max-count=1", commit]);
+      await assertCheckoutMatchesObjects(checkout, await this.git([...local, "ls-tree", "-rtz", commit]));
+      const ref = retainedSnapshotRef(commit);
+      const previous = await this.git([...local, "show-ref", "--exists", ref]).then(
+        () => commit,
+        (error: NodeJS.ErrnoException) => {
+          if (Number(error.code) !== 2) throw error;
+          return "0".repeat(40);
+        },
+      );
+      await this.git([...local, "update-ref", ref, commit, previous]);
+      // Detach the public cache path before deleting files. A failed cleanup must not expose a half-removed checkout.
+      const control = resolve(this.stateRoot, "control");
+      if (!(await managedGitDirectoryExists(control))) await mkdir(control, { recursive: true, mode: 0o700 });
+      if (!(await managedGitDirectoryExists(control))) throw new Error("shared_checkout_changed");
+      const quarantine = await mkdtemp(resolve(control, "shared-checkout-eviction-"));
+      const retired = resolve(quarantine, "checkout");
+      try {
+        await this.git([...local, "worktree", "move", checkout, retired]);
+      } catch (error) {
+        await rmdir(quarantine).catch((cleanup: NodeJS.ErrnoException) => {
+          if (cleanup.code !== "ENOTEMPTY") throw new AggregateError([error, cleanup], "shared_checkout_cleanup_failed");
+        });
+        throw error;
+      }
+      await rmdir(dirname(checkout)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOTEMPTY") throw error;
+      });
+      await this.git([...local, "worktree", "remove", retired]);
+      await rmdir(quarantine);
+      checkoutUseTime.delete(checkout);
+      return true;
+    });
+  }
+
+  async reclaimSharedCheckouts(highWater: number, target: number, onFailure: (error: unknown) => void, stopping: () => boolean): Promise<void> {
+    if (highWater <= 0) return;
+    if (target < 0 || target >= highWater) throw new Error("shared_checkout_target_must_be_below_high_water");
+    if (!(await managedGitDirectoryExists(this.sharedCheckoutsRoot))) return;
+    const { stdout } = await execFileAsync("du", ["-x", "-B1", "-d2", "--", this.sharedCheckoutsRoot], {
+      timeout: issuePilotConfig.limits.process.diskUsageMs,
+      maxBuffer: issuePilotConfig.limits.process.diskUsageOutputBytes,
+    });
+    const measured = new Map(
+      stdout
+        .trimEnd()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("\t");
+          return [line.slice(separator + 1), Number(line.slice(0, separator))] as const;
+        }),
+    );
+    let remaining = measured.get(this.sharedCheckoutsRoot);
+    if (remaining === undefined || !Number.isSafeInteger(remaining) || remaining < 0) throw new Error("invalid_shared_checkout_disk_usage");
+    if (remaining <= highWater || stopping()) return;
+    const candidates = [];
+    for (const candidate of await listSharedCheckouts(this.stateRoot)) {
+      const { checkout } = candidate;
+      if (checkoutUsers.has(checkout)) continue;
+      const used = measured.get(checkout);
+      if (!used || !Number.isSafeInteger(used) || used < 0) continue;
+      const timestamp = checkoutUseTime.get(checkout) ?? (await lstat(checkout)).mtimeMs;
+      candidates.push({ ...candidate, used, timestamp });
+    }
+    for (const candidate of candidates.sort((left, right) => left.timestamp - right.timestamp).slice(0, 8)) {
+      if (remaining <= target || stopping()) break;
+      try {
+        if (await this.evictSharedCheckout(candidate)) remaining -= candidate.used;
+      } catch (error) {
+        checkoutUseTime.set(candidate.checkout, Date.now());
+        onFailure(new Error(`shared_checkout_reclaim_failed:${basename(candidate.commonDirectory)}/${candidate.commit}`, { cause: error }));
+      }
+    }
+  }
+
   private validateRepositoryInput(input: PrepareSharedCheckoutInput): void {
     if (input.url.startsWith("-") || !input.baseBranch.trim() || input.baseBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
   }
@@ -425,10 +617,14 @@ export class WorktreeManager {
       if (!(await pathExists(resolve(workspacePath, ".git")))) throw new Error("shared_checkout_is_not_git_worktree");
       await this.assertSharedCheckout(workspacePath, commit, cachePath, checkedCheckouts);
     } else {
+      if (await managedGitDirectoryExists(this.sharedCheckoutsRoot)) await managedGitDirectoryExists(checkoutParent);
       await mkdir(checkoutParent, { recursive: true });
-      await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
+      if ((await realpath(checkoutParent)) !== checkoutParent) throw new Error("shared_checkout_changed");
+      await this.git(["--no-lazy-fetch", "-c", "core.hooksPath=/dev/null", "-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
       checkedCheckouts?.add(workspacePath);
     }
+    checkoutLease.getStore()?.pin(workspacePath);
+    if (issuePilotConfig.workspace.sharedCheckoutHighWaterBytes > 0) checkoutUseTime.set(workspacePath, Date.now());
     return workspacePath;
   }
 

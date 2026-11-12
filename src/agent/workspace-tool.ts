@@ -13,7 +13,7 @@ import { objectToolParameters } from "./tool-schema.ts";
 import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
 import { loadDeploymentRepositories } from "../workspace/deployment.ts";
 import path from "node:path";
-import { issueRepositoryWorkspaceNames, repositoryStorePath } from "../workspace/git.ts";
+import { issueRepositoryWorkspaceNames, repositoryStorePath, type SharedCheckoutLease } from "../workspace/git.ts";
 import type { IssueProjectManager } from "../workspace/project.ts";
 import type { PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { resolveRecordedRepository } from "../workspace/runtime.ts";
@@ -40,6 +40,7 @@ type WorkspaceToolOptions = {
   personalGit?: PersonalGitEnvironment;
   commitEnvironment: Record<string, string>;
   networkDomains: readonly string[];
+  checkoutLease?: SharedCheckoutLease;
   onScopeChanged?: (readRoots?: string[]) => void;
 };
 
@@ -203,7 +204,8 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
           // but only completed preparation grants the new paths to native tools in this round.
           let readRoots: string[] | undefined;
           try {
-            const project = await projects.prepare(current, environmentKind, personalGit?.env);
+            const prepare = () => projects.prepare(current, environmentKind, personalGit?.env);
+            const project = await (options.checkoutLease ? options.checkoutLease.run(prepare) : prepare());
             signal?.throwIfAborted();
             await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
             readRoots = project.readRoots;

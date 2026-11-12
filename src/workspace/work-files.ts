@@ -48,26 +48,25 @@ async function resolveWorkPath(stateRoot: string, issueKey: string, relative: st
   if (relative.includes("\0") || relative.includes("\\") || path.isAbsolute(relative) || relative.split("/").some((segment) => segment === ".." || segment.toLowerCase() === ".git"))
     throw new Error("invalid_issue_file_path");
   const root = await assertIssueRoot(stateRoot, issueKey);
-  const target = await realpath(path.resolve(root, relative || "."));
   const requested = path.posix.normalize(relative || ".");
   const under = (prefix: string) => requested === prefix || requested.startsWith(prefix + "/");
+  const requestedRepository = [...(access.repositories ?? [])].find(([prefix]) => under(prefix))?.[1];
+  const requestedRoot = await requestedRepository?.resolve();
+  const target = await realpath(path.resolve(root, relative || "."));
   const allowed = inside(root, target) || Object.entries(access.readRoots ?? {}).some(([prefix, allowedRoot]) => under(prefix) && inside(allowedRoot, target));
   // A source link can lead outside the Issue root. A development worktree is inside it
   // and may be reached through another symlink, so verify the actual entry there too.
-  let repository: WorkFileRepository | undefined;
-  for (const [prefix, candidate] of access.repositories ?? []) {
-    if (under(prefix)) {
-      repository = candidate;
-      break;
+  let repository = requestedRepository;
+  if (!repository && allowed)
+    for (const [, candidate] of access.repositories ?? []) {
+      if (inside(candidate.entry, target)) repository = candidate;
     }
-    if (allowed && inside(candidate.entry, target)) repository = candidate;
-  }
   if (
     path
       .relative(root, target)
       .split(path.sep)
       .some((segment) => segment.toLowerCase() === ".git") ||
-    (repository ? !inside(await repository.resolve(), target) : !allowed)
+    (repository ? !inside(requestedRoot ?? (await repository.resolve()), target) : !allowed)
   )
     throw new Error("invalid_issue_file_path");
   return target;
