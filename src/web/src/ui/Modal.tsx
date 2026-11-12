@@ -19,87 +19,58 @@ interface ModalProps {
   onCancel: () => void;
 }
 
-const modalStack: HTMLElement[] = [];
-let previousOverflow = "";
-let nextLayer = 0;
-const focusable = 'button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],[tabindex="0"]';
-
 function ModalContent(props: ModalProps) {
   const id = createUniqueId();
-  const layer = 1000 + ++nextLayer * 10;
-  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-  let panel!: HTMLDivElement;
-  let disposed = false;
+  let panel!: HTMLDialogElement;
+  let opener: HTMLElement | undefined;
   const cancel = () => {
     if (!props.cancelButtonProps?.disabled && !props.confirmLoading) props.onCancel();
   };
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (modalStack.at(-1) !== panel || event.defaultPrevented) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      cancel();
-    }
-    if (event.key !== "Tab") return;
-    const fields = [...panel.querySelectorAll<HTMLElement>(focusable)].filter((element) => !element.closest("[hidden]"));
-    const first = fields[0] ?? panel;
-    const last = fields.at(-1) ?? panel;
-    if (event.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
   queueMicrotask(() => {
-    if (disposed) return;
-    if (!modalStack.length) {
-      previousOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-    }
-    modalStack.push(panel);
-    document.addEventListener("keydown", onKeyDown);
-    const initial = panel.querySelector<HTMLElement>('input:not(:disabled),textarea:not(:disabled),[role="combobox"]');
-    (initial ?? panel).focus();
+    if (!panel?.isConnected) return;
+    if (document.activeElement instanceof HTMLElement) opener = document.activeElement;
+    panel.showModal();
+    panel.querySelector<HTMLElement>('input:not([type="hidden"]):not(:disabled),textarea:not(:disabled),[role="combobox"][tabindex="0"]')?.focus();
   });
   onCleanup(() => {
-    disposed = true;
-    document.removeEventListener("keydown", onKeyDown);
-    const index = modalStack.indexOf(panel);
-    const wasTop = index === modalStack.length - 1;
-    if (index >= 0) {
-      modalStack.splice(index, 1);
-      if (!modalStack.length) document.body.style.overflow = previousOverflow;
-      if (wasTop && returnFocus?.isConnected) returnFocus.focus();
-    }
+    panel?.close();
+    // Solid can detach the portal before cleanup, bypassing the browser's restoration.
+    if (document.activeElement === document.body && opener?.isConnected) opener.focus({ preventScroll: true });
   });
   return (
     <Portal>
-      <div class="ui-modal-mask" style={{ "z-index": layer }}>
-        <div ref={panel} class="ui-modal-container" role="dialog" aria-modal="true" aria-labelledby={id} tabindex={-1} style={{ width: `${props.width ?? 560}px` }}>
-          <header class="ui-modal-header">
-            <h2 id={id}>{props.title}</h2>
-            <Button type="text" shape="circle" icon={<X size={18} />} aria-label="关闭弹窗" disabled={props.confirmLoading || props.cancelButtonProps?.disabled} onClick={cancel} />
-          </header>
-          <div class="ui-modal-body">{props.children}</div>
-          <footer class="ui-modal-footer">
-            {props.footer === undefined ? (
-              <>
-                <Button disabled={props.cancelButtonProps?.disabled || props.confirmLoading} onClick={cancel}>
-                  {props.cancelText ?? "取消"}
-                </Button>
-                <Button type="primary" danger={props.okButtonProps?.danger} disabled={props.okButtonProps?.disabled} loading={props.confirmLoading} onClick={props.onOk}>
-                  {props.okText ?? "确定"}
-                </Button>
-              </>
-            ) : (
-              props.footer
-            )}
-            {props.footerExtra}
-          </footer>
-        </div>
-      </div>
+      <dialog
+        ref={panel}
+        class="ui-modal-container"
+        aria-labelledby={id}
+        style={{ width: `${props.width ?? 560}px` }}
+        onCancel={(event) => {
+          // Open state and busy cancellation remain owned by the caller.
+          event.preventDefault();
+          cancel();
+        }}
+      >
+        <header class="ui-modal-header">
+          <h2 id={id}>{props.title}</h2>
+          <Button type="text" shape="circle" icon={<X size={18} />} aria-label="关闭弹窗" disabled={props.confirmLoading || props.cancelButtonProps?.disabled} onClick={cancel} />
+        </header>
+        <div class="ui-modal-body">{props.children}</div>
+        <footer class="ui-modal-footer">
+          {props.footer === undefined ? (
+            <>
+              <Button disabled={props.cancelButtonProps?.disabled || props.confirmLoading} onClick={cancel}>
+                {props.cancelText ?? "取消"}
+              </Button>
+              <Button type="primary" danger={props.okButtonProps?.danger} disabled={props.okButtonProps?.disabled} loading={props.confirmLoading} onClick={props.onOk}>
+                {props.okText ?? "确定"}
+              </Button>
+            </>
+          ) : (
+            props.footer
+          )}
+          {props.footerExtra}
+        </footer>
+      </dialog>
     </Portal>
   );
 }

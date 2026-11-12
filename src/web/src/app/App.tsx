@@ -1,12 +1,11 @@
 import { Button, Segmented, Select, Skeleton } from "../ui";
-import { createEffect, createSignal, lazy, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createEffect, createSignal, lazy, Loading, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 
 import { getIssue, type IssueDetail, type IssueExecutionItem } from "../data/client";
 import { parseIssueKey } from "../../../domain/contracts";
 import { DingtalkImportButton } from "./DingtalkImportDialog";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
-import { SettingsView } from "./SettingsView";
 import { OverviewView } from "./OverviewView";
 import { IssueSearchDialog } from "./IssueSearchDialog";
 import { IssueQueue } from "./IssueQueue";
@@ -27,6 +26,7 @@ function summaryChanged(detail: IssueDetail | IssueExecutionItem, summary: Issue
 }
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
+const SettingsView = lazy(() => import("./SettingsView"), { export: "SettingsView" });
 type AppView = "dashboard" | "issues" | "configuration";
 const viewOptions: Array<{ value: AppView; label: string }> = [
   { value: "dashboard", label: "首页" },
@@ -453,7 +453,15 @@ function AppWorkspace(props: { initialView?: AppView }) {
               </Show>
             </Match>
             <Match when={view() === "configuration"}>
-              <SettingsView />
+              <Loading
+                fallback={
+                  <main class="settings-view" role="status">
+                    正在加载配置…
+                  </main>
+                }
+              >
+                <SettingsView />
+              </Loading>
             </Match>
           </Switch>
         </div>

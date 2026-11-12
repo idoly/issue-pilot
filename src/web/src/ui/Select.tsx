@@ -235,7 +235,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
         <ChevronDown size={13} />
       </div>
       <Show when={open()}>
-        <Portal>
+        <Portal mount={root.closest("dialog") ?? document.body}>
           <div ref={popup} class={`ui-select-popup ${props.popupClass ?? ""}`} style={position()} onKeyDown={onKeyDown}>
             <Show when={searchable()}>
               <input

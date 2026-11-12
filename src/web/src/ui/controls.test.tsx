@@ -139,23 +139,21 @@ describe("local UI controls", () => {
     const input = screen.getByLabelText("草稿");
     await waitFor(() => expect(document.activeElement).toBe(input));
     await fireEvent.input(input, { target: { value: "未保存内容" } });
-    const mask = screen.getByRole("dialog").parentElement!;
-    fireEvent.click(mask);
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(dialog);
     fireEvent.mouseDown(input);
-    fireEvent.mouseUp(mask);
-    fireEvent.click(mask);
+    fireEvent.mouseUp(dialog);
+    fireEvent.click(dialog);
     expect(cancel).not.toHaveBeenCalled();
     expect(screen.getByLabelText("草稿")).toHaveProperty("value", "未保存内容");
-    expect(document.body.style.overflow).toBe("hidden");
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("traps dialog focus and restores parent and opener focus across nested dialogs", async () => {
+  it("routes the browser's cancel request to the open child dialog", async () => {
     const [open, setOpen] = createSignal(false, { ownedWrite: true });
     const [nested, setNested] = createSignal(false, { ownedWrite: true });
-    const previousOverflow = document.body.style.overflow;
     const view = render(() => (
       <>
         <Button onClick={() => setOpen(true)}>打开</Button>
@@ -178,18 +176,11 @@ describe("local UI controls", () => {
     fireEvent.click(nestedOpener);
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("子输入")));
     const child = screen.getByRole("dialog", { name: "子弹窗" });
-    const footer = within(child).getByRole("button", { name: "确定" });
-    footer.focus();
-    fireEvent.keyDown(footer, { key: "Tab" });
-    expect(document.activeElement).toBe(within(child).getByRole("button", { name: "关闭弹窗" }));
-    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(fireEvent(child, new Event("cancel", { cancelable: true }))).toBe(false);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "子弹窗" })).toBeNull());
-    expect(document.activeElement).toBe(nestedOpener);
-    expect(document.body.style.overflow).toBe("hidden");
-    fireEvent.keyDown(nestedOpener, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "父弹窗" })).toBe(parent);
+    fireEvent(parent, new Event("cancel", { cancelable: true }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.activeElement).toBe(opener);
-    expect(document.body.style.overflow).toBe(previousOverflow);
     view.unmount();
   });
 
@@ -201,7 +192,7 @@ describe("local UI controls", () => {
       </Modal>
     ));
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("密钥")));
-    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }))).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(cancel).not.toHaveBeenCalled();
     expect(screen.getByLabelText("密钥").getAttribute("type")).toBe("password");

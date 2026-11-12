@@ -1,4 +1,4 @@
-import { createEffect, For, omit, Show } from "solid-js";
+import { For, omit, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import "./controls.css";
 
@@ -66,40 +66,14 @@ export function PasswordInput(props: InputProps) {
   return <Input {...props} type="password" autocomplete="off" />;
 }
 
-type TextAreaProps = Omit<JSX.TextareaHTMLAttributes<HTMLTextAreaElement>, "onInput"> & {
+type TextAreaProps = JSX.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   autoSize?: { minRows: number; maxRows: number };
-  onInput?: JSX.EventHandler<HTMLTextAreaElement, InputEvent>;
 };
 export function TextArea(props: TextAreaProps) {
-  const rest = omit(props, "autoSize", "class", "onInput");
-  let element: HTMLTextAreaElement | undefined;
-  const resize = () => {
-    if (!element || !props.autoSize) return;
-    const style = getComputedStyle(element);
-    const line = Number.parseFloat(style.lineHeight) || 22;
-    const extra = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0) + 2;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(props.autoSize.maxRows * line + extra, Math.max(props.autoSize.minRows * line + extra, element.scrollHeight))}px`;
-    element.style.overflowY = element.scrollHeight > props.autoSize.maxRows * line + extra ? "auto" : "hidden";
-  };
-  createEffect(
-    () => props.value,
-    () => {
-      queueMicrotask(resize);
-    },
-  );
+  const rest = omit(props, "autoSize", "class", "rows");
   return (
-    <span class={`ui-textarea-wrapper ${props.class ?? ""}`}>
-      <textarea
-        {...rest}
-        ref={element}
-        rows={props.autoSize?.minRows ?? props.rows ?? 3}
-        class="ui-textarea"
-        onInput={(event) => {
-          props.onInput?.(event);
-          resize();
-        }}
-      />
+    <span class={`ui-textarea-wrapper ${props.class ?? ""}`} style={props.autoSize && { "--textarea-min-rows": props.autoSize.minRows, "--textarea-max-rows": props.autoSize.maxRows }}>
+      <textarea {...rest} rows={props.autoSize?.minRows ?? props.rows ?? 3} class={`ui-textarea${props.autoSize ? " ui-textarea-autosize" : ""}`} />
     </span>
   );
 }

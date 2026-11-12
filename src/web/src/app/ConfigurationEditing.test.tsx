@@ -129,9 +129,10 @@ for (const outcome of ["success", "failure"] as const)
     finish();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(within(dialog).queryByRole("alert")).toBeNull();
-    fireEvent.click(within(dialog).getByLabelText("关联仓库"));
-    fireEvent.click(await screen.findByRole("option", { name: /App/ }));
-    await waitFor(() => expect(within(dialog).getByLabelText("关联仓库").closest(".ui-select")?.textContent).toContain("App"));
+    const repositories = within(dialog).getByRole("combobox", { name: "关联仓库" });
+    fireEvent.click(repositories);
+    fireEvent.click(await within(dialog).findByRole("option", { name: /App/ }));
+    await waitFor(() => expect(repositories.textContent).toContain("App"));
     fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
     await waitFor(() => expect(state.create).toHaveBeenCalled());
     const input = state.create.mock.calls[0]![0];

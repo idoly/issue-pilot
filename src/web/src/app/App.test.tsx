@@ -323,7 +323,7 @@ describe("issue pilot workspace", () => {
     const shortcut = { key: "k", code: "KeyK", altKey: true };
     fireEvent.keyDown(window, shortcut);
     expect(screen.queryByRole("dialog", { name: "查找相似工单" })).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "参数" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "参数" }));
     const parameters = within(await screen.findByRole("region", { name: "参数表单" }));
     expect(parameters.queryByLabelText("Cloudflare Account ID")).toBeNull();
     const mode = await parameters.findByRole("combobox", { name: "工单搜索" });
@@ -453,7 +453,7 @@ describe("issue pilot workspace", () => {
     await fireEvent.input(query, { target: { value: "旧查询" } });
     await fireEvent.keyDown(query, { key: "Enter" });
     const signal = vi.mocked(client.searchIssues).mock.lastCall?.[1];
-    await fireEvent.keyDown(query, { key: "Escape" });
+    await fireEvent(screen.getByRole("dialog", { name: "查找相似工单" }), new Event("cancel", { cancelable: true }));
     expect(signal?.aborted).toBe(true);
     finish([{ key: "ISSUE-20260810-038", title: "不应出现的旧结果", status: "open", assignee: null }]);
     await response;

@@ -141,7 +141,7 @@ it("retries a failed attachment preview while retaining the download action", as
   expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
 });
 
-it("offers an Excel attachment download without fetching or parsing its contents", () => {
+it("offers an Excel attachment download without fetching or parsing its contents", async () => {
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   const attachment = {
@@ -153,7 +153,7 @@ it("offers an Excel attachment download without fetching or parsing its contents
     createdAt: "2026-10-02T00:00:00Z",
   };
   render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={attachment} onClose={() => {}} />);
-  expect(screen.getByRole("status").textContent).toContain("此格式不支持内嵌预览");
+  expect((await screen.findByRole("status")).textContent).toContain("此格式不支持内嵌预览");
   expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
   expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
   expect(screen.queryByRole("link", { name: "下载文件" })).toBeNull();

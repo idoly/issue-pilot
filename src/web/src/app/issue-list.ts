@@ -43,12 +43,15 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
     else cancel();
   });
   // Automatic samples never cancel slow reads. Explicit mutations/refreshes supersede older snapshots.
-  const timer = window.setInterval(() => {
-    if (scope() && !controller) void refresh();
-  }, 10_000);
+  const sample = () => {
+    if (!document.hidden && scope() && !controller) void refresh();
+  };
+  const timer = window.setInterval(sample, 10_000);
+  document.addEventListener("visibilitychange", sample);
   onCleanup(() => {
     disposed = true;
     window.clearInterval(timer);
+    document.removeEventListener("visibilitychange", sample);
     cancel();
   });
   return {

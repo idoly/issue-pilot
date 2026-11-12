@@ -50,3 +50,12 @@ Object.defineProperty(window, "matchMedia", {
 Object.defineProperty(globalThis, "ResizeObserver", { value: ResizeObserverMock, configurable: true });
 Object.defineProperty(globalThis, "EventSource", { value: EventSourceMock, configurable: true });
 Object.defineProperty(HTMLElement.prototype, "scrollTo", { value() {}, configurable: true });
+// jsdom does not implement modal dialogs. Native focus, inertness and Escape are tested in Chromium.
+Object.assign(HTMLDialogElement.prototype, {
+  showModal(this: HTMLDialogElement) {
+    this.open = true;
+  },
+  close(this: HTMLDialogElement) {
+    this.open = false;
+  },
+});

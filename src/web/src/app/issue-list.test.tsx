@@ -34,6 +34,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.resetAllMocks();
+  vi.restoreAllMocks();
 });
 
 it("lets slow samples finish and retains the last good list through failure and retry", async () => {
@@ -66,6 +67,38 @@ it("lets slow samples finish and retains the last good list through failure and 
   await vi.advanceTimersByTimeAsync(10_000);
   expect(list.error()).toBe("");
   expect(list.items()[0]?.title).toBe("recovered");
+});
+
+it("skips hidden-tab polling and refreshes on return without interrupting a request", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const hidden = vi.spyOn(document, "hidden", "get");
+  const changeVisibility = (value: boolean) => {
+    hidden.mockReturnValue(value);
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  const returned = deferred<IssueExecutionItem[]>();
+  api.list.mockResolvedValueOnce([row("initial")]).mockReturnValueOnce(returned.promise);
+  let list!: IssueListResource;
+  const view = render(() => {
+    list = createIssueList();
+    return <output>{list.items()[0]?.title}</output>;
+  });
+  await waitFor(() => expect(list.items()[0]?.title).toBe("initial"));
+  changeVisibility(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(api.list).toHaveBeenCalledOnce();
+  changeVisibility(false);
+  expect(api.list).toHaveBeenCalledTimes(2);
+  const signal = api.list.mock.calls[1]![0] as AbortSignal;
+  changeVisibility(true);
+  changeVisibility(false);
+  expect(api.list).toHaveBeenCalledTimes(2);
+  expect(signal.aborted).toBe(false);
+  returned.resolve([row("fresh")]);
+  await waitFor(() => expect(list.items()[0]?.title).toBe("fresh"));
+  view.unmount();
+  changeVisibility(false);
+  expect(api.list).toHaveBeenCalledTimes(2);
 });
 
 it("rejects old snapshots after explicit refresh, navigation and disposal", async () => {
