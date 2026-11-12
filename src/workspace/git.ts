@@ -30,7 +30,8 @@ export interface PrepareSharedCheckoutInput {
   baseBranch: string;
 }
 
-export interface PrepareBranchSnapshotInput extends PrepareSharedCheckoutInput {
+interface RecordBranchSnapshotInput {
+  url: string;
   issueKey: string;
   workingBranch: string;
 }
@@ -158,7 +159,7 @@ export function issueRepositoryWorkspaceNames(repositories: Array<{ url: string;
 }
 
 /** New Git directories may be absent, but never create through a redirected ancestor. */
-async function managedGitDirectoryExists(directory: string): Promise<boolean> {
+export async function managedGitDirectoryExists(directory: string): Promise<boolean> {
   const info = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -453,20 +454,19 @@ export class WorktreeManager {
     return this.serialized(repositoryKey, () => this.prepareSharedLocked(input, repositoryKey, checkedCheckouts));
   }
 
-  async prepareBranchSnapshot(input: PrepareBranchSnapshotInput): Promise<PreparedWorktree> {
-    this.validateRepositoryInput(input);
-    if (input.workingBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
+  async recordBranchSnapshot(input: RecordBranchSnapshotInput): Promise<{ checkout: string; commit: string }> {
+    if (input.url.startsWith("-") || input.workingBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
     const repositoryKey = repositoryHash(input.url, 20);
-    return this.serialized(repositoryKey, () => this.prepareBranchSnapshotLocked(input, repositoryKey));
+    return this.serialized(repositoryKey, () => this.recordBranchSnapshotLocked(input, repositoryKey));
   }
 
-  /** Recreate only a checkout explicitly evicted by this owner, at its exact recorded commit. */
+  /** Materialize only an exact checkout recorded or evicted by this owner. */
   async openSharedCheckout(url: string, commit: string, checkedCheckouts?: Set<string>): Promise<string> {
     if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("shared_checkout_changed");
     const repositoryKey = repositoryHash(url, 20);
     const store = resolve(this.repositoriesRoot, repositoryKey);
     return this.serialized(repositoryKey, async () => {
-      const checkout = resolve(this.sharedCheckoutsRoot, repositoryKey, commit);
+      const checkout = this.sharedCheckoutPath(repositoryKey, commit);
       if (!(await managedGitDirectoryExists(store))) throw new Error("repository_cache_not_found");
       if (!(await managedGitDirectoryExists(checkout))) {
         const retained = (await this.git(["-C", store, "show-ref", "--verify", "--hash", "--", retainedSnapshotRef(commit)])).trim();
@@ -490,18 +490,9 @@ export class WorktreeManager {
       if (checkoutUsers.has(checkout) || !(await managedGitDirectoryExists(checkout))) return false;
       if (!(await managedGitDirectoryExists(commonDirectory))) throw new Error("repository_cache_not_found");
       await this.assertSharedCheckout(checkout, commit, commonDirectory);
-      const local = ["--no-lazy-fetch", "-c", "core.hooksPath=/dev/null", "-C", commonDirectory];
-      await this.git([...local, "rev-list", "--objects", "--missing=error", "--quiet", "--max-count=1", commit]);
+      const local = ["--no-lazy-fetch", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", commonDirectory];
       await assertCheckoutMatchesObjects(checkout, await this.git([...local, "ls-tree", "-rtz", commit]));
-      const ref = retainedSnapshotRef(commit);
-      const previous = await this.git([...local, "show-ref", "--exists", ref]).then(
-        () => commit,
-        (error: NodeJS.ErrnoException) => {
-          if (Number(error.code) !== 2) throw error;
-          return "0".repeat(40);
-        },
-      );
-      await this.git([...local, "update-ref", ref, commit, previous]);
+      await this.retainSnapshotCommit(commonDirectory, commit);
       // Detach the public cache path before deleting files. A failed cleanup must not expose a half-removed checkout.
       const control = resolve(this.stateRoot, "control");
       if (!(await managedGitDirectoryExists(control))) await mkdir(control, { recursive: true, mode: 0o700 });
@@ -598,20 +589,40 @@ export class WorktreeManager {
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
   }
 
-  private async prepareBranchSnapshotLocked(input: PrepareBranchSnapshotInput, repositoryKey: string): Promise<PreparedWorktree> {
+  private async recordBranchSnapshotLocked(input: RecordBranchSnapshotInput, repositoryKey: string): Promise<{ checkout: string; commit: string }> {
     const isolated = await developmentRepositoryStorePath(this.stateRoot, input.issueKey, input.url);
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
     if (!(await managedGitDirectoryExists(cachePath))) throw new Error("repository_cache_not_found");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
-    const baseCommit = await publishIssueBranch(cachePath, isolated, input.workingBranch, true);
-    const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
-    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: input.workingBranch, baseCommit };
+    const commit = await publishIssueBranch(cachePath, isolated, input.workingBranch, true);
+    const checkout = this.sharedCheckoutPath(repositoryKey, commit);
+    if (await managedGitDirectoryExists(checkout)) await this.assertSharedCheckout(checkout, commit, cachePath);
+    await this.retainSnapshotCommit(cachePath, commit);
+    return { checkout, commit };
+  }
+
+  private async retainSnapshotCommit(store: string, commit: string): Promise<void> {
+    const local = ["--no-lazy-fetch", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", store];
+    await this.git([...local, "rev-list", "--objects", "--missing=error", "--quiet", "--max-count=1", commit]);
+    const ref = retainedSnapshotRef(commit);
+    const previous = await this.git([...local, "show-ref", "--exists", ref]).then(
+      () => commit,
+      (error: NodeJS.ErrnoException) => {
+        if (Number(error.code) !== 2) throw error;
+        return "0".repeat(40);
+      },
+    );
+    await this.git([...local, "update-ref", ref, commit, previous]);
+  }
+
+  private sharedCheckoutPath(repositoryKey: string, commit: string): string {
+    if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("shared_checkout_changed");
+    return resolve(this.sharedCheckoutsRoot, repositoryKey, commit);
   }
 
   private async prepareCommitCheckout(cachePath: string, repositoryKey: string, commit: string, checkedCheckouts?: Set<string>): Promise<string> {
-    const checkoutParent = resolve(this.sharedCheckoutsRoot, repositoryKey);
-    const workspacePath = resolve(checkoutParent, commit);
-    if (dirname(workspacePath) !== checkoutParent) throw new Error("shared_checkout_path_invalid");
+    const workspacePath = this.sharedCheckoutPath(repositoryKey, commit);
+    const checkoutParent = dirname(workspacePath);
 
     if (await managedGitDirectoryExists(workspacePath)) {
       if (!(await pathExists(resolve(workspacePath, ".git")))) throw new Error("shared_checkout_is_not_git_worktree");
@@ -620,7 +631,7 @@ export class WorktreeManager {
       if (await managedGitDirectoryExists(this.sharedCheckoutsRoot)) await managedGitDirectoryExists(checkoutParent);
       await mkdir(checkoutParent, { recursive: true });
       if ((await realpath(checkoutParent)) !== checkoutParent) throw new Error("shared_checkout_changed");
-      await this.git(["--no-lazy-fetch", "-c", "core.hooksPath=/dev/null", "-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
+      await this.git(["--no-lazy-fetch", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
       checkedCheckouts?.add(workspacePath);
     }
     checkoutLease.getStore()?.pin(workspacePath);
@@ -636,7 +647,7 @@ export class WorktreeManager {
     });
     if (head !== commit) throw new Error("shared_checkout_changed");
     // A single Git status verifies that Git resolves this detached HEAD and that even ignored content is absent.
-    const status = await this.git(["--no-optional-locks", "-C", checkout, "status", "--porcelain=v2", "--branch", "--untracked-files=all", "--ignored=matching"]);
+    const status = await this.git(["--no-optional-locks", "--no-replace-objects", "-C", checkout, "status", "--porcelain=v2", "--branch", "--untracked-files=all", "--ignored=matching"]);
     const lines = status.trimEnd().split("\n");
     if (!lines.includes(`# branch.oid ${commit}`) || !lines.includes("# branch.head (detached)") || lines.some((line) => !line.startsWith("# "))) throw new Error("shared_checkout_changed");
     checkedCheckouts?.add(checkout);

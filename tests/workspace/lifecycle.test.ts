@@ -30,7 +30,8 @@ import {
   services,
   subjects,
 } from "../../src/db/schema.ts";
-import { WorktreeManager } from "../../src/workspace/git.ts";
+import { retainedSnapshotRef, WorktreeManager } from "../../src/workspace/git.ts";
+import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import {
   WorkspaceConversionRefusal,
   WorkspaceLifecycleManager,
@@ -887,10 +888,15 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const [releasedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(releasedWorkspace!.status, "stopped");
     assert.equal(releasedWorkspace!.runtimeReady, true);
-    for (const [index, repository] of releasedRows.entries()) {
-      const runtimeRepository = path.join(issueRoot(root, issue!.key), index === 0 ? "alpha" : "beta");
+    const browser = new SourceBrowser(database.db, root);
+    for (const repository of releasedRows) {
+      const name = repository.workspaceName!;
+      const runtimeRepository = path.join(issueRoot(root, issue!.key), name);
       const repositoryRoot = path.join(root, "git", "repositories", createHash("sha256").update(repository.url).digest("hex").slice(0, 20));
-      assert.equal(await git(["-C", runtimeRepository, "rev-parse", "HEAD"]), await git(["-C", repositoryRoot, "rev-parse", `refs/heads/${repository.workingBranch}`]));
+      const commit = await git(["-C", repositoryRoot, "rev-parse", `refs/heads/${repository.workingBranch}`]);
+      assert.equal(await git(["-C", repositoryRoot, "rev-parse", retainedSnapshotRef(commit)]), commit);
+      assert.equal((await browser.file(issue!, name, "README.md")).content.trimEnd(), await git(["-C", repositoryRoot, "show", `${commit}:README.md`]));
+      await assert.rejects(access(runtimeRepository), { code: "ENOENT" });
     }
     const [sessionBinding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue!.id));
     assert.equal(sessionBinding!.sessionFile, sessionFile);

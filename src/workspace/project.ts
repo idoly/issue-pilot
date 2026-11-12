@@ -117,8 +117,8 @@ export class IssueProjectManager {
       if (state !== "development_snapshot") throw new Error("development_repository_state_invalid");
       const snapshots = [];
       for (const repository of repositories) {
-        const snapshot = await this.worktrees.prepareBranchSnapshot({ issueKey: issue.key, url: repository.url, baseBranch: repository.baseBranch, workingBranch: repository.workingBranch! });
-        snapshots.push({ name: names.get(repository.url)!, repositoryPath: snapshot.workspacePath });
+        const snapshot = await this.worktrees.recordBranchSnapshot({ issueKey: issue.key, url: repository.url, workingBranch: repository.workingBranch! });
+        snapshots.push({ name: names.get(repository.url)!, repositoryPath: snapshot.checkout });
       }
       runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, snapshots, "read", relatedIssues);
     }

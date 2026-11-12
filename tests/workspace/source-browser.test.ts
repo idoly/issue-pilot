@@ -316,7 +316,8 @@ test("browses only registered Issue repository content", async () => {
     const git = promisify(execFile);
     await git("git", ["init", "-b", "main", remote]);
     await writeFile(path.join(remote, "README.md"), "# Snapshot\n", "utf8");
-    await git("git", ["-C", remote, "add", "README.md"]);
+    await symlink(".", path.join(remote, "same-directory"));
+    await git("git", ["-C", remote, "add", "README.md", "same-directory"]);
     await git("git", ["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=test@example.test", "commit", "-m", "snapshot"]);
     const worktrees = new WorktreeManager(root);
     const { workspacePath: readOnlyRepository, cachePath, baseCommit } = await worktrees.prepareShared({ url: remote, baseBranch: "main" });
@@ -345,8 +346,13 @@ test("browses only registered Issue repository content", async () => {
     assert.deepEqual(await realBrowser.tree(readOnlyIssue!, "application"), snapshotTree);
     assert.deepEqual(await realBrowser.file(readOnlyIssue!, "application", "README.md"), snapshot);
     assert.deepEqual(await realBrowser.history(readOnlyIssue!, "application"), snapshotHistory);
+    await assert.rejects(realBrowser.file(readOnlyIssue!, "application", "missing.txt"), /source_path_not_found/);
+    await assert.rejects(realBrowser.file(readOnlyIssue!, "application", "README.md/missing.txt"), /source_path_not_found/);
+    await assert.rejects(realBrowser.tree(readOnlyIssue!, "application", "missing/directory"), /source_path_not_found/);
+    await assert.rejects(realBrowser.tree(readOnlyIssue!, "application", "README.md"), /source_path_not_directory/);
     await assert.rejects(access(readOnlyRepository), { code: "ENOENT" });
     await withSharedCheckout(async () => {
+      assert.equal((await realBrowser.file(readOnlyIssue!, "application", "same-directory/README.md")).content, snapshot.content);
       const file = await openIssueWorkFile(root, readOnlyIssue!.key, "application/README.md", { repositories: await realBrowser.workFileRepositories(readOnlyIssue!) });
       try {
         assert.equal(await file.handle.readFile("utf8"), snapshot.content);

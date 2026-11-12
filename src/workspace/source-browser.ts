@@ -10,7 +10,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
-import { issueRepositoryWorkspaceNames, retainedSnapshotRef } from "./git.ts";
+import { issueRepositoryWorkspaceNames, managedGitDirectoryExists, retainedSnapshotRef } from "./git.ts";
 import { recordedSharedSnapshot, resolveRecordedRepository } from "./runtime.ts";
 import type { WorkFileRepository } from "./work-files.ts";
 import { classifyRepositoryState, issueRoot } from "./state.ts";
@@ -51,7 +51,7 @@ type ColdSnapshot = Awaited<ReturnType<typeof recordedSharedSnapshot>>;
 
 function normalizedRelativePath(value: string): string {
   if (value.length > 4096 || value.includes("\0") || path.isAbsolute(value)) throw new Error("invalid_source_path");
-  const normalized = path.normalize(value || ".");
+  const normalized = path.normalize(value || ".").replace(/\/+$/, "");
   if (normalized === ".") return "";
   if (normalized === ".." || normalized.startsWith(`..${path.sep}`) || path.isAbsolute(normalized) || normalized.split(path.sep).includes(".git")) throw new Error("invalid_source_path");
   return normalized;
@@ -130,7 +130,16 @@ export class SourceBrowser {
     const selection = await this.selectRepository(issue, repositoryName);
     const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
     if (snapshot) {
-      const entries = await this.snapshotEntries(snapshot, parent ? `${snapshot.commit}:${parent}` : snapshot.commit);
+      const entry = parent ? await this.snapshotEntry(snapshot, parent) : undefined;
+      if (entry?.mode.startsWith("100")) throw new Error("source_path_not_directory");
+      const entries =
+        !parent || entry?.mode === "040000"
+          ? await this.snapshotEntries(snapshot, parent ? `${snapshot.commit}:${parent}` : snapshot.commit).catch((error: unknown) => {
+              // The filesystem reader can return a bounded listing even for a very large directory.
+              if (error instanceof Error && error.message === "command_output_too_large") return undefined;
+              throw error;
+            })
+          : undefined;
       if (entries) {
         const limit = issuePilotConfig.limits.sourceBrowser.directoryEntries;
         const visible = entries
@@ -190,9 +199,11 @@ export class SourceBrowser {
     const selected = sourcePath(normalizedRelativePath(relativePath));
     const selection = await this.selectRepository(issue, repositoryName);
     const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
-    if (snapshot && selected) {
-      const entries = await this.snapshotEntries(snapshot, snapshot.commit, selected);
-      if (entries?.length === 1 && entries[0]?.mode.startsWith("100")) {
+    if (snapshot) {
+      if (!selected) throw new Error("source_path_not_file");
+      const entry = await this.snapshotEntry(snapshot, selected);
+      if (entry?.mode === "040000") throw new Error("source_path_not_file");
+      if (entry?.mode.startsWith("100")) {
         const content = await this.gitFile({ root: snapshot.store, workingBranch: null }, `${snapshot.commit}:${selected}`, "source_history_timeout", "source_path_not_found");
         const bytes = Buffer.from(content);
         return { path: selected, content, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -205,9 +216,8 @@ export class SourceBrowser {
     if (state === "development_workspace") return undefined;
     const snapshot = await recordedSharedSnapshot(this.stateRoot, issue.key, repository, repositoryName, state).catch(missingPathError);
     if (
-      await lstat(snapshot.checkout).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
+      await managedGitDirectoryExists(snapshot.checkout).catch((error: unknown) => {
+        throw new Error("source_git_binding_invalid", { cause: error });
       })
     )
       return undefined;
@@ -220,6 +230,34 @@ export class SourceBrowser {
     return snapshot;
   }
 
+  private async snapshotEntry(snapshot: ColdSnapshot, selected: string) {
+    const entry = (await this.snapshotEntries(snapshot, snapshot.commit, selected)).find(({ name }) => name === selected);
+    if (entry) return entry;
+    // Git never follows links while resolving a tree path. Only such an ancestor
+    // (or a submodule) can make an otherwise missing path depend on the checkout.
+    const ancestors: string[] = [];
+    for (let parent = path.posix.dirname(selected); parent !== "."; parent = path.posix.dirname(parent)) {
+      ancestors.push(`${snapshot.commit}:${parent}`);
+      if (ancestors.length === 64) break;
+    }
+    if (ancestors.length) {
+      const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", snapshot.store, "cat-file", "--batch-check=%(objecttype)", "-Z"], {
+        ...this.commandOptions(),
+        input: Buffer.from(ancestors.join("\0") + "\0"),
+      });
+      if (result.killed) throw new Error("source_history_timeout");
+      if (result.code !== 0) throw new Error("source_git_binding_invalid");
+      const ancestor = result.stdout.split("\0").findIndex((kind) => kind === "blob" || kind === "commit");
+      if (ancestor >= 0) {
+        const prefix = ancestors[ancestor]!.slice(snapshot.commit.length + 1);
+        const entries = await this.snapshotEntries(snapshot, snapshot.commit, prefix);
+        if (entries.some(({ name, mode }) => name === prefix && (mode === "120000" || mode === "160000"))) return undefined;
+      }
+      if (ancestors.length === 64) return undefined;
+    }
+    throw new Error("source_path_not_found");
+  }
+
   private async snapshotEntries(snapshot: ColdSnapshot, tree: string, selected?: string) {
     const result = await this.executor.execute(
       issuePilotConfig.runtime.sourceBrowser.gitExecutable,
@@ -227,7 +265,7 @@ export class SourceBrowser {
       this.commandOptions(),
     );
     if (result.killed) throw new Error("source_history_timeout");
-    if (result.code !== 0) return undefined;
+    if (result.code !== 0) throw new Error("source_git_binding_invalid");
     return result.stdout
       .split("\0")
       .filter(Boolean)
@@ -718,7 +756,7 @@ export class SourceBrowser {
     return {
       timeout: issuePilotConfig.limits.sourceBrowser.commandMs,
       maxOutputBytes,
-      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1", GIT_NO_LAZY_FETCH: "1" } as Record<string, string>,
+      environment: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1", GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" } as Record<string, string>,
     };
   }
 
