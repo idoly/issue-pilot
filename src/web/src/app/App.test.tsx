@@ -1752,7 +1752,7 @@ describe("issue pilot workspace", () => {
     expect(queueItem.textContent).toContain("待确认");
   });
 
-  test("refreshes the Issue queue immediately when a resolved Issue is reopened", async () => {
+  test.each([false, true])("refreshes the Issue queue immediately on reopen (already reopened: %s)", async (alreadyReopened) => {
     const client = await import("../data/client");
     const updateIssueStatus = vi.mocked(client.updateIssueStatus);
     const getIssue = vi.mocked(client.getIssue);
@@ -1771,6 +1771,10 @@ describe("issue pilot workspace", () => {
     const detailRefresh = new Promise<typeof resolvedIssue>((resolve) => {
       resolveDetail = resolve;
     });
+    if (alreadyReopened) {
+      await updateIssueStatus("ISSUE-20260810-038", "open");
+      updateIssueStatus.mockRejectedValueOnce(new client.RequestError("invalid_issue_status_transition"));
+    }
     getIssue.mockClear();
     listIssues.mockClear();
     updateIssueStatus.mockClear();
@@ -1783,6 +1787,9 @@ describe("issue pilot workspace", () => {
     resolveDetail({ ...resolvedIssue, status: "open" });
     await waitFor(() => expect(screen.getByRole("button", { name: "编辑工单" })).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false));
+    expect(updateIssueStatus).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("invalid_issue_status_transition")).toBeNull();
+    expect(screen.queryByText("工单状态已变化，请按最新状态操作。")).toBeNull();
     const queueItem = screen.getAllByRole("listitem").find((item) => item.textContent?.includes("ISSUE-20260810-038"));
     expect(queueItem?.textContent).toContain("待处理");
   });

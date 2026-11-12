@@ -583,7 +583,11 @@ export const resetIssueSession = (key: string, expectedSessionId: string) => jso
 export const abortAgent = (key: string) => request<void>(issuePath(key, "/abort"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export const agentMessageReceipt = (key: string, id: string) => request<{ state: "queued" | "started" | "rejected" | "unknown" }>(issuePath(key, `/agent-messages/${encodeURIComponent(id)}`));
-export function sendAgentMessage(key: string, message: string, images: File[] = [], id = crypto.randomUUID()): Promise<void> {
+export function createAgentMessageId(): string {
+  // getRandomValues is also available when the host serves the Web UI over plain HTTP.
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+export function sendAgentMessage(key: string, message: string, images: File[] = [], id = createAgentMessageId()): Promise<void> {
   const headers = { "X-Issue-Pilot-Message-Id": id };
   if (!images.length) return request<void>(issuePath(key, "/agent-messages"), { method: "POST", headers, body: JSON.stringify({ message }) });
   const form = new FormData();

@@ -7,6 +7,7 @@ import {
   ISSUE_STATUSES,
   agentStreamUrl,
   abortAgent,
+  createAgentMessageId,
   sendAgentMessage,
   agentMessageReceipt,
   mergeAgentCostSource,
@@ -621,7 +622,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       return;
     }
     const submitGeneration = issueGeneration;
-    const submission = { id: crypto.randomUUID(), text: editorText, message, images: pendingImages, pasteEditor: record.pasteEditor };
+    const submission = { id: createAgentMessageId(), text: editorText, message, images: pendingImages, pasteEditor: record.pasteEditor };
     record.submitted = submission;
     setSubmitted(submission);
     record.text = "";

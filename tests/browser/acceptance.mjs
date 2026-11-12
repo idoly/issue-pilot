@@ -189,6 +189,17 @@ try {
     await httpPage.getByRole("button", { name: "浏览工单代码", exact: true }).click();
     await httpPage.getByRole("button", { name: "变更", exact: true }).click();
     await verifyDiffCopy(httpPage, false);
+    await httpPage.getByRole("button", { name: "关闭代码浏览器", exact: true }).click();
+    assert.equal(await httpPage.evaluate(() => typeof crypto.randomUUID), "undefined");
+    const text = "Browser plain HTTP message";
+    await httpPage.getByRole("textbox", { name: "发送给 Agent", exact: true }).fill(text);
+    const [sent] = await Promise.all([
+      httpPage.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/agent-messages")),
+      httpPage.getByRole("button", { name: "发送消息", exact: true }).click(),
+    ]);
+    assert.equal(sent.status(), 202);
+    assert.match((await sent.request().allHeaders())["x-issue-pilot-message-id"], /^[0-9a-f]{32}$/);
+    assert.equal(engine.messages.at(-1), text);
   } finally {
     await httpPage.close();
   }

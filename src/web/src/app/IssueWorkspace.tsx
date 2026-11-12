@@ -348,7 +348,18 @@ export function IssueWorkspace(props: {
       await updateIssueStatus(issueId, status);
       if (issueGeneration === generation) await props.onUpdated();
     } catch (error) {
-      if (issueGeneration === generation) setStatusError(errorMessage(error));
+      if (issueGeneration !== generation) return;
+      const code = errorMessage(error);
+      if (code !== "invalid_issue_status_transition") {
+        setStatusError(code);
+        return;
+      }
+      try {
+        await props.onUpdated();
+        if (issueGeneration === generation && props.issue.status !== status) setStatusError("工单状态已变化，请按最新状态操作。");
+      } catch {
+        if (issueGeneration === generation) setStatusError("工单状态已变化，请刷新页面查看最新状态。");
+      }
     } finally {
       if (issueGeneration === generation) setStatusSaving(false);
     }
