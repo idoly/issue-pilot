@@ -1,14 +1,14 @@
 import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { constants, createReadStream, type ReadStream } from "node:fs";
-import { mkdtemp, open, realpath, rename, rm, lstat, type FileHandle } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { constants, type ReadStream } from "node:fs";
+import { link, lstat, mkdir, mkdtemp, open, realpath, rm, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { MultipartFile } from "@fastify/multipart";
 import type { Database } from "../db/client.ts";
-import { issueAttachments } from "../db/schema.ts";
+import { issueAttachments, retiredIssueAttachments } from "../db/schema.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { ApiError } from "./input.ts";
 
@@ -20,19 +20,22 @@ export interface PendingAttachment {
   sha256: string;
 }
 
-export async function readMultipartAttachment(part: MultipartFile): Promise<PendingAttachment> {
+export async function readMultipartAttachment(stateRoot: string, part: MultipartFile): Promise<PendingAttachment> {
   async function* chunks() {
     yield* part.file;
     if (part.file.truncated) throw new Error("attachment_stream_truncated");
   }
   // A file part without a filename is client input, not a server fault.
   const fileName = typeof part.filename === "string" ? part.filename : "";
-  return stageAttachment(path.basename(fileName), part.mimetype, chunks());
+  return stageAttachment(stateRoot, path.basename(fileName), part.mimetype, chunks());
 }
 
-export async function stageAttachment(fileName: string, mediaType: string, chunks: AsyncIterable<Uint8Array>): Promise<PendingAttachment> {
+export async function stageAttachment(stateRoot: string, fileName: string, mediaType: string, chunks: AsyncIterable<Uint8Array>): Promise<PendingAttachment> {
   if (!fileName || /[/\\\u0000-\u001f\u007f]/.test(fileName) || [".", ".."].includes(fileName)) throw new ApiError(400, "invalid_attachment_name");
-  const stagingRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-attachment-"));
+  const control = path.resolve(stateRoot, "control");
+  await mkdir(control, { recursive: true, mode: 0o700 });
+  await assertAttachmentRoot(control);
+  const stagingRoot = await mkdtemp(path.join(control, "attachment-upload-"));
   const temporaryPath = path.join(stagingRoot, randomUUID());
   const sha256 = createHash("sha256");
   let size = 0;
@@ -45,6 +48,8 @@ export async function stageAttachment(fileName: string, mediaType: string, chunk
       sha256.update(content);
       size += content.length;
     }
+    await handle.chmod(0o400);
+    await handle.sync();
     await handle.close();
     return { fileName, mediaType, temporaryPath, size, sha256: sha256.digest("hex") };
   } catch (error) {
@@ -148,23 +153,6 @@ export function serializeAttachment(attachment: typeof issueAttachments.$inferSe
 
 type AttachmentWriter = Pick<Database, "insert">;
 
-export interface QuarantinedAttachment {
-  sourcePath: string;
-  temporaryPath: string;
-}
-
-export async function restoreQuarantinedAttachments(quarantined: QuarantinedAttachment[]): Promise<void> {
-  const failures: unknown[] = [];
-  for (const { sourcePath, temporaryPath } of [...quarantined].reverse()) {
-    try {
-      await rename(temporaryPath, sourcePath);
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length) throw new OperationError("attachment_rollback_failed", "unknown", { cause: new AggregateError(failures, "attachment_rollback_failed") });
-}
-
 export async function removeWrittenAttachments(objectKeys: string[]): Promise<void> {
   const failures: unknown[] = [];
   await Promise.all(
@@ -179,20 +167,56 @@ export async function removeWrittenAttachments(objectKeys: string[]): Promise<vo
   if (failures.length) throw new OperationError("attachment_rollback_failed", "unknown", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
-export async function finalizeQuarantinedAttachments(
-  quarantined: QuarantinedAttachment[],
-  remove: (candidate: string) => Promise<void> = (candidate) => rm(candidate, { force: true }),
+export async function retireAttachments(
+  transaction: Pick<Database, "insert" | "delete">,
+  issueId: string,
+  attachments: Array<Pick<typeof issueAttachments.$inferSelect, "id" | "objectKey" | "size" | "sha256">>,
 ): Promise<void> {
-  const failures: unknown[] = [];
-  await Promise.all(
-    quarantined.map(async ({ temporaryPath }) => {
-      try {
-        await remove(temporaryPath);
-      } catch (error) {
-        failures.push(error);
-      }
-    }),
+  if (!attachments.length) return;
+  await transaction.insert(retiredIssueAttachments).values(attachments.map(({ id, objectKey, size, sha256 }) => ({ id, issueId, objectKey, size, sha256 })));
+  await transaction.delete(issueAttachments).where(
+    and(
+      eq(issueAttachments.issueId, issueId),
+      inArray(
+        issueAttachments.id,
+        attachments.map(({ id }) => id),
+      ),
+    ),
   );
+}
+
+/** Only process recorded retirements while the caller holds the Issue reservation. */
+export async function finalizeRetiredAttachments(database: Database, attachmentRoot: string, issueId: string): Promise<void> {
+  const failures: unknown[] = [];
+  const retired = await database.select().from(retiredIssueAttachments).where(eq(retiredIssueAttachments.issueId, issueId));
+  for (const { id, objectKey, size, sha256 } of retired) {
+    try {
+      await assertAttachmentRoot(attachmentRoot);
+      if (path.resolve(objectKey) !== objectKey || path.dirname(objectKey) !== attachmentRoot || !path.basename(objectKey).startsWith(".attachment-"))
+        throw new Error("insecure_issue_attachment_file");
+      const [active] = await database
+        .select({ id: issueAttachments.id })
+        .from(issueAttachments)
+        .where(and(eq(issueAttachments.issueId, issueId), eq(issueAttachments.objectKey, objectKey)))
+        .limit(1);
+      if (active) throw new Error("attachment_still_referenced");
+      const metadata = await lstat(objectKey).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+      if (metadata) {
+        await using original = await openVerifiedAttachmentFile(attachmentRoot, objectKey, size, sha256);
+        const current = await lstat(objectKey);
+        const opened = await original.stat();
+        if (current.dev !== opened.dev || current.ino !== opened.ino) throw new Error("insecure_issue_attachment_file");
+        await unlink(objectKey);
+      }
+      // The name may already be gone if the process stopped after unlinking it.
+      await syncAttachmentDirectory(attachmentRoot);
+      await database.delete(retiredIssueAttachments).where(eq(retiredIssueAttachments.id, id));
+    } catch (error) {
+      failures.push(error);
+    }
+  }
   if (failures.length) throw new OperationError("attachment_finalize_failed", "committed", { cause: new AggregateError(failures, "attachment_finalize_failed") });
 }
 
@@ -208,53 +232,44 @@ function attachmentObjectName(fileName: string): string {
   return `${prefix}${name}${extension}`;
 }
 
-export interface CopiedAttachment {
+interface PublishedAttachment {
   pending: PendingAttachment;
   objectKey: string;
 }
 
-/** Copy uploads into the Issue root before its database transaction so a large copy never holds the SQLite write lock. */
-export async function copyPendingAttachments(stateRoot: string, issueKey: string, pendingAttachments: PendingAttachment[], writtenObjectKeys: string[]): Promise<CopiedAttachment[]> {
+async function syncAttachmentDirectory(attachmentRoot: string): Promise<void> {
+  await using directory = await open(attachmentRoot, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  await directory.sync();
+}
+
+/** Publish the staged inode without overwriting an existing name or copying bytes. */
+export async function publishPendingAttachments(stateRoot: string, issueKey: string, pendingAttachments: PendingAttachment[], writtenObjectKeys: string[]): Promise<PublishedAttachment[]> {
   if (!pendingAttachments.length) return [];
   const attachmentRoot = issueRoot(stateRoot, issueKey);
   // Creation has already claimed this root. Edits must not recreate missing state or follow a replacement link.
   await assertAttachmentRoot(attachmentRoot);
-  const copied: CopiedAttachment[] = [];
+  const published: PublishedAttachment[] = [];
   for (const pendingAttachment of pendingAttachments) {
     const objectKey = path.join(attachmentRoot, attachmentObjectName(pendingAttachment.fileName));
-    const handle = await open(objectKey, "wx", 0o600);
-    // Register only paths exclusively created by this operation, including partial copies.
+    validateAttachmentFile(await lstat(pendingAttachment.temporaryPath), pendingAttachment.size);
+    await link(pendingAttachment.temporaryPath, objectKey);
     writtenObjectKeys.push(objectKey);
-    let failed = false;
-    let failure: unknown;
-    try {
-      for await (const chunk of createReadStream(pendingAttachment.temporaryPath)) {
-        await handle.writeFile(chunk);
-      }
-      await handle.chmod(0o400);
-    } catch (error) {
-      failed = true;
-      failure = error;
-      throw error;
-    } finally {
-      try {
-        await handle.close();
-      } catch (error) {
-        // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
-        if (failed) throw new AggregateError([failure, error], "attachment_copy_cleanup_failed");
-        // biome-ignore lint/correctness/noUnsafeFinally: reached only when the copy succeeded; the close failure is the sole error.
-        throw error;
-      }
-    }
-    copied.push({ pending: pendingAttachment, objectKey });
+    await unlink(pendingAttachment.temporaryPath);
+    published.push({ pending: pendingAttachment, objectKey });
   }
-  return copied;
+  await syncAttachmentDirectory(attachmentRoot);
+  return published;
 }
 
-/** Register copied originals inside the Issue transaction; the caller removes writtenObjectKeys if it rolls back. */
-export async function insertCopiedAttachments(executor: AttachmentWriter, issueId: string, uploadedBy: string, copied: CopiedAttachment[]): Promise<Array<ReturnType<typeof serializeAttachment>>> {
+/** Register originals inside the Issue transaction; the caller removes writtenObjectKeys if it rolls back. */
+export async function insertPublishedAttachments(
+  executor: AttachmentWriter,
+  issueId: string,
+  uploadedBy: string,
+  published: PublishedAttachment[],
+): Promise<Array<ReturnType<typeof serializeAttachment>>> {
   const createdAttachments: Array<ReturnType<typeof serializeAttachment>> = [];
-  for (const { pending, objectKey } of copied) {
+  for (const { pending, objectKey } of published) {
     const [attachment] = await executor
       .insert(issueAttachments)
       .values({

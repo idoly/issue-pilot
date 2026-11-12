@@ -14,11 +14,13 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
   const { app, database, stateRoot } = context;
   app.get<{ Params: { key: string; attachmentId: string } }>("/api/issues/:key/attachments/:attachmentId", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    const [attachment] = await database.db
-      .select()
-      .from(issueAttachments)
-      .where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId)))
-      .limit(1);
+    const findAttachment = () =>
+      database.db
+        .select()
+        .from(issueAttachments)
+        .where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId)))
+        .limit(1);
+    const [attachment] = await findAttachment();
     if (!attachment) throw new ApiError(404, "attachment_not_found");
 
     const controller = new AbortController();
@@ -52,6 +54,9 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
         if (error !== controller.signal.reason) request.log.error({ code: errorCode(error), reason: stableErrorReason(error, "attachment_download_failed") }, "attachment_download_failed");
         return reply;
       }
+      // An edit can retire the object after the first lookup but before the descriptor is verified.
+      if (!stream && (errorCode(error) === "ENOENT" || (error instanceof Error && error.message === "insecure_issue_attachment_file")) && !(await findAttachment()).length)
+        throw new ApiError(404, "attachment_not_found");
       throw error;
     }
   });

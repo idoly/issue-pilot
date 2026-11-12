@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
 import fsPromises, { chmod, readFile, readdir, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
-import { Readable } from "node:stream";
 import path from "node:path";
 import { test } from "node:test";
 import { parse as parseDisposition } from "content-disposition";
@@ -297,7 +295,7 @@ test("creates initial attachments atomically and rolls back the claimed Issue ro
   }
 });
 
-test("edits metadata and attachment replacement as one rollback-safe transaction", async () => {
+test("edits metadata and attachment replacement as one rollback-safe transaction", async (context) => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
@@ -322,13 +320,28 @@ test("edits metadata and attachment replacement as one rollback-safe transaction
       removedAttachmentIds: [created.attachments[0]!.id],
     };
     const boundary = "replace-attachment";
+    const link = fsPromises.link;
+    const initialDownloadUrl = `/api/issues/${issue.id}/attachments/${created.attachments[0]!.id}`;
+    let preCommitDownloads = 0;
+    context.mock.method(fsPromises, "link", async (...args: Parameters<typeof link>) => {
+      const read = await fixture.app.inject(initialDownloadUrl);
+      assert.equal(read.statusCode, 200, read.body);
+      assert.equal(read.body, "initial evidence");
+      preCommitDownloads++;
+      await link(...args);
+    });
+    syncBuiltinESMExports();
     const updated = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${issue.id}`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload: issueMultipart(boundary, edit, "replacement.txt", "replacement evidence"),
     });
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     assert.equal(updated.statusCode, 200, updated.body);
+    assert.equal(preCommitDownloads, 1);
+    assert.equal((await fixture.app.inject(initialDownloadUrl)).statusCode, 404);
     assert.match(fixture.engine.messages.at(-1) ?? "", /replacement\.txt/);
     assert.doesNotMatch(fixture.engine.messages.at(-1) ?? "", /initial\.txt/);
     fixture.engine.running.delete(issueId);
@@ -441,8 +454,9 @@ test("streams Issue attachments larger than the former application limit", async
   }
 });
 
-test("a committed edit stays successful and enqueues the update when quarantine cleanup fails", async (context) => {
+test("a committed edit retains and retries only recorded attachment cleanup failures", async (context) => {
   const fixture = await createApiFixture();
+  const database = openDatabase(fixture.databaseFile);
   try {
     await createService(fixture.app, "Alpha");
     const createBoundary = "create-attachment";
@@ -454,11 +468,12 @@ test("a committed edit stays successful and enqueues the update when quarantine 
     });
     const issue = await json(create);
     fixture.engine.running.delete(fixture.engine.enqueued.at(-1)!);
-    const created = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { attachments: Array<{ id: string }> };
-    const remove = fsPromises.rm;
-    context.mock.method(fsPromises, "rm", async (target: string, options?: Parameters<typeof remove>[1]) => {
-      if (String(target).endsWith(".deleting")) throw Object.assign(new Error("simulated_remove_failure"), { code: "EIO" });
-      return remove(target, options);
+    const created = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).json<{ attachments: Array<{ id: string; storedFileName: string }> }>();
+    const original = path.join(issueRoot(fixture.root, String(issue.id)), created.attachments[0]!.storedFileName);
+    const unlink = fsPromises.unlink;
+    context.mock.method(fsPromises, "unlink", async (target: string) => {
+      if (target === original) throw Object.assign(new Error("simulated_remove_failure"), { code: "EIO" });
+      return unlink(target);
     });
     syncBuiltinESMExports();
     const messages = fixture.engine.messages.length;
@@ -480,33 +495,45 @@ test("a committed edit stays successful and enqueues the update when quarantine 
     const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { title: string; attachments: unknown[] };
     assert.equal(detail.title, "Updated");
     assert.deepEqual(detail.attachments, []);
-    // The quarantined original is retained for operator cleanup rather than silently lost.
-    assert.equal((await readdir(issueRoot(fixture.root, String(issue.id)))).filter((name) => name.endsWith(".deleting")).length, 1);
+    assert.equal((await fixture.app.inject(`/api/issues/${issue.id}/attachments/${created.attachments[0]!.id}`)).statusCode, 404);
+    assert.equal(await readFile(original, "utf8"), "initial evidence");
+    assert.deepEqual((await database.client.execute("select id, object_key from retired_issue_attachments")).rows, [{ id: created.attachments[0]!.id, object_key: original }]);
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    fixture.engine.running.clear();
+    const unrelated = path.join(path.dirname(original), ".attachment-unknown.txt");
+    await writeFile(unrelated, "preserve unknown", { mode: 0o400 });
+    const retry = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${issue.id}`,
+      payload: { ...issueMetadataPayload("Another edit"), expectedEditVersion: await issueEditVersion(fixture.app, issue.id) },
+    });
+    assert.equal(retry.statusCode, 200, retry.body);
+    await assert.rejects(fsPromises.stat(original), { code: "ENOENT" });
+    assert.deepEqual((await database.client.execute("select id from retired_issue_attachments")).rows, []);
+    assert.equal(await readFile(unrelated, "utf8"), "preserve unknown");
   } finally {
     context.mock.restoreAll();
     syncBuiltinESMExports();
+    database.close();
     await fixture.cleanup();
   }
 });
 
-test("attachment copies run before the Issue write transaction so other writers are not blocked", async (context) => {
+test("publishes the staged attachment inode before the Issue write transaction without making a copy", async (context) => {
   const fixture = await createApiFixture();
   const other = openDatabase(fixture.databaseFile);
   try {
     await createService(fixture.app, "Alpha");
-    const copyStream = fs.createReadStream;
+    const link = fsPromises.link;
     let concurrentWrite: Promise<unknown> | undefined;
-    context.mock.method(fs, "createReadStream", (...args: Parameters<typeof copyStream>) => {
-      // A writer on another connection must complete while the upload is being copied.
-      // The copy waits for it, so copying under the Issue write lock would stall until SQLITE_BUSY.
+    let inode: number | undefined;
+    context.mock.method(fsPromises, "link", async (...args: Parameters<typeof link>) => {
+      // A writer on another connection must complete before the staged file is published.
       concurrentWrite ??= other.client.execute({ sql: "UPDATE subjects SET display_name = display_name WHERE subject = ?", args: ["nobody"] });
-      const write = concurrentWrite;
-      return Readable.from(
-        (async function* () {
-          await write;
-          yield* copyStream(...args);
-        })(),
-      ) as ReturnType<typeof copyStream>;
+      await concurrentWrite;
+      inode = (await fsPromises.stat(args[0])).ino;
+      await link(...args);
     });
     syncBuiltinESMExports();
     const boundary = "concurrent-copy";
@@ -518,9 +545,12 @@ test("attachment copies run before the Issue write transaction so other writers 
     });
     assert.equal(create.statusCode, 201, create.body);
     assert.ok(concurrentWrite);
-    // Under the old ordering (copy inside the write transaction) this writer deadlocks until SQLITE_BUSY
-    // and the request fails; reaching 201 with the write completed proves the copy ran outside the transaction.
     await concurrentWrite;
+    const root = issueRoot(fixture.root, create.json().id);
+    const stored = await fsPromises.stat(path.join(root, (await readdir(root))[0]!));
+    assert.equal(stored.ino, inode);
+    assert.equal(stored.nlink, 1);
+    assert.ok(!(await readdir(path.join(fixture.root, "control"))).some((name) => name.startsWith("attachment-upload-")));
   } finally {
     context.mock.restoreAll();
     syncBuiltinESMExports();

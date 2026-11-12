@@ -87,6 +87,40 @@ test("worktree removal preserves ignored files until they are explicitly removed
   }
 });
 
+test("worktree removal preserves changes hidden by Git index flags", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-hidden-worktree-changes-"));
+  try {
+    const source = join(root, "source");
+    const fileName = "evidence\nS report.txt";
+    const original = "committed content\n";
+    const changed = "uncommitted content\n";
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, fileName), original);
+    await git(["-C", source, "add", "--", fileName]);
+    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    const manager = new WorktreeManager(join(root, "state"));
+    const { workspacePath, workingBranch } = await manager.prepare({ issueKey: "ISSUE-20261024-902", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" });
+    const file = join(workspacePath, fileName);
+
+    for (const flag of ["assume-unchanged", "skip-worktree"]) {
+      await git(["-C", workspacePath, "update-index", `--${flag}`, "--", fileName]);
+      await writeFile(file, changed);
+      assert.equal(await git(["-C", workspacePath, "status", "--porcelain", "--ignored=matching"]), "");
+      await assert.rejects(manager.assertClean(source, workspacePath, workingBranch!), { message: "workspace_has_changes" });
+      await assert.rejects(manager.remove(source, workspacePath, workingBranch!), { message: "workspace_has_changes" });
+      assert.equal(await readFile(file, "utf8"), changed);
+      await git(["-C", workspacePath, "update-index", `--no-${flag}`, "--", fileName]);
+      assert.notEqual(await git(["-C", workspacePath, "status", "--porcelain"]), "");
+      await writeFile(file, original);
+    }
+
+    await manager.remove(source, workspacePath, workingBranch!);
+    await assert.rejects(access(workspacePath), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("reports an invalid Git pointer as a stable reason while preserving the checkout", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-pointer-inspection-"));
   try {

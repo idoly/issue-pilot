@@ -11,14 +11,13 @@ import { test } from "node:test";
 import { createApiFixture, createService, issueMetadataPayload } from "./fixture.ts";
 import type { MultipartFile } from "@fastify/multipart";
 import {
-  finalizeQuarantinedAttachments,
   readMultipartAttachment,
   stageAttachment,
   removePendingAttachments,
   openVerifiedAttachmentStream,
   removeWrittenAttachments,
   resolveSecureAttachmentFile,
-  copyPendingAttachments,
+  publishPendingAttachments,
 } from "../../src/http/attachment-store.ts";
 import { claimIssueRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
 
@@ -50,7 +49,7 @@ for (const stage of ["open", "close"] as const)
           return handle;
         });
       syncBuiltinESMExports();
-      await assert.rejects(readMultipartAttachment(part), (error) => error === reason);
+      await assert.rejects(readMultipartAttachment(root, part), (error) => error === reason);
       assert.ok(staging);
       await assert.rejects(access(staging), { code: "ENOENT" });
     } finally {
@@ -76,7 +75,7 @@ test("staging keeps both a stream failure and a cleanup failure", async (context
       yield Buffer.from("partial");
       throw failure;
     };
-    await assert.rejects(stageAttachment("input.txt", "text/plain", chunks()), (error) => error instanceof AggregateError && error.errors.includes(failure) && error.errors.includes(cleanup));
+    await assert.rejects(stageAttachment(root, "input.txt", "text/plain", chunks()), (error) => error instanceof AggregateError && error.errors.includes(failure) && error.errors.includes(cleanup));
   } finally {
     context.mock.restoreAll();
     syncBuiltinESMExports();
@@ -206,11 +205,13 @@ test("an attachment collision never registers another transaction's original for
     const original = path.join(issueRoot(root, key), `.attachment-${id}-evidence.txt`);
     const pending = path.join(root, "pending.txt");
     await writeFile(original, "original evidence", { mode: 0o400 });
-    await writeFile(pending, "new content");
+    await writeFile(pending, "new content", { mode: 0o400 });
     context.mock.method(crypto, "randomUUID", () => id);
     syncBuiltinESMExports();
     const written: string[] = [];
-    await assert.rejects(copyPendingAttachments(root, key, [{ fileName: "evidence.txt", mediaType: "text/plain", temporaryPath: pending, size: 11, sha256: "fixture" }], written), { code: "EEXIST" });
+    await assert.rejects(publishPendingAttachments(root, key, [{ fileName: "evidence.txt", mediaType: "text/plain", temporaryPath: pending, size: 11, sha256: "fixture" }], written), {
+      code: "EEXIST",
+    });
     await removeWrittenAttachments(written);
     assert.equal(await readFile(original, "utf8"), "original evidence");
     assert.deepEqual(written, []);
@@ -221,20 +222,26 @@ test("an attachment collision never registers another transaction's original for
   }
 });
 
-test("a failed attachment copy registers and removes only its owned partial file", async () => {
+test("a staging unlink failure rolls back only the original just linked", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-partial-original-"));
   const key = "ISSUE-20261023-001";
   try {
     await claimIssueRoot(root, key);
+    const pending = path.join(root, "pending.txt");
+    await writeFile(pending, "staged", { mode: 0o400 });
+    context.mock.method(fs, "unlink", async () => {
+      throw Object.assign(new Error("simulated staging unlink failure"), { code: "EIO" });
+    });
+    syncBuiltinESMExports();
     const written: string[] = [];
-    await assert.rejects(
-      copyPendingAttachments(root, key, [{ fileName: "input.txt", mediaType: "text/plain", temporaryPath: path.join(root, "missing-source"), size: 0, sha256: "fixture" }], written),
-      { code: "ENOENT" },
-    );
+    await assert.rejects(publishPendingAttachments(root, key, [{ fileName: "input.txt", mediaType: "text/plain", temporaryPath: pending, size: 6, sha256: "fixture" }], written), { code: "EIO" });
     assert.equal(written.length, 1);
     await removeWrittenAttachments(written);
     await assert.rejects(access(written[0]!), { code: "ENOENT" });
+    assert.equal(await readFile(pending, "utf8"), "staged");
   } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -397,20 +404,4 @@ test("attachment verification rejects an ancestor redirected between validation 
     syncBuiltinESMExports();
     await rm(directory, { recursive: true, force: true });
   }
-});
-
-test("reports quarantine finalize failures without hiding retained evidence", async () => {
-  const quarantined = [
-    { sourcePath: "/attachments/one", temporaryPath: "/attachments/.one.deleting" },
-    { sourcePath: "/attachments/two", temporaryPath: "/attachments/.two.deleting" },
-  ];
-  const attempts: string[] = [];
-  await assert.rejects(
-    finalizeQuarantinedAttachments(quarantined, async (candidate) => {
-      attempts.push(candidate);
-      if (candidate.includes(".one.")) throw new Error("remove_failed");
-    }),
-    /attachment_finalize_failed/,
-  );
-  assert.deepEqual(attempts.sort(), quarantined.map(({ temporaryPath }) => temporaryPath).sort());
 });

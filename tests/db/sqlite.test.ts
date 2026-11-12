@@ -66,6 +66,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0073_index_issue_recovery",
       "0074_issue_search_configuration",
       "0075_derive_dbhub_connections",
+      "0076_issue_data_publication",
     ],
   );
   const previousJournal = {
@@ -107,6 +108,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     await migrate(db, { migrationsFolder: migrationSource });
 
     assert.deepEqual((await client.execute("select key, title, status from issues")).rows, [{ key: "ISSUE-20260809-001", title: "Preserved", status: "open" }]);
+    assert.deepEqual((await client.execute("select day, last_value from issue_key_sequences")).rows, [{ day: "20260809", last_value: 1 }]);
     assert.deepEqual((await client.execute("select issue_id, subject from issue_cc_recipients")).rows, [{ issue_id: "issue", subject: "recipient" }]);
     assert.deepEqual((await client.execute("select issue_id, session_file, workspace_path from issue_pilot_sessions")).rows, [
       { issue_id: "issue", session_file: "/sessions/issue.jsonl", workspace_path: "/workspaces/issue" },
@@ -447,6 +449,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
         "issue_attachments",
         "issue_cc_recipients",
         "issue_comments",
+        "issue_key_sequences",
         "issue_pilot_sessions",
         "issue_pins",
         "issue_relations",
@@ -457,6 +460,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
         "issues",
         "mcp_services",
         "repositories",
+        "retired_issue_attachments",
         "service_deployment_repositories",
         "service_deployments",
         "service_repositories",

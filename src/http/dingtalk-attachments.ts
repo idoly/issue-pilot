@@ -4,7 +4,7 @@ import type { DingtalkAttachment } from "../mcp/dingtalk.ts";
 import { DingtalkError } from "../mcp/dingtalk.ts";
 
 /** Only download signed URLs from the configured DingTalk attachment storage hosts. Never forward MCP credentials. */
-export async function downloadDingtalkAttachments(files: DingtalkAttachment[], signal: AbortSignal, request: typeof fetch = fetch): Promise<PendingAttachment[]> {
+export async function downloadDingtalkAttachments(stateRoot: string, files: DingtalkAttachment[], signal: AbortSignal, request: typeof fetch = fetch): Promise<PendingAttachment[]> {
   const pending: PendingAttachment[] = [];
   try {
     for (const file of files) {
@@ -31,7 +31,7 @@ export async function downloadDingtalkAttachments(files: DingtalkAttachment[], s
       const failures: unknown[] = [];
       try {
         if (!response.ok) throw new DingtalkError("dingtalk_attachment_download_failed");
-        const staged = await stageAttachment(file.fileName, response.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream", chunks());
+        const staged = await stageAttachment(stateRoot, file.fileName, response.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream", chunks());
         pending.push(staged);
         signal.throwIfAborted();
         if (staged.size !== file.size) throw new DingtalkError("dingtalk_attachment_size_changed", 409);

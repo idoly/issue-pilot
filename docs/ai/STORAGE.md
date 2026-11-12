@@ -18,7 +18,7 @@ Human comments and Pi conversations are separate. A SQLite rollback cannot resto
 
 ## Relations and identifiers
 
-Keys use ISSUE-YYYYMMDD-NNN... in the configured time zone; internal issueId is UUID. The HTTP Issue DTO's id is the business key, not that UUID.
+Keys use ISSUE-YYYYMMDD-NNN... in the configured time zone; internal issueId is UUID. The HTTP Issue DTO's id is the business key, not that UUID. SQLite reserves the next number for that day before the root is claimed. Failed creation can leave a gap; deletion never returns an allocated number. Migration seeds the counter from existing Issues; numbers already deleted before migration cannot be recovered from those rows.
 
 Each Issue matches a valid Service/Environment Deployment and owns exactly one Workspace. resolved iff resolved_at is non-null. Repository records, session binding, attachments, comments, relations, CC, pins and scope transitions have separate persisted relations.
 
@@ -67,9 +67,9 @@ Ordinary startup does not compare all Issue records with filesystem entries. Cre
 
 ## Attachments
 
-[attachment-store.ts](../../src/http/attachment-store.ts) stages uploads, computes size/SHA-256 and coordinates files/metadata with Issue transactions. Reads verify direct root ownership, regular-file type, exact 0400, size and hash. Recheck the opened descriptor's real location and send from that descriptor, avoiding check/reopen races.
+[attachment-store.ts](../../src/http/attachment-store.ts) streams uploads once into private staging under `control`, calculates size/SHA-256 and syncs the sealed 0400 file. On the same filesystem, publish that inode under a new no-clobber name in the Issue root, remove the staging name, and sync the root before committing metadata. There is no attachment copy or backup. Reads verify direct root ownership, regular-file type, exact 0400, size and hash. Recheck the opened descriptor's real location and send from that descriptor, avoiding check/reopen races.
 
-Mutation reserves the Issue and closes the old session before applying files; it does not repair abnormal roots. Removal quarantines first, restores on rollback and finalizes after commit. Preserve primary and cleanup failures; cleanup failure is not ordinary cancellation.
+Mutation reserves the Issue and closes the old session before applying files; it does not repair abnormal roots. Keep the old original addressable until the transaction replaces its active record with an exact retirement record. After commit, verify and unlink only those recorded originals. A failed unlink leaves the record and evidence for the next successful edit; no directory sweep claims unrepresented files. Preserve primary and cleanup failures; cleanup failure does not undo a committed edit.
 
 Preparation reads originals without automatic editable copies. Explicit editing creates work files. Pasted images stay in Pi messages. Regression: [attachment-api.test.ts](../../tests/http/attachment-api.test.ts).
 
@@ -100,7 +100,7 @@ Released development records its exact local branch tip and links to the corresp
 
 The private store is the sole runtime authority for recorded development branches. A missing store fails even if a shared mirror exists. The [offline migration](../RUNBOOK.md#开发工单-git-迁移) isolates only explicitly reviewed shared worktrees or independently evidenced released refs. It keeps staged and uncommitted data, packs Issue-specific objects in the private store, retains read-only baseline alternates, and does not change SQLite or publish a ref. Refuse ambiguous ownership, mismatched HEAD and changed tips. Keep original registrations as recovery evidence.
 
-Release requires resolved, idle, correctly bound and clean state, including staged/untracked/ignored content. Remove only registered code; retain Issue root, conversations, originals, work files and private branches. Missing roots cannot be released/reopened.
+Release requires resolved, idle, correctly bound and clean state, including staged/untracked/ignored content. Worktree removal also refuses indexes with `assume-unchanged` or `skip-worktree` entries because Git status can omit local edits. Remove only registered code; retain Issue root, conversations, originals, work files and private branches. Missing roots cannot be released/reopened.
 
 Owners: [git.ts](../../src/workspace/git.ts), [issue-git.ts](../../src/workspace/issue-git.ts), [lifecycle.ts](../../src/workspace/lifecycle.ts).
 

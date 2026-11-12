@@ -258,6 +258,10 @@ export const issues = sqliteTable(
   ],
 );
 
+export const issueKeySequences = sqliteTable("issue_key_sequences", { day: text("day").primaryKey().notNull(), lastValue: integer("last_value").notNull() }, (table) => [
+  check("issue_key_sequence_range", sql`${table.lastValue} between 1 and 9007199254740991`),
+]);
+
 export const dingtalkIssueImports = sqliteTable(
   "dingtalk_issue_imports",
   {
@@ -413,6 +417,20 @@ export const issueAttachments = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [index("issue_attachments_issue_idx").on(table.issueId)],
+);
+
+export const retiredIssueAttachments = sqliteTable(
+  "retired_issue_attachments",
+  {
+    id: text("id").primaryKey().notNull(),
+    issueId: text("issue_id")
+      .notNull()
+      .references(() => issues.id, { onDelete: "cascade" }),
+    objectKey: text("object_key").notNull(),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+  },
+  (table) => [index("retired_issue_attachments_issue_idx").on(table.issueId)],
 );
 
 export const issueComments = sqliteTable(

@@ -1,9 +1,6 @@
 import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { rename } from "node:fs/promises";
-import path from "node:path";
-
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -18,6 +15,7 @@ import {
   issueAttachments,
   issueCcRecipients,
   issueComments,
+  issueKeySequences,
   issuePins,
   issueRelations,
   issueRepositories,
@@ -32,17 +30,16 @@ import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { IssueDeletionRefusal, WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import {
-  finalizeQuarantinedAttachments,
+  finalizeRetiredAttachments,
   type PendingAttachment,
-  type QuarantinedAttachment,
   readMultipartAttachment,
   removePendingAttachments,
   removeWrittenAttachments,
   resolveSecureAttachmentFile,
-  restoreQuarantinedAttachments,
+  retireAttachments,
   serializeAttachment,
-  copyPendingAttachments,
-  insertCopiedAttachments,
+  publishPendingAttachments,
+  insertPublishedAttachments,
 } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
@@ -87,13 +84,13 @@ function regionalDateStamp(now = new Date()): string {
   return `${dateParts.get("year")}${dateParts.get("month")}${dateParts.get("day")}`;
 }
 
-async function readIssueInput(request: FastifyRequest): Promise<{ input: Record<string, unknown>; attachments: PendingAttachment[] }> {
+async function readIssueInput(stateRoot: string, request: FastifyRequest): Promise<{ input: Record<string, unknown>; attachments: PendingAttachment[] }> {
   if (!request.isMultipart()) return { input: record(request.body), attachments: [] };
   const attachments: PendingAttachment[] = [];
   let issueField: unknown;
   try {
     for await (const part of request.parts()) {
-      if (part.type === "file") attachments.push(await readMultipartAttachment(part));
+      if (part.type === "file") attachments.push(await readMultipartAttachment(stateRoot, part));
       else if (part.fieldname === "issue") issueField = part.value;
     }
     return { input: record(JSON.parse(text(issueField, "issue", 100_000))), attachments };
@@ -316,17 +313,19 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         const issueId = randomUUID();
         return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
           options.signal?.throwIfAborted();
-          const prefix = `ISSUE-${regionalDateStamp()}-`;
+          const day = regionalDateStamp();
+          // Reserve the number before touching the filesystem. A failed create may leave a gap, never a reusable key.
           const [next] = await database.db
-            .select({ sequence: sql<number>`coalesce(max(cast(substr(${issues.key}, ${prefix.length + 1}) as integer)), 0) + 1` })
-            .from(issues)
-            .where(and(gte(issues.key, prefix), lt(issues.key, `${prefix}\uffff`)));
-          const issueKey = `${prefix}${String(next!.sequence).padStart(3, "0")}`;
+            .insert(issueKeySequences)
+            .values({ day, lastValue: 1 })
+            .onConflictDoUpdate({ target: issueKeySequences.day, set: { lastValue: sql`${issueKeySequences.lastValue} + 1` } })
+            .returning({ sequence: issueKeySequences.lastValue });
+          const issueKey = `ISSUE-${day}-${String(next!.sequence).padStart(3, "0")}`;
           const writtenObjectKeys: string[] = [];
           await claimIssueRoot(stateRoot, issueKey);
           let issue: typeof issues.$inferSelect;
           try {
-            const copiedAttachments = await copyPendingAttachments(stateRoot, issueKey, initialAttachments, writtenObjectKeys);
+            const publishedAttachments = await publishPendingAttachments(stateRoot, issueKey, initialAttachments, writtenObjectKeys);
             issue = await database.db.transaction(async (transaction) => {
               const [insertedIssue] = await transaction
                 .insert(issues)
@@ -347,7 +346,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
               if (relatedIssues.length) await transaction.insert(issueRelations).values(relatedIssues.map((relatedIssue) => ({ issueId: insertedIssue!.id, relatedIssueId: relatedIssue.id })));
               await transaction.insert(issueWorkspaces).values({ issueId: insertedIssue!.id });
               if (options.dingtalk) await transaction.insert(dingtalkIssueImports).values({ ...options.dingtalk, issueId: insertedIssue!.id, importedBy: reporterSubject });
-              await insertCopiedAttachments(transaction, insertedIssue!.id, reporterSubject, copiedAttachments);
+              await insertPublishedAttachments(transaction, insertedIssue!.id, reporterSubject, publishedAttachments);
               return insertedIssue!;
             });
           } catch (error) {
@@ -371,7 +370,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   };
   app.post("/api/issues", async (request, reply) => {
     await ensureCurrentSubject(database, request);
-    const { input, attachments } = await readIssueInput(request);
+    const { input, attachments } = await readIssueInput(stateRoot, request);
     const result = await createIssue(input, request, attachments);
     return reply.code(201).send(result.issue);
   });
@@ -379,7 +378,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
     await ensureCurrentSubject(database, request);
     const issue = await requireIssue(database, request.params.key);
-    const { input, attachments: pendingAttachments } = await readIssueInput(request);
+    const { input, attachments: pendingAttachments } = await readIssueInput(stateRoot, request);
     const failures: unknown[] = [];
     try {
       const expectedEditVersion = input.expectedEditVersion;
@@ -422,24 +421,13 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
           if (issueEnvironment.kind === "dev") await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
           const attachmentRoot = issueRoot(stateRoot, issue.key);
-          const removableFiles = await Promise.all(
-            removedAttachments.map(async (attachment) => ({
-              attachment,
-              sourcePath: await resolveSecureAttachmentFile(attachmentRoot, attachment.objectKey, attachment.size),
-            })),
-          );
+          await Promise.all(removedAttachments.map(({ objectKey, size }) => resolveSecureAttachmentFile(attachmentRoot, objectKey, size)));
           await reservation.closeSession(issue.id);
-          const quarantined: QuarantinedAttachment[] = [];
           const writtenObjectKeys: string[] = [];
           let attachmentDtos: Array<ReturnType<typeof serializeAttachment>> = [];
           try {
-            for (const { attachment, sourcePath } of removableFiles) {
-              const temporaryPath = path.join(attachmentRoot, `.attachment-${attachment.id}-${randomUUID()}.deleting`);
-              await rename(sourcePath, temporaryPath);
-              quarantined.push({ sourcePath, temporaryPath });
-            }
-            const copiedAttachments = await copyPendingAttachments(stateRoot, issue.key, pendingAttachments, writtenObjectKeys);
-            let createdAttachments: Awaited<ReturnType<typeof insertCopiedAttachments>> = [];
+            const publishedAttachments = await publishPendingAttachments(stateRoot, issue.key, pendingAttachments, writtenObjectKeys);
+            let createdAttachments: Awaited<ReturnType<typeof insertPublishedAttachments>> = [];
             const save = async (transaction: Parameters<Parameters<typeof database.db.transaction>[0]>[0]) => {
               await transaction
                 .update(issues)
@@ -447,25 +435,22 @@ export function registerIssueRoutes(context: ApiRouteContext) {
                 .where(eq(issues.id, issue.id));
               await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
               if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: issue.id, subject: recipient })));
-              if (removedAttachmentIds.length) await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, removedAttachmentIds)));
-              createdAttachments = await insertCopiedAttachments(transaction, issue.id, editorSubject, copiedAttachments);
+              await retireAttachments(transaction, issue.id, removedAttachments);
+              createdAttachments = await insertPublishedAttachments(transaction, issue.id, editorSubject, publishedAttachments);
             };
             if (resetSession) await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId, save);
             else await database.db.transaction(save);
             attachmentDtos = [...currentAttachments.filter((attachment) => !removedAttachmentIdSet.has(attachment.id)).map(serializeAttachment), ...createdAttachments];
           } catch (error) {
             const rollbackErrors: unknown[] = [];
-            try {
-              await restoreQuarantinedAttachments(quarantined);
-            } catch (rollbackError) {
-              rollbackErrors.push(rollbackError);
-            }
             await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
             if (rollbackErrors.length) throw new OperationError("issue_update_rollback_failed", "unknown", { cause: new AggregateError([error, ...rollbackErrors], "issue_update_rollback_failed") });
             throw error;
           }
-          // The update is committed; a leftover quarantined original is operator cleanup, not a failed edit.
-          await finalizeQuarantinedAttachments(quarantined).catch((error: unknown) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"));
+          // A committed retirement is never rolled back. The next successful edit retries any recorded cleanup failures.
+          await finalizeRetiredAttachments(database.db, attachmentRoot, issue.id).catch((error: unknown) =>
+            request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"),
+          );
           if (resetSession) {
             events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
           } else if (currentIssue.status !== "resolved") {

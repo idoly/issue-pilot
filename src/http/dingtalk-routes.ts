@@ -13,7 +13,7 @@ import type { IssueCreationScopeResolver, IssueCreator } from "./issue-routes.ts
 import { authorizeWorkMode, requireCurrentUser, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: IssueCreator, resolveCreationScope: IssueCreationScopeResolver, connect: McpConnector = connectMcp): void {
-  const { app, database, runScopeExclusive } = context;
+  const { app, database, runScopeExclusive, stateRoot } = context;
   const handle =
     <T>(operation: (request: FastifyRequest, signal: AbortSignal) => Promise<T>) =>
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -132,7 +132,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
         if (manualMatches[0]) outcome = await result("existing", manualMatches[0].key, manualMatches[0].assigneeSubject);
         else {
           signal.throwIfAborted();
-          const pending = await downloadDingtalkAttachments(dingtalkAttachments(row, columns.attachments), signal);
+          const pending = await downloadDingtalkAttachments(stateRoot, dingtalkAttachments(row, columns.attachments), signal);
           const created = await createIssue(
             { title: data.title, description: `${data.description}\n\n钉钉来源：${table.url}`, priority, workMode, serviceKey, assigneeSubject, ccSubjects: [] },
             request,

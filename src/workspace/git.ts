@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
+import { executeLocalCommand } from "../process.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { isolateIssueWorktree, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
@@ -352,6 +353,26 @@ export class WorktreeManager {
       if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
     }
     if (lines.some((line) => !line.startsWith("# "))) throw new Error("workspace_has_changes");
+
+    // Git status and worktree remove both honor flags that can hide local file changes.
+    // ls-files -v marks skip-worktree with S and assume-unchanged entries with lowercase tags.
+    let atEntryStart = true;
+    let hiddenChangesPossible = false;
+    try {
+      const result = await executeLocalCommand("git", ["-C", resolvedWorkspace, "ls-files", "-v", "-z"], {
+        timeout: issuePilotConfig.limits.process.gitOperationMs,
+        environment: { ...process.env, ...this.gitEnvironment.getStore() } as Record<string, string>,
+        maxOutputBytes: null,
+        onStdout: (chunk) => {
+          hiddenChangesPossible ||= (atEntryStart && /^[a-zS]/.test(chunk)) || /\0[a-zS]/.test(chunk);
+          atEntryStart = chunk.endsWith("\0");
+        },
+      });
+      if (result.code !== 0 || result.killed || !atEntryStart) throw new Error(result.stderr || "git_index_listing_incomplete");
+    } catch (error) {
+      throw new Error("workspace_git_inspection_failed", { cause: error });
+    }
+    if (hiddenChangesPossible) throw new Error("workspace_has_changes");
   }
 
   private validatedWorkspacePath(workspacePath: string): string {

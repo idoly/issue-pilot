@@ -1,13 +1,12 @@
-import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
-import { agentSessions, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
+import { agentSessions, issueKeySequences, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { issueEditVersion, createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
 
 test("every edit requires a valid version before metadata, attachments or session state can change", async () => {
@@ -112,19 +111,12 @@ test("allocates numeric Issue sequences beyond three digits within the current d
     await createService(fixture.app, "Sequence", ["test"]);
     const first = await createIssue(fixture.app, "sequence", "test");
     const prefix = String(first.id).slice(0, -3);
-    const [original] = await database.db
-      .select()
-      .from(issues)
-      .where(eq(issues.key, String(first.id)));
-    for (const key of [`${prefix}099`, `${prefix}999`, `${prefix}1000`, "ISSUE-19000101-999999"]) {
-      const id = randomUUID();
-      await database.db.transaction(async (tx) => {
-        await tx.insert(issues).values({ ...original!, id, key });
-        await tx.insert(issueWorkspaces).values({ issueId: id });
-      });
-    }
+    const day = prefix.slice(6, 14);
+    await database.db.update(issueKeySequences).set({ lastValue: 998 }).where(eq(issueKeySequences.day, day));
+    await database.db.insert(issueKeySequences).values({ day: "19000101", lastValue: 999999 });
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}999`);
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1000`);
     assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1001`);
-    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1002`);
   } finally {
     database.close();
     await fixture.cleanup();
@@ -611,8 +603,6 @@ test("generates concurrent Issue keys and refuses unmanaged state", async () => 
     assert.equal(blocked.statusCode, 409);
     assert.equal((await json(blocked)).error, "unmanaged_issue_state");
     assert.equal(await readFile(evidence, "utf8"), "preserve");
-    await rm(unmanagedRoot, { recursive: true });
-
     const concurrent = await Promise.all([
       fixture.app.inject({ method: "POST", url: "/api/issues", payload: issuePayload("alpha", "test", "Concurrent A") }),
       fixture.app.inject({ method: "POST", url: "/api/issues", payload: issuePayload("alpha", "test", "Concurrent B") }),
@@ -623,7 +613,24 @@ test("generates concurrent Issue keys and refuses unmanaged state", async () => 
     );
     const keys = await Promise.all(concurrent.map(async (response) => String((await json(response)).id)));
     assert.equal(new Set(keys).size, 2);
-    assert.deepEqual(keys.sort(), [unmanagedKey, String(first.id).replace(/001$/, "003")]);
+    assert.deepEqual(keys.sort(), [String(first.id).replace(/001$/, "003"), String(first.id).replace(/001$/, "004")]);
+    assert.equal(await readFile(evidence, "utf8"), "preserve");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("deleting the last Issue of a day does not recycle its key or link", async () => {
+  const fixture = await createApiFixture();
+  try {
+    await createService(fixture.app, "Sequence");
+    const first = await createIssue(fixture.app, "sequence", "test", "Original");
+    fixture.engine.running.clear();
+    const oldLink = `/api/issues/${first.id}`;
+    assert.equal((await fixture.app.inject({ method: "DELETE", url: oldLink })).statusCode, 204);
+    const second = await createIssue(fixture.app, "sequence", "test", "New Issue");
+    assert.equal(second.id, String(first.id).replace(/001$/, "002"));
+    assert.equal((await fixture.app.inject(oldLink)).statusCode, 404);
   } finally {
     await fixture.cleanup();
   }
