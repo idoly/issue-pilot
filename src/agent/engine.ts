@@ -31,7 +31,7 @@ import {
   type AgentMessageScope,
 } from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
-import { createPrivateSessionManager, assertSessionFileComplete, isIssueSessionPath, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
+import { createPrivateSessionManager, assertSessionFileComplete, gitIdentityEnvironment, isIssueSessionPath, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
@@ -637,10 +637,18 @@ export class AgentEngine implements AgentController {
       repositoryAccess: project.repositories.map((repository) => repository.access),
     });
     let readRoots = project.readRoots;
-    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, project.runtimeRoot, personalGit?.env, (updatedRoots) => {
-      if (updatedRoots) readRoots = updatedRoots;
-      const current = this.sessions.get(issue.id);
-      if (current) this.scopeChangedSessions.add(current);
+    const commitIdentity = owner.user.role === "developer" ? personGitIdentity(owner.user) : gitIdentity;
+    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, {
+      stateRoot: this.stateRoot,
+      runtimeRoot: project.runtimeRoot,
+      ...(personalGit ? { personalGit } : {}),
+      commitEnvironment: gitIdentityEnvironment(commitIdentity),
+      networkDomains: agentConfiguration.runtime.networkAllowedDomains ?? [],
+      onScopeChanged: (updatedRoots) => {
+        if (updatedRoots) readRoots = updatedRoots;
+        const current = this.sessions.get(issue.id);
+        if (current) this.scopeChangedSessions.add(current);
+      },
     });
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
       const manager = reusableManager ?? (await this.sessionManagerLocked(issue, workDirectory));
@@ -659,10 +667,8 @@ export class AgentEngine implements AgentController {
         get readRoots() {
           return readRoots;
         },
-        gitAccess: environmentKind === "dev" ? "write" : "read",
-        gitIdentity: owner.user.role === "developer" ? personGitIdentity(owner.user) : gitIdentity,
+        gitIdentity: commitIdentity,
         modelApiKey,
-        ...(personalGit ? { gitEnvironment: personalGit.env, gitReadRoots: personalGit.readRoots } : {}),
         workFiles: new IssueWorkFileStore(this.stateRoot, issue.key),
         systemPrompt: agentSystemPrompt(context),
         onEvent: (event) => this.publishPiEvent(issue.id, event),

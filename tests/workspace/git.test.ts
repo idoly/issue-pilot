@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 import { test } from "node:test";
@@ -14,6 +14,31 @@ const execFileAsync = promisify(execFile);
 async function git(args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
 }
+
+test("missing private Git never falls back to an older shared branch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-missing-private-"));
+  try {
+    const source = join(root, "source"),
+      state = join(root, "state");
+    await git(["init", "-b", "main", source]);
+    const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m"];
+    await git(["-C", source, ...commit, "initial"]);
+    const manager = new WorktreeManager(state);
+    const input = { issueKey: "ISSUE-20261024-900", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
+    const own = await manager.prepare(input);
+    await git(["-C", own.workspacePath, ...commit, "private change"]);
+    const workingBranch = own.workingBranch!;
+    const privateTip = await git(["-C", own.cachePath, "show-ref", "--hash", `refs/heads/${workingBranch}`]);
+    assert.notEqual(privateTip, own.baseCommit);
+    await rename(own.cachePath, join(root, "preserved-private"));
+    await assert.rejects(manager.prepareBranchSnapshot({ ...input, workingBranch }), /workspace_git_store_missing/);
+    await assert.rejects(manager.prepare({ ...input, workingBranch, existingBaseCommit: own.baseCommit }), /workspace_git_store_missing/);
+    await assert.rejects(manager.remove(source, own.workspacePath, workingBranch), /workspace_git_store_missing/);
+    assert.equal(await git(["-C", repositoryStorePath(state, source), "show-ref", "--hash", `refs/heads/${workingBranch}`]), own.baseCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("uses readable repository names and stable suffixes for basename collisions", () => {
   const urls = ["git@gitlab.example.test:team-a/srm-server.git", "https://gitlab.example.test/team-b/srm-server.git", "https://gitlab.example.test/team/srm-admin-front.git"];
@@ -94,7 +119,11 @@ test("preserves persisted issue repository workspace names", () => {
 test("serializes repository operations across manager instances sharing one state root", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-git-lock-"));
   try {
+    const url = join(root, "source");
+    await git(["init", "-b", "main", url]);
+    await git(["-C", url, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
     const managers = [new WorktreeManager(root), new WorktreeManager(root)];
+    const own = await managers[0]!.prepare({ issueKey: "ISSUE-20260805-001", workspaceName: "orders", url, baseBranch: "main", mode: "hotfix" });
     let active = 0;
     let maximumActive = 0;
     for (const manager of managers) {
@@ -108,15 +137,12 @@ test("serializes repository operations across manager instances sharing one stat
         return args.includes("rev-parse") ? "a".repeat(40) : "";
       };
     }
-    const url = "https://example.test/team/orders.git";
     await Promise.all(managers.map((manager) => manager.prepareShared({ url, baseBranch: "main" })));
     assert.equal(maximumActive, 1);
 
     active = 0;
     maximumActive = 0;
-    const cleanPath = join(root, "workspaces", "issue-20260805-001", "orders");
-    await mkdir(cleanPath, { recursive: true });
-    await Promise.all([managers[0]!.prepareShared({ url, baseBranch: "main" }), managers[1]!.assertClean(url, cleanPath)]);
+    await Promise.all([managers[0]!.prepareShared({ url, baseBranch: "main" }), managers[1]!.assertClean(url, own.workspacePath)]);
     assert.equal(maximumActive, 1);
   } finally {
     await rm(root, { recursive: true, force: true });

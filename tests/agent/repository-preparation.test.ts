@@ -270,7 +270,6 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       const bash = issueNativeTools({
         writeRoot: options.workspaceRoot,
         stateRoot,
-        gitAccess: options.gitAccess!,
         get readRoots() {
           return options.readRoots ?? [];
         },

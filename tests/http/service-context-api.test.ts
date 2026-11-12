@@ -14,6 +14,7 @@ import { createApiFixture, createIssue, createService } from "./fixture.ts";
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const target = { instanceAlias: "ORDERS", schemaName: "orders", instanceId: "i1", instanceHost: "db.example.test", instancePort: "3306", databaseId: "42" };
 const unresolvedTarget = { instanceAlias: "ORDERS", schemaName: "orders", instanceId: "", instanceHost: "", instancePort: "", databaseId: "" };
+const describeOnly = { stateRoot: "/unused", runtimeRoot: "/unused", commitEnvironment: {}, networkDomains: [] };
 async function serviceInput(f: Awaited<ReturnType<typeof createApiFixture>>, key = "other") {
   const service = JSON.parse((await f.app.inject({ method: "GET", url: "/api/config" })).body).services.find((row: { key: string }) => row.key === key);
   return {
@@ -38,13 +39,13 @@ test("workspace tool schema mutations remain local to that tool instance", async
     const visible = await createIssue(f.app, "schemaisolation", "dev");
     const [issue] = await database.db.select().from(issues);
     assert.ok(issue && issue.key === visible.id);
-    const first = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, "/unused");
+    const first = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, describeOnly);
     // OpenAI-compatible providers reject a bare union root, so the workspace tool keeps an object root.
     assert.equal(Reflect.get(first.parameters, "type"), "object");
     operation = Reflect.get(Reflect.get(Reflect.get(first.parameters, "anyOf")[0], "properties"), "operation");
     assert.ok(operation);
     Reflect.set(operation, "const", "changed-by-extension");
-    const second = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, "/unused");
+    const second = await createWorkspaceTool(database.db, issue, "dev", {} as IssueProjectManager, describeOnly);
     const result = await second.execute("list", { operation: "list" }, undefined, undefined, {} as never);
     assert.match(JSON.stringify(result), /schemaisolation/);
   } finally {
@@ -114,7 +115,7 @@ test("service configuration and generated descriptions share one source without 
       })
       .returning();
     await db.db.insert(issueWorkspaces).values({ issueId: issue!.id });
-    const workspace = await createWorkspaceTool(db.db, issue!, "dev", {} as IssueProjectManager, "/unused");
+    const workspace = await createWorkspaceTool(db.db, issue!, "dev", {} as IssueProjectManager, describeOnly);
     const notes = await workspace.execute("describe", { operation: "describe", service: "other", environment: "test" }, undefined, undefined, {} as never);
     assert.match(JSON.stringify(notes.content), /orders_test/);
     assert.ok(!JSON.stringify(notes).includes("fixture-private-token"));

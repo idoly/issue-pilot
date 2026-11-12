@@ -128,13 +128,16 @@ export function repositoryStorePath(stateRoot: string, url: string): string {
   return resolve(repositoriesRoot(stateRoot), repositoryHash(url, 20));
 }
 
-function issueRepositoryStorePath(stateRoot: string, issueKey: string, url: string): string {
+export function issueRepositoryStorePath(stateRoot: string, issueKey: string, url: string): string {
   return resolve(issueRoot(stateRoot, normalizeIssueKey(issueKey)), ".issue-git", repositoryHash(url, 20));
 }
 
 export async function developmentRepositoryStorePath(stateRoot: string, issueKey: string, url: string): Promise<string> {
   const isolated = issueRepositoryStorePath(stateRoot, issueKey, url);
-  if (!(await pathExists(isolated))) return repositoryStorePath(stateRoot, url);
+  await lstat(isolated).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") throw new Error("workspace_git_store_missing", { cause: error });
+    throw error;
+  });
   await validateIssueGitStore(isolated, url);
   return isolated;
 }
@@ -202,7 +205,10 @@ export class WorktreeManager {
   async assertClean(url: string, workspacePath: string, expectedBranch?: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
-    await this.serialized(repositoryKey, () => this.assertCleanLocked(resolvedWorkspace, expectedBranch));
+    await this.serialized(repositoryKey, async () => {
+      const store = await developmentRepositoryStorePath(this.stateRoot, basename(dirname(resolvedWorkspace)), url);
+      await this.assertCleanLocked(resolvedWorkspace, store, expectedBranch);
+    });
   }
 
   async remove(url: string, workspacePath: string, expectedBranch?: string): Promise<string> {
@@ -211,13 +217,11 @@ export class WorktreeManager {
     return this.serialized(repositoryKey, async () => {
       const issueKey = basename(dirname(resolvedWorkspace));
       const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, url);
-      await this.assertCleanLocked(resolvedWorkspace, expectedBranch);
+      await this.assertCleanLocked(resolvedWorkspace, cachePath, expectedBranch);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
-      if (cachePath !== resolve(this.repositoriesRoot, repositoryKey)) {
-        const branch = expectedBranch ?? (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
-        if (!branch) throw new Error("workspace_branch_required");
-        await publishIssueBranch(resolve(this.repositoriesRoot, repositoryKey), cachePath, branch);
-      }
+      const branch = expectedBranch ?? (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
+      if (!branch) throw new Error("workspace_branch_required");
+      await publishIssueBranch(resolve(this.repositoriesRoot, repositoryKey), cachePath, branch, true);
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
       } catch (error) {
@@ -232,8 +236,11 @@ export class WorktreeManager {
     });
   }
 
-  private async assertCleanLocked(resolvedWorkspace: string, expectedBranch?: string): Promise<void> {
+  private async assertCleanLocked(resolvedWorkspace: string, store: string, expectedBranch?: string): Promise<void> {
     if (!(await pathExists(resolvedWorkspace))) throw new Error("workspace_repository_missing");
+    await readLinkedWorktreeHead(store, resolvedWorkspace).catch((error: unknown) => {
+      throw new Error("workspace_git_binding_invalid", { cause: error });
+    });
     const inspect = async (args: string[]): Promise<string> => {
       try {
         return await this.git(args);
@@ -400,17 +407,11 @@ export class WorktreeManager {
   }
 
   private async prepareBranchSnapshotLocked(input: PrepareBranchSnapshotInput, repositoryKey: string): Promise<PreparedWorktree> {
+    const isolated = await developmentRepositoryStorePath(this.stateRoot, input.issueKey, input.url);
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
     if (!(await managedGitDirectoryExists(cachePath))) throw new Error("repository_cache_not_found");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
-    const isolated = issueRepositoryStorePath(this.stateRoot, input.issueKey, input.url);
-    let baseCommit: string;
-    if (await pathExists(isolated)) {
-      await validateIssueGitStore(isolated, input.url);
-      baseCommit = await publishIssueBranch(cachePath, isolated, input.workingBranch, true);
-    } else {
-      baseCommit = await readIssueBranchCommit(cachePath, input.workingBranch);
-    }
+    const baseCommit = await publishIssueBranch(cachePath, isolated, input.workingBranch, true);
     const workspacePath = await this.prepareCommitCheckout(cachePath, repositoryKey, baseCommit);
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: input.workingBranch, baseCommit };
   }
@@ -447,13 +448,12 @@ export class WorktreeManager {
 
   private async restoreLocalLocked(input: RestoreWorktreeInput, issueKey: string): Promise<void> {
     const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url);
-    if (!(await pathExists(cachePath))) throw new Error("repository_cache_not_found");
     const root = issueRoot(this.stateRoot, issueKey);
     const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.workspacePath);
     if (await pathExists(workspacePath)) throw new Error("workspace_path_already_exists");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
     if (!input.workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
-    const commit = (await this.git(["-C", cachePath, "rev-parse", `refs/heads/${input.workingBranch}`])).trim();
+    const commit = await readIssueBranchCommit(cachePath, input.workingBranch);
     if (commit !== input.expectedCommit) throw new Error("working_branch_changed_during_release");
     await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
     await mkdir(dirname(workspacePath), { recursive: true });
@@ -461,13 +461,12 @@ export class WorktreeManager {
   }
 
   private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {
-    await mkdir(this.workspacesRoot, { recursive: true });
     await this.assertBranchReference(input.baseBranch);
+    const privateStore = issueRepositoryStorePath(this.stateRoot, issueKey, input.url);
     const sharedStore = input.workingBranch ? resolve(this.repositoriesRoot, repositoryKey) : await this.updateCache(input, repositoryKey);
-    let cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url);
+    const cachePath = input.workingBranch || (await managedGitDirectoryExists(privateStore)) ? await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url) : sharedStore;
     if (cachePath !== sharedStore && !input.workingBranch)
       await this.git(["-C", cachePath, "fetch", "--no-tags", sharedStore, `+refs/remotes/origin/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`]);
-    if (input.workingBranch && !(await pathExists(cachePath))) throw new Error("repository_cache_not_found");
 
     const root = issueRoot(this.stateRoot, issueKey);
     const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.existingWorkspacePath);
@@ -503,10 +502,22 @@ export class WorktreeManager {
       () => "",
     );
     if (upstream && upstream !== `origin/${workingBranch}`) await this.git(["-C", workspacePath, "branch", "--unset-upstream"]);
-    const privateStore = issueRepositoryStorePath(this.stateRoot, issueKey, input.url);
-    await isolateIssueWorktree(sharedStore, privateStore, workspacePath, workingBranch);
-    cachePath = privateStore;
-    return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
+    if (cachePath === sharedStore) {
+      try {
+        await isolateIssueWorktree(sharedStore, privateStore, workspacePath, workingBranch, baseCommit);
+      } catch (error) {
+        if (!workspaceExists) {
+          try {
+            await validateIssueWorktreeBinding(sharedStore, workspacePath, workingBranch);
+            await this.git(["-C", sharedStore, "worktree", "remove", workspacePath]);
+          } catch (cleanup) {
+            throw new WorktreeRollbackFailure(new AggregateError([error, cleanup], "worktree_rollback_failed"));
+          }
+        }
+        throw error;
+      }
+    }
+    return { cachePath: privateStore, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
   }
 
   private resolveIssueWorkspacePath(issueRoot: string, workspaceName: string, existingWorkspacePath?: string): string {

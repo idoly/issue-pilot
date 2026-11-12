@@ -1,5 +1,5 @@
 import { createConnection, createServer, type Server } from "node:net";
-import { chmod, lstat, mkdir, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 
 /** Exclusive application lifetime. The legacy pathname keeps old binaries and offline migrations interlocked. No RPC is served. */
@@ -9,8 +9,10 @@ export class ApplicationStateLease {
   private identity: { dev: bigint; ino: bigint } | undefined;
   private starting: Promise<void> | undefined;
   private closing: Promise<void> | undefined;
-  constructor(stateRoot: string) {
+  private readonly recoverStaleSocket: boolean;
+  constructor(stateRoot: string, { recoverStaleSocket = true } = {}) {
     this.socketPath = path.join(path.resolve(stateRoot), "control", "project-tools.sock");
+    this.recoverStaleSocket = recoverStaleSocket;
   }
   start(): Promise<void> {
     if (this.starting) return this.starting;
@@ -27,14 +29,19 @@ export class ApplicationStateLease {
   private async startLocked(previous?: Promise<void>): Promise<void> {
     await previous;
     if (this.server) return;
-    await mkdir(path.dirname(this.socketPath), { recursive: true, mode: 0o700 });
-    await chmod(path.dirname(path.dirname(this.socketPath)), 0o700);
-    await chmod(path.dirname(this.socketPath), 0o700);
+    const control = path.dirname(this.socketPath);
+    await mkdir(control, { recursive: true, mode: 0o700 });
+    if (!this.recoverStaleSocket && (await realpath(control)) !== control) throw new Error("application_control_directory_invalid");
+    if (this.recoverStaleSocket) {
+      await chmod(path.dirname(control), 0o700);
+      await chmod(control, 0o700);
+    }
     const metadata = await lstat(this.socketPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined;
       throw error;
     });
     if (metadata) {
+      if (!this.recoverStaleSocket) throw new Error("application_state_lease_exists");
       if (!metadata.isSocket() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) throw new Error("application_control_socket_invalid");
       const active = await new Promise<boolean>((resolve, reject) => {
         const socket = createConnection(this.socketPath);

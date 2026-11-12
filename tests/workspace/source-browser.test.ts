@@ -16,7 +16,7 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
-import { repositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
+import { issueRepositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 
 test("browses only registered Issue repository content", async () => {
@@ -54,9 +54,10 @@ test("browses only registered Issue repository content", async () => {
     });
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
-    const store = repositoryStorePath(root, "https://git.example.test/application.git"),
+    const store = issueRepositoryStorePath(root, issue!.key, "https://git.example.test/application.git"),
       gitDirectory = path.join(store, "worktrees", "application");
     await mkdir(gitDirectory, { recursive: true });
+    await writeFile(path.join(store, "config"), "[core]\n\tbare = true\n");
     await writeFile(path.join(repository, ".git"), `gitdir: ${gitDirectory}\n`);
     await writeFile(path.join(gitDirectory, "gitdir"), path.join(repository, ".git"));
     await writeFile(path.join(gitDirectory, "commondir"), "../..\n");

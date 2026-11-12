@@ -36,7 +36,7 @@ export async function assertIssueHardlinks(root: string): Promise<void> {
   }
   if ([...linked.values()].some((entry) => entry.seen < entry.links)) throw new Error("issue_external_hardlink_requires_inspection");
 }
-function environment(extra: Record<string, string> = {}): Record<string, string> {
+export function issueCommandEnvironment(extra: Record<string, string> = {}): Record<string, string> {
   const result: Record<string, string> = {};
   for (const name of [
     "PATH",
@@ -98,7 +98,7 @@ export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: 
             const [executable, ...args] = prepared.argv;
             const execution = await executeLocalCommand(executable!, args, {
               cwd: root,
-              environment: environment(getEnvironment()),
+              environment: issueCommandEnvironment(getEnvironment()),
               input: Buffer.from(JSON.stringify(input)),
               maxOutputBytes: null,
               ...(signal ? { signal } : {}),

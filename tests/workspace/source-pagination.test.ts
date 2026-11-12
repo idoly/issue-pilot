@@ -14,8 +14,7 @@ import { environments, issueRepositories, issues, issueWorkspaces, serviceDeploy
 import { executeLocalCommand, type CommandExecutor } from "../../src/process.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
-import { repositoryStorePath } from "../../src/workspace/git.ts";
-import { issueRoot } from "../../src/workspace/state.ts";
+import { WorktreeManager } from "../../src/workspace/git.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import { TestAgentController } from "../http/fixture.ts";
 
@@ -30,31 +29,24 @@ async function fixture() {
     .insert(issues)
     .values({ key: "ISSUE-20261017-991", title: "Synthetic source", type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "browser-test" })
     .returning();
-  const repository = path.join(issueRoot(root, issue!.key), "application");
-  await mkdir(repository, { recursive: true });
-  const git = async (args: string[]) => {
-    const result = await executeLocalCommand("git", ["-C", repository, ...args]);
+  const runGit = async (args: string[]) => {
+    const result = await executeLocalCommand("git", args);
     assert.equal(result.code, 0, result.stderr);
     return result.stdout.trim();
   };
-  await git(["init", "--initial-branch=hotfix-issue-20261017-991"]);
-  await git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture baseline"]);
-  const seed = path.join(root, "seed"),
-    store = repositoryStorePath(root, "https://example.test/source-pages.git");
-  await rename(repository, seed);
-  await mkdir(path.dirname(store), { recursive: true });
-  const cloned = await executeLocalCommand("git", ["clone", "--mirror", seed, store]);
-  assert.equal(cloned.code, 0, cloned.stderr);
-  const linked = await executeLocalCommand("git", ["--git-dir", store, "worktree", "add", repository, "hotfix-issue-20261017-991"]);
-  assert.equal(linked.code, 0, linked.stderr);
+  const seed = path.join(root, "seed");
+  await runGit(["init", "-b", "main", seed]);
+  await runGit(["-C", seed, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture baseline"]);
+  const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "application", url: seed, baseBranch: "main", mode: "hotfix" });
+  const repository = prepared.workspacePath;
   await database.db.insert(issueRepositories).values({
     issueId: issue!.id,
-    url: "https://example.test/source-pages.git",
+    url: seed,
     baseBranch: "main",
-    workingBranch: "hotfix-issue-20261017-991",
+    workingBranch: prepared.workingBranch,
     localPath: repository,
     workspaceName: "application",
-    commitBefore: "a".repeat(40),
+    commitBefore: prepared.baseCommit,
   });
   await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
   await prepareIssueRuntime(root, issue!.key, [{ name: "application", repositoryPath: repository }], "write");
@@ -63,7 +55,8 @@ async function fixture() {
     database,
     issue: issue!,
     repository,
-    git,
+    store: prepared.cachePath,
+    git: (args: string[]) => runGit(["-C", repository, ...args]),
     browser: new SourceBrowser(database.db, root),
     close: async () => {
       database.close();
@@ -546,12 +539,11 @@ test("a completed save does not delete a newly reused temporary pathname", async
 test("source mutations reject a Git pointer redirected to another Issue's worktree", async () => {
   const f = await fixture();
   try {
-    const store = repositoryStorePath(f.root, "https://example.test/source-pages.git"),
-      foreign = path.join(f.root, "other-issue");
-    const added = await executeLocalCommand("git", ["--git-dir", store, "worktree", "add", "--force", foreign, "hotfix-issue-20261017-991"]);
+    const foreign = path.join(f.root, "other-issue");
+    const added = await executeLocalCommand("git", ["--git-dir", f.store, "worktree", "add", "--force", foreign, "hotfix-issue-20261017-991"]);
     assert.equal(added.code, 0, added.stderr);
     const pointer = await readFile(path.join(foreign, ".git"), "utf8"),
-      directory = pointer.trim().slice("gitdir: ".length),
+      directory = path.resolve(foreign, pointer.trim().slice("gitdir: ".length)),
       index = path.join(directory, "index");
     const before = await readFile(index);
     await writeFile(path.join(f.repository, "evidence.txt"), "own change");
@@ -673,7 +665,7 @@ test("rejects source reads through aliases to Git control paths", async () => {
   const f = await fixture();
   try {
     await symlink(".git", path.join(f.repository, "control-alias"));
-    await symlink(path.join(repositoryStorePath(f.root, "https://example.test/source-pages.git"), "config"), path.join(f.repository, "config-alias"));
+    await symlink(path.join(f.store, "config"), path.join(f.repository, "config-alias"));
     await assert.rejects(f.browser.tree(f.issue, "application", "control-alias"), /invalid_source_path/);
     await assert.rejects(f.browser.file(f.issue, "application", "config-alias"), /source_path_outside_repository/);
     await assert.rejects(f.browser.createFile(f.issue, "application", "control-alias/new.txt", "forbidden"), /invalid_source_path|source_path_outside_repository/);

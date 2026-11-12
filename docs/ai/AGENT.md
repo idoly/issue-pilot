@@ -46,6 +46,10 @@ The binding must name a private `.session-` file directly under its own Issue ro
 
 Read-only rounds close instances at completion and restore from durable history next round; idle dev instances may be reused. The application defaults Pi cache warming to streaming; warming between rounds requires explicit configuration. Failure cleanup stays serialized and cannot overwrite a newer round. Aggregate abort/shutdown/dispose and storage cleanup errors.
 
+## Conversation Git
+
+Native tools and stdio MCP can read the current Issue's Git metadata and inspect other authorized refs that are already available locally. They cannot change refs, HEAD or the index. Development uses the [workspace tool](../../src/agent/workspace-tool.ts) to stage named paths, unstage, commit staged changes, or push the recorded branch to the same name on origin. Each operation rechecks the recorded private store and both worktree links. Fixed Git commands use SRT with writes to that store only; the selected developer's personal SSH key is exposed only to the push invocation. There is no force push, branch creation or switching, or publication to another ref. Test and production conflict resolution belongs to the corresponding integration or merge request; environment-specific changes stay out of the Issue branch.
+
 ## Native evidence queries
 
 [service-query-tool.ts](../../src/agent/service-query-tool.ts) parses unknown boundary input and dispatches environment/service/capability to its owner. Targets come from authorized deployments, not credentials. Keep execution checks required after mutable Pi hooks.

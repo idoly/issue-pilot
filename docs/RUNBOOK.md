@@ -94,7 +94,20 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 node --experimental-strip-types scripts/check-issue-state.ts --state-root /absolute/path/to/state
 ```
 
-检查工单关联的工作区记录、解决状态以及新旧目录的归属。排查共享 Git 时可追加 `--shared-git`，校验全部共享快照的 Git 指针、提交与工作树。遇到异常先保留现场；审计不修复、不清理，常规重启也不需要执行它。
+检查工单关联的工作区记录、解决状态以及新旧目录的归属。排查共享 Git 时可追加 `--shared-git`，校验全部共享快照的 Git 指针、提交与工作树。单独排查开发仓库绑定时，追加 `--development-git`，核对私有仓、工作树双向指针和镜像分支。只有共享分支、没有私有仓或工作树的记录需要另找历史证据。遇到异常先保留现场；审计不修复、不清理，常规重启也不需要执行它。
+
+## 开发工单 Git 迁移
+
+记录过的开发分支只从工单私有仓读取。对历史共享工作树，核对审计中的工单、仓库哈希、数据库记录的分支以及共享仓该完整引用的提交。已释放工单另需独立证据确认提交，例如发布记录或可核对的旧工单私有仓；只有共享引用不足以迁移。分支不符时保留现场，勿加入清单。
+
+清单是 JSON 数组。每项填写 `issue`、`repository`（审计的 20 位仓库哈希）、`branch`（数据库记录名）及 `sharedCommit`（核对过的 40 位提交）；已释放工单还需 `releasedEvidence`，填写可复核的证据出处，不放凭据。先预演：
+
+```bash
+node --experimental-strip-types scripts/migrate-development-git.ts \
+  --state-root /absolute/path/to/state --manifest /absolute/path/to/manifest.json
+```
+
+正式执行前停止应用和所有 Git 写入者，确认清单，再追加 `--apply`。工具拒绝已有租约套接字，整份清单通过校验才写入；迁移逐条生效，失败即停，已完成项会输出 `migrated`。复核失败项和残留的 `.preparing-*`、私有仓及工作树指针后再重试，勿清理未知路径。迁移后重新运行 `--development-git` 审计并复查迁移的 refs、工作树和未提交变更，再启动服务。
 
 ## 工单删除失败边界
 

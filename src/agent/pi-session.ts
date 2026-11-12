@@ -45,9 +45,6 @@ export interface StartPiSessionOptions {
   readRoots?: string[];
   /** SQLite-selected personal or shared key; AgentEngine always supplies it, only injected runtimes omit it. */
   modelApiKey?: string;
-  gitEnvironment?: Record<string, string>;
-  gitAccess?: "write" | "read";
-  gitReadRoots?: readonly string[];
   gitIdentity?: GitCommitIdentity;
   serviceScopes?: ServiceToolScope[];
   workspaceTool?: ToolDefinition<any, any, any>;
@@ -314,16 +311,15 @@ function sessionTools(
   model: AgentSession["model"],
   dms: Pick<DmsQueryRound, "query">,
 ): ToolDefinition<any, any, any>[] {
-  const { context, deploymentConfig, workspaceRoot, workFiles, gitEnvironment, serviceScopes } = options;
+  const { context, deploymentConfig, workspaceRoot, workFiles, serviceScopes } = options;
   const tools = createCapabilityTools(context, deploymentConfig, { workFiles, serviceScopes, dms });
   tools.unshift(
     ...issueNativeTools(
       {
         writeRoot: workspaceRoot,
         ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
-        gitAccess: options.gitAccess ?? (context.canModifyCode ? "write" : "read"),
         get readRoots() {
-          return [...(options.readRoots ?? []), ...(options.gitReadRoots ?? []), options.agentDirectory ?? getAgentDir()];
+          return [...(options.readRoots ?? []), options.agentDirectory ?? getAgentDir()];
         },
         networkDomains: options.runtime?.networkAllowedDomains ?? [],
       },
@@ -341,7 +337,6 @@ function sessionTools(
         PI_REASONING_LEVEL: context.model.thinkingLevel,
         ...(settings.getShellPath() ? { ISSUE_PILOT_SHELL_PATH: settings.getShellPath()! } : {}),
         ...(settings.getShellCommandPrefix() ? { ISSUE_PILOT_SHELL_PREFIX: settings.getShellCommandPrefix()! } : {}),
-        ...gitEnvironment,
         ...identityEnvironment(),
       }),
     ),
@@ -488,7 +483,6 @@ export class PiSessionRuntime {
         {
           writeRoot: workspaceRoot,
           ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
-          gitAccess: "read",
           readRoots: options.readRoots ?? [],
           networkDomains: options.runtime?.networkAllowedDomains ?? [],
         },

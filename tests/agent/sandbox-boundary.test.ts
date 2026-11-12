@@ -65,7 +65,7 @@ test("stdio sandbox Git protection includes stores created after the connection 
   const store = path.join(root, ".issue-git", "a".repeat(20)),
     config = path.join(store, "config");
   const code = `try { require('node:fs').writeFileSync(${JSON.stringify(config)}, 'compromised'); process.exit(0); } catch { process.exit(17); }`;
-  const prepared = await prepareIssueCommand({ writeRoot: root, gitAccess: "read" }, [process.execPath, "-e", code]);
+  const prepared = await prepareIssueCommand({ writeRoot: root }, [process.execPath, "-e", code]);
   try {
     await mkdir(store, { recursive: true });
     await writeFile(config, "trusted");
@@ -86,7 +86,7 @@ test("unexpected .issue-git entries stay protected without disabling native tool
   try {
     await mkdir(path.dirname(stray), { recursive: true });
     await writeFile(stray, "original");
-    prepared = await prepareIssueCommand({ writeRoot: root, gitAccess: "write" }, [process.execPath, "-e", code]);
+    prepared = await prepareIssueCommand({ writeRoot: root }, [process.execPath, "-e", code]);
     const result = await executeLocalCommand(prepared.argv[0]!, prepared.argv.slice(1), { cwd: root });
     assert.equal(result.code, 17);
     assert.equal(await readFile(stray, "utf8"), "original");

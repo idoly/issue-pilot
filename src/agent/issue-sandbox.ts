@@ -17,7 +17,8 @@ export interface IssueFilesystemPolicy {
   stateRoot?: string;
   readRoots?: readonly string[];
   networkDomains?: readonly string[];
-  gitAccess?: "write" | "read";
+  /** Only fixed bound-branch commands may grant writes to a selected private store. */
+  writableGitStore?: string;
 }
 export interface PreparedIssueCommand {
   argv: string[];
@@ -157,6 +158,9 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
   const gitRoot = path.join(root, ".issue-git");
   await mkdir(gitRoot, { recursive: true, mode: 0o700 });
   if ((await realpath(gitRoot)) !== gitRoot || !(await lstat(gitRoot)).isDirectory()) throw new Error("workspace_git_store_invalid");
+  const writableStore = policy.writableGitStore;
+  if (writableStore && (path.dirname(writableStore) !== gitRoot || !/^[a-f0-9]{20}$/.test(path.basename(writableStore)) || (await realpath(writableStore)) !== writableStore))
+    throw new Error("workspace_git_store_invalid");
   const directory = await realpath(cwd);
   if (!within(root, directory)) throw new Error("issue_sandbox_cwd_outside_issue");
   if (!command.length || command.some((value) => value.includes("\0"))) throw new Error("invalid_issue_command");
@@ -189,21 +193,20 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
   };
   try {
     const denyWrite = ["/tmp/claude", "/private/tmp/claude", path.join(os.homedir(), ".npm/_logs"), path.join(os.homedir(), ".claude/debug")];
-    if (policy.gitAccess === "read") denyWrite.push(gitRoot);
+    if (!writableStore) denyWrite.push(gitRoot);
     else
       for (const name of await readdir(gitRoot)) {
         const file = path.join(gitRoot, name);
-        // Preserve unexpected entries for the Git owner instead of disabling every native tool.
-        if (!/^[a-f0-9]{20}$/.test(name)) {
+        if (file !== writableStore) {
           denyWrite.push(file);
           continue;
         }
-        denyWrite.push(path.join(file, "config"), path.join(file, "hooks"), path.join(file, "issue-pilot-published.json"), path.join(file, "objects/info/alternates"));
+        for (const control of ["HEAD", "config", "hooks", "issue-pilot-published.json", "objects/info/alternates"]) denyWrite.push(path.join(file, control));
         for (const worktree of await readdir(path.join(file, "worktrees")).catch((error: NodeJS.ErrnoException) => {
           if (error.code === "ENOENT") return [];
           throw error;
         })) {
-          for (const protectedName of ["commondir", "gitdir", "config.worktree"]) denyWrite.push(path.join(file, "worktrees", worktree, protectedName));
+          for (const protectedName of ["HEAD", "commondir", "gitdir", "config.worktree"]) denyWrite.push(path.join(file, "worktrees", worktree, protectedName));
         }
       }
     // This is a snapshot: managed files created later stay writable to this sandbox. Owners therefore write
@@ -218,7 +221,7 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
             if (error.code === "ENOENT") return undefined;
             throw error;
           });
-        if (metadata?.isFile()) denyWrite.push(git);
+        if (metadata) denyWrite.push(git);
       }
     }
     const agent = getAgentDir(),
