@@ -4,10 +4,11 @@ import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { issueRoot } from "../../src/workspace/state.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEngine, type AgentReservation } from "../../src/agent/engine.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
-import type { GitCommitIdentity, ManagedPiSession } from "../../src/agent/pi-session.ts";
+import { createPrivateSessionManager, type GitCommitIdentity, type ManagedPiSession } from "../../src/agent/pi-session.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces, subjects } from "../../src/db/schema.ts";
 import { ApiError } from "../../src/http/input.ts";
@@ -31,7 +32,7 @@ for (const mode of ["queued", "steering", "steering-to-queued"] as const)
       const dispatched: Array<string | undefined> = [];
       const steered: string[] = [];
       const identities: GitCommitIdentity[] = [];
-      const manager = SessionManager.inMemory(f.root);
+      let manager = SessionManager.inMemory(f.root);
       internal.run = async (_issueId, message) => {
         dispatched.push(message);
       };
@@ -54,6 +55,8 @@ for (const mode of ["queued", "steering", "steering-to-queued"] as const)
         // The sender owns no Issues and is also the deterministic default identity before deactivation.
         await database.db.insert(subjects).values({ subject: sender, role: "product", createdAt: new Date(0) });
         if (mode !== "queued") {
+          const root = issueRoot(f.root, String(issue.id));
+          manager = await createPrivateSessionManager(root, root);
           let streaming = true;
           internal.sessions.set(issueId, {
             get streaming() {

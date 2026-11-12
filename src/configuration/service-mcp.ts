@@ -1,4 +1,5 @@
-import { userPreferences } from "../db/schema.ts";
+import { dbHubConnections } from "./dbhub.ts";
+import { mcpServices, serviceDeployments, userPreferences } from "../db/schema.ts";
 import type { Database } from "../db/client.ts";
 
 /** DingTalk connections are application import resources, never service tools. */
@@ -14,4 +15,10 @@ export function serviceMcpConnections<Row extends { name: string; enabled: boole
 ): Row[] {
   const scope = new Set(deploymentIds);
   return rows.filter((row) => row.enabled && row.deploymentId != null && scope.has(row.deploymentId) && !importNames.has(row.name));
+}
+
+/** Read within the caller's configuration scope/snapshot. Generated connections are never persisted. */
+export async function loadMcpConnections(database: Pick<Database, "select">) {
+  const [connections, deployments] = await Promise.all([database.select().from(mcpServices), database.select().from(serviceDeployments)]);
+  return [...connections, ...dbHubConnections(deployments, connections)];
 }

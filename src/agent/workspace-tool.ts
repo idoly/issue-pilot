@@ -2,10 +2,10 @@ import { and, eq } from "drizzle-orm";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { compile, lit, obj, oneOf, str, union, unknown as unknownSchema, type Static } from "@earendil-works/pi-schema";
 import type { Database } from "../db/client.ts";
-import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
+import { dingtalkMcpNames, loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { publicMcpUrl } from "../configuration/mcp.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
-import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, mcpServices, repositories as repositoryCatalog } from "../db/schema.ts";
+import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueLocalCommands } from "./native-tools.ts";
@@ -81,9 +81,7 @@ export async function createWorkspaceTool(
       if (input.operation === "describe") {
         const target = available.find((row) => row.service.key === input.service && row.environment.key === input.environment);
         if (!target) throw new Error("service_not_available_in_environment");
-        const mcpRows = await database
-          .select({ id: mcpServices.id, name: mcpServices.name, url: mcpServices.url, transport: mcpServices.transport, enabled: mcpServices.enabled, deploymentId: mcpServices.deploymentId })
-          .from(mcpServices);
+        const mcpRows = (await loadMcpConnections(database)).map(({ id, name, url, transport, enabled, deploymentId }) => ({ id, name, url, transport, enabled, deploymentId }));
         const mcp = serviceMcpConnections(mcpRows, [target.deployment.id], await dingtalkMcpNames(database));
         const definition = await loadDeploymentRepositories(database, { serviceId: target.service.id, environmentId: target.environment.id });
         const names = new Map((await database.select().from(repositoryCatalog)).map((row) => [row.url, row.name]));

@@ -108,6 +108,7 @@ describe("Agent conversation state", () => {
       comments: [],
       environmentKey: "dev",
       agentRunning: true,
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     let resolve!: (response: Response) => void;
@@ -184,6 +185,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const original = { content: [{ type: "text" as const, text: "x".repeat(issuePilotConfig.web.agentToolOutputCharacters + 1) }] };
@@ -400,12 +402,14 @@ describe("Agent conversation state", () => {
       status: "complete",
       startedAt: "2026-08-06T00:00:00.000Z",
       arguments: {
-        path: "/home/idoly/issue-pilot/.issue-pilot/workspaces/issue-20260807-001/srm-api-manage/src/PurchaseOrderServiceImpl.java",
+        path: "/fixture/data/workspaces/ISSUE-20260807-001/srm-api-manage/src/PurchaseOrderServiceImpl.java",
         offset: 2940,
         limit: 220,
       },
     } satisfies ConversationEntry;
-    expect(toolLabel(entry)).toBe("read ~/srm-api-manage/src/PurchaseOrderServiceImpl.java:2940-3159");
+    expect(toolLabel(entry, "/fixture/data/workspaces/ISSUE-20260807-001")).toBe("read ~/srm-api-manage/src/PurchaseOrderServiceImpl.java:2940-3159");
+    expect(toolLabel(entry, "/fixture/data/workspaces/ISSUE-20260807-00")).toContain("/fixture/data/workspaces/ISSUE-20260807-001/");
+    expect(toolLabel(entry, "/fixture/data/workspaces/ISSUE-20260807-002")).toContain("/fixture/data/workspaces/ISSUE-20260807-001/");
   });
 
   it("uses Pi read range defaults and only colors display-diff prefixes", () => {
@@ -440,6 +444,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const initial: Extract<ConversationEntry, { kind: "tool" }> = {
@@ -568,6 +573,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const fetchRequest = vi.spyOn(globalThis, "fetch");
@@ -600,6 +606,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:clipboard-image");
@@ -656,6 +663,7 @@ describe("Agent conversation state", () => {
         attachments: [],
         comments: [],
         environmentKey: "dev",
+        workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:uncertain-image");
@@ -670,7 +678,8 @@ describe("Agent conversation state", () => {
         await waitFor(() => expect(editor.value).toBe("check the uncertain operation"));
         fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
         expect(await screen.findByText(warning)).toBeTruthy();
-        expect(editor.value).toBe("check the uncertain operation");
+        expect(editor.value).toBe("");
+        expect(screen.getByText("check the uncertain operation")).toBeTruthy();
         expect(screen.getByAltText("uncertain.png")).toBeTruthy();
         if (code === "resolved_issue_cannot_run_agent") expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
         expect(fetchRequest).toHaveBeenCalledTimes(1);
@@ -697,6 +706,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -759,6 +769,7 @@ describe("Agent conversation state", () => {
         attachments: [],
         comments: [],
         environmentKey: "dev",
+        workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -839,6 +850,7 @@ describe("Agent conversation state", () => {
         attachments: [],
         comments: [],
         environmentKey: "dev",
+        workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -902,6 +914,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -948,6 +961,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
@@ -1045,6 +1059,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
@@ -1095,12 +1110,14 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "preparing", sourceAvailable: false },
     } satisfies IssueDetail;
     const prepared = {
       ...initial,
       status: "in_progress" as const,
       repositories: [{ name: "service", url: "git@example.test:team/service.git", baseBranch: "main", workingBranch: "feature-issue-20260810-001" }],
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running" as const, sourceAvailable: true },
     };
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
@@ -1144,6 +1161,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
@@ -1176,6 +1194,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "prod",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -1229,6 +1248,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -1284,6 +1304,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -1405,6 +1426,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -1449,6 +1471,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const first = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -1484,6 +1507,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "dev",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     let respond!: (response: Response) => void;
@@ -1506,11 +1530,28 @@ describe("Agent conversation state", () => {
     const second = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
     onTestFinished(() => second.unmount());
     const secondEditor = second.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
-    expect(secondEditor.disabled).toBe(true);
+    expect(secondEditor.disabled).toBe(false);
+    fireEvent.input(secondEditor, { target: { value: "new independent draft" } });
     respond(new Response(JSON.stringify({ error: "agent_session_file_missing" }), { status: 409 }));
-    await waitFor(() => expect(secondEditor.value).toBe("slow question"));
+    await second.findByText("会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。");
+    expect(secondEditor.value).toBe("new independent draft");
+    expect(second.getByText("slow question")).toBeTruthy();
     expect(secondEditor.disabled).toBe(false);
     expect(second.getByText("会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。")).toBeTruthy();
+    const messageId = new Headers(fetchRequest.mock.calls[0]![1]!.headers).get("X-Issue-Pilot-Message-Id");
+    expect(messageId).toBeTruthy();
+    fetchRequest.mockResolvedValueOnce(new Response(JSON.stringify({ state: "unknown" })));
+    fireEvent.click(second.getByRole("button", { name: "查询接收状态" }));
+    await second.findByText(/暂时无法确认接收结果/);
+    expect(second.getByText("slow question")).toBeTruthy();
+    expect(secondEditor.value).toBe("new independent draft");
+    fetchRequest.mockResolvedValueOnce(new Response(JSON.stringify({ state: "started" })));
+    fireEvent.click(second.getByRole("button", { name: "查询接收状态" }));
+    await second.findByText("消息已接收，请查看会话中的处理进度。");
+    expect(second.queryByText("slow question")).toBeNull();
+    expect(secondEditor.value).toBe("new independent draft");
+    expect(fetchRequest.mock.calls.slice(1).every(([url, init]) => url === `/api/issues/${issue.id}/agent-messages/${messageId}` && (!init?.method || init.method === "GET"))).toBe(true);
+    expect(fetchRequest).toHaveBeenCalledTimes(3);
   });
 
   for (const code of ["agent_session_file_missing", "resolved_issue_cannot_run_agent"])
@@ -1531,6 +1572,7 @@ describe("Agent conversation state", () => {
         attachments: [],
         comments: [],
         environmentKey: "dev",
+        workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       const drafts = new AgentDraftStore();
@@ -1590,6 +1632,7 @@ describe("Agent conversation state", () => {
         attachments: [],
         comments: [],
         environmentKey: "prod",
+        workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
       const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
@@ -1646,6 +1689,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "prod",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     let rejectFirst!: (error: unknown) => void;
@@ -1684,6 +1728,7 @@ describe("Agent conversation state", () => {
       attachments: [],
       comments: [],
       environmentKey: "prod",
+      workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn<() => Promise<IssueDetail>>().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValue(issue);
@@ -1719,6 +1764,7 @@ describe("Agent conversation loading", () => {
     attachments: [],
     comments: [],
     environmentKey: "prod",
+    workingDirectory: "/fixture/workspaces/issue",
     workspace: { status: "ready", sourceAvailable: false },
   } satisfies IssueDetail;
 

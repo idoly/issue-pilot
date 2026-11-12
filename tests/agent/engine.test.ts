@@ -127,7 +127,7 @@ test("selects repository preparation modes from environment and issue type", () 
 });
 
 test("reserves issues against concurrent Agent activity and always releases reservations", async () => {
-  const engine = new AgentEngine({} as never);
+  const engine = new AgentEngine({} as never, unusedStateRoot);
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => {
     release = resolve;
@@ -155,7 +155,7 @@ test("reserves issues against concurrent Agent activity and always releases rese
 });
 
 test("drains active reservations before closing and rejects new activity", async () => {
-  const engine = new AgentEngine({} as never);
+  const engine = new AgentEngine({} as never, unusedStateRoot);
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -183,7 +183,7 @@ test("drains active reservations before closing and rejects new activity", async
 });
 
 test("attempts to stop every session when closing", async () => {
-  const engine = new AgentEngine({} as never);
+  const engine = new AgentEngine({} as never, unusedStateRoot);
   const stopped: string[] = [];
   const internal = engine as unknown as { sessions: Map<string, unknown> };
   internal.sessions.set("issue-1", {
@@ -307,7 +307,7 @@ test("retains an accepted message without dispatching it after the Issue becomes
   );
 });
 
-test("serializes streaming messages and records only accepted steering", async () => {
+test("persists streaming admissions before serialized dispatch, including uncertain failures", async () => {
   const records: string[] = [];
   const steers: string[] = [];
   const steeredImages: unknown[] = [];
@@ -345,12 +345,12 @@ test("serializes streaming messages and records only accepted steering", async (
   await waitFor(() => steers.length === 1);
   assert.equal(steers[0]?.includes("first"), true);
   assert.deepEqual(steeredImages[0], [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }]);
-  assert.equal(records.length, 0);
+  assert.equal(records.length, 1);
   releaseFirst();
   await first;
   await assert.rejects(second, /steer_failed/);
   assert.equal(steers[1]?.includes("second"), true);
-  assert.deepEqual(records, ["first"]);
+  assert.deepEqual(records, ["first", "second"]);
   assert.equal(engine.isRunning("issue-1"), false);
 });
 
@@ -418,7 +418,7 @@ test("a steer left undelivered when the round ends is taken back and queued inst
       sessionManager: {
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string; delivery?: unknown }) {
-          records.push({ message: data.message, queued: data.delivery !== undefined });
+          if (_type === "issue-pilot-user") records.push({ message: data.message, queued: data.delivery !== undefined });
           return `entry-${records.length}`;
         },
       },
@@ -581,7 +581,7 @@ test("queues a waiting steering message when the preceding turn becomes idle", {
   }
 });
 
-test("does not record or replay an uncertain steer after failed-round cleanup replaces its session", { timeout: 5_000 }, async () => {
+test("retains the uncertain admission without replaying it after failed-round cleanup replaces its session", { timeout: 5_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-steer-replaced-"));
   await claimIssueRoot(root, fixtureIssueKey);
   const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }] }) }) }) };
@@ -594,6 +594,7 @@ test("does not record or replay an uncertain steer after failed-round cleanup re
     sessions: Map<string, unknown>;
     schedule(issueId: string, operation: () => Promise<void>): void;
     run(issueId: string, message?: string): Promise<void>;
+    promptExisting(issueId: string, managed: unknown, message?: string): Promise<void>;
   };
   let fail!: () => void;
   let releaseSteer!: () => void;
@@ -631,6 +632,9 @@ test("does not record or replay an uncertain steer after failed-round cleanup re
     },
   };
   internal.run = async (_issueId, message) => {
+    dispatched.push(message);
+  };
+  internal.promptExisting = async (_issueId, _managed, message) => {
     dispatched.push(message);
   };
   internal.sessions.set("issue-1", {
@@ -672,7 +676,7 @@ test("does not record or replay an uncertain steer after failed-round cleanup re
     await rejected;
     await next;
     await waitFor(() => !engine.isRunning("issue-1"));
-    assert.deepEqual(records, []);
+    assert.deepEqual(records, ["uncertain"]);
     assert.equal(oldStops, 1);
     assert.equal(newStops, 0);
     assert.deepEqual(dispatched, ["not dispatched yet"]);
@@ -722,7 +726,7 @@ test("isolates publisher failures after recording a streaming message", async ()
   assert.equal(internal.sessions.has("issue-1"), true);
 });
 
-test("closes a streaming session when an accepted steer cannot be recorded", async () => {
+test("refuses steering and closes the session when admission cannot be persisted", async () => {
   let stopped = false;
   const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
   const engine = new AgentEngine(database as never, unusedStateRoot);

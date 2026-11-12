@@ -526,6 +526,13 @@
       "when": 1794326400000,
       "tag": "0074_issue_search_configuration",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1794441600000,
+      "tag": "0075_derive_dbhub_connections",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import { SerialQueue } from "../serial.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { addAbortListener } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -345,7 +346,14 @@ async function resolveFileTarget(
   return resolved;
 }
 
-export async function queryDms(input: CapabilityInputs["dms"], configured: CapabilityConfig<"dms">, signal?: AbortSignal, connect: ConnectDmsMcp = connectDmsMcp, workFiles?: IssueWorkFileStore) {
+export async function queryDms(
+  input: CapabilityInputs["dms"],
+  configured: CapabilityConfig<"dms">,
+  signal?: AbortSignal,
+  connect: ConnectDmsMcp = connectDmsMcp,
+  workFiles?: IssueWorkFileStore,
+  deadline?: AbortSignal,
+) {
   if (input.export) {
     if (!workFiles) throw new Error("issue_work_files_not_available");
     workFileName(input.export.fileName);
@@ -353,7 +361,7 @@ export async function queryDms(input: CapabilityInputs["dms"], configured: Capab
   }
   const database = configured.databases.find(({ schemaName }) => schemaName === input.schema);
   if (!database) throw new Error("dms_database_not_authorized");
-  const boundedSignal = operationSignal(signal);
+  const boundedSignal = deadline ?? operationSignal(signal);
   const args = executeScriptArguments(input, database.databaseId);
   const started = performance.now();
   const phaseElapsedMs: DmsDiagnostics["phaseElapsedMs"] = {};
@@ -428,5 +436,90 @@ export async function queryDms(input: CapabilityInputs["dms"], configured: Capab
       },
       boundedSignal.aborted ? new Error("dms_mcp_timeout", { cause: error }) : error,
     );
+  }
+}
+
+/** One owner per Agent round. Credentials are scoped to this object, never a process-wide pool. */
+export class DmsQueryRound {
+  private readonly queue = new SerialQueue();
+  private readonly lifetime = new AbortController();
+  private readonly connections = new Map<string, { session: DmsMcpSession; tools?: DmsMcpTool[] }>();
+  private closing?: Promise<void>;
+  private readonly connect: ConnectDmsMcp;
+
+  constructor(connect: ConnectDmsMcp = connectDmsMcp) {
+    this.connect = connect;
+  }
+
+  query(input: CapabilityInputs["dms"], configured: CapabilityConfig<"dms">, signal?: AbortSignal, workFiles?: IssueWorkFileStore) {
+    const cancellation = AbortSignal.any([this.lifetime.signal, ...(signal ? [signal] : [])]);
+    const bounded = operationSignal(cancellation);
+    return this.queue.run(async () => {
+      cancellation.throwIfAborted();
+      if (bounded.aborted) throw new Error("dms_mcp_timeout");
+      const key = JSON.stringify([configured.url, configured.authorization]);
+      const borrow: ConnectDmsMcp = async (_configuration, requestSignal) => {
+        requestSignal.throwIfAborted();
+        let entry = this.connections.get(key);
+        if (!entry) {
+          // Only the handshake borrows the first request's deadline. The established transport
+          // belongs to the round, so that deadline cannot later disconnect another query.
+          const connecting = new AbortController();
+          const abort = addAbortListener(requestSignal, () => connecting.abort(requestSignal.reason));
+          try {
+            const session = await this.connect(configured, AbortSignal.any([this.lifetime.signal, connecting.signal]));
+            entry = { session };
+            this.connections.set(key, entry);
+            requestSignal.throwIfAborted();
+          } finally {
+            abort[Symbol.dispose]();
+          }
+        }
+        const current = entry;
+        return {
+          listTools: async (requestSignal) => {
+            requestSignal.throwIfAborted();
+            current.tools ??= await current.session.listTools(requestSignal);
+            requestSignal.throwIfAborted();
+            return current.tools;
+          },
+          callTool: (name, args, requestSignal) => current.session.callTool(name, args, requestSignal),
+          // Query completion does not depend on releasing a round-owned connection.
+          close: async () => {},
+        };
+      };
+      try {
+        return await queryDms(input, configured, cancellation, borrow, workFiles, bounded);
+      } catch (error) {
+        const entry = this.connections.get(key);
+        if (entry) {
+          try {
+            await entry.session.close();
+            this.connections.delete(key);
+          } catch (cleanup) {
+            throw new Error("dms_mcp_operation_cleanup_failed", { cause: new AggregateError([error, cleanup]) });
+          }
+        }
+        throw error;
+      }
+    });
+  }
+
+  close(): Promise<void> {
+    this.closing ??= (async () => {
+      this.lifetime.abort(new Error("dms_round_closed"));
+      await this.queue.idle();
+      const failures: unknown[] = [];
+      for (const [key, entry] of this.connections) {
+        try {
+          await entry.session.close();
+          this.connections.delete(key);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length) throw new Error("dms_mcp_connection_cleanup_failed", { cause: new AggregateError(failures) });
+    })();
+    return this.closing;
   }
 }

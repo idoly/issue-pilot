@@ -91,7 +91,7 @@ The private host runner allows up to 1800 seconds for graceful stop and 600 seco
 
 ## Web projection
 
-- ApplicationResources owns identity, configuration and per-Issue Agent drafts/failures. Navigation can restore them; identity changes cancel old unsent work and generation checks reject late responses.
+- ApplicationResources owns identity, configuration and per-Issue Agent drafts/failures. A submitted snapshot (ID/text/images) is independent of the next draft; receipt queries never resend it. Navigation can restore them; identity changes cancel old unsent work and generation checks reject late responses.
 - A stream is usable only after replay reaches snapshot_ready. Invalid frames invalidate the connection; reconnect replaces the projection instead of accepting a partial snapshot.
 - Stable entry IDs/contentIndex preserve block identity. Streaming is plain text; completed content uses Markdown. Tool details and Monaco load lazily; editors and models are disposed independently.
 - ConversationProjection owns display reduction for replay, live batches and history pages. Tool-call and streaming-assistant indexes avoid repeatedly scanning history; snapshots use copy-on-write so an entire replay or batch needs at most one array copy while previously published snapshots remain unchanged.

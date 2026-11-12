@@ -1,3 +1,4 @@
+import { DmsQueryRound } from "../capabilities/dms.ts";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import path from "node:path";
@@ -306,9 +307,15 @@ export function gitIdentityEnvironment(identity?: GitCommitIdentity): Record<str
   };
 }
 
-function sessionTools(options: StartPiSessionOptions, identityEnvironment: () => Record<string, string>, settings: SettingsManager, model: AgentSession["model"]): ToolDefinition<any, any, any>[] {
+function sessionTools(
+  options: StartPiSessionOptions,
+  identityEnvironment: () => Record<string, string>,
+  settings: SettingsManager,
+  model: AgentSession["model"],
+  dms: Pick<DmsQueryRound, "query">,
+): ToolDefinition<any, any, any>[] {
   const { context, deploymentConfig, workspaceRoot, workFiles, gitEnvironment, serviceScopes } = options;
-  const tools = createCapabilityTools(context, deploymentConfig, { workFiles, serviceScopes });
+  const tools = createCapabilityTools(context, deploymentConfig, { workFiles, serviceScopes, dms });
   tools.unshift(
     ...issueNativeTools(
       {
@@ -521,6 +528,13 @@ export class PiSessionRuntime {
       .flatMap((extension) => [...extension.tools.values()].map((tool) => tool.definition));
     assertExtensionToolNames(extensions.extensions);
 
+    let dmsRound: DmsQueryRound | undefined;
+    const dms: Pick<DmsQueryRound, "query"> = {
+      query: (...args) => {
+        if (!dmsRound) throw new Error("dms_round_not_running");
+        return dmsRound.query(...args);
+      },
+    };
     let activeSession: AgentSession | undefined;
     try {
       const requiredTools = [...sessionToolAllowlist(context), ...(options.workspaceTool ? [options.workspaceTool.name] : [])];
@@ -537,7 +551,7 @@ export class PiSessionRuntime {
         model,
         thinkingLevel: context.model.thinkingLevel,
         tools: allowedTools,
-        customTools: [...sessionTools(options, () => identityEnvironment, settingsManager, model), ...(options.workspaceTool ? [options.workspaceTool] : [])],
+        customTools: [...sessionTools(options, () => identityEnvironment, settingsManager, model, dms), ...(options.workspaceTool ? [options.workspaceTool] : [])],
         sessionManager: options.manager,
         settingsManager,
         resourceLoader,
@@ -585,14 +599,27 @@ export class PiSessionRuntime {
           signal?.throwIfAborted();
           signal?.addEventListener("abort", abort, { once: true });
           watchdog.start();
+          const queries = new DmsQueryRound();
+          dmsRound = queries;
+          let failure: unknown;
           try {
             await Promise.race([session.prompt(command ?? message, images.length ? { images } : undefined), idle]);
             // Pi resolves after its retry policy settles, including terminal model errors.
             if (modelResponseFailed) throw new Error("model_response_failed");
+          } catch (error) {
+            failure = error;
+            throw error;
           } finally {
             signal?.removeEventListener("abort", abort);
             rejectIdle = undefined;
             watchdog.stop();
+            dmsRound = undefined;
+            try {
+              await queries.close();
+            } catch (cleanup) {
+              // biome-ignore lint/correctness/noUnsafeFinally: preserve both the round failure and disposal failure.
+              throw new Error("dms_mcp_connection_cleanup_failed", { cause: new AggregateError(failure === undefined ? [cleanup] : [failure, cleanup]) });
+            }
           }
         },
         stop: () =>

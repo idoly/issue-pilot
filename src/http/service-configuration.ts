@@ -1,4 +1,5 @@
-import { parseDbHubTargets, saveDbHubConnections } from "../configuration/dbhub.ts";
+import { loadMcpConnections } from "../configuration/service-mcp.ts";
+import { parseDbHubTargets } from "../configuration/dbhub.ts";
 import { or, eq, inArray, sql } from "drizzle-orm";
 import { CapabilityConfigurationError } from "../capabilities/registry.ts";
 import { resolveConfiguredCapabilitySections } from "../configuration/credentials.ts";
@@ -131,7 +132,6 @@ async function applyServiceDeployment(
       branches.length === input.repositoryBranches.length &&
       input.repositoryBranches.every((branch) => branches.some((current) => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))
     ) {
-      await saveDbHubConnections(executor, existing.id, input.config.dbhub ?? []);
       return { deployment: existing, changed: false };
     }
   }
@@ -147,7 +147,6 @@ async function applyServiceDeployment(
     await executor
       .insert(serviceDeploymentRepositories)
       .values(input.repositoryBranches.map((branch) => ({ deploymentId: saved.id, repositoryId: repositories.get(branch.repositoryAlias)!.id, baseBranch: branch.baseBranch })));
-  await saveDbHubConnections(executor, saved.id, input.config.dbhub ?? []);
   return { deployment: saved, changed: true };
 }
 
@@ -216,6 +215,7 @@ export async function applyServiceConfiguration(options: {
       await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
       configurationChanged = true;
     }
+  if (configurationChanged) await loadMcpConnections(executor);
   if (configurationChanged && !serviceUpdate)
     await executor
       .update(services)

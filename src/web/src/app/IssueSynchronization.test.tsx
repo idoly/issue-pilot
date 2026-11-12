@@ -23,6 +23,7 @@ const summary = (): IssueExecutionItem => {
 };
 beforeEach(() => {
   current = {
+    workingDirectory: "/fixture/workspaces/issue",
     id: "ISSUE-20261109-001",
     title: "Sync fixture",
     description: "",

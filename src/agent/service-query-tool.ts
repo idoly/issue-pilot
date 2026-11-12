@@ -1,7 +1,7 @@
 import { defineTool, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { compile, lit, union, unknown as unknownSchema, type Schema } from "@earendil-works/pi-schema";
 import { structuredJsonResult } from "../capabilities/contracts.ts";
-import { DmsOperationError, queryDms } from "../capabilities/dms.ts";
+import { DmsOperationError, queryDms, type DmsQueryRound } from "../capabilities/dms.ts";
 import { capabilityToolInputSchema, type CapabilityInputs } from "../capabilities/registry.ts";
 import { readSlsLogs } from "../capabilities/sls.ts";
 import { objectToolParameters } from "./tool-schema.ts";
@@ -20,7 +20,7 @@ export interface ServiceToolScope {
 export function createCapabilityTools(
   context: Pick<AgentSessionContext, "serviceKey" | "environmentKey" | "capabilities">,
   deploymentConfig: DeploymentConfig,
-  options: { workFiles?: IssueWorkFileStore | undefined; serviceScopes?: ServiceToolScope[] | undefined } = {},
+  options: { dms?: Pick<DmsQueryRound, "query">; workFiles?: IssueWorkFileStore | undefined; serviceScopes?: ServiceToolScope[] | undefined } = {},
 ): ToolDefinition<any, any, any>[] {
   const { workFiles, serviceScopes } = options;
   const scopes = structuredClone(serviceScopes ?? [{ environmentKey: context.environmentKey, serviceKey: context.serviceKey, serviceName: context.serviceKey, config: deploymentConfig }]);
@@ -69,7 +69,9 @@ export function createCapabilityTools(
         try {
           const result: AgentToolResult<unknown> =
             capability === "dms"
-              ? await queryDms(input as CapabilityInputs["dms"], scope.config.dms!, signal, undefined, workFiles)
+              ? await (options.dms
+                  ? options.dms.query(input as CapabilityInputs["dms"], scope.config.dms!, signal, workFiles)
+                  : queryDms(input as CapabilityInputs["dms"], scope.config.dms!, signal, undefined, workFiles))
               : await readSlsLogs(input as CapabilityInputs["sls"], scope.config.sls!, signal);
           return structuredJsonResult(result);
         } catch (error) {

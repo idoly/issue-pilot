@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { IssueDetail } from "../data/client";
+import { RequestError, type IssueDetail } from "../data/client";
 const state = vi.hoisted(() => ({ update: vi.fn(), read: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
@@ -26,6 +26,7 @@ const issue: IssueDetail = {
   environmentKey: "prod",
   updatedAt: "2026-10-18T00:00:00Z",
   repositories: [],
+  workingDirectory: "/fixture/workspaces/issue",
   workspace: { status: "ready", sourceAvailable: false },
   attachments: [],
   comments: [],
@@ -96,23 +97,21 @@ it("keeps the editor version across background refresh and preserves a conflicte
   expect(state.update.mock.calls[1]?.[1]).toMatchObject({ title: latest.title, expectedEditVersion: latest.editVersion });
   expect(state.update.mock.calls[1]?.[3]).toEqual([]);
 });
-it("reloads after partial success without submitting the saved edit again", async () => {
-  state.update.mockRejectedValueOnce(new Error("issue_saved_session_reset_failed"));
+it("preserves uploads and allows the unchanged edit to retry after atomic reset failure", async () => {
+  state.update.mockRejectedValueOnce(new Error("reset_failed"));
   const updated = vi.fn(async () => {}),
     dialog = await open(updated);
   const file = new File(["content"], "evidence.txt", { type: "text/plain" });
   await fireEvent.change(within(dialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
-  expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存，但会话重置失败");
-  expect(state.update.mock.calls[0]![3]).toEqual([file]);
-  expect(within(dialog).queryByRole("button", { name: "重置" })).toBeNull();
-  expect(within(dialog).queryByRole("button", { name: "保存" })).toBeNull();
-  expect(within(dialog).queryByLabelText("编辑工单选择附件")).toBeNull();
-  fireEvent.click(within(dialog).getByRole("button", { name: "重新读取" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("reset_failed");
+  expect(within(dialog).getByText("evidence.txt")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
-  expect(state.update).toHaveBeenCalledOnce();
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
+  expect(state.update).toHaveBeenCalledTimes(2);
+  expect(state.update.mock.calls[1]).toEqual(state.update.mock.calls[0]);
 });
+
 it("saves normally without reading or resetting the session", async () => {
   const updated = vi.fn(async () => {}),
     dialog = await open(updated);
@@ -143,14 +142,14 @@ it("reports a completed reset separately from a failed page refresh", async () =
   expect(state.update).toHaveBeenCalledOnce();
 });
 for (const change of ["identity", "issue"] as const)
-  for (const failure of ["partial save", "refresh"] as const)
+  for (const failure of ["committed cleanup", "refresh"] as const)
     it(`preserves the new attachment draft when an old ${failure} fails after changing ${change}`, async () => {
       let rejectPending!: (error: Error) => void;
       const pending = new Promise<never>((_, reject) => {
         rejectPending = reject;
       });
       const updated = vi.fn(async () => {});
-      if (failure === "partial save") state.update.mockImplementationOnce(() => pending);
+      if (failure === "committed cleanup") state.update.mockImplementationOnce(() => pending);
       else updated.mockImplementationOnce(() => pending);
       const attachment = { id: "existing", fileName: "existing.txt", mediaType: "text/plain", size: 3, sha256: "a".repeat(64) };
       const [currentIssue, setIssue] = createSignal({ ...issue, attachments: [attachment] }, { ownedWrite: true });
@@ -174,7 +173,7 @@ for (const change of ["identity", "issue"] as const)
         fireEvent.click(within(currentDialog).getByRole("button", { name: "移除existing.txt" }));
         await waitFor(() => expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull());
 
-        rejectPending(new Error(failure === "partial save" ? "issue_saved_session_reset_failed" : "old_refresh_failed"));
+        rejectPending(failure === "committed cleanup" ? new RequestError("attachment_finalize_failed", "committed") : new Error("old_refresh_failed"));
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(within(currentDialog).getByText("new-evidence.txt")).toBeTruthy();
         expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull();

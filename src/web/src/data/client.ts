@@ -1,3 +1,4 @@
+import type { MutationOutcome } from "../../../operation-error";
 import type { IssueSearchHit } from "../../../search/contracts";
 export type { IssueSearchHit } from "../../../search/contracts";
 import { issuePilotConfig } from "../../../../issue-pilot.config";
@@ -192,7 +193,7 @@ export interface IssueDetail extends IssueListItem {
   agentRunning?: boolean;
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
-  workingDirectory?: string;
+  workingDirectory: string;
   attachments: Array<{ id: string; fileName: string; storedFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
   collaboratingServices?: Array<{ key: string; name: string }>;
   relatedIssues?: IssueExecutionItem[];
@@ -257,12 +258,18 @@ export function setCurrentUserSubject(subject: string | null, remember = true): 
   selectedSubject = subject;
 }
 
+export class RequestError extends Error {
+  readonly outcome?: MutationOutcome;
+  constructor(code: string, outcome?: MutationOutcome) {
+    super(code);
+    this.outcome = outcome;
+  }
+}
+
 async function requestError(response: Response): Promise<Error> {
-  const code = await response
-    .json()
-    .then((body: { error?: string }) => body.error)
-    .catch(() => undefined);
-  return new Error(code ?? `request_failed:${response.status}`);
+  const body = (await response.json().catch(() => undefined)) as { error?: string; outcome?: unknown } | undefined;
+  const outcome = body?.outcome;
+  return new RequestError(body?.error ?? `request_failed:${response.status}`, outcome === "committed" || outcome === "not_committed" || outcome === "unknown" ? outcome : undefined);
 }
 
 function requestHeaders(init?: HeadersInit): Headers {
@@ -575,11 +582,13 @@ export const readIssueSession = (key: string, sessionId: string, offset = 0, sig
 export const resetIssueSession = (key: string, expectedSessionId: string) => jsonRequest<{ sessionId: string }>(issuePath(key, "/reset-session"), "POST", { expectedSessionId });
 export const abortAgent = (key: string) => request<void>(issuePath(key, "/abort"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
-export function sendAgentMessage(key: string, message: string, images: File[] = []): Promise<void> {
-  if (!images.length) return jsonRequest<void>(issuePath(key, "/agent-messages"), "POST", { message });
+export const agentMessageReceipt = (key: string, id: string) => request<{ state: "queued" | "started" | "rejected" | "unknown" }>(issuePath(key, `/agent-messages/${encodeURIComponent(id)}`));
+export function sendAgentMessage(key: string, message: string, images: File[] = [], id = crypto.randomUUID()): Promise<void> {
+  const headers = { "X-Issue-Pilot-Message-Id": id };
+  if (!images.length) return request<void>(issuePath(key, "/agent-messages"), { method: "POST", headers, body: JSON.stringify({ message }) });
   const form = new FormData();
   form.append("message", message);
   for (const image of images) form.append("images", image, image.name);
-  return request<void>(issuePath(key, "/agent-messages"), { method: "POST", body: form });
+  return request<void>(issuePath(key, "/agent-messages"), { method: "POST", headers, body: form });
 }
 export const agentStreamUrl = (key: string) => issuePath(key, "/agent-stream");

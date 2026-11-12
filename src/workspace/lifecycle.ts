@@ -1,3 +1,4 @@
+import { OperationError } from "../operation-error.ts";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
@@ -716,7 +717,7 @@ export class WorkspaceLifecycleManager {
             try {
               await rename(staged, root);
             } catch (rollbackError) {
-              throw new AggregateError([error, rollbackError], "issue_delete_rollback_failed");
+              throw new OperationError("issue_delete_rollback_failed", "unknown", { cause: new AggregateError([error, rollbackError]) });
             }
             throw error;
           }
@@ -735,7 +736,7 @@ export class WorkspaceLifecycleManager {
         try {
           await rm(staged, { recursive: true });
         } catch (error) {
-          throw new Error("issue_delete_cleanup_failed", { cause: error });
+          throw new OperationError("issue_delete_cleanup_failed", "committed", { cause: error });
         }
       },
       (error) => {

@@ -260,22 +260,23 @@ for (const condition of ["resolved", "unbound"] as const) {
   });
 }
 for (const failure of ["binding failure", "session disappearance"] as const) {
-  test(`combined save/reset reports committed metadata after ${failure} and permits a reset-only retry`, async () => {
+  test(`combined save/reset preserves metadata after ${failure} and permits the original edit to retry`, async () => {
     const f = await fixture();
     try {
       const oldFile = f.manager.getSessionFile()!;
       const originalSession = await readFile(oldFile);
+      const originalIssue = (await f.db.db.select().from(issues).where(eq(issues.id, f.issue.id)))[0]!;
+      const expectedEditVersion = await issueEditVersion(f.app, f.issue.key);
       if (failure === "binding failure") await f.db.client.execute("CREATE TRIGGER fail_reset BEFORE UPDATE ON issue_pilot_sessions BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
       else f.engine.closeSessionHook = async () => rm(oldFile);
       const response = await f.app.inject({
         method: "PATCH",
         url: `/api/issues/${f.issue.key}`,
         headers,
-        payload: { ...issueMetadataPayload("Saved despite reset failure"), expectedEditVersion: await issueEditVersion(f.app, f.issue.key), resetSession: true },
+        payload: { ...issueMetadataPayload("Atomic edit"), expectedEditVersion, resetSession: true },
       });
       assert.equal(response.statusCode, 500, response.body);
-      assert.equal(response.json().error, "issue_saved_session_reset_failed");
-      assert.equal((await f.db.db.select().from(issues).where(eq(issues.id, f.issue.id)))[0]!.title, "Saved despite reset failure");
+      assert.deepEqual((await f.db.db.select().from(issues).where(eq(issues.id, f.issue.id)))[0], originalIssue);
       assert.equal((await f.db.db.select().from(agentSessions))[0]!.sessionFile, oldFile);
       assert.equal(f.engine.enqueued.length, 1);
       assert.equal((await readdir(f.root)).filter((name) => name.startsWith(".session-")).length, failure === "binding failure" ? 1 : 0);
@@ -286,7 +287,7 @@ for (const failure of ["binding failure", "session disappearance"] as const) {
         f.engine.closeSessionHook = undefined;
         await writeFile(oldFile, originalSession, { mode: 0o600 });
       }
-      const retry = await f.app.inject({ method: "POST", url: `/api/issues/${f.issue.key}/reset-session`, headers, payload: { expectedSessionId: f.manager.getSessionId() } });
+      const retry = await f.app.inject({ method: "PATCH", url: `/api/issues/${f.issue.key}`, headers, payload: { ...issueMetadataPayload("Atomic edit"), expectedEditVersion, resetSession: true } });
       assert.equal(retry.statusCode, 200, retry.body);
       assert.notEqual((await f.db.db.select().from(agentSessions))[0]!.sessionFile, oldFile);
       assert.deepEqual(await readFile(oldFile), originalSession);

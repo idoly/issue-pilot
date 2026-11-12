@@ -1,3 +1,5 @@
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
@@ -115,6 +117,28 @@ test("browses only registered Issue repository content", async () => {
     assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
     await browser.renamePath(issue!, "application", "generated/result.ts", "generated/result.ts", true);
     assert.equal(await readFile(path.join(repository, "generated", "result.ts"), "utf8"), "export const value = 1;\n");
+    await browser.createFile(issue!, "application", "generated/replacement.ts", "replacement\n");
+    const rename = fsPromises.rename;
+    let replacements = 0;
+    fsPromises.rename = async (source, destination) => {
+      if (String(source).endsWith("/replacement.ts")) {
+        // An observer must still see the old destination until the atomic replacement occurs.
+        assert.equal(await readFile(destination, "utf8"), "export const value = 1;\n");
+        replacements++;
+      }
+      return rename(source, destination);
+    };
+    syncBuiltinESMExports();
+    try {
+      await browser.renamePath(issue!, "application", "generated/replacement.ts", "generated/result.ts", true);
+    } finally {
+      fsPromises.rename = rename;
+      syncBuiltinESMExports();
+    }
+    assert.equal(replacements, 1);
+    assert.equal(await readFile(path.join(repository, "generated/result.ts"), "utf8"), "replacement\n");
+    await assert.rejects(browser.renamePath(issue!, "application", "generated/missing.ts", "generated/result.ts", true), /source_path_not_found/);
+    assert.equal(await readFile(path.join(repository, "generated/result.ts"), "utf8"), "replacement\n");
     await browser.createDirectory(issue!, "application", "generated/child");
     await browser.createFile(issue!, "application", "generated/child/evidence.txt", "preserve\n");
     await assert.rejects(browser.renamePath(issue!, "application", "generated", "generated/child", true), /invalid_source_path/);

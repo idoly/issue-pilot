@@ -235,15 +235,15 @@ export function activityForEvent(event: RunEvent["event"]): AgentActivity | null
   return undefined;
 }
 
-function compactPath(value: string): string {
-  const workspaceRelative = value.replace(/^.*\/\.issue-pilot\/workspaces\/[^/]+(?=\/|$)/, "~");
+function compactPath(value: string, workspaceRoot?: string): string {
+  const workspaceRelative = workspaceRoot && (value === workspaceRoot || value.startsWith(workspaceRoot + "/")) ? "~" + value.slice(workspaceRoot.length) : value;
   return workspaceRelative.replace(/^\/home\/[^/]+(?=\/)/, "~");
 }
 
-export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>): string {
+export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>, workspaceRoot?: string): string {
   const input = entry.arguments && typeof entry.arguments === "object" ? (entry.arguments as Record<string, unknown>) : {};
   const value = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
-  const path = () => compactPath(value("path"));
+  const path = () => compactPath(value("path"), workspaceRoot);
   const name = entry.name;
   if (name === "bash") return `$ ${value("command")}`.trim();
   if (name === "read") {

@@ -1,3 +1,4 @@
+import { OperationError } from "../../src/operation-error.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -449,5 +450,29 @@ test("normal startup and close release process handlers and reuse saved model se
     await app?.close();
     context.mock.restoreAll();
     await fixture.cleanup();
+  }
+});
+
+test("HTTP preserves explicit mutation outcomes over nested conflicts without disclosing diagnostics", async () => {
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Outcomes");
+    const issue = await createIssue(f.app, "outcomes", "test");
+    for (const outcome of ["committed", "not_committed", "unknown"] as const) {
+      const sqlFailure = new DrizzleQueryError(
+        "insert into private_configuration values (?)",
+        ["fixture-private-key"],
+        Object.assign(new Error("UNIQUE constraint failed: fixture-private-key"), { code: "SQLITE_CONSTRAINT_UNIQUE" }),
+      );
+      f.engine.send = async () => {
+        throw new OperationError("attachment_finalize_failed", outcome, { cause: new AggregateError([sqlFailure, new Error("fixture cleanup secret")]) });
+      };
+      const response = await f.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "fixture" } });
+      assert.equal(response.statusCode, 500);
+      assert.deepEqual(response.json(), { error: "attachment_finalize_failed", outcome });
+      assert.doesNotMatch(response.body, /private-key|private_configuration|cleanup secret/);
+    }
+  } finally {
+    await f.cleanup();
   }
 });

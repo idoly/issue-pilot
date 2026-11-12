@@ -22,7 +22,8 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.match(prompt, /Do not run dependency installation or a full build as a routine step/);
     assert.match(prompt, /Missing dependency caches are not a reason to reinstall or rebuild automatically/);
     assert.match(prompt, /native read\/bash\/edit\/write\/grep\/find\/ls/);
-    assert.match(prompt, /not an operating-system isolation boundary/);
+    assert.match(prompt, /Local tools run on the host through the Issue sandbox/);
+    assert.match(prompt, /Remote MCP services enforce their own access controls/);
     assert.doesNotMatch(prompt, /sandbox operation|output\.spreadsheet|sandbox export_output/);
     assert.match(prompt, /global MCP servers expose separate mcp__ tools through Pi in every Issue environment/);
     assert.doesNotMatch(prompt, /service_query/);

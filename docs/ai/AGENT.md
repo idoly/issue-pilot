@@ -12,7 +12,7 @@ Prod/test analysis keeps its environment's code/evidence scope. Dev code belongs
 
 HTTP 201/202 does not mean model completion. Persist input and bind the session inside the per-Issue scope; preparation failures must not lose admitted messages. Pin the request sender and reauthorize after steering/session waits without switching identity.
 
-Running-session input may steer or queue a later round. Earlier pending inputs cannot be bypassed. Queued work must not use a disposed or replaced instance.
+Running-session input is durably admitted with a conservative started marker before steering. A sole undelivered steer can return to queued only after Pi removes it; the same entry is reused, never appended as another message. Request IDs and sender identity live in this admission entry, not a second delivery database. Receipt lookup and sends share the per-Issue admission queue. Earlier pending inputs cannot be bypassed. Queued work must not use a disposed or replaced instance.
 
 [message-delivery.ts](../../src/agent/message-delivery.ts) owns durable delivery metadata:
 
@@ -38,7 +38,7 @@ Owners: [engine.ts](../../src/agent/engine.ts), [pi-session.ts](../../src/agent/
 
 Independent reset requires an active developer, an idle unresolved Issue and matching expectedSessionId. Close the old instance, create a new file and transactionally change its binding. Keep the old JSONL, set status=open and do not auto-run. After an uncertain response, read the current session rather than retrying with a fresh ID.
 
-Combined editing preflights reset, saves fields/attachments, then resets. Post-commit reset failure is issue_saved_session_reset_failed: fields are saved; do not upload again. Owners: [session-reset.ts](../../src/agent/session-reset.ts), [issue-routes.ts](../../src/http/issue-routes.ts). Regression: [session-reset.test.ts](../../tests/http/session-reset.test.ts).
+Combined editing prepares the new session then commits metadata, attachment records, CC recipients and session binding in one SQLite transaction. Rollback removes only the prepared session; the old JSONL remains unchanged. Attachment files still use their own prepare/rollback/finalize owner. Owners: [session-reset.ts](../../src/agent/session-reset.ts), [issue-routes.ts](../../src/http/issue-routes.ts). Regression: [session-reset.test.ts](../../tests/http/session-reset.test.ts).
 
 Before reading a bound session validate a nonempty regular JSONL, valid header/records and final newline. Never repair blanks, malformed lines or truncation automatically. SSE may skip missing durable replay; MCP follows its failure contract. Neither creates a replacement empty file. SDK reading of a complete old format may migrate it, so do not promise that every read is byte-preserving. Verify [session-read-integrity.test.ts](../../tests/http/session-read-integrity.test.ts).
 
@@ -58,7 +58,7 @@ Before connecting, enforce read-only SQL checks against writes, multiple stateme
 
 Root defaults are 120 seconds per execution and 12 seconds for first handshake. At most two handshakes: only first-handshake timeout or bounded Retry-After 429 permits retry; never retry 401/403. Backoff and retry share the budget. Discovery/execution failure does not reconnect/replay; dispatched SQL is not automatically queried again.
 
-Diagnostics retain phase, elapsedMs, sqlDispatchAttempted and retryAfterSeconds without secrets. Preserve operation and close failures together; cleanup failure is not ordinary cancellation. DMS batches remain serial with required delay/backoff.
+One DmsQueryRound owns connections and tool discovery for one Agent prompt, keyed by the exact selected URL/Authorization. Queries serialize within that round and include queue wait in their timeout; no connection crosses Issues, credentials or rounds. The handshake borrows the request deadline, but an established transport belongs to the round lifetime. A failed call invalidates its connection without SQL replay. Successful evidence/export returns before round disposal; disposal failure is reported separately at round completion. Standalone queries retain per-call ownership. Diagnostics retain phase, elapsedMs, sqlDispatchAttempted and retryAfterSeconds without secrets. Preserve operation and close failures together; cleanup failure is not ordinary cancellation.
 
 Exports use ordinary work files and replace only after content/protocol success; preserve prior files on failure. Owner: [dms.ts](../../src/capabilities/dms.ts); regression: [dms.test.ts](../../tests/capabilities/dms.test.ts).
 

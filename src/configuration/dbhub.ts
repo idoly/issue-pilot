@@ -1,13 +1,10 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { and, eq, like } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
-import { mcpServices } from "../db/schema.ts";
+import type { mcpServices, serviceDeployments } from "../db/schema.ts";
 import { DBHUB_DATABASES, type DbHubTarget } from "../domain/contracts.ts";
 import { ApiError, choice, record, text } from "../http/input.ts";
 
-type Writer = Pick<Database, "select" | "insert" | "update" | "delete">;
 export function parseDbHubTargets(value: unknown): DbHubTarget[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new ApiError(400, "invalid_dbhub_targets");
@@ -34,41 +31,38 @@ export function dbHubDsn(target: DbHubTarget): string {
   const host = target.host.includes(":") && !target.host.startsWith("[") ? `[${target.host}]` : target.host;
   return `${target.type}://${encodeURIComponent(target.username)}:${encodeURIComponent(target.password)}@${host}:${target.port}/${encodeURIComponent(target.database)}`;
 }
-export async function saveDbHubConnections(writer: Writer, deploymentId: string, targets: DbHubTarget[]): Promise<void> {
-  // Deployment-owned MCP rows may also come from explicit service configuration; only reconcile generated DBHub rows.
-  const previous = await writer
-    .select()
-    .from(mcpServices)
-    .where(and(eq(mcpServices.deploymentId, deploymentId), like(mcpServices.id, "dbhub-%")));
-  const retained = new Set<string>();
-  for (const target of targets) {
-    const identity = createHash("sha256")
-      .update(JSON.stringify([deploymentId, target.type, target.host, target.port, target.database]))
-      .digest("hex")
-      .slice(0, 24);
-    const id = `dbhub-${identity}`;
-    if (retained.has(id)) throw new ApiError(400, "duplicate_dbhub_target");
-    retained.add(id);
-    const values = {
-      name: `DBHub-${target.type}-${identity}`,
-      url: "",
-      authorization: "",
-      transport: "stdio" as const,
-      enabled: true,
-      deploymentId,
-      stdio: {
-        command: process.execPath,
-        args: [createRequire(import.meta.url).resolve("@bytebase/dbhub"), "--transport", "stdio", "--config", fileURLToPath(new URL("../../scripts/dbhub.toml", import.meta.url))],
-        env: { DBHUB_DSN: dbHubDsn(target) },
-      },
-    };
-    const old = previous.find((row) => row.id === id);
-    if (!old || Object.entries(values).some(([key, value]) => JSON.stringify(old[key as keyof typeof old]) !== JSON.stringify(value))) {
-      await writer
-        .insert(mcpServices)
-        .values({ id, ...values })
-        .onConflictDoUpdate({ target: mcpServices.id, set: { ...values, updatedAt: new Date() } });
-    }
+/** Deployment targets are authoritative; MCP launch configuration is a read projection. */
+export function dbHubConnections(deployments: readonly (typeof serviceDeployments.$inferSelect)[], explicit: readonly { id: string; name: string }[] = []): (typeof mcpServices.$inferSelect)[] {
+  const connections = deployments.flatMap((deployment) =>
+    (deployment.config.dbhub ?? []).map((target) => {
+      const identity = createHash("sha256")
+        .update(JSON.stringify([deployment.id, target.type, target.host, target.port, target.database]))
+        .digest("hex")
+        .slice(0, 24);
+      return {
+        id: `dbhub-${identity}`,
+        name: `DBHub-${target.type}-${identity}`,
+        url: "",
+        authorization: "",
+        transport: "stdio" as const,
+        enabled: true,
+        deploymentId: deployment.id,
+        createdAt: deployment.createdAt,
+        updatedAt: deployment.updatedAt,
+        stdio: {
+          command: process.execPath,
+          args: [createRequire(import.meta.url).resolve("@bytebase/dbhub"), "--transport", "stdio", "--config", fileURLToPath(new URL("../../scripts/dbhub.toml", import.meta.url))],
+          env: { DBHUB_DSN: dbHubDsn(target) },
+        },
+      };
+    }),
+  );
+  const ids = new Set(explicit.map((row) => row.id));
+  const names = new Set(explicit.map((row) => row.name));
+  for (const row of connections) {
+    if (ids.has(row.id) || names.has(row.name)) throw new ApiError(409, "mcp_name_conflict");
+    ids.add(row.id);
+    names.add(row.name);
   }
-  for (const row of previous) if (!retained.has(row.id)) await writer.delete(mcpServices).where(eq(mcpServices.id, row.id));
+  return connections;
 }

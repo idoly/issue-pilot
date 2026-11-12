@@ -17,6 +17,7 @@ import {
   listIssues,
   planIssueScopeTransition,
   retryIssue,
+  RequestError,
   updateIssue,
   updateIssueRelatedIssues,
   updateIssueStatus,
@@ -312,7 +313,7 @@ export function IssueWorkspace(props: {
     } catch (error) {
       if (issueGeneration !== generation) return;
       const code = errorMessage(error);
-      if (code === "issue_saved_session_reset_failed") markEditCommitted("工单已保存，但会话重置失败");
+      if (error instanceof RequestError && error.outcome === "committed") markEditCommitted("工单已保存，后续清理失败，请重新读取");
       else if (code === "issue_edit_conflict") {
         setEditConflict(true);
         setEditError("工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。");

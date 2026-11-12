@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { OperationError } from "../../src/operation-error.ts";
 import crypto from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import fs, { chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -152,7 +153,13 @@ test("parent descriptor cleanup preserves a mutation failure and releases the di
     syncBuiltinESMExports();
     await assert.rejects(
       f.browser.createFile(f.issue, "application", "new.txt", "content"),
-      (error) => error instanceof AggregateError && error.message === "source_path_cleanup_failed" && error.errors[0] === primary && error.errors[1] === cleanup,
+      (error) =>
+        error instanceof OperationError &&
+        error.outcome === "unknown" &&
+        error.message === "source_path_cleanup_failed" &&
+        error.cause instanceof AggregateError &&
+        error.cause.errors[0] === primary &&
+        error.cause.errors[1] === cleanup,
     );
     assert.ok(descriptor !== undefined);
     await assert.rejects(fs.stat(`/proc/self/fd/${descriptor}`), { code: "ENOENT" });
@@ -403,7 +410,14 @@ for (const cleanupFails of [false, true])
       });
       syncBuiltinESMExports();
       await assert.rejects(f.browser.createFile(f.issue, "application", "new.txt", "complete content"), (error) =>
-        cleanupFails ? error instanceof AggregateError && error.message === "source_create_cleanup_failed" && error.errors.includes(primary) && error.errors.includes(cleanup) : error === primary,
+        cleanupFails
+          ? error instanceof OperationError &&
+            error.outcome === "unknown" &&
+            error.message === "source_create_cleanup_failed" &&
+            error.cause instanceof AggregateError &&
+            error.cause.errors.includes(primary) &&
+            error.cause.errors.includes(cleanup)
+          : error === primary,
       );
       await assert.rejects(lstat(path.join(f.repository, "new.txt")), { code: "ENOENT" });
       assert.ok(descriptor !== undefined);
@@ -484,7 +498,14 @@ for (const cleanupFails of [false, true])
       });
       syncBuiltinESMExports();
       await assert.rejects(f.browser.writeFile(f.issue, "application", "report.txt", "replacement", original.sha256), (error) =>
-        cleanupFails ? error instanceof AggregateError && error.message === "source_save_cleanup_failed" && error.errors.includes(primary) && error.errors.includes(cleanup) : error === primary,
+        cleanupFails
+          ? error instanceof OperationError &&
+            error.outcome === "not_committed" &&
+            error.message === "source_save_cleanup_failed" &&
+            error.cause instanceof AggregateError &&
+            error.cause.errors.includes(primary) &&
+            error.cause.errors.includes(cleanup)
+          : error === primary,
       );
       assert.equal(closed, true);
       assert.equal(await readFile(path.join(f.repository, "report.txt"), "utf8"), "original source");

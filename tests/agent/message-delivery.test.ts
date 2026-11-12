@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { appendQueuedAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage } from "../../src/agent/message-delivery.ts";
+import { appendAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage } from "../../src/agent/message-delivery.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 
 const scope = { serviceId: "service-a", environmentId: "test" };
@@ -12,7 +12,7 @@ test("recovers only explicitly queued inputs and keeps delivery bookkeeping out 
   manager.appendCustomEntry("issue-pilot-user", { message: "Historical request" });
   manager.appendCustomEntry("issue-pilot-user", undefined);
   const images = [{ type: "image" as const, mimeType: "image/png", data: "aW1hZ2U=" }];
-  const id = appendQueuedAgentMessage(manager, scope, "Unstarted request", images);
+  const id = appendAgentMessage(manager, scope, "Unstarted request", images);
   assert.deepEqual(pendingAgentMessages(manager), [{ id, message: "Unstarted request", images, scope }]);
   assert.equal(selectAgentMessage(manager, scope, id)?.id, id);
   startAgentMessage(manager, id, scope);
@@ -30,8 +30,8 @@ test("recovers only explicitly queued inputs and keeps delivery bookkeeping out 
 
 test("selects pending input in admission order even when a newer request owns the queued callback", () => {
   const manager = SessionManager.inMemory();
-  const first = appendQueuedAgentMessage(manager, scope, "First", []);
-  const second = appendQueuedAgentMessage(manager, scope, "Second", []);
+  const first = appendAgentMessage(manager, scope, "First", []);
+  const second = appendAgentMessage(manager, scope, "Second", []);
   assert.equal(selectAgentMessage(manager, scope, second)?.id, first);
   startAgentMessage(manager, first, scope);
   assert.equal(selectAgentMessage(manager, scope, second)?.id, second);
@@ -42,10 +42,10 @@ test("selects pending input in admission order even when a newer request owns th
 
 test("rejects all queued inputs from a changed scope while retaining their original contents", () => {
   const manager = SessionManager.inMemory();
-  appendQueuedAgentMessage(manager, scope, "Old scope one", []);
-  appendQueuedAgentMessage(manager, scope, "Old scope two", []);
+  appendAgentMessage(manager, scope, "Old scope one", []);
+  appendAgentMessage(manager, scope, "Old scope two", []);
   const changed = { serviceId: "service-b", environmentId: "prod" };
-  const current = appendQueuedAgentMessage(manager, changed, "Current scope", []);
+  const current = appendAgentMessage(manager, changed, "Current scope", []);
   assert.throws(() => selectAgentMessage(manager, changed), /agent_message_scope_changed/);
   assert.deepEqual(
     pendingAgentMessages(manager).map((message) => message.id),

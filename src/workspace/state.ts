@@ -1,3 +1,4 @@
+import { OperationError } from "../operation-error.ts";
 import { access, lstat, mkdir, opendir, readdir, realpath, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { normalizeIssueKey } from "../domain/contracts.ts";
@@ -94,7 +95,7 @@ export async function removeEmptyIssueRoot(stateRoot: string, issueKey: string):
     await rmdir(issueRoot(stateRoot, issueKey));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
-    throw new Error("issue_state_rollback_failed", { cause: new AggregateError([error], "issue_state_rollback_failed") });
+    throw new OperationError("issue_state_rollback_failed", "unknown", { cause: new AggregateError([error], "issue_state_rollback_failed") });
   }
 }
 

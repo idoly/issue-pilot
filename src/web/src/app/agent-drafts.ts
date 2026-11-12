@@ -7,7 +7,16 @@ export interface AgentDraftImage {
   url: string;
 }
 
+export interface SubmittedAgentMessage {
+  id: string;
+  text: string;
+  message: string;
+  images: AgentDraftImage[];
+  pasteEditor: PasteEditorModel;
+}
+
 export interface AgentDraftRecord {
+  submitted?: SubmittedAgentMessage;
   text: string;
   images: AgentDraftImage[];
   pasteEditor: PasteEditorModel;
@@ -49,7 +58,7 @@ export class AgentDraftStore {
 
   /** Unsent text, images or an in-flight send would be lost on reload. */
   hasPending(): boolean {
-    for (const record of this.records.values()) if (record.sending || record.text.trim().length > 0 || record.images.length) return true;
+    for (const record of this.records.values()) if (record.submitted || record.text.trim().length > 0 || record.images.length) return true;
     return false;
   }
 
@@ -62,12 +71,16 @@ export class AgentDraftStore {
     const record = this.records.get(issueId);
     if (!record) return;
     revoke(record.images);
+    if (record.submitted) revoke(record.submitted.images);
     this.records.delete(issueId);
     this.setVersion((value) => value + 1);
   }
 
   clearAll(): void {
-    for (const record of this.records.values()) revoke(record.images);
+    for (const record of this.records.values()) {
+      revoke(record.images);
+      if (record.submitted) revoke(record.submitted.images);
+    }
     this.records.clear();
     this.setVersion((value) => value + 1);
   }

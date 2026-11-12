@@ -31,6 +31,7 @@ vi.mock("../data/client", async (importOriginal) => {
     ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
     environmentKey: "test",
+    workingDirectory: "/fixture/workspaces/issue",
     workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
   });
   const issues = [
@@ -839,7 +840,7 @@ describe("issue pilot workspace", () => {
     const agentRegion = screen.getByRole("region", { name: "ISSUE-20260810-042 Agent 会话" });
     expect(agentRegion.querySelector(".agent-conversation")).toBeTruthy();
     expect(agentRegion.querySelector(".agent-composer")).toBeTruthy();
-    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("~/.issue-pilot/workspaces/issue-20260810-042");
+    expect(agentRegion.querySelector(".agent-meta")?.textContent).toContain("/fixture/workspaces/issue");
     expect(screen.getByRole("heading", { name: "代码分支" })).toBeTruthy();
     expect(screen.getByText("hotfix-issue")).toBeTruthy();
     const agentInput = within(agentRegion).getByLabelText("发送给 Agent") as HTMLTextAreaElement;
@@ -849,7 +850,7 @@ describe("issue pilot workspace", () => {
     expect(within(agentRegion).queryByRole("button", { name: "发送" })).toBeNull();
     fireEvent.keyDown(agentInput, { key: "Enter", code: "Enter", shiftKey: false });
     const { fetchAttachment, sendAgentMessage } = await import("../data/client");
-    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", pastedMessage));
+    await waitFor(() => expect(sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", pastedMessage, [], expect.any(String)));
     fireEvent.input(agentInput, { target: { value: "还原后保留的 Agent 草稿" } });
     const issueQueue = screen.getByLabelText("工单队列") as HTMLElement;
     const issueWorkspace = document.querySelector(".issue-workspace") as HTMLElement;
@@ -1639,7 +1640,7 @@ describe("issue pilot workspace", () => {
     fireEvent.input(composer, { target: { value: "working期间补充信息" } });
     await waitFor(() => expect(composer.value).toBe("working期间补充信息"));
     fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
-    await waitFor(() => expect(client.sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", "working期间补充信息"));
+    await waitFor(() => expect(client.sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", "working期间补充信息", [], expect.any(String)));
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const dialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
@@ -1726,7 +1727,14 @@ describe("issue pilot workspace", () => {
     render(() => <App initialView="issues" />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     const current = await getIssue.mock.results[0]!.value;
-    const pending = { ...current, type: "smart_analysis" as const, status: "pending" as const, workspace: { ...current.workspace, status: "ready" as const } };
+    const pending = {
+      ...current,
+      agentRunning: false,
+      workspaceStatus: "ready" as const,
+      type: "smart_analysis" as const,
+      status: "pending" as const,
+      workspace: { ...current.workspace, status: "ready" as const },
+    };
     getIssue.mockClear();
     listIssues.mockClear();
     getIssue.mockResolvedValueOnce(pending);

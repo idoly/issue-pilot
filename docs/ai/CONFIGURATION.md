@@ -117,7 +117,7 @@ Service writes require an explicit deployments array; omission is not clearing. 
 - DMS records instanceAlias/schema intent; the server resolves actual instances/databaseId using the selected credentials, not client-supplied host/ID guesses.
 - SLS records region/project/logstores or multiple targets. A configured * still requires a concrete logstore at call time; there is no custom target name.
 - Actual deployment targets determine native availability. Do not hard-code environment exclusions. Retired NACOS/DB/Redis/MQ/ES settings remain private historical state and neither execute nor project publicly.
-- DBHub is deployment-owned stdio MCP. Types belong to domain/contracts.ts. DSNs travel only in environment variables, not argv; read-only/row/timeout hints do not replace a read-only remote account. Generated connections cannot be arbitrarily mutated by generic MCP APIs.
+- DBHub is deployment-owned stdio MCP. Deployment targets are its sole persisted configuration; launch connections are derived on read, including current executable/package paths. Migration 0075 removes the old generated connection shape without changing targets or explicit MCP records. Generated and explicit connection IDs/names must remain unique, with conflicting writes rolled back. Types belong to domain/contracts.ts. DSNs travel only in environment variables, not argv; read-only/row/timeout hints do not replace a read-only remote account. Generated connections cannot be arbitrarily mutated by generic MCP APIs.
 
 See [dbhub.ts](../../src/configuration/dbhub.ts), [dbhub.toml](../../scripts/dbhub.toml), [service-context.ts](../../src/configuration/service-context.ts). Blocked optional-driver installation is not proof that every database type works.
 

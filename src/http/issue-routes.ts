@@ -1,3 +1,4 @@
+import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { rename } from "node:fs/promises";
 import path from "node:path";
@@ -365,7 +366,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
             const rollbackErrors: unknown[] = [];
             await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
             await removeEmptyIssueRoot(stateRoot, issueKey).catch((rollbackError) => rollbackErrors.push(rollbackError));
-            if (rollbackErrors.length) throw new Error("issue_state_rollback_failed", { cause: new AggregateError([error, ...rollbackErrors], "issue_state_rollback_failed") });
+            if (rollbackErrors.length) throw new OperationError("issue_state_rollback_failed", "unknown", { cause: new AggregateError([error, ...rollbackErrors], "issue_state_rollback_failed") });
             throw error;
           }
           if (options.startAgent !== false) reservation.enqueue(issue.id);
@@ -450,7 +451,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
               quarantined.push({ sourcePath, temporaryPath });
             }
             const copiedAttachments = await copyPendingAttachments(stateRoot, issue.key, pendingAttachments, writtenObjectKeys);
-            const createdAttachments = await database.db.transaction(async (transaction) => {
+            let createdAttachments: Awaited<ReturnType<typeof insertCopiedAttachments>> = [];
+            const save = async (transaction: Parameters<Parameters<typeof database.db.transaction>[0]>[0]) => {
               await transaction
                 .update(issues)
                 .set({ title: issueValues.title, description: issueValues.description, priority: issueValues.priority, assigneeSubject: issueValues.assigneeSubject, updatedAt: new Date() })
@@ -458,8 +460,10 @@ export function registerIssueRoutes(context: ApiRouteContext) {
               await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
               if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: issue.id, subject: recipient })));
               if (removedAttachmentIds.length) await transaction.delete(issueAttachments).where(and(eq(issueAttachments.issueId, issue.id), inArray(issueAttachments.id, removedAttachmentIds)));
-              return insertCopiedAttachments(transaction, issue.id, editorSubject, copiedAttachments);
-            });
+              createdAttachments = await insertCopiedAttachments(transaction, issue.id, editorSubject, copiedAttachments);
+            };
+            if (resetSession) await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId, save);
+            else await database.db.transaction(save);
             attachmentDtos = [...currentAttachments.filter((attachment) => !removedAttachmentIdSet.has(attachment.id)).map(serializeAttachment), ...createdAttachments];
           } catch (error) {
             const rollbackErrors: unknown[] = [];
@@ -469,18 +473,12 @@ export function registerIssueRoutes(context: ApiRouteContext) {
               rollbackErrors.push(rollbackError);
             }
             await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
-            if (rollbackErrors.length) throw new Error("issue_update_rollback_failed", { cause: new AggregateError([error, ...rollbackErrors], "issue_update_rollback_failed") });
+            if (rollbackErrors.length) throw new OperationError("issue_update_rollback_failed", "unknown", { cause: new AggregateError([error, ...rollbackErrors], "issue_update_rollback_failed") });
             throw error;
           }
           // The update is committed; a leftover quarantined original is operator cleanup, not a failed edit.
           await finalizeQuarantinedAttachments(quarantined).catch((error: unknown) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"));
           if (resetSession) {
-            try {
-              await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId);
-            } catch (error) {
-              // Every failure here follows a committed edit, including a session changed or lost after preflight.
-              throw new Error("issue_saved_session_reset_failed", { cause: error });
-            }
             events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
           } else if (currentIssue.status !== "resolved") {
             reservation.enqueue(

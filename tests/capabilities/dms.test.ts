@@ -8,7 +8,7 @@ import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import { test } from "node:test";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
-import { DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
+import { DmsQueryRound, DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
 
 const configured = {
   url: "https://dms.example.test/sse",
@@ -967,4 +967,182 @@ test("handles MCP errors, unbounded SQL and results, and abort", async () => {
   });
   await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, controller.signal, aborted.connect), /cancelled/);
   assert.equal(aborted.closes(), 1);
+});
+
+test("DMS round reuses connection/discovery and does not inherit a completed query's cancellation", async () => {
+  let connects = 0,
+    discoveries = 0,
+    calls = 0,
+    closes = 0;
+  const transportSignals: AbortSignal[] = [];
+  const round = new DmsQueryRound(async (_config, signal) => {
+    connects++;
+    transportSignals.push(signal);
+    return {
+      listTools: async () => {
+        discoveries++;
+        return [executeScriptTool];
+      },
+      callTool: async (_name, _args, requestSignal) => {
+        requestSignal.throwIfAborted();
+        calls++;
+        return { content: [{ type: "text", text: "[]" }] };
+      },
+      close: async () => {
+        closes++;
+      },
+    };
+  });
+  const first = new AbortController();
+  try {
+    await round.query({ schema: "orders", script: "SELECT 1" }, configured, first.signal);
+    first.abort(new Error("completed request expired"));
+    assert.equal(transportSignals[0]!.aborted, false);
+    await round.query({ schema: "orders", script: "SELECT 2" }, configured);
+    assert.deepEqual({ connects, discoveries, calls, closes }, { connects: 1, discoveries: 1, calls: 2, closes: 0 });
+    await round.query({ schema: "orders", script: "SELECT 3" }, { ...configured, authorization: "Bearer another-identity" });
+    assert.equal(connects, 2);
+  } finally {
+    await round.close();
+  }
+  assert.equal(closes, 2);
+  await assert.rejects(round.query({ schema: "orders", script: "SELECT 4" }, configured));
+  assert.equal(calls, 3);
+  await round.close();
+  assert.equal(closes, 2);
+});
+
+test("DMS round never replays a failed SQL dispatch and serializes calls", async () => {
+  let calls = 0,
+    connects = 0,
+    active = 0,
+    maximum = 0,
+    closes = 0;
+  const round = new DmsQueryRound(async () => {
+    connects++;
+    return {
+      listTools: async () => [executeScriptTool],
+      callTool: async () => {
+        calls++;
+        active++;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setImmediate(resolve));
+        active--;
+        if (calls === 1) throw new Error("uncertain_remote_result");
+        return { content: [{ type: "text", text: "[]" }] };
+      },
+      close: async () => {
+        closes++;
+      },
+    };
+  });
+  try {
+    await assert.rejects(round.query({ schema: "orders", script: "SELECT 1" }, configured));
+    assert.equal(calls, 1);
+    await Promise.all([round.query({ schema: "orders", script: "SELECT 2" }, configured), round.query({ schema: "orders", script: "SELECT 3" }, configured)]);
+    assert.deepEqual({ connects, calls, maximum, closes }, { connects: 2, calls: 3, maximum: 1, closes: 1 });
+  } finally {
+    await round.close();
+  }
+});
+
+test("DMS round returns completed evidence before separately reporting close failure", async () => {
+  const round = new DmsQueryRound(async () => ({
+    listTools: async () => [executeScriptTool],
+    callTool: async () => ({ content: [{ type: "text", text: "completed evidence" }] }),
+    close: async () => {
+      throw new Error("fixture_close_failure");
+    },
+  }));
+  const result = await round.query({ schema: "orders", script: "SELECT 1" }, configured);
+  assert.match(JSON.stringify(result), /completed evidence/);
+  await assert.rejects(round.close(), /dms_mcp_connection_cleanup_failed/);
+});
+
+for (const phase of ["connect", "execute"] as const)
+  test(`DMS round close cancels ${phase} and never dispatches queued work`, async () => {
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    let calls = 0,
+      connects = 0,
+      closes = 0;
+    const waitForAbort = async (signal: AbortSignal) => {
+      enter();
+      if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      throw signal.reason;
+    };
+    const round = new DmsQueryRound(async (_config, signal) => {
+      connects++;
+      if (phase === "connect") await waitForAbort(signal);
+      return {
+        listTools: async () => [executeScriptTool],
+        callTool: async (_name, _args, requestSignal) => {
+          calls++;
+          return waitForAbort(requestSignal);
+        },
+        close: async () => {
+          closes++;
+        },
+      };
+    });
+    const first = assert.rejects(round.query({ schema: "orders", script: "SELECT 1" }, configured));
+    await entered;
+    const queued = assert.rejects(round.query({ schema: "orders", script: "SELECT 2" }, configured));
+    await round.close();
+    await Promise.all([first, queued]);
+    assert.equal(connects, 1);
+    assert.equal(calls, phase === "execute" ? 1 : 0);
+    assert.equal(closes, phase === "execute" ? 1 : 0);
+  });
+
+test("DMS round retains a committed export when round disposal fails", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-round-export-"));
+  await claimIssueRoot(root, "ISSUE-20261016-004");
+  const store = new IssueWorkFileStore(root, "ISSUE-20261016-004");
+  let calls = 0;
+  const round = new DmsQueryRound(async () => ({
+    listTools: async () => [executeScriptTool],
+    callTool: async () => {
+      calls++;
+      return { content: [{ type: "text", text: "completed evidence" }] };
+    },
+    close: async () => {
+      throw new Error("fixture_close_failure");
+    },
+  }));
+  try {
+    const result = await round.query({ schema: "orders", script: "SELECT 1", export: { fileName: "evidence.json" } }, configured, undefined, store);
+    assert.equal(JSON.parse(result.content[0]!.text).export.fileName, "evidence.json");
+    await assert.rejects(round.close(), /dms_mcp_connection_cleanup_failed/);
+    assert.match(await readFile(path.join(store.directory, "evidence.json"), "utf8"), /completed evidence/);
+    assert.equal(calls, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("DMS round retains timeout phase and dispatch diagnostics", async (t) => {
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, "timeout", () => deadline.signal);
+  const round = new DmsQueryRound(async () => ({
+    listTools: async () => [executeScriptTool],
+    callTool: async () => {
+      deadline.abort(new DOMException("fixture timeout", "TimeoutError"));
+      throw deadline.signal.reason;
+    },
+    close: async () => {},
+  }));
+  try {
+    await assert.rejects(round.query({ schema: "orders", script: "SELECT 1" }, configured), (error) => {
+      assert.ok(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_timeout");
+      assert.equal(error.diagnostics.phase, "execute");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, true);
+      return true;
+    });
+  } finally {
+    await round.close();
+  }
 });

@@ -1,3 +1,4 @@
+import { dbHubConnections } from "./dbhub.ts";
 import { drizzle } from "drizzle-orm/libsql";
 import { asc, eq, inArray, sql } from "drizzle-orm";
 
@@ -100,6 +101,7 @@ async function projectConfiguration(database: ConfigurationReader, agentModels: 
       })
       .from(schema.mcpServices),
   ]);
+  mcp.push(...dbHubConnections(deploymentRows, mcp));
   const importNames = await dingtalkMcpNames(database);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
   const environmentById = new Map(environmentRows.map((environment) => [environment.id, environment]));
@@ -172,6 +174,7 @@ export function loadServiceConfigurationDescription(database: Database, key: str
       reader.select().from(environments),
       reader.select().from(schema.mcpServices),
     ]);
+    mcp.push(...dbHubConnections(deployments, mcp));
     const importNames = await dingtalkMcpNames(reader);
     const entries = deployments.map((deployment) => {
       const environment = environmentRows.find((row) => row.id === deployment.environmentId);

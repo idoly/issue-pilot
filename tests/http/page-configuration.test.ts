@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { loadMcpConnections } from "../../src/configuration/service-mcp.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -125,7 +126,8 @@ test("DBHub MySQL targets save atomically with deployment-owned MCP connections 
     assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, password);
     const connection = openDatabase(f.databaseFile);
     try {
-      const rows = await connection.db.select().from(mcpServices);
+      const rows = await loadMcpConnections(connection.db);
+      assert.equal((await connection.db.select().from(mcpServices)).length, 0);
       assert.equal(rows.length, 1);
       assert.ok(rows[0]!.deploymentId);
       assert.equal(decodeURIComponent(new URL(rows[0]!.stdio!.env.DBHUB_DSN!).password), password);
@@ -137,7 +139,7 @@ test("DBHub MySQL targets save atomically with deployment-owned MCP connections 
       const failed = await f.app.inject({ method: "POST", url: "/api/services", headers, payload: invalid });
       assert.equal(failed.statusCode, 400);
       assert.equal((await connection.db.select().from(services)).length, 1);
-      assert.equal((await connection.db.select().from(mcpServices)).length, 1);
+      assert.equal((await loadMcpConnections(connection.db)).length, 1);
       assert.equal((await f.app.inject({ method: "DELETE", url: `/api/mcp-services/${rows[0]!.id}`, headers })).statusCode, 409);
     } finally {
       await connection.close();

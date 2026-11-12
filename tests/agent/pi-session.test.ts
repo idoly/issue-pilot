@@ -1,3 +1,4 @@
+import { DmsQueryRound } from "../../src/capabilities/dms.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -435,6 +436,51 @@ test("rejects configured models that are not currently available", async () => {
       /configured_model_unavailable/,
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Pi prompt owns DMS disposal across success, failure and reuse without hiding either failure", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-dms-round-"));
+  let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
+  const primary = new Error("fixture_prompt_failure");
+  const cleanup = new Error("fixture_close_failure");
+  const owners: DmsQueryRound[] = [];
+  let promptFails = true,
+    closeFails = false;
+  t.mock.method(DmsQueryRound.prototype, "close", async function (this: DmsQueryRound) {
+    owners.push(this);
+    if (closeFails) throw cleanup;
+  });
+  try {
+    managed = await new PiSessionRuntime(sharedModelRuntime(modelRuntime())).start({
+      manager: await createPrivateSessionManager(root, root),
+      context: context({ writable: false }),
+      deploymentConfig: {},
+      workspaceRoot: root,
+      agentDirectory: root,
+      systemPrompt: "",
+      onEvent: () => {},
+    });
+    t.mock.method(managed.session, "prompt", async () => {
+      if (promptFails) throw primary;
+    });
+    await assert.rejects(managed.prompt("first"), (error) => error === primary);
+    assert.equal(owners.length, 1);
+    promptFails = false;
+    await managed.prompt("second");
+    assert.equal(owners.length, 2);
+    assert.notEqual(owners[0], owners[1]);
+    promptFails = closeFails = true;
+    await assert.rejects(managed.prompt("third"), (error) => {
+      assert.ok(error instanceof Error && error.cause instanceof AggregateError);
+      assert.deepEqual(error.cause.errors, [primary, cleanup]);
+      return true;
+    });
+    assert.equal(owners.length, 3);
+  } finally {
+    await managed?.stop();
+    t.mock.restoreAll();
     await rm(root, { recursive: true, force: true });
   }
 });

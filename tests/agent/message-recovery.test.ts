@@ -11,7 +11,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
-import { appendQueuedAgentMessage, pendingAgentMessages } from "../../src/agent/message-delivery.ts";
+import { appendAgentMessage, pendingAgentMessages } from "../../src/agent/message-delivery.ts";
 import { createPrivateSessionManager, type PiSessionRuntime, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { agentSessions, environments, globalAgentConfiguration, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
@@ -98,7 +98,7 @@ test("explicit retry recovers unstarted text and images without recording anothe
   const f = await fixture(t);
   try {
     const images: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }];
-    appendQueuedAgentMessage(f.manager, f.issue, "Recover this unstarted input", images);
+    appendAgentMessage(f.manager, f.issue, "Recover this unstarted input", images);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(f.deliveries.length, 0, "opening an Engine does not automatically resume work");
     f.engine.enqueue(f.issue.id);
@@ -164,7 +164,7 @@ for (const phase of ["queued", "started"] as const)
 test("a preparation failure leaves the input pending for a later explicit retry", async (t) => {
   const f = await fixture(t);
   try {
-    appendQueuedAgentMessage(f.manager, f.issue, "Retry after preparation fails", []);
+    appendAgentMessage(f.manager, f.issue, "Retry after preparation fails", []);
     const internal = f.engine as unknown as { projectManager: IssueProjectManager };
     const failure = t.mock.method(internal.projectManager, "prepare", async () => {
       throw new Error("fixture_prepare_failed");
@@ -186,8 +186,8 @@ test("a preparation failure leaves the input pending for a later explicit retry"
 test("recovers queued messages in order alongside a newly admitted message and drains them on close", async (t) => {
   const f = await fixture(t, true);
   try {
-    appendQueuedAgentMessage(f.manager, f.issue, "First recovered input", []);
-    appendQueuedAgentMessage(f.manager, f.issue, "Second recovered input", []);
+    appendAgentMessage(f.manager, f.issue, "First recovered input", []);
+    appendAgentMessage(f.manager, f.issue, "Second recovered input", []);
     f.engine.enqueue(f.issue.id);
     await f.firstStarted;
     await f.engine.send(f.issue.id, "New admitted input");
@@ -206,7 +206,7 @@ test("recovers queued messages in order alongside a newly admitted message and d
 test("scope changes reject stale queued intent before model work and leave new scope input usable", async (t) => {
   const f = await fixture(t);
   try {
-    appendQueuedAgentMessage(f.manager, { serviceId: "previous-service", environmentId: f.issue.environmentId }, "Old scope request", []);
+    appendAgentMessage(f.manager, { serviceId: "previous-service", environmentId: f.issue.environmentId }, "Old scope request", []);
     f.engine.enqueue(f.issue.id);
     await idle(f.engine, f.issue.id);
     assert.equal(f.deliveries.length, 0);

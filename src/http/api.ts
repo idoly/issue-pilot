@@ -1,3 +1,4 @@
+import { OperationError } from "../operation-error.ts";
 import path from "node:path";
 import { DrizzleQueryError } from "drizzle-orm";
 import { errorChain, errorDiagnostic } from "../diagnostics.ts";
@@ -162,6 +163,11 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       if (["FST_ERR_CTP_BODY_TOO_LARGE", "FST_REQ_FILE_TOO_LARGE", "FST_FIELDS_LIMIT", "FST_PARTS_LIMIT", "FST_FILES_LIMIT"].includes(code))
         return reply.code(413).send({ error: "payload_too_large" });
       if (code === "FST_ERR_CTP_INVALID_MEDIA_TYPE") return reply.code(415).send({ error: "unsupported_media_type" });
+      const operationError = errorChain(error).find((cause): cause is OperationError => cause instanceof OperationError);
+      if (operationError) {
+        app.log.error(errorDiagnostic(error));
+        return reply.code(500).send({ error: operationError.message, outcome: operationError.outcome });
+      }
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
       // Known failure codes keep their status; the joined chain stays internal and never reaches the client.
       const errorMessages = errorChain(error)
@@ -171,21 +177,10 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       // A rollback or cleanup failure dominates the constraint error wrapped in its AggregateError: the state was not
       // cleanly settled, so reporting a retryable conflict (or keeping the failure out of the log) would mislead.
       for (const operationalError of [
-        // A committed edit takes precedence over the nested reason why its session reset failed.
-        "issue_saved_session_reset_failed",
-        "attachment_finalize_failed",
-        "attachment_rollback_failed",
         "attachment_staging_cleanup_failed",
         "attachment_copy_cleanup_failed",
         "attachment_read_cleanup_failed",
         "dingtalk_connection_close_failed",
-        "issue_state_rollback_failed",
-        "issue_update_rollback_failed",
-        "source_rename_rollback_failed",
-        "source_rename_finalize_failed",
-        "source_save_cleanup_failed",
-        "source_create_cleanup_failed",
-        "source_path_cleanup_failed",
         "workspace_runtime_restore_failed",
         "issue_root_missing",
         "invalid_issue_root",

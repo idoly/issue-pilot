@@ -3836,3 +3836,20 @@ summary.agent-tool-head > svg {
   font-size: 12px;
   color: #526d5c;
 }
+
+.agent-submitted {
+  margin: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid #3d444d;
+  border-radius: 8px;
+}
+.agent-submitted pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+.agent-submitted img {
+  max-width: 120px;
+  max-height: 100px;
+}

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { openDatabase } from "../../src/db/client.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,6 +24,10 @@ export const modelCatalog = {
 };
 
 export class TestAgentController {
+  private readonly databaseFile: string | undefined;
+  constructor(databaseFile?: string) {
+    this.databaseFile = databaseFile;
+  }
   readonly enqueued: string[] = [];
   readonly messages: Array<string | undefined> = [];
   readonly gitIdentities: Array<GitCommitIdentity | undefined> = [];
@@ -69,6 +74,15 @@ export class TestAgentController {
   async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>): Promise<void> {
     if (this.reservations.has(issueId)) throw new Error("issue_already_running");
     await authorize?.();
+    if (this.databaseFile) {
+      const database = openDatabase(this.databaseFile);
+      try {
+        const row = await database.client.execute({ sql: "SELECT status FROM issues WHERE id = ?", args: [issueId] });
+        if (row.rows[0]?.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+      } finally {
+        await database.close();
+      }
+    }
     this.messages.push(message);
     this.gitIdentities.push(gitIdentity);
     this.images.push(images);
@@ -102,7 +116,7 @@ export async function createApiFixture(
 ): Promise<ApiFixture> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
-  const engine = new TestAgentController();
+  const engine = new TestAgentController(databaseFile);
   const app = await buildApi({
     databaseFile,
     stateRoot: root,

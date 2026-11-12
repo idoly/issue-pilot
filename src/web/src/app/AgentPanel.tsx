@@ -8,6 +8,7 @@ import {
   agentStreamUrl,
   abortAgent,
   sendAgentMessage,
+  agentMessageReceipt,
   mergeAgentCostSource,
   type AgentCostSource,
   type AgentFooterStats,
@@ -35,11 +36,11 @@ import {
 } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
-import { type AgentDraftImage, type AgentDraftStore, defaultAgentDraftStore } from "./agent-drafts";
+import { type AgentDraftImage, type SubmittedAgentMessage, type AgentDraftStore, defaultAgentDraftStore } from "./agent-drafts";
 
 function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "tool" }> }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
-  const label = createMemo(() => toolLabel(props.entry));
+  const label = createMemo(() => toolLabel(props.entry, props.issue.workingDirectory));
   const labelParts = createMemo(() => toolLabelParts(label()));
   const diff = createMemo(() => {
     if (props.entry.name !== "edit" || !props.entry.result?.details || typeof props.entry.result.details !== "object") return [];
@@ -331,6 +332,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [error, setError] = createSignal("", { ownedWrite: true });
   const draftStore = props.drafts ?? defaultAgentDraftStore;
   let draftRecord = untrack(() => draftStore.get(props.issue.id));
+  const [submitted, setSubmitted] = createSignal<SubmittedAgentMessage | undefined>(draftRecord.submitted, { ownedWrite: true });
   const [draft, setDraftValue] = createSignal(draftRecord.text, { ownedWrite: true });
   const [images, setImagesValue] = createSignal<AgentDraftImage[]>(draftRecord.images, { ownedWrite: true });
   const setDraft = (value: string) => {
@@ -348,6 +350,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setImagesValue(draftRecord.images);
     setError(draftRecord.error);
     setSending(draftRecord.sending);
+    setSubmitted(draftRecord.submitted);
   };
   const [entries, setEntries] = createSignal<ConversationEntry[]>([], { ownedWrite: true });
   let projection = new ConversationProjection();
@@ -375,9 +378,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
 
   const canSend = () => issueStatus() !== "resolved";
   const canInterrupt = () => (runState() === undefined ? processing() || props.issue.agentRunning === true : processing());
-  const canSubmit = () => canSend() && !sending() && (images().length > 0 || /\S/.test(draft()));
+  const canSubmit = () => canSend() && !sending() && !submitted() && (images().length > 0 || /\S/.test(draft()));
   const usageMetrics = () => footerMetrics(footer());
-  const codeRoot = () => props.issue.workingDirectory ?? `~/.issue-pilot/workspaces/${props.issue.id.toLowerCase()}`;
+  const codeRoot = () => props.issue.workingDirectory;
   const developmentRepositoriesPending = () => props.issue.environmentKey === "dev" && (!props.issue.repositories.length || props.issue.repositories.some((repository) => !repository.workingBranch));
   const clearUnread = () => {
     unreadEntryIds.clear();
@@ -606,7 +609,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const submit = async () => {
     const issueId = props.issue.id;
     const record = draftRecord;
-    if (record.sending || !canSend() || !draftStore.isCurrent(issueId, record)) return;
+    if (record.submitted || !canSend() || !draftStore.isCurrent(issueId, record)) return;
     const editorText = record.text;
     const pendingImages = record.images;
     const message = record.pasteEditor.expand(editorText).trim() || (pendingImages.length ? "请分析这些图片。" : "");
@@ -618,12 +621,14 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       return;
     }
     const submitGeneration = issueGeneration;
-    const submittedEditor = record.pasteEditor;
+    const submission = { id: crypto.randomUUID(), text: editorText, message, images: pendingImages, pasteEditor: record.pasteEditor };
+    record.submitted = submission;
+    setSubmitted(submission);
     record.text = "";
     record.images = [];
     record.error = "";
     record.sending = true;
-    // The next draft gets its own paste editor; the submitted one returns only if this send fails.
+    // The submitted message owns its snapshot; new typing never competes with failure recovery.
     record.pasteEditor = new PasteEditorModel();
     setDraftValue("");
     setImagesValue([]);
@@ -632,20 +637,19 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     scrollLatest();
     const submitCurrent = () => submitGeneration === issueGeneration && draftRecord === record && draftStore.isCurrent(issueId, record);
     try {
-      if (pendingImages.length)
-        await sendAgentMessage(
-          issueId,
-          message,
-          pendingImages.map(({ file }) => file),
-        );
-      else await sendAgentMessage(issueId, message);
-      discardImages(pendingImages);
+      await sendAgentMessage(
+        issueId,
+        message,
+        pendingImages.map(({ file }) => file),
+        submission.id,
+      );
+      if (draftStore.isCurrent(issueId, record)) {
+        discardImages(pendingImages);
+        record.submitted = undefined;
+      }
       if (submitCurrent()) setProcessing(true);
     } catch (cause) {
-      if (!draftStore.isCurrent(issueId, record)) {
-        discardImages(pendingImages);
-        return;
-      }
+      if (!draftStore.isCurrent(issueId, record)) return;
       let failureMessage = cause instanceof Error ? cause.message : "agent_message_failed";
       if (failureMessage === "agent_message_too_long") failureMessage = `消息超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
       else if (failureMessage === "invalid_agent_message") failureMessage = "消息内容无效，请输入文字后重新发送。";
@@ -659,16 +663,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         failureMessage = "工单已解决，请先重开后再发送。";
         // The panel may already show another Issue; never mark that one resolved.
         if (props.issue.id === issueId) setIssueStatus("resolved");
-      }
-      // Restore into the original Issue's record even if navigation already moved to another panel,
-      // but never over a newer draft started after this message was submitted.
-      if (!record.text && !record.images.length) {
-        record.text = editorText;
-        record.images = pendingImages;
-        record.pasteEditor = submittedEditor;
-      } else {
-        discardImages(pendingImages);
-        failureMessage = `${failureMessage}（原消息未恢复：已有新草稿）`;
       }
       record.error = failureMessage;
       if (submitCurrent()) {
@@ -685,8 +679,42 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         });
       }
       // A remounted panel for this Issue reloads the record's outcome.
-      else if (draftStore.isCurrent(issueId, record)) draftStore.touch();
+      if (draftStore.isCurrent(issueId, record)) draftStore.touch();
     }
+  };
+  const checkSubmission = async () => {
+    const issueId = props.issue.id;
+    const record = draftRecord;
+    if (record.sending || !record.submitted) return;
+    const value = record.submitted;
+    record.sending = true;
+    draftStore.touch();
+    try {
+      const receipt = await agentMessageReceipt(issueId, value.id);
+      if (!draftStore.isCurrent(issueId, record)) return;
+      if (receipt.state === "queued" || receipt.state === "started") {
+        discardImages(value.images);
+        record.submitted = undefined;
+        record.error = "消息已接收，请查看会话中的处理进度。";
+      } else record.error = receipt.state === "rejected" ? "消息已接收后取消，请查看会话再决定是否重新发送。" : "暂时无法确认接收结果。原消息已保留，请查看会话后再决定是否重新发送。";
+    } catch {
+      if (draftStore.isCurrent(issueId, record)) record.error = "接收状态查询失败，原消息仍保留。";
+    } finally {
+      record.sending = false;
+      if (draftStore.isCurrent(issueId, record)) draftStore.touch();
+    }
+  };
+  const releaseSubmission = (restore: boolean) => {
+    const value = draftRecord.submitted;
+    if (!value || draftRecord.sending || (restore && (draftRecord.text || draftRecord.images.length))) return;
+    if (restore) {
+      draftRecord.text = value.text;
+      draftRecord.images = value.images;
+      draftRecord.pasteEditor = value.pasteEditor;
+    } else discardImages(value.images);
+    draftRecord.submitted = undefined;
+    draftRecord.error = "";
+    draftStore.touch();
   };
   const applyEditorResult = (textarea: HTMLTextAreaElement, edit: PasteEditResult) => {
     setDraft(edit.value);
@@ -847,6 +875,29 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
             {activity()?.text ?? "处理中…"}
           </div>
         </Show>
+        <Show when={submitted()}>
+          {(value) => (
+            <div class="agent-submitted" aria-label="已提交消息">
+              <strong>{sending() ? "正在发送" : "发送未确认，原消息已保留"}</strong>
+              <details>
+                <summary>查看原消息</summary>
+                <pre>{value().message}</pre>
+                <For each={value().images}>{(image) => <img src={image.url} alt={image.file.name || "已提交图片"} />}</For>
+              </details>
+              <Show when={!sending()}>
+                <Button size="small" onClick={() => void checkSubmission()}>
+                  查询接收状态
+                </Button>
+                <Button size="small" disabled={Boolean(draft() || images().length)} onClick={() => releaseSubmission(true)}>
+                  移入空草稿
+                </Button>
+                <Button size="small" onClick={() => releaseSubmission(false)}>
+                  移除记录
+                </Button>
+              </Show>
+            </div>
+          )}
+        </Show>
         <div class="agent-composer-gutter">
           <div class={`agent-composer thinking-${agent().thinkingLevel || "off"}`}>
             <Show when={images().length}>
@@ -869,7 +920,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
               aria-label="发送给 Agent"
               placeholder={canSend() ? "补充消息或粘贴图片…" : "工单已解决，重开后可发送"}
               value={draft()}
-              disabled={sending() || !canSend()}
+              disabled={!canSend()}
               onInput={handleEditorInput}
               onPaste={handlePaste}
               onSelect={protectPasteSelection}

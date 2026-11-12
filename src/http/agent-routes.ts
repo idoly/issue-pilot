@@ -293,15 +293,25 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     }
   });
 
+  app.get<{ Params: { key: string; id: string } }>("/api/issues/:key/agent-messages/:id", async (request) => {
+    const person = await requireCurrentUser(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(request.params.id)) throw new ApiError(400, "invalid_agent_message_id");
+    if (!engine.messageReceipt) throw new ApiError(501, "agent_message_receipt_unavailable");
+    return runScopeExclusive(() => engine.messageReceipt!(issue, { id: request.params.id, subject: person.subject }, () => requireCurrentUser(database, request)));
+  });
+
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
     const issue = await requireIssue(database, request.params.key);
-    if (issue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_run_agent");
     const { message, images } = await readAgentMessage(request);
     const person = await requireCurrentUser(database, request);
+    const id = request.headers["x-issue-pilot-message-id"] ?? crypto.randomUUID();
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new ApiError(400, "invalid_agent_message_id");
     try {
-      await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request));
+      await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request), { id, subject: person.subject });
     } catch (error) {
-      if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown"].includes(error.message)) throw new ApiError(409, error.message);
+      if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown", "agent_message_id_conflict"].includes(error.message))
+        throw new ApiError(409, error.message);
       throw error;
     }
     return reply.code(202).send();

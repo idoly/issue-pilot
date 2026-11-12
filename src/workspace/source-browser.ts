@@ -1,3 +1,4 @@
+import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -216,7 +217,7 @@ export class SourceBrowser {
             cleanup.push(error);
           }
         // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
-        if (cleanup.length) throw new AggregateError([...failures, ...cleanup], "source_save_cleanup_failed");
+        if (cleanup.length) throw new OperationError("source_save_cleanup_failed", published ? "committed" : "not_committed", { cause: new AggregateError([...failures, ...cleanup]) });
       }
       return this.workingFile(context, selected);
     });
@@ -257,7 +258,7 @@ export class SourceBrowser {
           cleanup.push(error);
         }
         // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
-        if (cleanup.length) throw new AggregateError([...failures, ...cleanup], "source_create_cleanup_failed");
+        if (cleanup.length) throw new OperationError("source_create_cleanup_failed", failures.length ? "unknown" : "committed", { cause: new AggregateError([...failures, ...cleanup]) });
       }
       return this.workingFile(context, relativePath);
     });
@@ -302,21 +303,36 @@ export class SourceBrowser {
     }
     if (isInside(selectedSource, selectedDestination) || isInside(selectedDestination, selectedSource)) throw new Error("invalid_source_path");
     await this.withMutablePath(context, relativePath, true, async (source) => {
+      let sourceMetadata;
       try {
-        await lstat(source);
+        sourceMetadata = await lstat(source);
       } catch (error) {
         mutationPathError(error);
       }
       await this.withMutablePath(context, destinationPath, overwrite, async (destination) => {
-        let previous: string | undefined;
-        if (overwrite) {
-          const backup = path.join(path.dirname(destination), `.issue-pilot-rename-${randomUUID()}.previous`);
+        const targetMetadata = overwrite
+          ? await lstat(destination).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT") throw error;
+              return undefined;
+            })
+          : undefined;
+        // Ordinary files have an atomic replacement primitive. Directory replacement retains
+        // its existing semantics below, including replacement of nonempty directories.
+        if (!overwrite || !targetMetadata || (sourceMetadata!.isFile() && targetMetadata.isFile())) {
           try {
-            await rename(destination, backup);
-            previous = backup;
+            await rename(source, destination);
           } catch (error) {
-            if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+            mutationPathError(error);
           }
+          return;
+        }
+        let previous: string | undefined;
+        const backup = path.join(path.dirname(destination), `.issue-pilot-rename-${randomUUID()}.previous`);
+        try {
+          await rename(destination, backup);
+          previous = backup;
+        } catch (error) {
+          if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
         }
         try {
           await rename(source, destination);
@@ -325,7 +341,7 @@ export class SourceBrowser {
             try {
               await rename(previous, destination);
             } catch (rollbackError) {
-              throw new Error("source_rename_rollback_failed", { cause: new AggregateError([error, rollbackError], "source_rename_rollback_failed") });
+              throw new OperationError("source_rename_rollback_failed", "unknown", { cause: new AggregateError([error, rollbackError], "source_rename_rollback_failed") });
             }
           }
           mutationPathError(error);
@@ -334,7 +350,7 @@ export class SourceBrowser {
           try {
             await rm(previous, { recursive: true, force: true });
           } catch (error) {
-            throw new Error("source_rename_finalize_failed", { cause: error });
+            throw new OperationError("source_rename_finalize_failed", "committed", { cause: error });
           }
         }
       });
@@ -823,7 +839,7 @@ export class SourceBrowser {
         await directory.close();
       } catch (error) {
         // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
-        throw new AggregateError([...failures, error], "source_path_cleanup_failed");
+        throw new OperationError("source_path_cleanup_failed", failures.length ? "unknown" : "committed", { cause: new AggregateError([...failures, error]) });
       }
     }
   }

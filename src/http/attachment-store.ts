@@ -1,3 +1,4 @@
+import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream, type ReadStream } from "node:fs";
 import { mkdtemp, open, realpath, rename, rm, lstat, type FileHandle } from "node:fs/promises";
@@ -161,7 +162,7 @@ export async function restoreQuarantinedAttachments(quarantined: QuarantinedAtta
       failures.push(error);
     }
   }
-  if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
+  if (failures.length) throw new OperationError("attachment_rollback_failed", "unknown", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
 export async function removeWrittenAttachments(objectKeys: string[]): Promise<void> {
@@ -175,7 +176,7 @@ export async function removeWrittenAttachments(objectKeys: string[]): Promise<vo
       }
     }),
   );
-  if (failures.length) throw new Error("attachment_rollback_failed", { cause: new AggregateError(failures, "attachment_rollback_failed") });
+  if (failures.length) throw new OperationError("attachment_rollback_failed", "unknown", { cause: new AggregateError(failures, "attachment_rollback_failed") });
 }
 
 export async function finalizeQuarantinedAttachments(
@@ -192,7 +193,7 @@ export async function finalizeQuarantinedAttachments(
       }
     }),
   );
-  if (failures.length) throw new Error("attachment_finalize_failed", { cause: new AggregateError(failures, "attachment_finalize_failed") });
+  if (failures.length) throw new OperationError("attachment_finalize_failed", "committed", { cause: new AggregateError(failures, "attachment_finalize_failed") });
 }
 
 function attachmentObjectName(fileName: string): string {

@@ -3,7 +3,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
 const state = vi.hoisted(() => ({ plan: vi.fn(), create: vi.fn(), list: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
-vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), planIssueScopeTransition: state.plan, createIssue: state.create, listIssues: state.list }));
+vi.mock("../data/client", async (original) => ({
+  ...(await original<typeof import("../data/client")>()),
+  listIssueWorkFiles: vi.fn(async () => []),
+  planIssueScopeTransition: state.plan,
+  createIssue: state.create,
+  listIssues: state.list,
+}));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({
     currentUser: () => state.user(),
@@ -37,6 +43,7 @@ const issue: IssueDetail = {
   environmentKey: "prod",
   updatedAt: "2026-10-18T00:00:00Z",
   repositories: [],
+  workingDirectory: "/fixture/workspaces/issue",
   workspace: { status: "ready", sourceAvailable: false },
   attachments: [],
   comments: [],

@@ -1,3 +1,4 @@
+import { readIssueMessageReceipt } from "./session-reset.ts";
 import { randomUUID } from "node:crypto";
 import { chmod, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +12,7 @@ import { stableErrorReason } from "../diagnostics.ts";
 import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, selectAgentConfiguration } from "../configuration/agent.ts";
-import { dingtalkMcpNames, serviceMcpConnections } from "../configuration/service-mcp.ts";
+import { dingtalkMcpNames, loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
 import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
@@ -19,13 +20,22 @@ import { createWorkspaceTool } from "./workspace-tool.ts";
 import { openVerifiedAttachmentFile } from "../http/attachment-store.ts";
 import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { KeyedSerialQueue } from "../serial.ts";
-import { cancelPendingAgentMessages, appendQueuedAgentMessage, pendingAgentMessages, selectAgentMessage, startAgentMessage, type AgentMessageScope } from "./message-delivery.ts";
+import {
+  cancelPendingAgentMessages,
+  requeueAgentMessage,
+  type AgentMessageRequest,
+  appendAgentMessage,
+  pendingAgentMessages,
+  selectAgentMessage,
+  startAgentMessage,
+  type AgentMessageScope,
+} from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
 import { createPrivateSessionManager, assertSessionFileComplete, isIssueSessionPath, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
-import { agentSessions, applicationSettings, issueAttachments, mcpServices, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
+import { agentSessions, applicationSettings, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
 import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, errorMessage, personGitIdentity, type AgentRunState, type CapabilityName, type DeploymentConfig, type EnvironmentKind } from "../domain/contracts.ts";
 import type { PiModelRuntime } from "./model-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
@@ -37,8 +47,9 @@ export interface AgentReservation {
 }
 
 export interface AgentController {
+  messageReceipt?(issue: { id: string; key: string }, request: AgentMessageRequest, authorize: () => Promise<unknown>): Promise<{ state: string }>;
   enqueue(issueId: string, message?: string): void;
-  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[], authorize?: () => Promise<unknown>): Promise<void>;
+  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[], authorize?: () => Promise<unknown>, request?: AgentMessageRequest): Promise<void>;
   isRunning(issueId: string): boolean;
   getRunState(issueId: string): AgentRunState;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
@@ -78,7 +89,7 @@ export class AgentEngine implements AgentController {
 
   constructor(
     database: Database,
-    stateRoot = ".issue-pilot",
+    stateRoot: string,
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
     modelRuntime?: PiModelRuntime,
@@ -143,43 +154,53 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>): Promise<void> {
+  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>, request?: AgentMessageRequest): Promise<void> {
     this.assertOpen();
     this.assertNotReserved(issueId);
     this.beginActivity(issueId);
     try {
-      const [issue] = await this.database
-        .select({ key: issues.key, status: issues.status, serviceId: issues.serviceId, environmentId: issues.environmentId })
-        .from(issues)
-        .where(eq(issues.id, issueId))
-        .limit(1);
-      if (!issue) throw new Error("issue_not_found");
-      if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
-      const userMessage = message;
-      const messageIssue = { id: issueId, key: issue.key, serviceId: issue.serviceId, environmentId: issue.environmentId };
-      // The sender may own no Issues, so their deactivation need not reserve this Issue.
-      // Reauthorize after admission waits, before changing the session or persisting input.
-      const prepareAdmission = async () => {
+      await this.steerQueue.run(issueId, async () => {
+        const [issue] = await this.database
+          .select({ key: issues.key, status: issues.status, serviceId: issues.serviceId, environmentId: issues.environmentId })
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .limit(1);
+        if (!issue) throw new Error("issue_not_found");
         await authorize?.();
-        this.assertNotReserved(issueId);
-        await assertIssueRoot(this.stateRoot, issue.key);
-        if (gitIdentity && !this.personalSessions.has(issueId)) this.sessions.get(issueId)?.setGitIdentity(gitIdentity);
-      };
-      const managed = this.sessions.get(issueId);
-      if (!managed) {
-        await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, gitIdentity, images, entryId), prepareAdmission);
-        return;
-      }
-      const scheduleMessage = () =>
-        this.scheduleUserMessage(
-          messageIssue,
-          userMessage,
-          images,
-          (entryId) => (this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId)),
-          prepareAdmission,
-        );
-      if (managed.streaming) {
-        await this.steerQueue.run(issueId, async () => {
+        if (request) {
+          const receipt = await this.findMessageReceipt({ id: issueId, key: issue.key }, request);
+          if (receipt) {
+            await authorize?.();
+            if (receipt.message !== message || JSON.stringify(receipt.images) !== JSON.stringify(images)) throw new Error("agent_message_id_conflict");
+            return;
+          }
+        }
+        if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+        const userMessage = message;
+        const messageIssue = { id: issueId, key: issue.key, serviceId: issue.serviceId, environmentId: issue.environmentId };
+        // The sender may own no Issues, so their deactivation need not reserve this Issue.
+        // Reauthorize after admission waits, before changing the session or persisting input.
+        const prepareAdmission = async () => {
+          await authorize?.();
+          this.assertNotReserved(issueId);
+          await assertIssueRoot(this.stateRoot, issue.key);
+          if (gitIdentity && !this.personalSessions.has(issueId)) this.sessions.get(issueId)?.setGitIdentity(gitIdentity);
+        };
+        const managed = this.sessions.get(issueId);
+        if (!managed) {
+          await this.scheduleUserMessage(messageIssue, userMessage, images, (entryId) => this.run(issueId, userMessage, gitIdentity, images, entryId), prepareAdmission, request);
+          return;
+        }
+        const scheduleMessage = () =>
+          this.scheduleUserMessage(
+            messageIssue,
+            userMessage,
+            images,
+            (entryId) => (this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId)),
+            prepareAdmission,
+            request,
+          );
+        if (managed.streaming) {
           await authorize?.();
           this.assertNotReserved(issueId);
           await assertIssueRoot(this.stateRoot, issue.key);
@@ -191,6 +212,19 @@ export class AgentEngine implements AgentController {
           if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
           const steered = userMessage.startsWith("/") ? userMessage : promptWithRuntimeTime(userMessage);
           const queuedBefore = managed.session.getSteeringMessages().length;
+          // Persist admission and conservatively mark dispatch before Pi can accept side effects.
+          let entryId: string;
+          try {
+            entryId = await this.recordUserMessage(issueId, managed.session.sessionManager, userMessage, images, messageIssue, request, "started");
+          } catch (error) {
+            try {
+              await this.stopSession(issueId, managed);
+            } catch (cleanup) {
+              throw new AggregateError([error, cleanup], "agent_message_record_failed");
+            }
+            throw error;
+          }
+          if (this.sessions.get(issueId) !== managed) throw new Error("agent_message_outcome_unknown");
           await managed.session.steer(steered, images);
           // Pi may have accepted work before the old session was disposed; do not replay it.
           if (this.sessions.get(issueId) !== managed) throw new Error("agent_message_outcome_unknown");
@@ -200,25 +234,37 @@ export class AgentEngine implements AgentController {
           // so only do this when this steer is the only entry waiting there.
           if (!managed.streaming && queuedBefore === 0 && managed.session.getSteeringMessages().length === 1) {
             managed.session.clearQueue();
-            await scheduleMessage();
+            requeueAgentMessage(managed.session.sessionManager, entryId);
+            this.schedule(issueId, () =>
+              this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
+            );
             return;
           }
-          try {
-            await this.recordUserMessage(issueId, managed.session.sessionManager, userMessage, images);
-          } catch (error) {
-            try {
-              await this.stopSession(issueId, managed);
-            } catch (stopError) {
-              throw new AggregateError([error, stopError], "agent_message_record_failed");
-            }
-            throw error;
-          }
-        });
-      } else {
-        await scheduleMessage();
-      }
+        } else {
+          await scheduleMessage();
+        }
+      });
     } finally {
       this.endActivity(issueId);
+    }
+  }
+
+  private findMessageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest) {
+    return readIssueMessageReceipt(this.database, this.stateRoot, issue, request, this.sessions.get(issue.id)?.session.sessionManager);
+  }
+
+  async messageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, authorize: () => Promise<unknown>) {
+    this.assertOpen();
+    this.assertNotReserved(issue.id);
+    this.beginActivity(issue.id);
+    try {
+      return await this.steerQueue.run(issue.id, async () => {
+        await authorize();
+        const receipt = await this.findMessageReceipt(issue, request);
+        return { state: receipt?.state ?? "unknown" };
+      });
+    } finally {
+      this.endActivity(issue.id);
     }
   }
 
@@ -568,7 +614,7 @@ export class AgentEngine implements AgentController {
       return { ...scope, config: resolved, credentialErrors };
     });
     const deploymentConfig = serviceScopes.find((scope) => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
-    const mcpRows = await this.database.select().from(mcpServices);
+    const mcpRows = await loadMcpConnections(this.database);
     const includedServiceIds = new Set(await issueServiceIds(this.database, issue));
     const mcpConfigurations = serviceMcpConnections(
       mcpRows,
@@ -732,6 +778,7 @@ export class AgentEngine implements AgentController {
     images: ImageContent[],
     operation: (entryId: string) => Promise<void>,
     prepareAdmission: () => Promise<void>,
+    request?: AgentMessageRequest,
   ): Promise<void> {
     await this.sessionQueue.run(issue.id, async () => {
       await prepareAdmission();
@@ -739,7 +786,7 @@ export class AgentEngine implements AgentController {
       const manager = current ?? (await this.sessionManagerLocked(issue, await assertIssueRoot(this.stateRoot, issue.key)));
       let entryId: string;
       try {
-        entryId = await this.recordUserMessage(issue.id, manager, message, images, issue);
+        entryId = await this.recordUserMessage(issue.id, manager, message, images, issue, request);
       } catch (error) {
         try {
           await this.stopSessionLocked(issue.id);
@@ -752,8 +799,16 @@ export class AgentEngine implements AgentController {
     });
   }
 
-  private async recordUserMessage(issueId: string, manager: SessionManager, message: string, images: ImageContent[] = [], queuedScope?: AgentMessageScope): Promise<string> {
-    const entryId = queuedScope ? appendQueuedAgentMessage(manager, queuedScope, message, images) : manager.appendCustomEntry("issue-pilot-user", { message, ...(images.length ? { images } : {}) });
+  private async recordUserMessage(
+    issueId: string,
+    manager: SessionManager,
+    message: string,
+    images: ImageContent[],
+    scope: AgentMessageScope,
+    request?: AgentMessageRequest,
+    state: "queued" | "started" = "queued",
+  ): Promise<string> {
+    const entryId = appendAgentMessage(manager, scope, message, images, request, state);
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message, ...(images.length ? { images } : {}) } });
     return entryId;
   }

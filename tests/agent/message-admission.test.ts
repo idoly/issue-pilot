@@ -1,3 +1,7 @@
+import { agentMessageReceipt, pendingAgentMessages } from "../../src/agent/message-delivery.ts";
+import { buildApi } from "../../src/http/api.ts";
+import { resetIssueSession } from "../../src/agent/session-reset.ts";
+import { modelCatalog } from "../http/fixture.ts";
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
@@ -13,7 +17,7 @@ import { eq } from "drizzle-orm";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
-import { assertSessionFileComplete, type PiSessionRuntime, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
+import { assertSessionFileComplete, createPrivateSessionManager, type ManagedPiSession, type PiSessionRuntime, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import type { IssueProjectManager, PreparedIssueProject } from "../../src/workspace/project.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -422,6 +426,161 @@ for (const cached of [false, true])
       assert.equal(sessionTranscript(SessionManager.open(binding.sessionFile), issue.id).length, 2);
     } finally {
       internal.sessions.clear();
+      await engine.close();
+      await database.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+test("durable request receipts deduplicate concurrent sends and survive process reopening without replay", async () => {
+  const { root, database, issue } = await fixture();
+  const engine = new AgentEngine(database.db, root);
+  const request = { id: "fixture-request", subject: "admit-owner" };
+  const dispatched: string[] = [];
+  (engine as unknown as { run(issueId: string, message: string): Promise<void> }).run = async (_issueId, message) => {
+    dispatched.push(message);
+  };
+  try {
+    await Promise.all([engine.send(issue.id, "exactly one admission", undefined, [], undefined, request), engine.send(issue.id, "exactly one admission", undefined, [], undefined, request)]);
+    await engine.close();
+    assert.deepEqual(dispatched, ["exactly one admission"]);
+    const reopened = new AgentEngine(database.db, root);
+    try {
+      await reopened.send(issue.id, "exactly one admission", undefined, [], undefined, request);
+      assert.equal(reopened.isRunning(issue.id), false);
+      let authorizationChecks = 0;
+      await assert.rejects(
+        reopened.send(
+          issue.id,
+          "exactly one admission",
+          undefined,
+          [],
+          async () => {
+            if (++authorizationChecks === 2) throw new Error("identity_disabled_during_receipt_read");
+          },
+          request,
+        ),
+        /identity_disabled_during_receipt_read/,
+      );
+
+      assert.deepEqual(await reopened.messageReceipt(issue, request, async () => {}), { state: "queued" });
+      assert.deepEqual(await reopened.messageReceipt(issue, { ...request, subject: "another-user" }, async () => {}), { state: "unknown" });
+      await assert.rejects(reopened.send(issue.id, "different payload", undefined, [], undefined, request), /agent_message_id_conflict/);
+      await assert.rejects(
+        reopened.messageReceipt(issue, request, async () => {
+          throw new Error("identity_disabled");
+        }),
+        /identity_disabled/,
+      );
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await engine.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("HTTP receipts preserve sender identity and admission across session reset and resolution", async () => {
+  const { root, file, database, issue } = await fixture();
+  const engine = new AgentEngine(database.db, root);
+  let dispatches = 0;
+  (engine as unknown as { run(): Promise<void> }).run = async () => {
+    dispatches++;
+  };
+  const app = await buildApi({ stateRoot: root, databaseFile: file, engine, modelCatalog, logger: false });
+  const url = `/api/issues/${issue.key}/agent-messages`;
+  const headers = { "x-issue-pilot-subject": "admit-owner", "x-issue-pilot-message-id": "request-1" };
+  try {
+    await database.db.insert(subjects).values({ subject: "other-sender", role: "product" });
+    assert.equal((await app.inject({ method: "POST", url, headers: { ...headers, "x-issue-pilot-message-id": "bad id" }, payload: { message: "input" } })).statusCode, 400);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const accepted = await app.inject({ method: "POST", url, headers, payload: { message: "input" } });
+      assert.equal(accepted.statusCode, 202, accepted.body);
+    }
+    assert.equal((await app.inject({ method: "POST", url, headers, payload: { message: "changed" } })).statusCode, 409);
+    const receipt = await app.inject({ method: "GET", url: url + "/request-1", headers });
+    assert.deepEqual(receipt.json(), { state: "queued" });
+    assert.deepEqual((await app.inject({ method: "GET", url: url + "/request-1", headers: { "x-issue-pilot-subject": "other-sender" } })).json(), { state: "unknown" });
+    await (engine as unknown as { waitForIdle(): Promise<void> }).waitForIdle();
+    const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id));
+    const manager = SessionManager.open(binding!.sessionFile);
+    await engine.runExclusive([issue.id], async (reservation) => {
+      await reservation.closeSession(issue.id);
+      await resetIssueSession(database.db, root, issue, "admit-owner", manager.getSessionId());
+    });
+    assert.deepEqual((await app.inject({ method: "GET", url: url + "/request-1", headers })).json(), { state: "queued" });
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, issue.id));
+    assert.equal((await app.inject({ method: "POST", url, headers, payload: { message: "input" } })).statusCode, 202);
+    assert.equal((await app.inject({ method: "POST", url, headers: { ...headers, "x-issue-pilot-message-id": "new-request" }, payload: { message: "new input" } })).statusCode, 409);
+    assert.equal(dispatches, 1);
+    await database.db.update(subjects).set({ active: false }).where(eq(subjects.subject, "admit-owner"));
+    assert.equal((await app.inject({ method: "GET", url: url + "/request-1", headers })).statusCode, 400);
+  } finally {
+    await app.close();
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const outcome of ["accepted", "late", "uncertain"] as const)
+  test(`streaming admission is durable before ${outcome} steering and never duplicates its input`, async () => {
+    const { root, database, issue } = await fixture();
+    const directory = issueRoot(root, issue.key);
+    const manager = await createPrivateSessionManager(directory, directory);
+    await database.db.insert(agentSessions).values({ issueId: issue.id, sessionFile: manager.getSessionFile()!, workspacePath: directory });
+    const engine = new AgentEngine(database.db, root);
+    const request = { id: "steering-request", subject: "admit-owner" };
+    let streaming = true,
+      queued = 0,
+      steers = 0,
+      dispatches = 0;
+    const internal = engine as unknown as {
+      sessions: Map<string, ManagedPiSession>;
+      promptExisting(): Promise<void>;
+      waitForIdle(): Promise<void>;
+    };
+    internal.promptExisting = async () => {
+      dispatches++;
+    };
+    internal.sessions.set(issue.id, {
+      get streaming() {
+        return streaming;
+      },
+      setGitIdentity() {},
+      async stop() {},
+      session: {
+        sessionManager: manager,
+        getSteeringMessages: () => Array.from({ length: queued }, () => "steer"),
+        clearQueue: () => {
+          queued = 0;
+        },
+        async steer() {
+          steers++;
+          const persisted = SessionManager.open(manager.getSessionFile()!);
+          assert.equal(agentMessageReceipt(persisted, request)?.state, "started");
+          assert.equal(sessionTranscript(persisted, issue.id).length, 1);
+          if (outcome === "uncertain") throw new Error("remote_delivery_uncertain");
+          if (outcome === "late") {
+            streaming = false;
+            queued = 1;
+          }
+        },
+      },
+    } as unknown as ManagedPiSession);
+    try {
+      const sent = engine.send(issue.id, "original steer", undefined, [], undefined, request);
+      if (outcome === "uncertain") await assert.rejects(sent, /remote_delivery_uncertain/);
+      else await sent;
+      await internal.waitForIdle();
+      await engine.send(issue.id, "original steer", undefined, [], undefined, request);
+      const persisted = SessionManager.open(manager.getSessionFile()!);
+      assert.equal(steers, 1);
+      assert.equal(dispatches, outcome === "late" ? 1 : 0);
+      assert.equal(sessionTranscript(persisted, issue.id).length, 1);
+      assert.equal(pendingAgentMessages(persisted).length, outcome === "late" ? 1 : 0);
+    } finally {
       await engine.close();
       await database.close();
       await rm(root, { recursive: true, force: true });

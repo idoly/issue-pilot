@@ -1,10 +1,11 @@
+import { agentMessageReceipt, type AgentMessageRequest } from "./message-delivery.ts";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Database } from "../db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../db/schema.ts";
-import { issueRoot } from "../workspace/state.ts";
+import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
 import { assertSessionFileComplete, createPrivateSessionManager, isIssueSessionPath, openRegularSessionFile } from "./pi-session.ts";
 
 const resetEntry = "issue-pilot-session-reset";
@@ -69,7 +70,14 @@ async function readSessionSummary(file: string, root: string) {
 }
 
 /** Caller holds the configuration scope and Issue reservation, and closes the active session first. */
-export async function resetIssueSession(database: Database, stateRoot: string, issue: { id: string; key: string }, actor: string, expectedSessionId: string) {
+export async function resetIssueSession(
+  database: Database,
+  stateRoot: string,
+  issue: { id: string; key: string },
+  actor: string,
+  expectedSessionId: string,
+  edit?: (transaction: Parameters<Parameters<Database["transaction"]>[0]>[0]) => Promise<void>,
+) {
   const root = issueRoot(stateRoot, issue.key);
   const [binding] = await database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
   if (!binding) throw new Error("agent_session_not_found");
@@ -81,6 +89,7 @@ export async function resetIssueSession(database: Database, stateRoot: string, i
     // A custom entry is audit metadata, never model context. The old JSONL stays byte-for-byte intact.
     manager.appendCustomEntry(resetEntry, { previousFile: path.basename(binding.sessionFile), actor, resetAt: new Date().toISOString() });
     await database.transaction(async (transaction) => {
+      await edit?.(transaction);
       await transaction.update(agentSessions).set({ sessionFile: file, workspacePath: root, updatedAt: new Date() }).where(eq(agentSessions.issueId, issue.id));
       await transaction.update(issues).set({ status: "open", updatedAt: new Date() }).where(eq(issues.id, issue.id));
       await transaction
@@ -124,4 +133,22 @@ export async function readIssueSessionHistory(database: Database, stateRoot: str
   const entry = history.find((item) => item.sessionId === sessionId);
   if (!entry) throw new Error("agent_session_not_found");
   return readSession(entry.file, issueRoot(stateRoot, issue.key));
+}
+
+/** Receipt lookup follows the same validated reset chain as history, including compacted branches. */
+export async function readIssueMessageReceipt(database: Database, stateRoot: string, issue: { id: string; key: string }, request: AgentMessageRequest, current?: SessionManager) {
+  await assertIssueRoot(stateRoot, issue.key);
+  if (current) {
+    const file = current.getSessionFile();
+    if (!file || !isIssueSessionPath(file, issueRoot(stateRoot, issue.key))) throw new Error("agent_session_file_incomplete");
+    await ownSessionFile(() => assertSessionFileComplete(file));
+    const receipt = agentMessageReceipt(current, request);
+    if (receipt) return receipt;
+  }
+  for (const entry of await issueSessionHistory(database, stateRoot, issue)) {
+    if (current?.getSessionId() === entry.sessionId) continue;
+    const receipt = agentMessageReceipt(await readSession(entry.file, issueRoot(stateRoot, issue.key)), request);
+    if (receipt) return receipt;
+  }
+  return undefined;
 }

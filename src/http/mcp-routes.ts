@@ -1,4 +1,5 @@
-import { asc, eq } from "drizzle-orm";
+import { loadMcpConnections } from "../configuration/service-mcp.ts";
+import { eq } from "drizzle-orm";
 import { mcpServices, issues } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configuration/mcp.ts";
@@ -17,7 +18,7 @@ const project = (row: McpRow) => ({
 export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">) {
   const { app, database, engine, runScopeExclusive } = context;
   const requireService = async (id: string) => {
-    const [row] = await database.db.select().from(mcpServices).where(eq(mcpServices.id, id)).limit(1);
+    const row = (await loadMcpConnections(database.db)).find((connection) => connection.id === id);
     if (!row) throw new ApiError(404, "mcp_service_not_found");
     return row;
   };
@@ -42,7 +43,9 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     }
   };
   app.get("/api/mcp-services", async (_request, _reply) => {
-    return runScopeExclusive(async () => (await database.db.select().from(mcpServices).orderBy(asc(mcpServices.createdAt), asc(mcpServices.id))).map(project));
+    return runScopeExclusive(async () =>
+      (await loadMcpConnections(database.db)).sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id)).map(project),
+    );
   });
   // Global connections (including the DingTalk import gateway) carry shared credentials and launch host
   // processes, so reading their configuration, changing, deleting or testing them is admin-only like creation.
@@ -62,10 +65,13 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     const result = await runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const input = parseMcpConfiguration(request.body);
-      return mutate(async () => {
-        const [row] = await database.db.insert(mcpServices).values(input).returning();
-        return project(row!);
-      });
+      return mutate(() =>
+        database.db.transaction(async (transaction) => {
+          const [row] = await transaction.insert(mcpServices).values(input).returning();
+          await loadMcpConnections(transaction);
+          return project(row!);
+        }),
+      );
     });
     return reply.code(201).send(result);
   });
@@ -74,7 +80,13 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     const result = await runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const inputs = parseMcpImport(request.body);
-      return mutate(() => database.db.transaction(async (transaction) => (await transaction.insert(mcpServices).values(inputs).returning()).map(project)));
+      return mutate(() =>
+        database.db.transaction(async (transaction) => {
+          const rows = await transaction.insert(mcpServices).values(inputs).returning();
+          await loadMcpConnections(transaction);
+          return rows.map(project);
+        }),
+      );
     });
     return reply.code(201).send(result);
   });
@@ -87,14 +99,17 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
       const input = "mcpServers" in record(request.body) ? parseMcpImport(request.body, current)[0]! : parseMcpConfiguration(request.body, current);
       if (Object.entries(input).every(([key, value]) => (key === "stdio" ? JSON.stringify(current.stdio) === JSON.stringify(value) : current[key as keyof typeof input] === value)))
         return project(current);
-      return mutate(async () => {
-        const [row] = await database.db
-          .update(mcpServices)
-          .set({ ...input, updatedAt: new Date() })
-          .where(eq(mcpServices.id, current.id))
-          .returning();
-        return project(row!);
-      });
+      return mutate(() =>
+        database.db.transaction(async (transaction) => {
+          const [row] = await transaction
+            .update(mcpServices)
+            .set({ ...input, updatedAt: new Date() })
+            .where(eq(mcpServices.id, current.id))
+            .returning();
+          await loadMcpConnections(transaction);
+          return project(row!);
+        }),
+      );
     });
   });
   app.delete<{ Params: { id: string } }>("/api/mcp-services/:id", async (request, reply) => {
