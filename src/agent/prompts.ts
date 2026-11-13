@@ -139,7 +139,7 @@ function workspaceContext(repositories: RepositoryContext[], attachmentPath: str
             (key) =>
               `- ${relatedRoot}/.related-${key.toLowerCase()}.json; optional .related-${key.toLowerCase()}.jsonl; .related-${key.toLowerCase()} links to the related Issue's complete working directory.`,
           ),
-          "Read the associated Issue directory as evidence only. Never edit or delete its files, including uncommitted code.",
+          "Read the associated Issue directory and any checkout paths listed in its metadata as evidence only. Never edit or delete these files.",
         ]
       : []),
     ...(readOnly

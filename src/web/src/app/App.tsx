@@ -2,6 +2,7 @@ import { Button, Segmented, Select, Skeleton } from "../ui";
 import { createEffect, createSignal, lazy, Loading, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 
 import { getIssue, type IssueDetail, type IssueExecutionItem } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { parseIssueKey } from "../../../domain/contracts";
 import { DingtalkImportButton } from "./DingtalkImportDialog";
 import { AgentPanel } from "./AgentPanel";
@@ -44,7 +45,7 @@ function AgentWorkspace(props: {
   sourceExpanded: boolean;
   sourceDetailsOpen: boolean;
   onCloseSource: () => void;
-  onRefresh: (issueKey: string) => Promise<IssueDetail>;
+  onRefresh: (issueKey: string) => Promise<unknown>;
   onToggleAgent: () => void;
   onToggleDetails: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -171,21 +172,66 @@ function AppWorkspace(props: { initialView?: AppView }) {
   window.addEventListener("popstate", onHistoryNavigation);
   onCleanup(() => window.removeEventListener("popstate", onHistoryNavigation));
   let issueWorkspace: HTMLElement | undefined;
-  let selectionGeneration = 0;
-  const issueRefreshes = new Map<string, number>();
-  let nextRefresh = 0;
-  onCleanup(() => {
-    selectionGeneration++;
-  });
+  const detailTask = createLatestTask();
+  onCleanup(detailTask.cancel);
+  const readDetail = async (id: string, kind: "selection" | "update" | "sample") => {
+    if (untrack(selectedId) !== id || untrack(view) !== "issues") return;
+    if (kind === "update") void issueList.refresh();
+    const request = detailTask.begin();
+    const read = issueList.beginDetailRead();
+    const navigation = assigneeNavigation;
+    const isCurrent = () => request.isCurrent() && untrack(selectedId) === id && untrack(view) === "issues";
+    let published = false;
+    try {
+      const detail = await getIssue(id, request.signal);
+      if (!isCurrent()) return;
+      const assignee = detail.assigneeSubject;
+      if (navigation && assignee) {
+        const canFollow = () => isCurrent() && assigneeNavigation === navigation && (navigation.subject === undefined || currentUser()?.subject === navigation.subject);
+        const knowsAssignee = () => people().some((person) => person.subject === assignee);
+        if (canFollow() && !knowsAssignee()) await refreshPeople().catch(() => undefined);
+        if (canFollow() && knowsAssignee() && maySwitchUser(assignee)) {
+          if (assignee !== currentUser()?.subject) selectCurrentUser(assignee);
+          setQueueReveal({ key: id, subject: assignee });
+        }
+      }
+      if (!isCurrent()) return;
+      read.publish(detail);
+      setIssueError("");
+      published = true;
+    } catch (error) {
+      if (!isCurrent()) return;
+      if (kind === "selection") issueList.clearDetail(id);
+      setIssueError(error instanceof Error ? error.message : "工单加载失败");
+      throw error;
+    } finally {
+      const current = isCurrent();
+      request.finish();
+      if (current) {
+        if (assigneeNavigation === navigation) assigneeNavigation = undefined;
+        setLoading(false);
+        if (published && read.hasNewerList()) refreshSampledDetail();
+      }
+    }
+  };
+  const refreshIssue = (id: string) => readDetail(id, "update");
+  function refreshSampledDetail() {
+    const current = untrack(issue);
+    if (untrack(view) !== "issues" || untrack(loading) || !current || detailTask.active) return;
+    const summaries = new Map(untrack(issueList.items).map((item) => [item.id, item]));
+    const changed = [current, ...(current.relatedIssues ?? [])].some((detail) => {
+      const summary = summaries.get(detail.id);
+      return !summary || summaryChanged(detail, summary);
+    });
+    if (untrack(issueError) || changed) void readDetail(current.id, "sample").catch(() => undefined);
+  }
+  createEffect(issueList.listVersion, refreshSampledDetail);
   createEffect(
     () => ({ id: selectedId(), reload: issueReloadToken(), active: view() === "issues" }),
     ({ id, active }) => {
-      const currentGeneration = ++selectionGeneration;
-      issueRefreshes.clear();
+      detailTask.cancel();
       setQueueReveal(undefined);
       if (!active || assigneeNavigation?.key !== id) assigneeNavigation = undefined;
-      const navigation = assigneeNavigation;
-      const isCurrent = () => currentGeneration === selectionGeneration && selectedId() === id && view() === "issues";
       if (!active) return;
       setSourceExpanded(false);
       setSourceDirty(false);
@@ -195,30 +241,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
       }
       setLoading(true);
       setIssueError("");
-      void getIssue(id)
-        .then(async (value) => {
-          if (navigation && isCurrent() && value.assigneeSubject) {
-            const assignee = value.assigneeSubject;
-            const canFollow = () => isCurrent() && assigneeNavigation === navigation && (navigation.subject === undefined || currentUser()?.subject === navigation.subject);
-            const knowsAssignee = () => people().some((person) => person.subject === assignee);
-            if (canFollow() && !knowsAssignee()) await refreshPeople().catch(() => undefined);
-            if (canFollow() && knowsAssignee() && maySwitchUser(assignee)) {
-              if (assignee !== currentUser()?.subject) selectCurrentUser(assignee);
-              setQueueReveal({ key: id, subject: assignee });
-            }
-          }
-          if (isCurrent()) issueList.setDetail(value);
-        })
-        .catch((error) => {
-          if (!isCurrent()) return;
-          issueList.clearDetail(id);
-          setIssueError(error instanceof Error ? error.message : "工单加载失败");
-        })
-        .finally(() => {
-          if (!isCurrent()) return;
-          if (assigneeNavigation === navigation) assigneeNavigation = undefined;
-          setLoading(false);
-        });
+      void readDetail(id, "selection").catch(() => undefined);
     },
   );
   createEffect(
@@ -242,37 +265,6 @@ function AppWorkspace(props: { initialView?: AppView }) {
       }
     },
   );
-  const refreshIssue = async (issueKey: string, refreshQueue = true) => {
-    const currentGeneration = selectionGeneration;
-    const currentRefresh = ++nextRefresh;
-    issueRefreshes.set(issueKey, currentRefresh);
-    if (refreshQueue) void issueList.refresh();
-    const isCurrent = () => currentGeneration === selectionGeneration && issueRefreshes.get(issueKey) === currentRefresh && selectedId() === issueKey;
-    try {
-      const refreshed = await getIssue(issueKey);
-      if (isCurrent()) {
-        issueList.setDetail(refreshed);
-        setIssueError("");
-      }
-      return refreshed;
-    } catch (error) {
-      if (isCurrent()) setIssueError(error instanceof Error ? error.message : "工单加载失败");
-      throw error;
-    } finally {
-      if (issueRefreshes.get(issueKey) === currentRefresh) issueRefreshes.delete(issueKey);
-    }
-  };
-  createEffect(issueList.items, (items) => {
-    // A sampled change also invalidates the selected details, including changes made by another client.
-    const current = untrack(issue);
-    if (untrack(view) !== "issues" || untrack(loading) || !current || issueRefreshes.has(current.id)) return;
-    const summaries = new Map(items.map((item) => [item.id, item]));
-    const changed = [current, ...(current.relatedIssues ?? [])].some((detail) => {
-      const summary = summaries.get(detail.id);
-      return !summary || summaryChanged(detail, summary);
-    });
-    if (untrack(issueError) || changed) void refreshIssue(current.id, false).catch(() => undefined);
-  });
   const openIssueLink = (key: string, followAssignee = false) => {
     if (!mayNavigate()) return false;
     assigneeNavigation = followAssignee ? { key, subject: currentUser()?.subject } : undefined;
@@ -443,7 +435,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
                         }}
                         onOpenIssue={openIssueLink}
                         onUpdated={async () => {
-                          await refreshIssue(current().id, true);
+                          await refreshIssue(current().id);
                         }}
                         onCreatedFollowUp={(issueKey) => {
                           void issueList.refresh();

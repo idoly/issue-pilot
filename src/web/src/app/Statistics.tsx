@@ -114,8 +114,6 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const releaseState = (workspace: WorkspaceStats["workspaces"][number]) => {
     if (workspace.blockedReason === "workspace_not_development") return "只读工单，保留工作文件";
     if (workspace.blockedReason === "workspace_released") return "代码已释放，保留历史与文件";
-    if (workspace.blockedReason === "workspace_runtime_not_ready") return "代码已释放，运行视图待恢复";
-    if (workspace.blockedReason === "workspace_runtime_restore_failed") return "代码已释放，视图恢复失败";
     if (workspace.issueStatus !== "resolved") return "解决后纳入";
     if (workspace.releasable) {
       const hours = workspaceStats()?.policy.retentionHours;

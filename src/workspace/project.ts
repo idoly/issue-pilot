@@ -10,7 +10,7 @@ import { createPersonalGitEnvironment } from "./git-credentials.ts";
 import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from "./issue-services.ts";
 import type { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryStorePath, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
-import { prepareIssueRuntime, resolveRecordedRepository, type RelatedIssueRuntime } from "./runtime.ts";
+import { prepareIssueRuntime, resolveRecordedRepository, type IssueRuntimeRepository, type RelatedIssueRuntime } from "./runtime.ts";
 import { assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, issueRoot, pathExists } from "./state.ts";
 
 interface PreparedIssueRepository {
@@ -116,31 +116,21 @@ export class IssueProjectManager {
     const state = classifyRepositoryState(repositories);
     const names = issueRepositoryWorkspaceNames(repositories);
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
-    let runtimeRoot: string;
-    if (state === "development_workspace") {
-      await assertManagedIssueWorkspaceLayout(
-        workspaceRoot,
-        repositories.map((repository) => repository.localPath!),
-      );
-      runtimeRoot = await prepareIssueRuntime(
-        this.stateRoot,
-        issue.key,
-        repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })),
-        "write",
-        relatedIssues,
-      );
-    } else {
-      if (state !== "development_snapshot") throw new Error("development_repository_state_invalid");
-      const snapshots = [];
-      for (const repository of repositories) {
-        const snapshot = await this.worktrees.recordBranchSnapshot({ issueKey: issue.key, url: repository.url, workingBranch: repository.workingBranch! });
-        snapshots.push({ name: names.get(repository.url)!, repositoryPath: snapshot.checkout });
-      }
-      runtimeRoot = await prepareIssueRuntime(this.stateRoot, issue.key, snapshots, "read", relatedIssues);
-    }
+    if (state !== "development_workspace") throw new Error("development_repository_state_invalid");
+    await assertManagedIssueWorkspaceLayout(
+      workspaceRoot,
+      repositories.map((repository) => repository.localPath!),
+    );
+    const runtimeRoot = await prepareIssueRuntime(
+      this.stateRoot,
+      issue.key,
+      repositories.map((repository) => ({ name: names.get(repository.url)!, repositoryPath: repository.localPath! })),
+      "write",
+      relatedIssues,
+    );
     await this.database
       .update(issueWorkspaces)
-      .set({ runtimeReady: true, ...(state === "development_workspace" ? { releasedAt: null } : {}), lastError: null, updatedAt: new Date() })
+      .set({ runtimeReady: true, releasedAt: null, lastError: null, updatedAt: new Date() })
       .where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     return runtimeRoot;
   }
@@ -148,46 +138,39 @@ export class IssueProjectManager {
   async restoreDevelopmentWorkspace<T>(
     issue: Pick<ProjectIssue, "id" | "key" | "type">,
     repositories: Array<typeof issueRepositories.$inferSelect>,
-    recoverRuntime: () => Promise<void>,
-    finalize: (prepared: PreparedWorktree[], names: Map<string, string>) => Promise<T>,
+    names: ReadonlyMap<string, string>,
+    commits: ReadonlyMap<string, string>,
+    finalize: (prepared: PreparedWorktree[]) => Promise<T>,
   ): Promise<T> {
     const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     const mode = developmentWorktreeMode(issue.type);
-    const names = issueRepositoryWorkspaceNames(repositories);
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     if (!(await pathExists(workspaceRoot))) throw new Error("workspace_missing");
-    try {
-      await prepareIssueRuntime(this.stateRoot, issue.key, [], "write", relatedIssues);
-      return await this.worktrees.prepareBatch({
-        worktrees: repositories.map((repository) => ({
-          issueKey: issue.key,
-          workspaceName: names.get(repository.url)!,
-          url: repository.url,
-          baseBranch: repository.baseBranch,
-          mode,
-          workingBranch: repository.workingBranch!,
-          ...(repository.commitBefore ? { existingBaseCommit: repository.commitBefore } : {}),
-        })),
-        finalize: async (prepared) => {
-          await assertManagedIssueWorkspaceLayout(
-            workspaceRoot,
-            prepared.map(({ workspacePath }) => workspacePath),
-          );
-          await prepareIssueRuntime(
-            this.stateRoot,
-            issue.key,
-            prepared.map((worktree, index) => ({ name: names.get(repositories[index]!.url)!, repositoryPath: worktree.workspacePath })),
-            "write",
-            relatedIssues,
-          );
-          return finalize(prepared, names);
-        },
+    const worktrees = [];
+    for (const repository of repositories) {
+      worktrees.push({
+        issueKey: issue.key,
+        workspaceName: names.get(repository.url)!,
+        url: repository.url,
+        baseBranch: repository.baseBranch,
+        mode,
+        workingBranch: repository.workingBranch!,
+        expectedWorkingCommit: commits.get(repository.url)!,
+        ...(repository.commitBefore ? { existingBaseCommit: repository.commitBefore } : {}),
       });
-    } catch (error) {
-      // The working directory may contain persistent files unrelated to repository restore.
-      // Worktree rollback owns its paths; do not remove the Issue directory here.
-      return this.recoverAfterFailure(error, "workspace_restore_cleanup_failed", recoverRuntime);
     }
+    // The released view is derived from recorded Git state even when this removes old generated links.
+    await prepareIssueRuntime(this.stateRoot, issue.key, [], "write", relatedIssues);
+    return this.worktrees.prepareBatch({
+      worktrees,
+      finalize: async (prepared) => {
+        await assertManagedIssueWorkspaceLayout(
+          workspaceRoot,
+          prepared.map(({ workspacePath }) => workspacePath),
+        );
+        return finalize(prepared);
+      },
+    });
   }
 
   private async prepareRelatedIssueRuntimes(issueId: string, agent?: { readRoots: Set<string>; checkedCheckouts: Set<string> }): Promise<RelatedIssueRuntime[]> {
@@ -195,38 +178,49 @@ export class IssueProjectManager {
     const relatedIssues: RelatedIssueRuntime[] = [];
     for (const relation of relations) {
       const [related] = await this.database
-        .select({ issue: issues, service: services, environment: environments, session: agentSessions })
+        .select({ issue: issues, service: services, environment: environments, session: agentSessions, releasedAt: issueWorkspaces.releasedAt })
         .from(issues)
         .innerJoin(services, eq(services.id, issues.serviceId))
         .innerJoin(environments, eq(environments.id, issues.environmentId))
         .leftJoin(agentSessions, eq(agentSessions.issueId, issues.id))
+        .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id))
         .where(eq(issues.id, relation.relatedIssueId))
         .limit(1);
       if (!related) throw new Error("related_issue_context_unavailable");
       const repositoryRows = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, related.issue.id));
       const names = issueRepositoryWorkspaceNames(repositoryRows);
+      const checkoutByUrl = new Map<string, IssueRuntimeRepository>();
       if (agent) {
         try {
           agent.readRoots.add(await assertIssueRoot(this.stateRoot, related.issue.key));
           const state = classifyRepositoryState(repositoryRows);
           if (repositoryRows.length && state === "invalid") throw domainError("source_repository_state_invalid");
+          if (state === "development_snapshot" && !related.releasedAt) throw domainError("source_repository_state_invalid");
           if (state !== "invalid") {
-            for (const repository of repositoryRows) {
+            for (const [index, repository] of repositoryRows.entries()) {
               const { root, store } = await resolveRecordedRepository(this.stateRoot, related.issue.key, repository, names.get(repository.url)!, state, agent.checkedCheckouts);
               allowRepositoryRead(agent.readRoots, repositoryStorePath(this.stateRoot, repository.url), root, store);
+              if (state === "development_snapshot") {
+                const name = `.related-${related.issue.key.toLowerCase()}-code-${index + 1}`;
+                checkoutByUrl.set(repository.url, { name, repositoryPath: root });
+              }
             }
           }
         } catch (error) {
           throw new Error("related_issue_context_unavailable", { cause: error });
         }
       }
-      const repositoryMetadata = repositoryRows.map((repository) => ({
-        name: names.get(repository.url),
-        url: repository.url,
-        baseBranch: repository.baseBranch,
-        workingBranch: repository.workingBranch,
-        commit: repository.commitBefore,
-      }));
+      const repositoryMetadata = repositoryRows.map((repository) => {
+        const checkout = checkoutByUrl.get(repository.url);
+        return {
+          name: names.get(repository.url),
+          url: repository.url,
+          baseBranch: repository.baseBranch,
+          workingBranch: repository.workingBranch,
+          commit: checkout ? path.basename(checkout.repositoryPath) : repository.commitBefore,
+          ...(checkout ? { checkout: checkout.name } : {}),
+        };
+      });
       let conversationPath: string | undefined;
       if (related.session) {
         const candidate = path.resolve(related.session.sessionFile);
@@ -235,6 +229,7 @@ export class IssueProjectManager {
       relatedIssues.push({
         key: related.issue.key,
         workDirectory: issueRoot(this.stateRoot, related.issue.key),
+        repositoryLinks: [...checkoutByUrl.values()],
         ...(conversationPath ? { conversationPath } : {}),
         metadata: {
           key: related.issue.key,
@@ -248,7 +243,7 @@ export class IssueProjectManager {
           repositories: repositoryMetadata,
           ...(conversationPath ? { conversationFile: `.related-${related.issue.key.toLowerCase()}.jsonl` } : {}),
           directory: `.related-${related.issue.key.toLowerCase()}`,
-          note: "The related Issue directory is a read-only reference containing code, attachments, session and working files. Do not modify it.",
+          note: "The related Issue directory and any listed checkout paths are read-only evidence. Do not modify them.",
         },
       });
     }

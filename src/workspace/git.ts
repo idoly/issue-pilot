@@ -10,7 +10,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 import { executeLocalCommand } from "../process.ts";
 import { KeyedSerialQueue } from "../serial.ts";
-import { isolateIssueWorktree, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
+import { createPrivateIssueBranch, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -24,17 +24,12 @@ export interface PrepareWorktreeInput {
   workingBranch?: string;
   existingWorkspacePath?: string;
   existingBaseCommit?: string;
+  expectedWorkingCommit?: string;
 }
 
 export interface PrepareSharedCheckoutInput {
   url: string;
   baseBranch: string;
-}
-
-interface RecordBranchSnapshotInput {
-  url: string;
-  issueKey: string;
-  workingBranch: string;
 }
 
 export interface PreparedWorktree {
@@ -48,10 +43,9 @@ export interface PreparedWorktree {
 /** Ownership collected while preparing, used only if the batch is rolled back. */
 interface PreparedWorktreeAttempt {
   prepared: PreparedWorktree;
-  privateStore: string;
   createdPrivateStore: boolean;
-  /** Stores whose issue branch was created by this attempt and may be deleted on rollback. */
-  createdBranchStores: string[];
+  createdWorktree: boolean;
+  repositoryKey: string;
 }
 
 export interface RestoreWorktreeInput {
@@ -318,7 +312,10 @@ export class WorktreeManager {
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
       const branch = expectedBranch ?? (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
       if (!branch) throw new Error("workspace_branch_required");
-      await publishIssueBranch(resolve(this.repositoriesRoot, repositoryKey), cachePath, branch, true);
+      const shared = resolve(this.repositoriesRoot, repositoryKey);
+      const published = await publishIssueBranch(shared, cachePath, branch, true);
+      if (published !== commit) throw new Error("working_branch_changed_during_release");
+      await this.retainSnapshotCommit(shared, commit);
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
       } catch (error) {
@@ -410,7 +407,7 @@ export class WorktreeManager {
   }
 
   async prepareBatch<T>(input: PrepareWorktreeBatchInput<T>): Promise<T> {
-    const created: Array<{ input: PrepareWorktreeInput; workspacePath: string; attempt?: PreparedWorktreeAttempt }> = [];
+    const created: PreparedWorktreeAttempt[] = [];
     const prepared: PreparedWorktree[] = [];
     const workspaceRoots = new Map<string, boolean>();
     for (const worktree of input.worktrees) {
@@ -419,14 +416,8 @@ export class WorktreeManager {
     }
     try {
       for (const worktree of input.worktrees) {
-        const root = issueRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
-        const workspacePath = this.resolveIssueWorkspacePath(root, worktree.workspaceName, worktree.existingWorkspacePath);
-        const workspaceExists = await pathExists(workspacePath);
-        if (workspaceExists && !worktree.existingWorkspacePath) throw new Error("workspace_path_already_exists");
-        const entry: { input: PrepareWorktreeInput; workspacePath: string; attempt?: PreparedWorktreeAttempt } | undefined = workspaceExists ? undefined : { input: worktree, workspacePath };
-        if (entry) created.push(entry);
         const attempt = await this.prepareAttempt(worktree);
-        if (entry) entry.attempt = attempt;
+        if (attempt.createdWorktree) created.push(attempt);
         prepared.push(attempt.prepared);
       }
       return await input.finalize(prepared);
@@ -434,14 +425,7 @@ export class WorktreeManager {
       const rollbackErrors: unknown[] = [];
       for (const createdWorktree of created.reverse()) {
         try {
-          // A completed attempt owns everything it created. A failed attempt may still have left a worktree.
-          if (createdWorktree.attempt) await this.discardPrepared(createdWorktree.attempt);
-          else if (await pathExists(createdWorktree.workspacePath))
-            await this.remove(
-              createdWorktree.input.url,
-              createdWorktree.workspacePath,
-              createdWorktree.input.workingBranch ?? `${createdWorktree.input.mode}-${normalizeIssueKey(createdWorktree.input.issueKey).toLowerCase()}`,
-            );
+          await this.serialized(createdWorktree.repositoryKey, () => this.discardPrepared(createdWorktree));
         } catch (rollbackError) {
           rollbackErrors.push(rollbackError);
         }
@@ -464,33 +448,29 @@ export class WorktreeManager {
    * Publishing here would make a failed preparation look like a completed one.
    */
   private async discardPrepared(attempt: PreparedWorktreeAttempt): Promise<void> {
-    const { prepared, privateStore, createdPrivateStore, createdBranchStores } = attempt;
-    const failures: unknown[] = [];
-    if (await pathExists(prepared.workspacePath)) {
-      try {
-        await this.git(["-C", privateStore, "worktree", "remove", prepared.workspacePath]);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (prepared.workingBranch) {
-      for (const store of createdBranchStores) {
-        try {
-          const commit = (await this.git(["-C", store, "rev-parse", "--verify", `refs/heads/${prepared.workingBranch}`])).trim();
-          await this.git(["-C", store, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`, commit]);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
+    const { prepared, createdPrivateStore } = attempt;
+    const { cachePath, workspacePath, workingBranch } = prepared;
+    if (createdPrivateStore && (await readIssueBranchCommit(cachePath, workingBranch!)) !== prepared.baseCommit) throw new Error("working_branch_changed_outside_issue");
+    if (await this.worktreeEntryExists(workspacePath)) {
+      await this.assertCleanLocked(workspacePath, cachePath, workingBranch!);
+      await this.git(["-C", cachePath, "worktree", "remove", workspacePath]);
     }
     if (createdPrivateStore) {
-      try {
-        await rm(privateStore, { recursive: true });
-      } catch (error) {
-        failures.push(error);
-      }
+      await rm(cachePath, { recursive: true });
+      await rmdir(dirname(cachePath)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOTEMPTY") throw error;
+      });
     }
-    if (failures.length) throw new WorktreeRollbackFailure(new AggregateError(failures, "worktree_rollback_failed"));
+  }
+
+  private async worktreeEntryExists(workspacePath: string): Promise<boolean> {
+    try {
+      await lstat(workspacePath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
   }
 
   async removeBatch(input: RemoveWorktreeBatchInput): Promise<void> {
@@ -527,24 +507,39 @@ export class WorktreeManager {
     return this.serialized(repositoryKey, () => this.prepareSharedLocked(input, repositoryKey, checkedCheckouts));
   }
 
-  async recordBranchSnapshot(input: RecordBranchSnapshotInput): Promise<{ checkout: string; commit: string }> {
-    if (input.url.startsWith("-") || input.workingBranch.startsWith("-")) throw new Error("invalid_repository_configuration");
-    const repositoryKey = repositoryHash(input.url, 20);
-    return this.serialized(repositoryKey, () => this.recordBranchSnapshotLocked(input, repositoryKey));
+  /** A cold snapshot must still be reachable from a local reference. */
+  async assertSnapshotCommit(url: string, commit: string, publishedBranch?: string): Promise<void> {
+    if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("shared_checkout_changed");
+    const store = repositoryStorePath(this.stateRoot, url);
+    const ref = retainedSnapshotRef(commit);
+    try {
+      const retained = (await this.git(["-C", store, "show-ref", "--verify", "--hash", "--", ref])).trim();
+      if (retained === commit) return;
+    } catch (error) {
+      if (!publishedBranch || Number((error as NodeJS.ErrnoException).code) !== 128) throw error;
+      const absent = await this.git(["-C", store, "show-ref", "--exists", ref]).then(
+        () => false,
+        (probe: NodeJS.ErrnoException) => {
+          if (Number(probe.code) !== 2) throw probe;
+          return true;
+        },
+      );
+      // An older release could finish before recording a retained ref. The mirror can prove
+      // local reachability only for the tip already verified in the private store.
+      if (absent && (await readIssueBranchCommit(store, publishedBranch)) === commit) return;
+    }
+    throw new Error("shared_checkout_changed");
   }
 
   /** Materialize only an exact checkout recorded or evicted by this owner. */
-  async openSharedCheckout(url: string, commit: string, checkedCheckouts?: Set<string>): Promise<string> {
+  async openSharedCheckout(url: string, commit: string, checkedCheckouts?: Set<string>, publishedBranch?: string): Promise<string> {
     if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("shared_checkout_changed");
     const repositoryKey = repositoryHash(url, 20);
     const store = resolve(this.repositoriesRoot, repositoryKey);
     return this.serialized(repositoryKey, async () => {
       const checkout = this.sharedCheckoutPath(repositoryKey, commit);
       if (!(await managedGitDirectoryExists(store))) throw new Error("repository_cache_not_found");
-      if (!(await managedGitDirectoryExists(checkout))) {
-        const retained = (await this.git(["-C", store, "show-ref", "--verify", "--hash", "--", retainedSnapshotRef(commit)])).trim();
-        if (retained !== commit) throw new Error("shared_checkout_changed");
-      }
+      if (!(await managedGitDirectoryExists(checkout))) await this.assertSnapshotCommit(url, commit, publishedBranch);
       return this.prepareCommitCheckout(store, repositoryKey, commit, checkedCheckouts);
     });
   }
@@ -662,18 +657,6 @@ export class WorktreeManager {
     return { cachePath, workspacePath, baseBranch: input.baseBranch, workingBranch: null, baseCommit };
   }
 
-  private async recordBranchSnapshotLocked(input: RecordBranchSnapshotInput, repositoryKey: string): Promise<{ checkout: string; commit: string }> {
-    const isolated = await developmentRepositoryStorePath(this.stateRoot, input.issueKey, input.url);
-    const cachePath = resolve(this.repositoriesRoot, repositoryKey);
-    if (!(await managedGitDirectoryExists(cachePath))) throw new Error("repository_cache_not_found");
-    await this.git(["check-ref-format", "--branch", input.workingBranch]);
-    const commit = await publishIssueBranch(cachePath, isolated, input.workingBranch, true);
-    const checkout = this.sharedCheckoutPath(repositoryKey, commit);
-    if (await managedGitDirectoryExists(checkout)) await this.assertSharedCheckout(checkout, commit, cachePath);
-    await this.retainSnapshotCommit(cachePath, commit);
-    return { checkout, commit };
-  }
-
   private async retainSnapshotCommit(store: string, commit: string): Promise<void> {
     const local = ["--no-lazy-fetch", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", store];
     await this.git([...local, "rev-list", "--objects", "--missing=error", "--quiet", "--max-count=1", commit]);
@@ -742,70 +725,59 @@ export class WorktreeManager {
 
   private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktreeAttempt> {
     await this.assertBranchReference(input.baseBranch);
-    const privateStore = issueRepositoryStorePath(this.stateRoot, issueKey, input.url);
-    const privateStoreExisted = await managedGitDirectoryExists(privateStore);
-    const sharedStore = input.workingBranch ? resolve(this.repositoriesRoot, repositoryKey) : await this.updateCache(input, repositoryKey);
-    const cachePath = input.workingBranch || privateStoreExisted ? await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url) : sharedStore;
-    if (cachePath !== sharedStore && !input.workingBranch)
-      await this.git(["-C", cachePath, "fetch", "--no-tags", sharedStore, `+refs/remotes/origin/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`]);
-
     const root = issueRoot(this.stateRoot, issueKey);
     const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     await this.git(["check-ref-format", "--branch", workingBranch]);
     if (!workingBranch.startsWith(`${input.mode}-`)) throw new Error("invalid_issue_branch_prefix");
-    const branchExists = await this.hasBranch(cachePath, workingBranch);
-    if (input.workingBranch && !branchExists) throw new Error("working_branch_not_found");
-    const baseRef = `refs/remotes/origin/${input.baseBranch}`;
-    const upstreamCommit = input.workingBranch ? undefined : (await this.git(["-C", cachePath, "rev-parse", baseRef])).trim();
-    let baseCommit = input.existingBaseCommit ?? upstreamCommit ?? (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim();
 
-    const workspaceExists = await pathExists(workspacePath);
+    const workspaceExists = await this.worktreeEntryExists(workspacePath);
+    if (workspaceExists && !input.existingWorkspacePath && (!input.workingBranch || input.expectedWorkingCommit)) throw new Error("workspace_path_already_exists");
     if (workspaceExists && !(await pathExists(resolve(workspacePath, ".git")))) throw new Error("workspace_is_not_git_worktree");
-    if (workspaceExists) {
-      await validateIssueWorktreeBinding(cachePath, workspacePath, workingBranch);
-      await this.git(["-C", cachePath, "worktree", "repair", "--relative-paths", workspacePath]);
-      const currentBranch = (await this.git(["-C", workspacePath, "branch", "--show-current"])).trim();
-      if (currentBranch !== workingBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
-      if (!input.existingBaseCommit && !input.workingBranch) baseCommit = (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim();
+    const privateStore = issueRepositoryStorePath(this.stateRoot, issueKey, input.url);
+    const reuseStore = input.workingBranch !== undefined || (await managedGitDirectoryExists(privateStore));
+    const baseRef = `refs/remotes/origin/${input.baseBranch}`;
+    let baseCommit: string;
+    if (reuseStore) {
+      await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url);
+      const tip = await readIssueBranchCommit(privateStore, workingBranch);
+      if (input.expectedWorkingCommit !== undefined && tip !== input.expectedWorkingCommit) throw new Error("working_branch_changed_during_release");
+      if (!input.workingBranch) {
+        // A repository previously removed from this Issue can be included again with its own history.
+        const sharedStore = await this.updateCache(input, repositoryKey);
+        await this.git(["-C", privateStore, "fetch", "--no-tags", sharedStore, `+${baseRef}:${baseRef}`]);
+      }
+      baseCommit = input.existingBaseCommit ?? (await this.git(["-C", privateStore, "merge-base", `refs/heads/${workingBranch}`, baseRef])).trim();
     } else {
-      await mkdir(dirname(workspacePath), { recursive: true });
-      await this.git(
-        branchExists
-          ? ["-C", cachePath, "worktree", "add", "--relative-paths", workspacePath, workingBranch]
-          : ["-C", cachePath, "worktree", "add", "--relative-paths", "-b", workingBranch, workspacePath, baseRef],
-      );
-      // A branch left by an interrupted process keeps its own history; record the base it actually contains.
-      // A failed preparation rolled back by this process leaves nothing to adopt.
-      if (!input.workingBranch) baseCommit = branchExists ? (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim() : upstreamCommit!;
+      if (workspaceExists) throw new Error("workspace_git_store_missing");
+      const sharedStore = await this.updateCache(input, repositoryKey);
+      if (await this.hasBranch(sharedStore, workingBranch)) throw new Error("workspace_git_store_missing");
+      baseCommit = (await this.git(["-C", sharedStore, "rev-parse", baseRef])).trim();
+      // The private branch borrows these objects. Keep the baseline even if origin is force-pushed.
+      await this.retainSnapshotCommit(sharedStore, baseCommit);
+      await createPrivateIssueBranch(sharedStore, privateStore, workingBranch, baseCommit);
     }
-    const upstream = await this.git(["-C", workspacePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).then(
-      (value) => value.trim(),
-      () => "",
-    );
-    if (upstream && upstream !== `origin/${workingBranch}`) await this.git(["-C", workspacePath, "branch", "--unset-upstream"]);
-    if (cachePath === sharedStore) {
+
+    const attempt: PreparedWorktreeAttempt = {
+      prepared: { cachePath: privateStore, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit },
+      createdPrivateStore: !reuseStore,
+      createdWorktree: !workspaceExists,
+      repositoryKey,
+    };
+    if (workspaceExists) await validateIssueWorktreeBinding(privateStore, workspacePath, workingBranch);
+    else {
       try {
-        await isolateIssueWorktree(sharedStore, privateStore, workspacePath, workingBranch, baseCommit);
+        await this.git(["-C", privateStore, "worktree", "add", "--relative-paths", workspacePath, workingBranch]);
       } catch (error) {
-        if (!workspaceExists) {
-          try {
-            await validateIssueWorktreeBinding(sharedStore, workspacePath, workingBranch);
-            await this.git(["-C", sharedStore, "worktree", "remove", workspacePath]);
-          } catch (cleanup) {
-            throw new WorktreeRollbackFailure(new AggregateError([error, cleanup], "worktree_rollback_failed"));
-          }
+        try {
+          await this.discardPrepared(attempt);
+        } catch (cleanup) {
+          throw new WorktreeRollbackFailure(new AggregateError([error, cleanup], "worktree_rollback_failed"));
         }
         throw error;
       }
     }
-    const createdPrivateStore = cachePath === sharedStore && !privateStoreExisted && (await managedGitDirectoryExists(privateStore));
-    return {
-      prepared: { cachePath: privateStore, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit },
-      privateStore,
-      createdPrivateStore,
-      createdBranchStores: branchExists ? [] : cachePath === sharedStore ? [sharedStore, privateStore] : [privateStore],
-    };
+    return attempt;
   }
 
   private resolveIssueWorkspacePath(issueRoot: string, workspaceName: string, existingWorkspacePath?: string): string {

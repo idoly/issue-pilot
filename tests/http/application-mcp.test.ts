@@ -10,13 +10,49 @@ import { mkdir, mkdtemp, readdir, rm, stat, symlink, truncate, writeFile } from 
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { issueRoot } from "../../src/workspace/state.ts";
-import { subjects, issues, issueAttachments } from "../../src/db/schema.ts";
+import { subjects, issues, issueAttachments, issueWorkspaces } from "../../src/db/schema.ts";
 import { eq } from "drizzle-orm";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 
 const text = (result: unknown): string => JSON.stringify(result);
 // Larger than one MCP response, yet within the read budget, so it must stay readable page by page.
 const largeLog = Array.from({ length: 150_000 }, (_, index) => `line ${index} ${"x".repeat(10)}`).join("\n");
+
+test("uses one opaque revision without exposing Workspace diagnostics in MCP projections", async () => {
+  const f = await createApiFixture();
+  const client = new Client({ name: "revision-fixture", version: "1" });
+  const database = openDatabase(f.databaseFile);
+  try {
+    await createService(f.app, "MCP Revision", ["test"]);
+    const issue = await createIssue(f.app, "mcp-revision", "test", "Revision fixture");
+    f.engine.running.clear();
+    const [row] = await database.db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(eq(issues.key, String(issue.id)));
+    const diagnostic = "synthetic workspace diagnostic";
+    const list = async () => (await f.app.inject("/api/issues")).json()[0];
+    const before = await list();
+    await database.db.update(issueWorkspaces).set({ lastError: diagnostic }).where(eq(issueWorkspaces.issueId, row!.id));
+    const summary = await list();
+    const detail = (await f.app.inject(`/api/issues/${issue.id}`)).json();
+    assert.notEqual(summary.revision, before.revision);
+    assert.equal(detail.revision, summary.revision);
+    assert.equal(detail.workspace.lastError, diagnostic);
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`)) as Parameters<Client["connect"]>[0]);
+    for (const result of [await client.callTool({ name: "issue_get", arguments: { key: issue.id } }), await client.callTool({ name: "issues_search", arguments: { query: "Revision fixture" } })]) {
+      assert.equal(result.isError, undefined, text(result));
+      assert.ok(text(result).includes(String(issue.id)));
+      assert.ok(!text(result).includes(diagnostic));
+      assert.ok(text(result).includes(summary.revision));
+    }
+  } finally {
+    await client.close();
+    database.close();
+    await f.cleanup();
+  }
+});
 
 test("serves application reads over stateless Streamable HTTP without starting an Agent", async () => {
   const f = await createApiFixture();

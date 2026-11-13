@@ -1647,7 +1647,7 @@ describe("issue pilot workspace", () => {
     resolveCurrentUser({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" });
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(getIssue).toHaveBeenCalledTimes(1);
-    expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042");
+    expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042", expect.any(AbortSignal));
   });
 
   test("allows switching Issues while the selected Agent is working", async () => {
@@ -1680,9 +1680,11 @@ describe("issue pilot workspace", () => {
   test("shows relative queue update time with a creation-time tooltip and omits detail facts", async () => {
     const client = await import("../data/client");
     const rows = await client.listIssues();
+    const detail = (await client.getIssue(rows[0]!.id))!;
     rows[0]!.createdAt = "2026-10-01T01:02:00.000Z";
     rows[0]!.updatedAt = "2026-10-22T08:00:00.000Z";
     vi.mocked(client.listIssues).mockResolvedValueOnce(rows);
+    vi.mocked(client.getIssue).mockResolvedValueOnce({ ...detail, createdAt: rows[0]!.createdAt, updatedAt: rows[0]!.updatedAt });
     render(() => <App initialView="issues" />);
     await screen.findByRole("heading", { name: "结算页提交后订单状态未刷新" });
     const row = screen.getAllByRole("listitem").find((row) => row.textContent?.includes(rows[0]!.id))!;
@@ -1698,10 +1700,16 @@ describe("issue pilot workspace", () => {
     const client = await import("../data/client");
     const stableIssues = await client.listIssues();
     const productionIssue = stableIssues.find((item) => item.id === "ISSUE-20260810-041")!;
+    const service = { key: "orders", name: "Orders" };
     productionIssue.environmentKey = "prod";
-    productionIssue.service = { key: "orders", name: "Orders" };
+    productionIssue.service = service;
     vi.mocked(client.listIssues).mockResolvedValueOnce(stableIssues);
-
+    const getIssue = vi.mocked(client.getIssue);
+    const original = getIssue.getMockImplementation()!;
+    getIssue.mockImplementation(async (key) => {
+      const detail = await original(key);
+      return key === productionIssue.id ? { ...detail!, service, environmentKey: "prod" } : detail;
+    });
     render(() => <App initialView="issues" />);
     const queue = screen.getByLabelText("工单队列");
     await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
@@ -1742,6 +1750,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(changedServiceOptions).getByText("SRM"));
     await waitFor(() => expect(within(queue).queryAllByRole("listitem")).toHaveLength(0));
     expect(within(queue).getByText("没有匹配的工单")).toBeTruthy();
+    getIssue.mockImplementation(original);
   });
 
   test("refreshes the Issue queue when an SSE event changes the selected Issue status", async () => {

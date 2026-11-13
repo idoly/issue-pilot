@@ -499,6 +499,7 @@ test("uses snapshot_ready as the versioned Agent stream handshake", { timeout: 5
     await createService(fixture.app, "Beta", ["dev"]);
     const issue = await createIssue(fixture.app, "beta", "dev");
     fixture.engine.running.clear();
+    const summary = (await fixture.app.inject("/api/issues")).json()[0];
     const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
     const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`);
     assert.equal(response.status, 200);
@@ -517,6 +518,13 @@ test("uses snapshot_ready as the versioned Agent stream handshake", { timeout: 5
     await reader.cancel();
     assert.match(handshake, /^event: snapshot_ready\n/);
     assert.doesNotMatch(handshake, /^event: ready\n/);
+    const snapshot = JSON.parse(
+      handshake
+        .split("\n")
+        .find((line) => line.startsWith("data: "))!
+        .slice(6),
+    );
+    assert.equal(snapshot.issueRevision, summary.revision);
   } finally {
     await fixture.cleanup();
   }

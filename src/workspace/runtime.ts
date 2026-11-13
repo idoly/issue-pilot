@@ -4,7 +4,7 @@ import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, 
 import path from "node:path";
 import type { issueRepositories } from "../db/schema.ts";
 import { developmentRepositoryStorePath, repositoryStorePath, WorktreeManager } from "./git.ts";
-import { readIssueBranchCommit, validateIssueWorktreeBinding } from "./issue-git.ts";
+import { readIssueBranchCommit, readIssuePublicationCommit, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { assertIssueRoot, issueRoot, sharedCheckoutsRoot, type RepositoryState } from "./state.ts";
 
 export interface IssueRuntimeRepository {
@@ -16,6 +16,7 @@ export interface RelatedIssueRuntime {
   metadata: Record<string, unknown>;
   conversationPath?: string;
   workDirectory: string;
+  repositoryLinks?: IssueRuntimeRepository[];
 }
 export type IssueRuntimeAccess = "read" | "write";
 type RecordedRepository = typeof issueRepositories.$inferSelect;
@@ -24,12 +25,22 @@ export async function recordedSharedSnapshot(stateRoot: string, issueKey: string
   const root = await assertIssueRoot(stateRoot, issueKey);
   const entry = path.join(root, entryName(name));
   const store = repositoryStorePath(stateRoot, repository.url);
-  if (!(await lstat(entry)).isSymbolicLink() || !(await lstat(store)).isDirectory() || (await realpath(store)) !== store) throw domainError("source_runtime_invalid");
-  const commit = state === "read_only" ? repository.commitBefore : await readIssueBranchCommit(await developmentRepositoryStorePath(stateRoot, issueKey, repository.url), repository.workingBranch!);
+  const entryMetadata = await absent(entry);
+  if ((entryMetadata ? !entryMetadata.isSymbolicLink() : state === "read_only") || !(await lstat(store)).isDirectory() || (await realpath(store)) !== store)
+    throw domainError("source_runtime_invalid");
+  const commit = state === "read_only" ? repository.commitBefore : await releasedRepositoryCommit(stateRoot, issueKey, repository);
   if (!commit || !/^[a-f0-9]{40}$/.test(commit)) throw domainError("source_runtime_invalid");
   const checkout = path.join(sharedCheckoutsRoot(stateRoot), path.basename(store), commit);
-  if (path.resolve(root, await readlink(entry)) !== checkout) throw domainError("source_runtime_invalid");
+  if (entryMetadata && path.resolve(root, await readlink(entry)) !== checkout) throw domainError("source_runtime_invalid");
   return { store, commit, checkout };
+}
+
+export async function releasedRepositoryCommit(stateRoot: string, issueKey: string, repository: RecordedRepository): Promise<string> {
+  const store = await developmentRepositoryStorePath(stateRoot, issueKey, repository.url);
+  const branch = repository.workingBranch!;
+  const tip = await readIssueBranchCommit(store, branch);
+  if ((await readIssuePublicationCommit(store, branch)) !== tip) throw new Error("working_branch_changed_during_release");
+  return tip;
 }
 
 /** Resolve the recorded code entry without changing the branch or remote refs. */
@@ -52,7 +63,7 @@ export async function resolveRecordedRepository(
       return { root, store };
     }
     const { commit } = await recordedSharedSnapshot(stateRoot, issueKey, repository, name, state);
-    return { root: await new WorktreeManager(stateRoot).openSharedCheckout(repository.url, commit, checkedCheckouts) };
+    return { root: await new WorktreeManager(stateRoot).openSharedCheckout(repository.url, commit, checkedCheckouts, state === "development_snapshot" ? repository.workingBranch! : undefined) };
   } catch (error) {
     if (error instanceof Error && (error.message === "source_runtime_invalid" || (error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
     throw domainError("source_git_binding_invalid", { cause: error });
@@ -113,22 +124,27 @@ async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; mod
   }
   return { entries, modesMatch };
 }
-/** Released code may retain only the application's recorded links to this repository's immutable cache. */
-export async function assertReleasedIssueRuntime(stateRoot: string, issueKey: string, repositories: Array<{ name: string; url: string }>): Promise<void> {
+/** A repository name may be absent or occupied by a verified, previously generated link. */
+export async function inspectReleasedRepositories(stateRoot: string, issueKey: string, repositories: RecordedRepository[], names: ReadonlyMap<string, string>): Promise<Map<string, string>> {
   const root = issueRoot(stateRoot, issueKey),
     metadata = await absent(root);
   // A released Issue keeps its durable content in this root; losing it must never rebuild from the shared refs.
   if (!metadata) throw new Error("workspace_missing");
   if (!metadata.isDirectory() || (await realpath(root)) !== root) throw new Error("workspace_path_already_exists");
   const entries = (await loadRuntime(root))?.entries ?? [];
+  const commits = new Map<string, string>();
   for (const repository of repositories) {
-    const name = entryName(repository.name),
+    const commit = await releasedRepositoryCommit(stateRoot, issueKey, repository);
+    const name = entryName(names.get(repository.url)!),
       selected = await absent(path.join(root, name));
-    if (!selected) continue;
-    const entry = entries.find((entry) => entry.name === name);
-    const cache = path.join(sharedCheckoutsRoot(stateRoot), path.basename(repositoryStorePath(stateRoot, repository.url)));
-    if (!selected.isSymbolicLink() || entry?.kind !== "link" || !/^[a-f0-9]{40}$/.test(path.relative(cache, entry.value))) throw new Error("workspace_path_already_exists");
+    if (selected) {
+      const entry = entries.find((entry) => entry.name === name);
+      const checkout = path.join(sharedCheckoutsRoot(stateRoot), path.basename(repositoryStorePath(stateRoot, repository.url)), commit);
+      if (!selected.isSymbolicLink() || entry?.kind !== "link" || entry.value !== checkout) throw new Error("workspace_path_already_exists");
+    }
+    commits.set(repository.url, commit);
   }
+  return commits;
 }
 /** Generated links and metadata are flat files. Only entries owned by the previous manifest may be replaced. */
 export async function prepareIssueRuntime(
@@ -169,6 +185,9 @@ export async function prepareIssueRuntime(
     const target = issueRoot(stateRoot, related.key);
     if (path.resolve(related.workDirectory) !== target) throw new Error("invalid_related_issue_directory");
     add(`.related-${key}`, "link", target);
+    for (const repository of related.repositoryLinks ?? []) {
+      add(repository.name, "link", managedRepository(stateRoot, issueKey, repository.repositoryPath, "read"));
+    }
   }
   const manifest = await loadRuntime(root);
   const previous = manifest?.entries ?? [];

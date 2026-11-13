@@ -41,7 +41,7 @@ test("conversation Git cannot create or switch branches and stages and commits o
     const own = await manager.prepare(input);
     const other = await manager.prepare({ ...input, issueKey: "ISSUE-20261023-002" });
     const shared = repositoryStorePath(state, source);
-    const before = await git(["-C", shared, "rev-parse", `refs/heads/${own.workingBranch}`]);
+    const before = own.baseCommit;
     await git(["-C", own.cachePath, "branch", "fixture-existing", own.workingBranch!]);
     const runtimeRoot = path.dirname(own.workspacePath);
     database = await openApplicationDatabase(path.join(state, "issues.db"));
@@ -102,7 +102,7 @@ test("conversation Git cannot create or switch branches and stages and commits o
     await update({ operation: "commit", message: "更新文件" });
     const after = await git(["-C", own.workspacePath, "rev-parse", "HEAD"]);
     assert.notEqual(after, before);
-    assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${own.workingBranch}`]), before);
+    await assert.rejects(git(["-C", shared, "show-ref", "--exists", `refs/heads/${own.workingBranch}`]), { code: 2 });
     const sharedConfig = path.join(shared, "config");
     const configBefore = await readFile(sharedConfig, "utf8");
     // The sandbox may create an ephemeral file at a hidden path; it cannot modify the host file.

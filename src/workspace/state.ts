@@ -18,6 +18,10 @@ export function classifyRepositoryState(repositories: RepositoryStateRecord[]): 
   return "invalid";
 }
 
+export function hasRepositoryView(state: RepositoryState, workspace?: { runtimeReady: boolean; releasedAt: Date | null }): boolean {
+  return state === "development_snapshot" ? workspace?.releasedAt != null : workspace?.runtimeReady === true;
+}
+
 export function pathExists(candidate: string): Promise<boolean> {
   return access(candidate).then(
     () => true,

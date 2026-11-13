@@ -311,7 +311,7 @@ function footerMetrics(footer: AgentFooterStats) {
   ].filter((metric) => metric.text);
 }
 
-export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<IssueDetail>; drafts?: AgentDraftStore }) {
+export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<unknown>; drafts?: AgentDraftStore }) {
   const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [inferredProcessing, setProcessing] = createSignal(false, { ownedWrite: true });

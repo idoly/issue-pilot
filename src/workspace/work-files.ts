@@ -19,6 +19,7 @@ export interface IssueWorkFile {
 export interface WorkFileRepository {
   entry: string;
   resolve: () => Promise<string>;
+  virtualUpdatedAt?: string;
 }
 export interface WorkFileAccess {
   readRoots?: Record<string, string>;
@@ -36,6 +37,7 @@ export function isManagedIssueFile(relative: string): boolean {
     name === ".issue-runtime.json" ||
     name === ".legacy-output-links.json" ||
     /^\.related-issue-[0-9]{8}-[0-9]{3,}\.jsonl?$/.test(name) ||
+    /^\.related-issue-[0-9]{8}-[0-9]{3,}-code-/.test(name) ||
     /^\.work-file-[0-9a-f-]+\.tmp$/i.test(name) ||
     /^\.issue-pilot-(?:rename-[0-9a-f-]+\.previous|[0-9a-f-]+\.tmp)$/i.test(name)
   );
@@ -51,7 +53,24 @@ async function resolveWorkPath(stateRoot: string, issueKey: string, relative: st
   const root = await assertIssueRoot(stateRoot, issueKey);
   const requested = path.posix.normalize(relative || ".");
   const under = (prefix: string) => requested === prefix || requested.startsWith(prefix + "/");
-  const requestedRepository = [...(access.repositories ?? [])].find(([prefix]) => under(prefix))?.[1];
+  const selectedRepository = [...(access.repositories ?? [])].find(([prefix]) => under(prefix));
+  const requestedRepository = selectedRepository?.[1];
+  if (selectedRepository && requestedRepository?.virtualUpdatedAt) {
+    const prefix = selectedRepository[0];
+    const parent = await realpath(path.resolve(root, path.posix.dirname(prefix)));
+    if (parent !== path.dirname(requestedRepository.entry)) throw domainError("invalid_issue_file_path");
+    const requestedRoot = await requestedRepository.resolve();
+    const target = await realpath(path.join(requestedRoot, requested.slice(prefix.length + 1)));
+    if (
+      !inside(requestedRoot, target) ||
+      path
+        .relative(requestedRoot, target)
+        .split(path.sep)
+        .some((segment) => segment.toLowerCase() === ".git")
+    )
+      throw domainError("invalid_issue_file_path");
+    return target;
+  }
   const requestedRoot = await requestedRepository?.resolve();
   const target = await realpath(path.resolve(root, relative || "."));
   const allowed = inside(root, target) || Object.entries(access.readRoots ?? {}).some(([prefix, allowedRoot]) => under(prefix) && inside(allowedRoot, target));
@@ -82,7 +101,14 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
     const pinned = `/proc/self/fd/${directory.fd}`;
     if ((await realpath(pinned)) !== target) throw domainError("invalid_issue_file_path");
     const entries = await readdir(pinned, { withFileTypes: true });
-    if (entries.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw domainError("issue_file_directory_too_large");
+    const listed = new Set(entries.map(({ name }) => name));
+    const virtual: IssueWorkFile[] = [];
+    for (const [prefix, repository] of access.repositories ?? []) {
+      const name = path.posix.basename(prefix);
+      if (repository.virtualUpdatedAt && path.posix.dirname(prefix) === path.posix.normalize(relative || ".") && !listed.has(name))
+        virtual.push({ name, path: prefix, kind: "directory", size: 0, updatedAt: repository.virtualUpdatedAt });
+    }
+    if (entries.length + virtual.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw domainError("issue_file_directory_too_large");
     const results = await Promise.allSettled(
       entries
         .filter((entry) => entry.name.toLowerCase() !== ".git")
@@ -116,7 +142,7 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
       if (result.status === "rejected") throw result.reason;
       return result.value;
     });
-    return files.sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name));
+    return [...files, ...virtual].sort((a, b) => Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name));
   } catch (error) {
     failures.push(error);
     throw error;

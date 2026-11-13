@@ -26,7 +26,7 @@ test("workspace statistics expose a sampled snapshot and explicit refresh bypass
   }
 });
 
-test("an unreadable directory inside one Issue root does not break workspace statistics", { skip: process.getuid?.() === 0 }, async () => {
+test("an unreadable Issue subtree preserves the last complete workspace statistics", { skip: process.getuid?.() === 0 }, async () => {
   const { chmod, mkdir } = await import("node:fs/promises");
   const path = await import("node:path");
   const { createIssue, createService } = await import("./fixture.ts");
@@ -38,9 +38,22 @@ test("an unreadable directory inside one Issue root does not break workspace sta
     const issue = await createIssue(fixture.app, "unreadable-stats", "test", "Unreadable directory");
     locked.path = path.join(issueRoot(fixture.root, String(issue.id)), "locked", "inner");
     await mkdir(locked.path, { recursive: true });
+    const complete = await workspaceStatistics(fixture.app);
+    assert.ok(complete.workspaces.some((row: { issueKey: string }) => row.issueKey === issue.id));
     await chmod(locked.path, 0);
-    const response = await workspaceStatistics(fixture.app, true);
-    assert.ok(response.workspaces.some((row: { issueKey: string }) => row.issueKey === issue.id));
+    let state = (await fixture.app.inject("/api/workspaces/stats?refresh=true")).json();
+    for (let attempt = 0; state.sampling && attempt < 500; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const response = await fixture.app.inject("/api/workspaces/stats");
+      assert.equal(response.statusCode, 200);
+      state = response.json();
+    }
+    assert.equal(state.sampling, false);
+    assert.equal(state.error, "workspace_statistics_failed");
+    assert.deepEqual(state.snapshot, complete);
+    await chmod(locked.path, 0o700);
+    const recovered = await workspaceStatistics(fixture.app, true);
+    assert.equal(recovered.totalBytes, complete.totalBytes);
   } finally {
     if (locked.path) await chmod(locked.path, 0o700);
     await fixture.cleanup();

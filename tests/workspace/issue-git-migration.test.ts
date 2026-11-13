@@ -10,7 +10,7 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services } from "../../src/db/schema.ts";
-import { issueRepositoryStorePath, repositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
+import { issueRepositoryStorePath, repositoryStorePath, retainedSnapshotRef, WorktreeManager } from "../../src/workspace/git.ts";
 import { isolateIssueWorktree, publishIssueBranch, publishedIssueBranchFile } from "../../src/workspace/issue-git.ts";
 import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
@@ -74,7 +74,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     const first = JSON.parse(stdout);
     assert.equal(first.privateVerified, 2);
     assert.equal(first.sharedWorktreeVerified, 1);
-    assert.equal(first.mirrorDifferent, 1);
+    assert.equal(first.mirrorUnavailable, 1);
 
     await rename(released.cachePath, path.join(root, "preserved-private-store"));
     await assert.rejects(run(), (error: Error & { code?: unknown; stderr?: string; stdout?: string }) => {
@@ -87,7 +87,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
       return true;
     });
     assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${released.workingBranch}`]), mirrorTip);
-    assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${own.workingBranch}`]), own.baseCommit);
+    await assert.rejects(git(["-C", shared, "show-ref", "--exists", `refs/heads/${own.workingBranch}`]), { code: 2 });
     assert.equal(await git(["-C", legacyPath, "branch", "--show-current"]), legacyBranch);
 
     await writeFile(path.join(legacyPath, "dirty.txt"), "staged");
@@ -162,6 +162,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     );
     // Simulate shared ref loss and GC in the fixture. Issue-owned data still resolves locally.
     await git(["-C", shared, "update-ref", "-d", `refs/heads/${released.workingBranch}`]);
+    await git(["-C", shared, "update-ref", "-d", retainedSnapshotRef(mirrorTip)]);
     await git(["-C", shared, "reflog", "expire", "--expire=now", "--all"]);
     await git(["-C", shared, "gc", "--prune=now"]);
     await assert.rejects(git(["-C", shared, "cat-file", "-t", mirrorTip]));

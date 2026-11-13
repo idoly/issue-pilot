@@ -178,7 +178,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         "attachment_staging_cleanup_failed",
         "attachment_read_cleanup_failed",
         "dingtalk_connection_close_failed",
-        "workspace_runtime_restore_failed",
         "issue_root_missing",
         "invalid_issue_root",
         "issue_layout_migration_required",

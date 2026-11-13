@@ -52,7 +52,6 @@ const workspaceErrorMessages: Record<string, string> = {
   model_api_key_not_configured: "尚未配置模型 API Key，请在用户配置中设置个人或共享 API Key 后重试。",
   model_response_failed: "模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。",
   agent_run_failed: "处理未完成：发生了未识别的错误。已有对话和文件已保留，请核对结果后重试处理。",
-  workspace_runtime_restore_failed: "代码工作区视图恢复失败，请重新打开工单或联系管理员检查运行环境。",
   database_operation_failed: "数据库操作失败，请稍后重试；如持续出现请联系管理员。",
 };
 

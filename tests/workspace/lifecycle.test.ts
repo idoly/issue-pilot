@@ -105,108 +105,101 @@ beforeEach(() => {
   engine.closeError = undefined;
 });
 
-for (const failureStage of ["session", "runtime"] as const)
-  test(`automatic release isolates a ${failureStage} failure, preserves unresolved failures and retries`, async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-maintenance-retry-"));
-    const database = await openApplicationDatabase(path.join(root, "issues.db"));
-    try {
-      const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
-      await database.db.insert(subjects).values({ subject: "maintenance-owner", role: "developer" });
-      const [service] = await database.db.insert(services).values({ key: "maintenance-retry", name: "Maintenance retry" }).returning();
-      await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
-      const remote = await createRemote(root, "retry");
-      const worktrees = new WorktreeManager(root);
-      const created: Array<typeof issues.$inferSelect> = [],
-        paths: string[] = [];
-      for (const index of [0, 1, 2]) {
-        const [issue] = await database.db
-          .insert(issues)
-          .values({
-            key: `ISSUE-20261024-${940 + index}`,
-            title: "Maintenance retry",
-            status: index === 2 ? "open" : "resolved",
-            resolvedAt: index === 2 ? null : new Date(0),
-            type: "defect_fix",
-            serviceId: service!.id,
-            environmentId: environment!.id,
-            reporterSubject: "maintenance-owner",
-            updatedAt: new Date(index),
-          })
-          .returning();
-        await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
-        const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
-        await database.db.insert(issueRepositories).values({
-          issueId: issue!.id,
-          url: remote,
-          baseBranch: "main",
-          workingBranch: prepared.workingBranch,
-          localPath: prepared.workspacePath,
-          workspaceName: "repo",
-          commitBefore: prepared.baseCommit,
-        });
-        created.push(issue!);
-        paths.push(prepared.workspacePath);
-      }
-      const failure = new Error("fixture_maintenance_failed");
-      let fail = true;
-      const scopedEngine = {
-        ...engine,
-        running: new Set<string>(),
-        closed: [] as string[],
-        async closeSession(id: string) {
-          this.closed.push(id);
-          if (fail && failureStage === "session" && id === created[0]!.id) throw failure;
-        },
-      };
-      const projects = new IssueProjectManager(database.db, root);
-      const manager = new WorkspaceLifecycleManager(
-        database.db,
-        root,
-        scopedEngine as never,
-        { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 },
-        async (issue) => {
-          if (fail && failureStage === "runtime" && issue.id === created[0]!.id) throw failure;
-          return projects.hydrateDevelopmentRuntime(issue);
-        },
-      );
-      const first = await manager.maintain();
-      assert.deepEqual(
-        first.released.map((row) => row.issueKey),
-        [created[1]!.key],
-      );
-      assert.equal(first.failures.length, 1);
-      assert.equal(first.failures[0]!.issueKey, created[0]!.key);
-      assert.ok(first.failures[0]!.error === failure || (first.failures[0]!.error instanceof Error && first.failures[0]!.error.cause === failure));
-      const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).sampleStats();
-      assert.equal(first.totalBytes, independentlyMeasured.totalBytes);
-      assert.equal((await manager.sampleStats()).totalBytes, independentlyMeasured.totalBytes);
-      await access(paths[2]!);
-      assert.equal(scopedEngine.closed.includes(created[2]!.id), false);
-      if (failureStage === "session") await access(paths[0]!);
-      else {
-        assert.equal((await manager.inspectIssue(created[0]!.id)).blockedReason, "workspace_runtime_restore_failed");
-        const [state] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, created[0]!.id));
-        assert.equal(state!.runtimeReady, false);
-      }
-      fail = false;
-      if (failureStage === "runtime") {
-        // A stopped but still active checkout must not be deleted by view recovery.
-        await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, created[2]!.id));
-        await database.db.update(issueWorkspaces).set({ status: "stopped", runtimeReady: false }).where(eq(issueWorkspaces.issueId, created[2]!.id));
-      }
-      const retryManager =
-        failureStage === "runtime"
-          ? new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 })
-          : manager;
-      const retried = await retryManager.maintain();
-      assert.deepEqual(retried.failures, []);
-      assert.equal((await retryManager.inspectIssue(created[0]!.id)).blockedReason, "workspace_released");
-      await access(paths[2]!);
-    } finally {
-      database.close();
-      await rm(root, { recursive: true, force: true });
+test("automatic release isolates a session failure and retries without rebuilding released views", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-maintenance-retry-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [environment] = await database.db.select().from(environments).where(eq(environments.kind, "dev"));
+    await database.db.insert(subjects).values({ subject: "maintenance-owner", role: "developer" });
+    const [service] = await database.db.insert(services).values({ key: "maintenance-retry", name: "Maintenance retry" }).returning();
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: environment!.id, config: {} });
+    const remote = await createRemote(root, "retry");
+    const worktrees = new WorktreeManager(root);
+    const created: Array<typeof issues.$inferSelect> = [],
+      paths: string[] = [];
+    for (const index of [0, 1, 2]) {
+      const [issue] = await database.db
+        .insert(issues)
+        .values({
+          key: `ISSUE-20261024-${940 + index}`,
+          title: "Maintenance retry",
+          status: index === 2 ? "open" : "resolved",
+          resolvedAt: index === 2 ? null : new Date(0),
+          type: "defect_fix",
+          serviceId: service!.id,
+          environmentId: environment!.id,
+          reporterSubject: "maintenance-owner",
+          updatedAt: new Date(index),
+        })
+        .returning();
+      await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
+      const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+      await database.db.insert(issueRepositories).values({
+        issueId: issue!.id,
+        url: remote,
+        baseBranch: "main",
+        workingBranch: prepared.workingBranch,
+        localPath: prepared.workspacePath,
+        workspaceName: "repo",
+        commitBefore: prepared.baseCommit,
+      });
+      created.push(issue!);
+      paths.push(prepared.workspacePath);
     }
-  });
+    const failure = new Error("fixture_maintenance_failed");
+    let fail = true;
+    const scopedEngine = {
+      ...engine,
+      running: new Set<string>(),
+      closed: [] as string[],
+      async closeSession(id: string) {
+        this.closed.push(id);
+        if (fail && id === created[0]!.id) throw failure;
+      },
+    };
+    const manager = new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, {
+      retentionMs: 0,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
+    const first = await manager.maintain();
+    assert.deepEqual(
+      first.released.map((row) => row.issueKey),
+      [created[1]!.key],
+    );
+    assert.equal(first.failures.length, 1);
+    assert.equal(first.failures[0]!.issueKey, created[0]!.key);
+    assert.ok(first.failures[0]!.error === failure || (first.failures[0]!.error instanceof Error && first.failures[0]!.error.cause === failure));
+    const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).sampleStats();
+    assert.equal(first.totalBytes, independentlyMeasured.totalBytes);
+    assert.equal((await manager.sampleStats()).totalBytes, independentlyMeasured.totalBytes);
+    await access(paths[2]!);
+    assert.equal(scopedEngine.closed.includes(created[2]!.id), false);
+    await access(paths[0]!);
+    await assert.rejects(lstat(paths[1]!), { code: "ENOENT" });
+    fail = false;
+    const retried = await manager.maintain();
+    assert.deepEqual(retried.failures, []);
+    assert.deepEqual(
+      retried.released.map(({ issueKey }) => issueKey),
+      [created[0]!.key],
+    );
+    assert.equal(scopedEngine.closed.filter((id) => id === created[1]!.id).length, 1);
+    assert.equal((await manager.inspectIssue(created[0]!.id)).blockedReason, "workspace_released");
+    for (const issue of created.slice(0, 2)) {
+      const [state] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id));
+      assert.ok(state!.releasedAt);
+      assert.equal(state!.runtimeReady, false);
+      await assert.rejects(lstat(path.join(issueRoot(root, issue.key), ".issue-runtime.json")), { code: "ENOENT" });
+    }
+    await access(paths[2]!);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("HTTP stays healthy during scheduled maintenance and a failed release preserves its checkout", { timeout: 10_000 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-startup-release-failure-"));
@@ -326,11 +319,11 @@ test("records an unmeasurable workspace instead of aborting the maintenance cycl
       });
       created.push(issue!);
     }
-    // `du` fails for the first Issue only; a single unreadable tree must not abort the whole cycle.
+    // An unreadable subtree can make du print a total and still exit 1. That total is incomplete.
     const bin = path.join(root, "bin");
     await mkdir(bin, { recursive: true });
     const du = path.join(bin, "du");
-    await writeFile(du, `#!/bin/sh\ncase "$3" in\n  *issue-20261026-977) echo "du unavailable" >&2; exit 2;;\nesac\nexec /usr/bin/du "$@"\n`);
+    await writeFile(du, `#!/bin/sh\ncase "$3" in\n  *issue-20261026-977) echo "1 $3"; echo "du: unreadable subtree" >&2; exit 1;;\nesac\nexec /usr/bin/du "$@"\n`);
     await chmod(du, 0o755);
     process.env.PATH = `${bin}:${originalPath ?? ""}`;
 
@@ -350,6 +343,8 @@ test("records an unmeasurable workspace instead of aborting the maintenance cycl
       result.released.map((release) => release.issueKey),
       [created[1]!.key],
     );
+    assert.equal(manager.readStats().snapshot, null);
+    assert.equal(manager.readStats().error, "workspace_measurement_incomplete");
     // Once `du` works again the next cycle is complete again.
     process.env.PATH = originalPath;
     const refreshed = await manager.maintain();
@@ -814,19 +809,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await rm(path.dirname(unknownMetadata), { recursive: true });
     assert.equal(await prepareRuntime(issue!), wrapperRoot);
 
-    const lifecycle = new WorkspaceLifecycleManager(
-      database.db,
-      root,
-      engine as never,
-      {
-        retentionMs: Number.POSITIVE_INFINITY,
-        highWaterBytes: 0,
-        targetBytes: 0,
-        maintenanceIntervalMs: 0,
-        taskConcurrency: 1,
-      },
-      prepareRuntime,
-    );
+    const lifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
+      retentionMs: Number.POSITIVE_INFINITY,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
     await writeFile(path.join(prepared[1]!.workspacePath, "untracked.txt"), "do not delete\n", "utf8");
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
     assert.equal(dirtyInspection.releasable, false);
@@ -867,7 +856,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await writeFile(manifestPath, originalManifest);
     assert.equal(released.releasedBytes > 0, true);
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    await Promise.all(prepared.map(async (worktree) => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
+    await Promise.all(prepared.map(async (worktree) => assert.rejects(lstat(worktree.workspacePath), { code: "ENOENT" })));
     assert.equal(await readFile(durableAttachment, "utf8"), attachmentContent);
     assert.equal(await readFile(sessionFile, "utf8"), "{}\n");
     assert.deepEqual(engine.closed, [issue!.id]);
@@ -887,7 +876,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     );
     const [releasedWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(releasedWorkspace!.status, "stopped");
-    assert.equal(releasedWorkspace!.runtimeReady, true);
+    assert.equal(releasedWorkspace!.runtimeReady, false);
     const browser = new SourceBrowser(database.db, root);
     for (const repository of releasedRows) {
       const name = repository.workspaceName!;
@@ -931,6 +920,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       true,
     );
 
+    assert.ok((await browser.file(issue!, "alpha", "README.md")).content.length);
+    await assert.rejects(lstat(prepared[0]!.workspacePath), { code: "ENOENT" });
     const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
     assert.equal(reopenedIssue.status, "open");
     assert.equal(reopenedIssue.resolvedAt, null);
@@ -1006,7 +997,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await lifecycle.releaseIssue(issue!.id);
     lifecycleWorktrees.remove = removeWorktree;
     assert.equal(await readFile(concurrentRootEntry, "utf8"), "preserve root entry\n");
-    await Promise.all(restoredRows.map(async (repository) => assert.equal((await lstat(repository.localPath!)).isSymbolicLink(), true)));
+    await Promise.all(restoredRows.map(async (repository) => assert.rejects(lstat(repository.localPath!), { code: "ENOENT" })));
     await lifecycle.reopenIssue(issue!.id);
     await database.db
       .update(issues)
@@ -1106,19 +1097,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     await reconstruct();
     await writeFile(checkpoint, '{"remaining":10}\n');
-    const retentionLifecycle = new WorkspaceLifecycleManager(
-      database.db,
-      root,
-      engine as never,
-      {
-        retentionMs: 0,
-        highWaterBytes: 0,
-        targetBytes: 0,
-        maintenanceIntervalMs: 0,
-        taskConcurrency: 1,
-      },
-      prepareRuntime,
-    );
+    const retentionLifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
+      retentionMs: 0,
+      highWaterBytes: 0,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
     const retention = await retentionLifecycle.maintain();
     assert.deepEqual(
       retention.released.map(({ issueKey }) => issueKey),
@@ -1126,26 +1111,20 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     );
 
     await reconstruct();
-    const quotaLifecycle = new WorkspaceLifecycleManager(
-      database.db,
-      root,
-      engine as never,
-      {
-        retentionMs: Number.POSITIVE_INFINITY,
-        highWaterBytes: 1,
-        targetBytes: 0,
-        maintenanceIntervalMs: 0,
-        taskConcurrency: 1,
-      },
-      prepareRuntime,
-    );
+    const quotaLifecycle = new WorkspaceLifecycleManager(database.db, root, engine as never, {
+      retentionMs: Number.POSITIVE_INFINITY,
+      highWaterBytes: 1,
+      targetBytes: 0,
+      maintenanceIntervalMs: 0,
+      taskConcurrency: 1,
+    });
     const quota = await quotaLifecycle.maintain();
     assert.deepEqual(
       quota.released.map(({ issueKey }) => issueKey),
       [issue!.key],
     );
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
-    await Promise.all(prepared.map(async (worktree) => assert.equal((await lstat(worktree.workspacePath)).isSymbolicLink(), true)));
+    await Promise.all(prepared.map(async (worktree) => assert.rejects(lstat(worktree.workspacePath), { code: "ENOENT" })));
 
     const [prodEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: prodEnvironment!.id, config: {} });

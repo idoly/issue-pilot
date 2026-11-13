@@ -352,7 +352,7 @@ export const listIssues = (signal?: AbortSignal) => request<IssueExecutionItem[]
 export const listIssuePins = (signal?: AbortSignal) => request<string[]>("/api/issue-pins", signal ? { signal } : undefined);
 export const setIssuePinned = (key: string, pinned: boolean) => request<void>(issuePath(key, "/pin"), { method: pinned ? "PUT" : "DELETE" });
 export const updateIssueRelatedIssues = (key: string, relatedIssueKeys: string[]) => request<void>(issuePath(key, "/related-issues"), { method: "PUT", body: JSON.stringify({ relatedIssueKeys }) });
-export const getIssue = (key: string) => request<IssueDetail>(issuePath(key));
+export const getIssue = (key: string, signal?: AbortSignal) => request<IssueDetail>(issuePath(key), signal ? { signal } : undefined);
 export interface IssueWorkFile {
   name: string;
   path: string;

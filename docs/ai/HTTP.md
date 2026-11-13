@@ -178,7 +178,7 @@ Owner: [server.ts](../../src/mcp/server.ts). Tests: [application-mcp.test.ts](..
 
 ## Errors and retry
 
-Ordinary errors usually return {"error":"stable_code"}; framework routing errors are exceptions. After file/SSE headers, failure may terminate the connection instead of returning JSON. Owners throw `DomainError(code, category)` and the HTTP boundary maps the category once; routes do not keep code-to-status catalogs or infer status from message text. Issue summaries, detail and SSE snapshots carry one opaque `revision` covering Issue, Workspace, Agent and joined display facts; clients compare it instead of maintaining field lists.
+Ordinary errors usually return {"error":"stable_code"}; framework routing errors are exceptions. After file/SSE headers, failure may terminate the connection instead of returning JSON. Owners throw `DomainError(code, category)` and the HTTP boundary maps the category once; routes do not keep code-to-status catalogs or infer status from message text. Issue summaries, detail and SSE snapshots carry the same opaque change token (`revision` on HTTP projections, `issueRevision` on SSE). Its fixed-length digest covers Issue, Workspace, Agent and joined display facts without including the source text. Clients compare tokens for equality.
 
 | Condition | Required handling |
 | --- | --- |

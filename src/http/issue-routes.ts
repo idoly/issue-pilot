@@ -28,7 +28,7 @@ import {
 import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind, type IssueWorkMode } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { IssueDeletionRefusal, WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
-import { claimIssueRoot, classifyRepositoryState, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
+import { claimIssueRoot, classifyRepositoryState, hasRepositoryView, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import {
   finalizeRetiredAttachments,
   type PendingAttachment,
@@ -613,7 +613,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const repositoryState = classifyRepositoryState(repositoryRows);
     let repositoryNames = new Map<string, string>();
     if (repositoryState !== "invalid") repositoryNames = issueRepositoryWorkspaceNames(repositoryRows);
-    const sourceAvailable = Boolean(workspace?.runtimeReady && repositoryState !== "invalid" && (await pathExists(issueRoot(stateRoot, issue.key))));
+    const sourceAvailable = Boolean(repositoryState !== "invalid" && hasRepositoryView(repositoryState, workspace) && (await pathExists(issueRoot(stateRoot, issue.key))));
     return {
       ...summary,
       editVersion: issueEditVersion(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentRunState, IssuePriority, IssueStatus, IssueType, WorkspaceStatus } from "../domain/contracts.ts";
 
 export interface IssueRevisionInput {
@@ -23,7 +24,7 @@ export interface IssueRevisionInput {
  * It covers every joined display fact plus Workspace and Agent state, so views need no field list.
  */
 export function issueRevision({ issue, service, environmentKey, assignee, workspace, runState }: IssueRevisionInput): string {
-  return JSON.stringify([
+  const facts = [
     issue.title,
     issue.priority,
     issue.type,
@@ -41,5 +42,6 @@ export function issueRevision({ issue, service, environmentKey, assignee, worksp
     workspace?.releasedAt?.toISOString() ?? null,
     workspace?.lastError ?? null,
     runState,
-  ]);
+  ];
+  return createHash("sha256").update(JSON.stringify(facts)).digest("hex");
 }

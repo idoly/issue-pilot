@@ -84,6 +84,41 @@ it("updates queue metadata after an Agent refresh without requiring a status cha
   expect(await within(screen.getByLabelText("工单队列")).findByText(current.title)).toBeTruthy();
 });
 
+it("updates the queue from selected details and ignores an older delayed list row", async () => {
+  const stream = await open();
+  const stale = summary();
+  let finishList!: (items: IssueExecutionItem[]) => void;
+  api.list.mockImplementationOnce(() => new Promise((resolve) => (finishList = resolve)));
+  current.title = "New detail while queue request is pending";
+  stream.emit("message", { id: "workspace", event: { type: "tool_execution_end", toolCallId: "workspace", toolName: "workspace", result: { content: [] }, isError: false } });
+  await screen.findByRole("heading", { name: current.title });
+  const queue = within(screen.getByLabelText("工单队列"));
+  expect(queue.getByText(current.title)).toBeTruthy();
+  const other = { ...stale, id: "ISSUE-20261109-002", title: "Another row from the list" };
+  finishList([stale, other]);
+  await queue.findByText(other.title);
+  expect(queue.getByText(current.title)).toBeTruthy();
+  expect(queue.queryByText(stale.title)).toBeNull();
+});
+
+it("reconciles a newer list change that arrived during a slow detail request", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const stream = await open();
+  const stale = structuredClone(current);
+  let finishDetail!: (detail: IssueDetail) => void;
+  api.detail.mockImplementationOnce(() => new Promise((resolve) => (finishDetail = resolve)));
+  stream.emit("message", { id: "slow", event: { type: "issue_status", status: "complete" } });
+  await waitFor(() => expect(api.detail).toHaveBeenCalledTimes(2));
+  current.title = "Newer list during the detail request";
+  await vi.advanceTimersByTimeAsync(10_000);
+  const queue = within(screen.getByLabelText("工单队列"));
+  await queue.findByText(current.title);
+  finishDetail(stale);
+  await screen.findByRole("heading", { name: current.title });
+  expect(queue.queryByText(stale.title)).toBeNull();
+  expect(api.detail).toHaveBeenCalledTimes(3);
+});
+
 it("reloads the same selected Issue when returning from another page", async () => {
   await open();
   fireEvent.click(screen.getByRole("radio", { name: "首页" }));

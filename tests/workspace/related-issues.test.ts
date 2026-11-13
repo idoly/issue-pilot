@@ -1,7 +1,7 @@
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -22,6 +22,7 @@ import {
   services,
   subjects,
 } from "../../src/db/schema.ts";
+import { WorkspaceLifecycleManager } from "../../src/workspace/lifecycle.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 
@@ -118,7 +119,7 @@ test("related Issues expose their complete current working directory and convers
     assert.equal(metadataOnly.key, relatedProduction!.key);
     assert.deepEqual(metadataOnly.repositories, []);
     assert.equal(metadataOnly.conversationFile, undefined);
-    assert.match(metadataOnly.note, /read-only reference/);
+    assert.match(metadataOnly.note, /read-only evidence/);
     assert.deepEqual(await readdir(metadataOnlyRoot), []);
     await assert.rejects(readFile(metadataOnlyRoot + ".jsonl", "utf8"), (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT");
     assert.equal(await readFile(path.join(preparedProduction.runtimeRoot, "remote", "README.md"), "utf8"), "production baseline\n");
@@ -140,6 +141,23 @@ test("related Issues expose their complete current working directory and convers
     assert.equal(await readFile(path.join(developmentRepository, "README.md"), "utf8"), "uncommitted local experiment\n");
     await git(["-C", developmentRepository, "switch", branch]);
     assert.deepEqual((await projects.prepare(production!, "prod")).relatedIssueKeys, preparedProduction.relatedIssueKeys);
+    await git(["-C", developmentRepository, "add", "README.md"]);
+    await git(["-C", developmentRepository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "Issue evidence"]);
+    const tip = await git(["-C", developmentRepository, "rev-parse", "HEAD"]);
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, development!.id));
+    const lifecycle = new WorkspaceLifecycleManager(database.db, root, {
+      isRunning: () => false,
+      runExclusive: async (_ids, operation) => operation({ closeSession: async () => undefined } as never),
+    } as Pick<import("../../src/agent/engine.ts").AgentController, "isRunning" | "runExclusive"> as never);
+    await lifecycle.releaseIssue(development!.id);
+    await assert.rejects(lstat(developmentRepository), { code: "ENOENT" });
+    const withReleased = await projects.prepare(production!, "prod");
+    const releasedMetadata = JSON.parse(await readFile(relatedRoot + ".json", "utf8"));
+    const recorded = releasedMetadata.repositories[0];
+    assert.equal(recorded.commit, tip);
+    assert.match(recorded.checkout, /^\.related-issue-20260918-101-code-/);
+    assert.equal(await readFile(path.join(withReleased.runtimeRoot, recorded.checkout, "README.md"), "utf8"), "uncommitted local experiment\n");
+    await assert.rejects(lstat(developmentRepository), { code: "ENOENT" });
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

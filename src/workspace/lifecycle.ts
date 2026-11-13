@@ -19,7 +19,7 @@ import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus }
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows, type ExpectedRepository } from "./project.ts";
-import { assertReleasedIssueRuntime } from "./runtime.ts";
+import { inspectReleasedRepositories } from "./runtime.ts";
 import { assertIssueLayoutCurrent, assertManagedIssueWorkspaceLayout, classifyRepositoryState, gitRoot, issueRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
@@ -100,16 +100,8 @@ type IssueRow = { issue: Issue; workspace: IssueWorkspace | null; environmentKin
 async function directoryBytes(candidate: string): Promise<number> {
   if (!(await pathExists(candidate))) return 0;
   const { diskUsageMs, diskUsageOutputBytes } = issuePilotConfig.limits.process;
-  let stdout: string;
-  try {
-    ({ stdout } = await execFileAsync("du", ["-sk", "--", candidate], { encoding: "utf8", timeout: diskUsageMs, maxBuffer: diskUsageOutputBytes }));
-  } catch (error) {
-    // du exits 1 for unreadable entries (e.g. a model-run `chmod 000`) yet still prints the measurable total.
-    // Accept that lower bound so one Issue cannot break statistics or maintenance; timeouts still fail.
-    const partial = error && typeof error === "object" && "code" in error && error.code === 1 && "stdout" in error && typeof error.stdout === "string" ? error.stdout : undefined;
-    if (partial === undefined || !partial.trim()) throw error;
-    stdout = partial;
-  }
+  // A nonzero exit can include a lower bound. It cannot serve as a complete measurement.
+  const { stdout } = await execFileAsync("du", ["-sk", "--", candidate], { encoding: "utf8", timeout: diskUsageMs, maxBuffer: diskUsageOutputBytes });
   const kibibytes = Number(stdout.trim().split(/\s+/, 1)[0]);
   if (!Number.isSafeInteger(kibibytes) || kibibytes < 0) throw new Error("invalid_workspace_disk_usage");
   return kibibytes * 1024;
@@ -121,7 +113,6 @@ export class WorkspaceLifecycleManager {
   private readonly engine: AgentController;
   private readonly worktrees: WorktreeManager;
   private readonly projects: IssueProjectManager;
-  private readonly prepareDevelopmentRuntime: (issue: Pick<Issue, "id" | "key" | "type">) => Promise<unknown>;
   private currentPolicy: WorkspaceLifecyclePolicy;
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
@@ -141,13 +132,7 @@ export class WorkspaceLifecycleManager {
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
 
-  constructor(
-    database: Database,
-    stateRoot: string,
-    engine: AgentController,
-    policy: WorkspaceLifecyclePolicy = workspaceLifecyclePolicy(),
-    prepareRuntime?: (issue: Pick<Issue, "id" | "key" | "type">) => Promise<unknown>,
-  ) {
+  constructor(database: Database, stateRoot: string, engine: AgentController, policy: WorkspaceLifecyclePolicy = workspaceLifecyclePolicy()) {
     assertWorkspaceLifecyclePolicy(policy);
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
@@ -155,7 +140,6 @@ export class WorkspaceLifecycleManager {
     this.currentPolicy = policy;
     this.worktrees = new WorktreeManager(this.stateRoot);
     this.projects = new IssueProjectManager(this.database, this.stateRoot, this.worktrees);
-    this.prepareDevelopmentRuntime = prepareRuntime ?? ((issue) => this.projects.hydrateDevelopmentRuntime(issue));
   }
 
   start(onError: (error: unknown) => void = () => undefined, onComplete: (durationMs: number) => void = () => undefined): void {
@@ -272,7 +256,7 @@ export class WorkspaceLifecycleManager {
     }
     const inspections = await pMap(
       issueRows,
-      (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id))),
+      (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id), false)),
       { concurrency: policy.taskConcurrency, stopOnError: false },
     );
     const sharedGitBytes = await directoryBytes(gitRoot(this.stateRoot));
@@ -399,48 +383,44 @@ export class WorkspaceLifecycleManager {
       const blocked: Array<{ issueKey: string; reason: string }> = [];
       const attemptedIssues = new Set<string>();
       // An unmeasured workspace has no known bytes, so it is left for the next cycle instead of being released blind.
-      const resolvedDevelopment = issueRows.filter(({ issue, environmentKind }) => environmentKind === "dev" && issue.status === "resolved" && (workspaceBytes.get(issue.id) ?? 0) > 0);
-      const completedReleases = await this.completedReleases(resolvedDevelopment);
-      const candidates = resolvedDevelopment.filter(({ issue }) => !completedReleases.has(issue.id));
-      const releaseCandidate = async (candidate: IssueRow, runtimeRecoveryOnly = false) => {
-        attemptedIssues.add(candidate.issue.id);
+      const candidates = issueRows.filter(
+        ({ issue, environmentKind, workspace }) => environmentKind === "dev" && issue.status === "resolved" && (workspaceBytes.get(issue.id) ?? 0) > 0 && !workspace?.releasedAt,
+      );
+      const releaseCandidate = async (candidate: IssueRow) => {
+        const { id, key } = candidate.issue;
         try {
-          const measured = await this.issueQueue.run(candidate.issue.id, () =>
-            this.engine.runExclusive([candidate.issue.id], async (reservation) => {
-              const current = await this.issueRow(candidate.issue.id);
-              const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, current.issue.id));
-              const released = current.workspace?.releasedAt != null;
-              // Already released code cannot free more space. Explicit inspection still verifies its runtime and root.
-              if (released && current.workspace?.runtimeReady) return null;
-              if (runtimeRecoveryOnly && !released) return undefined;
-              return this.releaseLocked(current, reservation, repositories);
+          const measured = await this.issueQueue.run(id, () =>
+            this.engine.runExclusive([id], async (reservation) => {
+              const current = await this.issueRow(id);
+              attemptedIssues.add(id);
+              if (current.workspace?.releasedAt) return;
+              try {
+                return await this.releaseLocked(current, reservation);
+              } catch (error) {
+                // A release can fail after writing to disk. Refresh its size before returning the reservation.
+                try {
+                  updateBytes(id, await directoryBytes(issueRoot(this.stateRoot, key)));
+                } catch (measurementError) {
+                  measurementIncomplete = true;
+                  throw new AggregateError([error, measurementError], "workspace_maintenance_measurement_failed");
+                }
+                throw error;
+              }
             }),
           );
-          if (measured === undefined) attemptedIssues.delete(candidate.issue.id);
           if (!measured) return;
-          updateBytes(candidate.issue.id, measured.remainingBytes);
+          updateBytes(id, measured.remainingBytes);
           if (!measured.alreadyReleased) {
             const { issueKey, releasedBytes, alreadyReleased } = measured;
             released.push({ issueKey, releasedBytes, alreadyReleased });
           }
         } catch (error) {
-          try {
-            updateBytes(candidate.issue.id, await directoryBytes(issueRoot(this.stateRoot, candidate.issue.key)));
-          } catch (measurementError) {
-            // Keep the earlier estimate for this pass, but do not reuse it in a later statistics response.
-            measurementIncomplete = true;
-            failures.push({ issueKey: candidate.issue.key, error: new AggregateError([error, measurementError], "workspace_maintenance_measurement_failed") });
-            return;
-          }
-          if (error instanceof WorkspaceReleaseRefusal) blocked.push({ issueKey: candidate.issue.key, reason: error.reason });
-          else if (error instanceof AgentBusyError) blocked.push({ issueKey: candidate.issue.key, reason: error.message });
-          else failures.push({ issueKey: candidate.issue.key, error });
+          attemptedIssues.add(id);
+          if (error instanceof WorkspaceReleaseRefusal || error instanceof AgentBusyError) blocked.push({ issueKey: key, reason: error.message });
+          else failures.push({ issueKey: key, error });
         }
       };
 
-      // Finish an already-recorded release even after disk pressure has gone away.
-      // The reserved recheck permits only snapshot-view recovery, never new code removal.
-      for (const candidate of candidates) if (candidate.workspace?.releasedAt && !candidate.workspace.runtimeReady) await releaseCandidate(candidate, true);
       if (Number.isFinite(policy.retentionMs)) {
         const retentionCutoff = Date.now() - policy.retentionMs;
         const retentionCandidates = [...candidates].sort(
@@ -479,11 +459,6 @@ export class WorkspaceLifecycleManager {
       .finally(() => {
         this.sampling--;
       });
-  }
-
-  private async completedReleases(candidates: IssueRow[]): Promise<Set<string>> {
-    // releasedAt and the released repository rows are committed together; runtimeReady completes the view.
-    return new Set(candidates.filter(({ workspace }) => workspace?.releasedAt && workspace.runtimeReady).map(({ issue }) => issue.id));
   }
 
   private async migrateDevelopmentScopeLocked(
@@ -664,45 +639,39 @@ export class WorkspaceLifecycleManager {
       return this.markReopened(issue);
     }
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
+    if (!workspace?.releasedAt) throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
+    let names: Map<string, string>;
+    let commits: Map<string, string>;
     try {
       developmentWorktreeMode(issue.type);
-      const names = issueRepositoryWorkspaceNames(repositories);
-      await assertReleasedIssueRuntime(
-        this.stateRoot,
-        issue.key,
-        repositories.map((repository) => ({ name: names.get(repository.url)!, url: repository.url })),
-      );
+      names = issueRepositoryWorkspaceNames(repositories);
+      commits = await inspectReleasedRepositories(this.stateRoot, issue.key, repositories, names);
     } catch (error) {
       throw new WorkspaceRestoreRefusal(errorMessage(error));
     }
 
     await reservation.closeSession(issue.id);
     try {
-      return await this.projects.restoreDevelopmentWorkspace(
-        issue,
-        repositories,
-        () => this.restoreDevelopmentRuntime(issue),
-        (prepared, names) =>
-          this.database.transaction(async (transaction) => {
-            const now = new Date();
-            for (const [index, repository] of repositories.entries()) {
-              await transaction
-                .update(issueRepositories)
-                .set({ localPath: prepared[index]!.workspacePath, workspaceName: names.get(repository.url)!, updatedAt: now })
-                .where(eq(issueRepositories.id, repository.id));
-            }
-            await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, releasedAt: null, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
-            const [reopened] = await transaction
-              .update(issues)
-              .set({ status: "open", resolvedAt: null, updatedAt: now })
-              .where(and(eq(issues.id, issue.id), eq(issues.status, "resolved")))
-              .returning();
-            if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
-            return reopened;
-          }),
+      return await this.projects.restoreDevelopmentWorkspace(issue, repositories, names, commits, (prepared) =>
+        this.database.transaction(async (transaction) => {
+          const now = new Date();
+          for (const [index, repository] of repositories.entries()) {
+            await transaction
+              .update(issueRepositories)
+              .set({ localPath: prepared[index]!.workspacePath, workspaceName: names.get(repository.url)!, updatedAt: now })
+              .where(eq(issueRepositories.id, repository.id));
+          }
+          await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, releasedAt: null, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
+          const [reopened] = await transaction
+            .update(issues)
+            .set({ status: "open", resolvedAt: null, updatedAt: now })
+            .where(and(eq(issues.id, issue.id), eq(issues.status, "resolved")))
+            .returning();
+          if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
+          return reopened;
+        }),
       );
     } catch (error) {
-      if (error instanceof Error && error.message === "workspace_restore_cleanup_failed") throw new WorkspaceRestoreRefusal(error.message);
       throw error instanceof WorkspaceRestoreRefusal ? error : new WorkspaceRestoreRefusal(errorMessage(error));
     }
   }
@@ -786,10 +755,10 @@ export class WorkspaceLifecycleManager {
     );
   }
 
-  private async releaseLocked(issueRow: IssueRow, reservation: AgentReservation, knownRepositories?: IssueRepository[]): Promise<MeasuredWorkspaceRelease> {
+  private async releaseLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<MeasuredWorkspaceRelease> {
     const { issue, workspace } = issueRow;
     if (issueRow.environmentKind !== "dev") throw new WorkspaceReleaseRefusal("workspace_not_development");
-    const repositories = knownRepositories ?? (await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)));
+    const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
     const repositoryState = classifyRepositoryState(repositories);
     // A released snapshot has no code bytes to subtract; only the resulting footprint is used.
     const inspection = await this.inspectLocked(issueRow, repositories, repositoryState === "development_snapshot" ? 0 : undefined);
@@ -803,11 +772,8 @@ export class WorkspaceLifecycleManager {
     if (repositoryState === "development_snapshot") {
       // releasedAt is committed with the snapshot repository rows; it is the release marker, not a status inference.
       if (!workspace?.releasedAt) throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
-      // Explicit inspection still reports a damaged runtime view instead of treating the release as complete.
-      if (!["workspace_released", "workspace_runtime_not_ready", "workspace_runtime_restore_failed"].includes(inspection.blockedReason ?? ""))
-        throw new WorkspaceReleaseRefusal(inspection.blockedReason ?? "development_repository_state_invalid");
+      if (inspection.blockedReason !== "workspace_released") throw new WorkspaceReleaseRefusal(inspection.blockedReason ?? "development_repository_state_invalid");
       await reservation.closeSession(issue.id);
-      if (!workspace.runtimeReady) await this.restoreDevelopmentRuntime(issue);
       return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true, remainingBytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) };
     }
     if (repositoryState !== "development_workspace") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
@@ -843,23 +809,8 @@ export class WorkspaceLifecycleManager {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOTEMPTY") throw new WorkspaceReleaseRefusal("workspace_has_untracked_files");
       throw error;
     }
-    await this.restoreDevelopmentRuntime(issue);
     const remainingBytes = await directoryBytes(issueRoot(this.stateRoot, issue.key));
     return { issueKey: issue.key, releasedBytes: Math.max(0, inspection.bytes - remainingBytes), alreadyReleased: false, remainingBytes };
-  }
-
-  private async restoreDevelopmentRuntime(issue: Issue): Promise<void> {
-    try {
-      await this.prepareDevelopmentRuntime(issue);
-    } catch (error) {
-      const reason = stableErrorReason(error, "workspace_runtime_restore_failed");
-      try {
-        await this.database.update(issueWorkspaces).set({ runtimeReady: false, lastError: reason, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-      } catch (stateError) {
-        throw new AggregateError([error, stateError], "workspace_runtime_restore_failed");
-      }
-      throw new Error("workspace_runtime_restore_failed", { cause: error });
-    }
   }
 
   private async markReleased(issueId: string, repositories: IssueRepository[]): Promise<void> {
@@ -876,7 +827,7 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  private async inspectLocked(issueRow: IssueRow, knownRepositories?: IssueRepository[], knownBytes?: number): Promise<WorkspaceInspection> {
+  private async inspectLocked(issueRow: IssueRow, knownRepositories?: IssueRepository[], knownBytes?: number, inspectReleased = true): Promise<WorkspaceInspection> {
     const { issue, workspace, environmentKind } = issueRow;
     const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     const bytes = knownBytes ?? (await directoryBytes(workspaceRoot));
@@ -893,16 +844,9 @@ export class WorkspaceLifecycleManager {
         if (!workspace?.releasedAt) blockedReason = "development_repository_state_invalid";
         else
           try {
-            const names = issueRepositoryWorkspaceNames(repositories);
-            if (!workspace.runtimeReady) blockedReason = workspace.lastError ? "workspace_runtime_restore_failed" : "workspace_runtime_not_ready";
-            else {
-              await assertReleasedIssueRuntime(
-                this.stateRoot,
-                issue.key,
-                repositories.map((repository) => ({ name: names.get(repository.url)!, url: repository.url })),
-              );
-              blockedReason = "workspace_released";
-            }
+            // Capacity samples only need to know that these worktrees have already been removed.
+            if (inspectReleased) await inspectReleasedRepositories(this.stateRoot, issue.key, repositories, issueRepositoryWorkspaceNames(repositories));
+            blockedReason = "workspace_released";
           } catch (error) {
             blockedReason = stableErrorReason(error, "workspace_runtime_inspection_failed");
           }

@@ -4,6 +4,7 @@ import { createLatestTask } from "../data/latest";
 
 interface IssueEntity {
   summary: IssueExecutionItem;
+  summaryRead: number;
   detail?: IssueDetail;
 }
 
@@ -46,6 +47,8 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
   const [refreshing, setRefreshing] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
   const latest = createLatestTask();
+  let nextRead = 0;
+  const [listVersion, setListVersion] = createSignal(0, { ownedWrite: true });
   let disposed = false;
   const cancel = () => {
     latest.cancel();
@@ -54,6 +57,7 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
   const refresh = async () => {
     if (disposed) return;
     const request = latest.begin();
+    const read = ++nextRead;
     setRefreshing(true);
     try {
       const values = await listIssues(request.signal);
@@ -61,11 +65,12 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
       setEntities((previous) => {
         const next = new Map<string, IssueEntity>();
         for (const summary of values) {
-          const detail = previous.get(summary.id)?.detail;
-          next.set(summary.id, detail ? { summary, detail } : { summary });
+          const entity = previous.get(summary.id);
+          next.set(summary.id, entity && entity.summaryRead > read ? entity : { summary, summaryRead: read, detail: entity?.detail });
         }
         return next;
       });
+      setListVersion(read);
       setError("");
     } catch (cause) {
       if (request.isCurrent() && !request.signal.aborted) setError(errorMessage(cause));
@@ -93,28 +98,42 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
     document.removeEventListener("visibilitychange", sample);
     cancel();
   });
-  const setDetail = (detail: IssueDetail) => {
-    if (disposed) return;
-    setEntities((previous) => {
-      const next = new Map(previous);
-      // Keep the list summary (and its ordering/createdAt) until the next list refresh.
-      next.set(detail.id, { summary: previous.get(detail.id)?.summary ?? summaryFromDetail(detail), detail });
-      return next;
-    });
-  };
   const clearDetail = (id: string) => {
     setEntities((previous) => {
       const entity = previous.get(id);
       if (!entity?.detail) return previous;
       const next = new Map(previous);
-      next.set(id, { summary: entity.summary });
+      next.set(id, { summary: entity.summary, summaryRead: entity.summaryRead });
       return next;
     });
   };
   return {
     items,
+    listVersion,
     detail: (id: string) => entities().get(id)?.detail,
-    setDetail,
+    beginDetailRead() {
+      const read = ++nextRead;
+      return {
+        hasNewerList: () => listVersion() > read,
+        publish(detail: IssueDetail) {
+          if (disposed) return;
+          const newerList = listVersion() > read;
+          setEntities((previous) => {
+            const entity = previous.get(detail.id);
+            if (!entity && newerList) return previous;
+            const next = new Map(previous);
+            // Both projections contain these fields. An earlier request may not roll back a later read.
+            if (entity && entity.summaryRead > read) next.set(detail.id, { ...entity, detail });
+            else {
+              const summary = summaryFromDetail(detail);
+              if (!summary.createdAt && entity?.summary.createdAt) summary.createdAt = entity.summary.createdAt;
+              next.set(detail.id, { summary, summaryRead: read, detail });
+            }
+            return next;
+          });
+        },
+      };
+    },
     clearDetail,
     loading,
     refreshing,
@@ -123,10 +142,11 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
     created(issue: IssueExecutionItem) {
       if (disposed) return;
       cancel();
+      const read = ++nextRead;
       setEntities((previous) => {
         const next = new Map<string, IssueEntity>();
         const detail = previous.get(issue.id)?.detail;
-        next.set(issue.id, detail ? { summary: issue, detail } : { summary: issue });
+        next.set(issue.id, { summary: issue, summaryRead: read, detail });
         for (const [id, entity] of previous) if (id !== issue.id) next.set(id, entity);
         return next;
       });

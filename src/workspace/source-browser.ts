@@ -11,10 +11,10 @@ import { domainError } from "../domain/errors.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
-import { issueRepositoryWorkspaceNames, managedGitDirectoryExists, retainedSnapshotRef } from "./git.ts";
+import { issueRepositoryWorkspaceNames, managedGitDirectoryExists, WorktreeManager } from "./git.ts";
 import { recordedSharedSnapshot, resolveRecordedRepository } from "./runtime.ts";
 import type { WorkFileRepository } from "./work-files.ts";
-import { classifyRepositoryState, issueRoot } from "./state.ts";
+import { classifyRepositoryState, hasRepositoryView, issueRoot } from "./state.ts";
 
 import type {
   SourceBlame,
@@ -113,13 +113,14 @@ export class SourceBrowser {
     });
     const roots = new Map<string, WorkFileRepository>();
     if (!recorded) return roots;
-    const { rows, state } = recorded;
+    const { rows, state, releasedAt } = recorded;
     const names = issueRepositoryWorkspaceNames(rows);
     const root = issueRoot(this.stateRoot, issue.key);
     for (const repository of rows) {
       const name = names.get(repository.url)!;
       roots.set(name, {
         entry: path.join(root, name),
+        ...(state === "development_snapshot" && releasedAt ? { virtualUpdatedAt: releasedAt.toISOString() } : {}),
         resolve: async () => (await resolveRecordedRepository(this.stateRoot, issue.key, repository, name, state).catch(missingPathError)).root,
       });
     }
@@ -215,19 +216,22 @@ export class SourceBrowser {
 
   private async coldSnapshot(issue: IssueReference, repositoryName: string, { repository, state }: Awaited<ReturnType<SourceBrowser["selectRepository"]>>): Promise<ColdSnapshot | undefined> {
     if (state === "development_workspace") return undefined;
-    const snapshot = await recordedSharedSnapshot(this.stateRoot, issue.key, repository, repositoryName, state).catch(missingPathError);
+    const snapshot = await recordedSharedSnapshot(this.stateRoot, issue.key, repository, repositoryName, state).catch((error: unknown) => {
+      if (state === "read_only") return missingPathError(error);
+      if (error instanceof Error && error.message === "source_runtime_invalid") throw error;
+      throw domainError("source_git_binding_invalid", { cause: error });
+    });
     if (
       await managedGitDirectoryExists(snapshot.checkout).catch((error: unknown) => {
         throw domainError("source_git_binding_invalid", { cause: error });
       })
     )
       return undefined;
-    const retained = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", snapshot.store, "show-ref", "--verify", "--hash", "--", retainedSnapshotRef(snapshot.commit)],
-      this.commandOptions(),
-    );
-    if (retained.killed || retained.code !== 0 || retained.stdout.trim() !== snapshot.commit) throw domainError("source_git_binding_invalid");
+    await new WorktreeManager(this.stateRoot)
+      .assertSnapshotCommit(repository.url, snapshot.commit, state === "development_snapshot" ? repository.workingBranch! : undefined)
+      .catch((error: unknown) => {
+        throw domainError("source_git_binding_invalid", { cause: error });
+      });
     return snapshot;
   }
 
@@ -893,13 +897,13 @@ export class SourceBrowser {
 
   private async repositorySet(issue: IssueReference) {
     const [workspace, repositories] = await Promise.all([
-      this.database.select({ runtimeReady: issueWorkspaces.runtimeReady }).from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)).limit(1),
+      this.database.select({ runtimeReady: issueWorkspaces.runtimeReady, releasedAt: issueWorkspaces.releasedAt }).from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)).limit(1),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
-    if (!workspace[0]?.runtimeReady) throw domainError("source_browser_unavailable");
     const state = classifyRepositoryState(repositories);
+    if (!hasRepositoryView(state, workspace[0])) throw domainError("source_browser_unavailable");
     if (state === "invalid") throw domainError("source_repository_state_invalid");
-    return { rows: repositories, state };
+    return { rows: repositories, state, releasedAt: workspace[0]?.releasedAt };
   }
 
   private async writableContext(issue: IssueReference, repositoryName: string): Promise<SourceContext> {

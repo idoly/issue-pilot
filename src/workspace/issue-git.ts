@@ -144,9 +144,16 @@ export async function readIssueBranchCommit(store: string, branch: string): Prom
 
 export const publishedIssueBranchFile = "issue-pilot-published.json";
 
-export async function readIssuePublicationCommit(store: string, branch: string): Promise<string> {
+export async function readIssuePublicationCommit(store: string, branch: string): Promise<string | null> {
   const marker: unknown = JSON.parse(await readFile(path.join(store, publishedIssueBranchFile), "utf8"));
-  if (!marker || typeof marker !== "object" || !("branch" in marker) || marker.branch !== branch || !("commit" in marker) || typeof marker.commit !== "string" || !/^[a-f0-9]{40}$/.test(marker.commit))
+  if (
+    !marker ||
+    typeof marker !== "object" ||
+    !("branch" in marker) ||
+    marker.branch !== branch ||
+    !("commit" in marker) ||
+    (marker.commit !== null && (typeof marker.commit !== "string" || !/^[a-f0-9]{40}$/.test(marker.commit)))
+  )
     throw new Error("workspace_git_publication_invalid");
   return marker.commit;
 }
@@ -160,11 +167,14 @@ export async function publishIssueBranch(sharedStore: string, privateStore: stri
   const markerFile = path.join(privateStore, publishedIssueBranchFile);
   const published = await readIssuePublicationCommit(privateStore, branch);
   const commit = await readIssueBranchCommit(privateStore, branch);
-  const current = await readIssueBranchCommit(sharedStore, branch);
+  const current = await readIssueBranchCommit(sharedStore, branch).catch((error: unknown) => {
+    if (error instanceof Error && error.message === "working_branch_not_found") return null;
+    throw error;
+  });
   if (current !== published && current !== commit) throw new Error("working_branch_changed_outside_issue");
   if (current !== commit) {
     await git(["-C", sharedStore, "fetch", "--no-tags", privateStore, `refs/heads/${branch}`]);
-    await git(["-C", sharedStore, "update-ref", `refs/heads/${branch}`, commit, current]);
+    await git(["-C", sharedStore, "update-ref", `refs/heads/${branch}`, commit, current ?? "0".repeat(40)]);
   }
   if (published !== commit || ((await lstat(markerFile)).mode & 0o7777) !== 0o600) await writeAtomicGitFile(markerFile, JSON.stringify({ branch, commit }) + "\n");
   return commit;
@@ -192,14 +202,22 @@ async function readIndexObjects(workspace: string): Promise<Set<string>> {
   return objects;
 }
 
-async function initializePrivateStore(sharedStore: string, temporary: string, branch: string, commit: string, base: string, workspace?: string): Promise<void> {
+async function initializePrivateStore(
+  sharedStore: string,
+  temporary: string,
+  branch: string,
+  commit: string,
+  base: string,
+  workspace?: string,
+  publishedCommit: string | null = commit,
+): Promise<void> {
   // Use only the reviewed branch. Baseline objects remain shared; Issue commits and staged blobs are packed locally.
   await git(["init", "--bare", "--object-format=sha1", `--initial-branch=${branch}`, temporary]);
   await writeFile(path.join(temporary, "objects/info/alternates"), `${path.relative(path.join(temporary, "objects"), path.join(sharedStore, "objects"))}\n`);
   const origin = await git(["-C", sharedStore, "remote", "get-url", "origin"]);
   await git(["-C", temporary, "remote", "add", "origin", origin]);
   await git(["-C", temporary, "update-ref", `refs/heads/${branch}`, commit]);
-  await writeFile(path.join(temporary, publishedIssueBranchFile), JSON.stringify({ branch, commit }) + "\n", { mode: 0o600 });
+  await writeFile(path.join(temporary, publishedIssueBranchFile), JSON.stringify({ branch, commit: publishedCommit }) + "\n", { mode: 0o600 });
   await git(["-C", temporary, "fetch", "--no-tags", sharedStore, "+refs/remotes/origin/*:refs/remotes/origin/*"]);
   const objects = workspace ? await readIndexObjects(workspace) : new Set<string>();
   if (commit === base && !objects.size) return;
@@ -242,6 +260,22 @@ export async function preserveReleasedIssueBranch(input: LegacyIssueBranch): Pro
       await rm(temporary, { recursive: true, force: true });
     } catch (cleanup) {
       throw new AggregateError([error, cleanup], "workspace_git_isolation_rollback_failed");
+    }
+    throw error;
+  }
+}
+
+/** Create a new branch directly in its private store. No shared branch or worktree is created. */
+export async function createPrivateIssueBranch(sharedStore: string, privateStore: string, branch: string, base: string): Promise<void> {
+  const temporary = await privateStoreStagingPath(privateStore);
+  try {
+    await initializePrivateStore(sharedStore, temporary, branch, base, base, undefined, null);
+    await rename(temporary, privateStore);
+  } catch (error) {
+    try {
+      await rm(temporary, { recursive: true, force: true });
+    } catch (cleanup) {
+      throw new AggregateError([error, cleanup], "workspace_git_creation_rollback_failed");
     }
     throw error;
   }
