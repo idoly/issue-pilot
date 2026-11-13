@@ -27,7 +27,6 @@ import {
   diffLineClass,
   duration,
   panelError,
-  processingAfterEvent,
   resultText,
   toolNestedCalls,
   toolLabel,
@@ -37,7 +36,7 @@ import {
 } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
-import { type AgentDraftImage, type SubmittedAgentMessage, type AgentDraftStore, defaultAgentDraftStore } from "./agent-drafts";
+import type { AgentDraftImage, SubmittedAgentMessage, AgentDraftStore } from "./agent-drafts";
 
 function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "tool" }> }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
@@ -311,18 +310,17 @@ function footerMetrics(footer: AgentFooterStats) {
   ].filter((metric) => metric.text);
 }
 
-export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<unknown>; drafts?: AgentDraftStore }) {
+export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<unknown>; drafts: AgentDraftStore }) {
   const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
-  const [inferredProcessing, setProcessing] = createSignal(false, { ownedWrite: true });
   const [runState, setRunState] = createSignal<AgentRunState | undefined>(undefined, { ownedWrite: true });
-  const processing = () => (runState() === undefined ? inferredProcessing() : runState() !== "idle");
+  const processing = () => (runState() === undefined ? props.issue.agentRunning === true : runState() !== "idle");
   const [issueStatus, setIssueStatus] = createSignal<IssueStatus>(
     untrack(() => props.issue.status),
     { ownedWrite: true },
   );
   const [error, setError] = createSignal("", { ownedWrite: true });
-  const draftStore = props.drafts ?? defaultAgentDraftStore;
+  const draftStore = props.drafts;
   let draftRecord = untrack(() => draftStore.get(props.issue.id));
   const [submitted, setSubmitted] = createSignal<SubmittedAgentMessage | undefined>(draftRecord.submitted, { ownedWrite: true });
   const [draft, setDraftValue] = createSignal(draftRecord.text, { ownedWrite: true });
@@ -369,7 +367,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   );
 
   const canSend = () => issueStatus() !== "resolved";
-  const canInterrupt = () => (runState() === undefined ? processing() || props.issue.agentRunning === true : processing());
+  const canInterrupt = processing;
   const canSubmit = () => canSend() && !sending() && !submitted() && (images().length > 0 || /\S/.test(draft()));
   const usageMetrics = () => footerMetrics(footer());
   const codeRoot = () => props.issue.workingDirectory;
@@ -523,7 +521,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     setFooter((current) => footerAfterEvent(current, event.event));
     const type = event.event.type;
     if (event.event.type === "issue_run_state") setRunState(event.event.state);
-    setProcessing((current) => processingAfterEvent(current, event.event));
     const nextActivity = activityForEvent(event.event);
     if (nextActivity !== undefined) setActivity(nextActivity);
     if (type === "queue_update") setQueue({ steering: [...event.event.steering], followUp: [...event.event.followUp] });
@@ -560,9 +557,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       const statusChanged = Boolean(payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus) && payload.issueStatus !== props.issue.status);
       if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
       setRunState(payload.runState);
-      setProcessing(payload.runState ? payload.runState !== "idle" : payload.running === true);
-      const running = payload.runState ? payload.runState !== "idle" : payload.running;
-      const executionChanged = running !== undefined && running !== Boolean(props.issue.agentRunning);
+      const executionChanged = (payload.runState !== "idle") !== Boolean(props.issue.agentRunning);
       const revisionChanged = Boolean(payload.issueRevision && payload.issueRevision !== props.issue.revision);
       if (statusChanged || executionChanged || revisionChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
       queueMicrotask(keepLatest);
@@ -590,7 +585,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       clearUnread();
       setError("");
       setSnapshotReady(false);
-      setProcessing(false);
       setRunState(undefined);
       setActivity(null);
       setQueue({ steering: [], followUp: [] });
@@ -640,7 +634,6 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         discardImages(pendingImages);
         record.submitted = undefined;
       }
-      if (submitCurrent()) setProcessing(true);
     } catch (cause) {
       if (!draftStore.isCurrent(issueId, record)) return;
       let failureMessage = cause instanceof Error ? cause.message : "agent_message_failed";

@@ -1,10 +1,8 @@
 import { beforeEach, vi } from "vitest";
-import { clearAgentDrafts } from "./app/agent-drafts";
 import { resetMonacoTestState } from "./test-monaco";
 vi.mock("./app/monaco", async () => (await import("./test-monaco")).monacoMock);
 beforeEach(() => {
   resetMonacoTestState();
-  clearAgentDrafts();
 });
 
 class ResizeObserverMock implements ResizeObserver {

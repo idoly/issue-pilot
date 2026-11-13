@@ -4,8 +4,7 @@ import { activityForEvent, ConversationProjection, type AgentActivity, type Conv
 interface AgentStreamSnapshot {
   agent?: { provider: string; model: string; thinkingLevel: string };
   footer?: AgentFooterStats;
-  running?: boolean;
-  runState?: AgentRunState;
+  runState: AgentRunState;
   issueStatus?: IssueStatus;
   issueRevision?: string;
 }
@@ -90,7 +89,7 @@ export class AgentStreamController {
       try {
         const parsed = JSON.parse(event.data) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent_event_protocol_error");
-        if ("runState" in parsed && !AGENT_RUN_STATES.includes(parsed.runState as AgentRunState)) throw new Error("agent_event_protocol_error");
+        if (!("runState" in parsed) || !AGENT_RUN_STATES.includes(parsed.runState as AgentRunState)) throw new Error("agent_event_protocol_error");
         this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replay.snapshot(), activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
         this.callbacks.onConnection(true);

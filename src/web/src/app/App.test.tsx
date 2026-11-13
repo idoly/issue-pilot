@@ -1656,7 +1656,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     const source = EventSourceMock.instances.at(-1)!;
     source.emit("open");
-    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     await waitFor(() => expect(screen.getByText("处理中…")).toBeTruthy());
     const client = await import("../data/client");
     vi.mocked(client.sendAgentMessage).mockClear();
@@ -1775,7 +1775,7 @@ describe("issue pilot workspace", () => {
     listIssues.mockResolvedValueOnce([pending]);
 
     const source = EventSourceMock.instances.at(-1)!;
-    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     source.emit("message", { id: "status-complete", issueId: current.id, createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
 
     await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
@@ -1846,7 +1846,7 @@ describe("issue pilot workspace", () => {
     getIssue.mockImplementationOnce(async () => oldRefresh).mockImplementationOnce(async () => newRefresh);
     const source = EventSourceMock.instances.at(-1)!;
 
-    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     source.emit("message", { id: "status-old", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
     source.emit("message", { id: "status-new", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
     resolveNew({ ...current, agentRunning: false, status: "resolved", workspace: { ...current.workspace, status: "ready" } });
@@ -1855,7 +1855,7 @@ describe("issue pilot workspace", () => {
     const currentSource = EventSourceMock.instances.at(-1)!;
     const connectionCount = EventSourceMock.instances.length;
     const requestCount = getIssue.mock.calls.length;
-    currentSource.emit("snapshot_ready", { running: false, issueStatus: "resolved" });
+    currentSource.emit("snapshot_ready", { runState: "idle", issueStatus: "resolved" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(EventSourceMock.instances).toHaveLength(connectionCount);
     expect(getIssue).toHaveBeenCalledTimes(requestCount);

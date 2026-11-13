@@ -11,7 +11,7 @@ import { normalizeIssueKey } from "../domain/contracts.ts";
 import { executeLocalCommand } from "../process.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { createPrivateIssueBranch, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
-import { issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
+import { assertIssueRoot, issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -409,11 +409,6 @@ export class WorktreeManager {
   async prepareBatch<T>(input: PrepareWorktreeBatchInput<T>): Promise<T> {
     const created: PreparedWorktreeAttempt[] = [];
     const prepared: PreparedWorktree[] = [];
-    const workspaceRoots = new Map<string, boolean>();
-    for (const worktree of input.worktrees) {
-      const root = issueRoot(this.stateRoot, normalizeIssueKey(worktree.issueKey));
-      if (!workspaceRoots.has(root)) workspaceRoots.set(root, await pathExists(root));
-    }
     try {
       for (const worktree of input.worktrees) {
         const attempt = await this.prepareAttempt(worktree);
@@ -428,14 +423,6 @@ export class WorktreeManager {
           await this.serialized(createdWorktree.repositoryKey, () => this.discardPrepared(createdWorktree));
         } catch (rollbackError) {
           rollbackErrors.push(rollbackError);
-        }
-      }
-      for (const [workspaceRoot, existed] of workspaceRoots) {
-        if (existed) continue;
-        try {
-          await rmdir(workspaceRoot);
-        } catch (rollbackError) {
-          if (!(rollbackError && typeof rollbackError === "object" && "code" in rollbackError && rollbackError.code === "ENOENT")) rollbackErrors.push(rollbackError);
         }
       }
       if (rollbackErrors.length) throw new WorktreeRollbackFailure(new AggregateError([error, ...rollbackErrors], "worktree_rollback_failed"));
@@ -710,8 +697,8 @@ export class WorktreeManager {
   }
 
   private async restoreLocalLocked(input: RestoreWorktreeInput, issueKey: string): Promise<void> {
+    const root = await assertIssueRoot(this.stateRoot, issueKey);
     const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url);
-    const root = issueRoot(this.stateRoot, issueKey);
     const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.workspacePath);
     if (await pathExists(workspacePath)) throw new Error("workspace_path_already_exists");
     await this.git(["check-ref-format", "--branch", input.workingBranch]);
@@ -719,13 +706,12 @@ export class WorktreeManager {
     const commit = await readIssueBranchCommit(cachePath, input.workingBranch);
     if (commit !== input.expectedCommit) throw new Error("working_branch_changed_during_release");
     await this.git(["-C", cachePath, "worktree", "prune", "--expire", "now"]);
-    await mkdir(dirname(workspacePath), { recursive: true });
     await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", workspacePath, input.workingBranch]);
   }
 
   private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktreeAttempt> {
+    const root = await assertIssueRoot(this.stateRoot, issueKey);
     await this.assertBranchReference(input.baseBranch);
-    const root = issueRoot(this.stateRoot, issueKey);
     const workspacePath = this.resolveIssueWorkspacePath(root, input.workspaceName, input.existingWorkspacePath);
     const workingBranch = input.workingBranch ?? `${input.mode}-${issueKey.toLowerCase()}`;
     await this.git(["check-ref-format", "--branch", workingBranch]);

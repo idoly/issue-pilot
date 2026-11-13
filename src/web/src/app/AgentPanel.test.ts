@@ -8,20 +8,8 @@ import { issuePilotConfig } from "../../../../issue-pilot.config";
 import type { IssueDetail, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel, ConversationItem } from "./AgentPanel";
-import { AgentDraftStore, clearAgentDrafts } from "./agent-drafts";
-import {
-  activityForEvent,
-  ConversationProjection,
-  boundedText,
-  codemodeCalls,
-  diffLineClass,
-  processingAfterEvent,
-  resultText,
-  toolNestedCalls,
-  toolLabel,
-  toolLabelParts,
-  type ConversationEntry,
-} from "./conversation";
+import { AgentDraftStore } from "./agent-drafts";
+import { activityForEvent, ConversationProjection, boundedText, codemodeCalls, diffLineClass, resultText, toolNestedCalls, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
 
 function applyAgentEvent(entries: ConversationEntry[], event: RunEvent): ConversationEntry[] {
   const projection = new ConversationProjection(entries);
@@ -120,12 +108,12 @@ describe("Agent conversation state", () => {
     const [hidden, setHidden] = createSignal(false);
     const view = render(() =>
       AgentPanel({
+        drafts: new AgentDraftStore(),
         issue,
         get hidden() {
           return hidden();
         },
         onRefresh: async () => issue,
-        drafts: new AgentDraftStore(),
       }),
     );
     try {
@@ -288,10 +276,7 @@ describe("Agent conversation state", () => {
     });
   });
 
-  it("keeps Pi retry lifecycle active until agent_settled", () => {
-    expect(processingAfterEvent(true, event({ type: "agent_end", messages: [], willRetry: true }).event)).toBe(true);
-    expect(processingAfterEvent(false, event({ type: "agent_start" }).event)).toBe(true);
-    expect(processingAfterEvent(true, event({ type: "agent_settled", aborted: false }).event)).toBe(false);
+  it("describes Pi compaction and retry activity", () => {
     expect(activityForEvent(event({ type: "compaction_start", reason: "threshold" }).event)).toEqual({ text: "正在压缩上下文…", tone: "info" });
     expect(activityForEvent(event({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, delayMs: 2_000, errorMessage: "overloaded" }).event)).toEqual({
       text: "第 2/3 次重试，2.0s后进行…",
@@ -577,7 +562,7 @@ describe("Agent conversation state", () => {
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const fetchRequest = vi.spyOn(globalThis, "fetch");
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.paste(editor, { clipboardData: { files: [], getData: () => "a".repeat(issuePilotConfig.limits.agentMessageChars + 1) } });
     await waitFor(() => expect(editor.value).toContain("[paste #1"));
@@ -612,7 +597,7 @@ describe("Agent conversation state", () => {
     const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:clipboard-image");
     const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const fetchRequest = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 202 }));
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "clipboard.png", { type: "image/png" });
     fireEvent.paste(editor, { clipboardData: { files: [image], getData: () => "" } });
@@ -668,7 +653,7 @@ describe("Agent conversation state", () => {
       } satisfies IssueDetail;
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:uncertain-image");
       const fetchRequest = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: code }), { status }));
-      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
         const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "uncertain.png", { type: "image/png" });
@@ -709,12 +694,12 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;
     source.emit("snapshot_ready", {
       agent: { provider: "test", model: "model", thinkingLevel: "medium" },
       footer: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, cost: 0.1, costSource: "unknown", latestCacheHitRate: 90, contextPercent: 10, contextWindow: 10_000, autoCompact: true },
-      running: false,
+      runState: "idle",
       issueStatus: "pending",
     });
     await waitFor(() => expect(screen.getByRole("group", { name: "会话用量" }).textContent?.trim()).toBe("↑100 ↓10 R900 CH90.0% $0.100 (来源未标明) 上下文 10.0%/10k (auto)"));
@@ -772,7 +757,7 @@ describe("Agent conversation state", () => {
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
-      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const source = EventSourceMock.instances[0]!;
         source.emit("snapshot_ready", {
@@ -788,7 +773,7 @@ describe("Agent conversation state", () => {
             contextWindow: 10_000,
             autoCompact: true,
           },
-          running: true,
+          runState: "running",
           issueStatus: "pending",
         });
         await screen.findByText("上下文 10.0%/10k (auto)");
@@ -853,13 +838,13 @@ describe("Agent conversation state", () => {
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
-      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const source = EventSourceMock.instances[0]!;
         const footer = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.1, costSource, latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true };
         const charged = { ...usage, cost: { ...usage.cost, total: 0.1, ...(flag === undefined ? {} : { totalFromProvider: flag }) } };
         const base = { parentId: null, timestamp: new Date().toISOString() };
-        source.emit("snapshot_ready", { footer, running: false, issueStatus: "pending" });
+        source.emit("snapshot_ready", { footer, runState: "idle", issueStatus: "pending" });
         await screen.findByText(`$0.100 (${label})`);
         source.emit("message", event({ type: "entry_appended", entry: { ...base, type: "usage", id: "auxiliary", kind: "auxiliary", provider: "test", model: "model", usage: charged } }));
         source.emit("message", event({ type: "message_end", message: { ...assistant([], "stop"), usage: charged } }));
@@ -888,7 +873,7 @@ describe("Agent conversation state", () => {
         await waitFor(() => expect(EventSourceMock.instances).toHaveLength(2));
         const resumed = EventSourceMock.instances[1]!;
         resumed.emit("message", mixed);
-        resumed.emit("snapshot_ready", { footer: { ...footer, cost: 0.7, costSource: "mixed" }, running: false, issueStatus: "pending" });
+        resumed.emit("snapshot_ready", { footer: { ...footer, cost: 0.7, costSource: "mixed" }, runState: "idle", issueStatus: "pending" });
         await screen.findByText("$0.700 (混合来源)");
         expect(screen.queryByText("$0.800 (混合来源)")).toBeNull();
       } finally {
@@ -917,12 +902,12 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     try {
       const source = EventSourceMock.instances[0]!;
       expect(screen.queryByText(/Esc 中断/)).toBeNull();
       source.emit("message", event({ type: "auto_retry_end", success: false, attempt: 3 }));
-      source.emit("snapshot_ready", { running: true, runState: "queued", issueStatus: "pending" });
+      source.emit("snapshot_ready", { runState: "queued", issueStatus: "pending" });
       await screen.findByText("排队中，等待执行名额…");
       expect(screen.getByTitle("中断当前处理并取消后续排队，保留未发送草稿").textContent).toContain("Esc 中断");
       expect(screen.queryByText("处理中…")).toBeNull();
@@ -932,6 +917,10 @@ describe("Agent conversation state", () => {
       expect(screen.getByText(/Esc 中断/)).toBeTruthy();
       expect(screen.queryByText("排队中，等待执行名额…")).toBeNull();
       source.emit("message", event({ type: "issue_status", status: "complete" }));
+      source.emit("message", event({ type: "agent_settled", aborted: false }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.getByText("处理中…")).toBeTruthy();
+      expect(screen.getByText(/Esc 中断/)).toBeTruthy();
       source.emit("message", event({ type: "issue_run_state", state: "queued" }));
       await screen.findByText("排队中，等待执行名额…");
       source.emit("message", event({ type: "issue_run_state", state: "idle" }));
@@ -965,12 +954,12 @@ describe("Agent conversation state", () => {
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
-    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     expect(source.url).toBe("/api/issues/ISSUE-20260810-001/agent-stream");
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
-    source.emit("ready", { agent: { provider: "stale", model: "stale-model", thinkingLevel: "high" }, running: false, issueStatus: "resolved" });
+    source.emit("ready", { agent: { provider: "stale", model: "stale-model", thinkingLevel: "high" }, runState: "idle", issueStatus: "resolved" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
     expect(screen.getByText("no-model")).toBeTruthy();
@@ -990,7 +979,7 @@ describe("Agent conversation state", () => {
         contextWindow: 272_000,
         autoCompact: true,
       },
-      running: false,
+      runState: "idle",
       issueStatus: "in_progress",
     });
     await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
@@ -1036,7 +1025,7 @@ describe("Agent conversation state", () => {
     view.unmount();
     expect(source.closed).toBe(true);
 
-    const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, onRefresh: async () => issue }));
+    const resolvedView = render(() => AgentPanel({ issue: { ...issue, status: "resolved" }, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
     resolvedView.unmount();
   });
@@ -1065,6 +1054,7 @@ describe("Agent conversation state", () => {
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
     const view = render(() =>
       AgentPanel({
+        drafts: new AgentDraftStore(),
         get issue() {
           return issue();
         },
@@ -1073,7 +1063,7 @@ describe("Agent conversation state", () => {
     );
     const first = EventSourceMock.instances[0]!;
     first.emit("open");
-    first.emit("snapshot_ready", { running: false, issueStatus: "resolved" });
+    first.emit("snapshot_ready", { runState: "idle", issueStatus: "resolved" });
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
 
     setIssue({ ...initial, status: "open" });
@@ -1085,7 +1075,7 @@ describe("Agent conversation state", () => {
     const second = EventSourceMock.instances[1]!;
     expect(second.url).toBe(first.url);
     second.emit("open");
-    second.emit("snapshot_ready", { running: false, issueStatus: "open" });
+    second.emit("snapshot_ready", { runState: "idle", issueStatus: "open" });
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
 
     view.unmount();
@@ -1127,6 +1117,7 @@ describe("Agent conversation state", () => {
     });
     const view = render(() =>
       AgentPanel({
+        drafts: new AgentDraftStore(),
         get issue() {
           return issue();
         },
@@ -1135,7 +1126,7 @@ describe("Agent conversation state", () => {
     );
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { running: true, issueStatus: "open" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "open" });
     source.emit("message", event({ type: "agent_start" }, "agent-start-live"));
 
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(initial.id));
@@ -1165,12 +1156,12 @@ describe("Agent conversation state", () => {
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn(async () => issue);
-    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("message", event({ type: "agent_start" }, "agent-start-replay"));
     expect(onRefresh).not.toHaveBeenCalled();
-    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
 
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(issue.id));
     view.unmount();
@@ -1197,7 +1188,7 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
     const conversation = panel.querySelector(".agent-conversation") as HTMLDivElement;
     const scroller = panel.querySelector(".agent-scroll") as HTMLDivElement;
@@ -1218,7 +1209,7 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("message", event({ type: "tool_execution_end", toolCallId: "keyboard-tool", toolName: "read", result: { content: [] }, isError: false }));
-    source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+    source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
     await waitFor(() => expect(panel.querySelector("summary.agent-tool-head")).toBeTruthy());
     const summary = panel.querySelector("summary.agent-tool-head") as HTMLElement;
     scrollTo.mockClear();
@@ -1251,7 +1242,7 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     onTestFinished(() => {
       window.getSelection()?.removeAllRanges();
       view.unmount();
@@ -1259,7 +1250,7 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Stable completed text" }], "stop") }, "completed"));
-    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     const paragraph = await screen.findByText("Stable completed text");
     const text = paragraph.firstChild!;
     const range = document.createRange();
@@ -1307,7 +1298,7 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     onTestFinished(() => {
       view.unmount();
       requestFrame.mockRestore();
@@ -1316,7 +1307,7 @@ describe("Agent conversation state", () => {
     });
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     const scroller = view.container.querySelector(".agent-scroll") as HTMLDivElement;
     Object.defineProperties(scroller, {
@@ -1429,7 +1420,7 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
-    const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     onTestFinished(() => {
       view.unmount();
       requestFrame.mockRestore();
@@ -1437,7 +1428,7 @@ describe("Agent conversation state", () => {
     });
     const first = EventSourceMock.instances[0]!;
     first.emit("open");
-    first.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    first.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     first.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ghost" } }, "ghost"));
     expect(requestFrame).toHaveBeenCalledTimes(1);
     const staleFrame = frames.get(frameId)!;
@@ -1445,7 +1436,7 @@ describe("Agent conversation state", () => {
     await Promise.resolve();
     const second = EventSourceMock.instances[1]!;
     second.emit("open");
-    second.emit("snapshot_ready", { running: true, issueStatus: "in_progress" });
+    second.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     // Simulate the frame that was already queued in the browser when the snapshot landed.
     staleFrame(performance.now());
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1474,17 +1465,18 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
-    const first = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const drafts = new AgentDraftStore();
+    const first = render(() => AgentPanel({ issue, drafts, onRefresh: async () => issue }));
     const firstEditor = first.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(firstEditor, { target: { value: "unsent question" } });
     expect(firstEditor.value).toBe("unsent question");
     first.unmount();
     EventSourceMock.instances.length = 0;
-    const second = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const second = render(() => AgentPanel({ issue, drafts, onRefresh: async () => issue }));
     onTestFinished(() => second.unmount());
     const secondEditor = second.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     expect(secondEditor.value).toBe("unsent question");
-    clearAgentDrafts();
+    drafts.clearAll();
     await Promise.resolve();
     expect((second.getByLabelText("发送给 Agent") as HTMLTextAreaElement).value).toBe("");
   });
@@ -1518,7 +1510,8 @@ describe("Agent conversation state", () => {
         }),
     );
     onTestFinished(() => fetchRequest.mockRestore());
-    const first = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const drafts = new AgentDraftStore();
+    const first = render(() => AgentPanel({ issue, drafts, onRefresh: async () => issue }));
     const firstEditor = first.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(firstEditor, { target: { value: "slow question" } });
     await waitFor(() => expect(firstEditor.value).toBe("slow question"));
@@ -1527,7 +1520,7 @@ describe("Agent conversation state", () => {
     // Navigate away while the message is still in flight, then come back.
     first.unmount();
     EventSourceMock.instances.length = 0;
-    const second = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+    const second = render(() => AgentPanel({ issue, drafts, onRefresh: async () => issue }));
     onTestFinished(() => second.unmount());
     const secondEditor = second.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     expect(secondEditor.disabled).toBe(false);
@@ -1635,11 +1628,11 @@ describe("Agent conversation state", () => {
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
       } satisfies IssueDetail;
-      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       const first = EventSourceMock.instances[0]!;
       first.emit("open");
       first.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Stable before disconnect" }], "stop") }, "message-before"));
-      first.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      first.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText("Stable before disconnect")).toBeTruthy();
 
@@ -1658,7 +1651,7 @@ describe("Agent conversation state", () => {
       expect(screen.queryByText("Replayed after reconnect")).toBeNull();
       expect(screen.queryByText("正在加载对话…")).toBeNull();
       expect(screen.queryByText("还没有对话")).toBeNull();
-      second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      second.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.queryByText("Stable before disconnect")).toBeNull();
       expect(screen.getByText("Replayed after reconnect")).toBeTruthy();
@@ -1697,10 +1690,10 @@ describe("Agent conversation state", () => {
       rejectFirst = reject;
     });
     const onRefresh = vi.fn<() => Promise<IssueDetail>>().mockReturnValueOnce(firstRefresh).mockResolvedValue(issue);
-    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+    source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-old"));
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-new"));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
@@ -1732,10 +1725,10 @@ describe("Agent conversation state", () => {
       workspace: { status: "ready", sourceAvailable: false },
     } satisfies IssueDetail;
     const onRefresh = vi.fn<() => Promise<IssueDetail>>().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValue(issue);
-    const view = render(() => AgentPanel({ issue, onRefresh }));
+    const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+    source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-failed"));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("工单状态刷新失败"));
     expect(onRefresh).toHaveBeenLastCalledWith(issue.id);
@@ -1772,7 +1765,7 @@ describe("Agent conversation loading", () => {
     it(`waits for snapshot_ready before displaying ${hasHistory ? "replayed history" : "an empty conversation"}`, async () => {
       vi.useFakeTimers();
       EventSourceMock.instances.length = 0;
-      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const source = EventSourceMock.instances[0]!;
         expect(screen.queryByText("还没有对话")).toBeNull();
@@ -1785,7 +1778,7 @@ describe("Agent conversation loading", () => {
         expect(screen.queryByText("Previously saved question")).toBeNull();
         expect(screen.queryByText("还没有对话")).toBeNull();
         expect(screen.getByText("正在加载对话…")).toBeTruthy();
-        source.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+        source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.queryByText("正在加载对话…")).toBeNull();
         if (hasHistory) {
@@ -1802,7 +1795,7 @@ describe("Agent conversation loading", () => {
     it(`preserves a ${failure} failure until a reconnect supplies a valid snapshot`, async () => {
       vi.useFakeTimers();
       EventSourceMock.instances.length = 0;
-      const view = render(() => AgentPanel({ issue, onRefresh: async () => issue }));
+      const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const first = EventSourceMock.instances[0]!;
         first.emit("open");
@@ -1820,7 +1813,7 @@ describe("Agent conversation loading", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.getByRole("alert").textContent).toBe(diagnostic);
         expect(screen.queryByText("还没有对话")).toBeNull();
-        second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+        second.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.queryByRole("alert")).toBeNull();
         expect(screen.getByText("还没有对话")).toBeTruthy();
@@ -1837,6 +1830,7 @@ describe("Agent conversation loading", () => {
     const [current, setCurrent] = createSignal<IssueDetail>(issue);
     const view = render(() =>
       AgentPanel({
+        drafts: new AgentDraftStore(),
         get issue() {
           return current();
         },
@@ -1846,7 +1840,7 @@ describe("Agent conversation loading", () => {
     try {
       const first = EventSourceMock.instances[0]!;
       first.emit("open");
-      first.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      first.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText("还没有对话")).toBeTruthy();
       setCurrent({ ...issue, id: "ISSUE-20261107-002" });
@@ -1862,7 +1856,7 @@ describe("Agent conversation loading", () => {
       expect(screen.getByText("正在加载对话…")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
       second.emit("message", event({ type: "issue_user", message: "New Issue question" }, "new-question"));
-      second.emit("snapshot_ready", { running: false, issueStatus: "pending" });
+      second.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText("New Issue question")).toBeTruthy();
       expect(screen.queryByText("还没有对话")).toBeNull();

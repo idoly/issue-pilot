@@ -17,13 +17,41 @@ import {
   WorktreeRemovalFailure,
 } from "../../src/workspace/git.ts";
 import { publishIssueBranch } from "../../src/workspace/issue-git.ts";
-import { sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
 const execFileAsync = promisify(execFile);
 
 async function git(args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
 }
+
+test("Git preparation rejects missing and redirected Issue roots before touching repositories", async () => {
+  const state = await mkdtemp(join(tmpdir(), "issue-pilot-git-root-"));
+  try {
+    const issueKey = "ISSUE-20261114-901";
+    const input = { issueKey, workspaceName: "repo", url: join(state, "unavailable.git"), baseBranch: "main", mode: "hotfix" as const };
+    const manager = new WorktreeManager(state);
+    const root = issueRoot(state, issueKey);
+    for (const redirected of [false, true]) {
+      if (redirected) {
+        await mkdir(join(state, "preserved"));
+        await mkdir(join(state, "workspaces"), { recursive: true });
+        await symlink(join(state, "preserved"), root);
+      }
+      const message = redirected ? "invalid_issue_root" : "issue_root_missing";
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await assert.rejects(manager.prepare(input), { message });
+        await assert.rejects(manager.prepareBatch({ worktrees: [input], finalize: async () => assert.fail("must not finalize") }), { message });
+        await assert.rejects(manager.restoreLocal({ ...input, workingBranch: "hotfix-issue-20261114-901", expectedCommit: "a".repeat(40), workspacePath: join(root, "repo") }), { message });
+      }
+      await assert.rejects(access(join(state, "git")), { code: "ENOENT" });
+      if (redirected) assert.deepEqual(await readdir(join(state, "preserved")), []);
+      else await assert.rejects(access(root), { code: "ENOENT" });
+    }
+  } finally {
+    await rm(state, { recursive: true, force: true });
+  }
+});
 
 test("creates an Issue branch only in its private store and publishes it on first use", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-private-birth-"));
@@ -34,6 +62,7 @@ test("creates an Issue branch only in its private store and publishes it on firs
     await git(["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "baseline"]);
     const manager = new WorktreeManager(state);
     const issueKey = "ISSUE-20261024-899";
+    await claimIssueRoot(state, issueKey);
     const prepared = await manager.prepare({ issueKey, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     const branch = prepared.workingBranch!;
     const shared = repositoryStorePath(state, remote);
@@ -65,6 +94,7 @@ test("missing private Git never falls back to an older shared branch", async () 
     await git(["-C", source, ...commit, "initial"]);
     const manager = new WorktreeManager(state);
     const input = { issueKey: "ISSUE-20261024-900", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
+    await claimIssueRoot(state, input.issueKey);
     const own = await manager.prepare(input);
     await git(["-C", own.workspacePath, ...commit, "private change"]);
     const workingBranch = own.workingBranch!;
@@ -97,6 +127,7 @@ test("preparing an existing bound worktree leaves its valid Git metadata unchang
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "baseline"]);
     const manager = new WorktreeManager(join(root, "state"));
     const input = { issueKey: "ISSUE-20261024-903", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
+    await claimIssueRoot(join(root, "state"), input.issueKey);
     const prepared = await manager.prepare(input);
     const pointer = join(prepared.workspacePath, ".git");
     const metadata = join(prepared.cachePath, "worktrees", basename(prepared.workspacePath));
@@ -128,6 +159,7 @@ test("worktree removal preserves ignored files until they are explicitly removed
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
+    await claimIssueRoot(join(root, "state"), "ISSUE-20261024-901");
     const prepared = await manager.prepare({ issueKey: "ISSUE-20261024-901", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     assert.ok(prepared.workingBranch);
     const branch = prepared.workingBranch;
@@ -159,6 +191,7 @@ test("worktree removal preserves changes hidden by Git index flags", async () =>
     await git(["-C", source, "add", "--", fileName]);
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
     const manager = new WorktreeManager(join(root, "state"));
+    await claimIssueRoot(join(root, "state"), "ISSUE-20261024-902");
     const { workspacePath, workingBranch } = await manager.prepare({ issueKey: "ISSUE-20261024-902", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" });
     const file = join(workspacePath, fileName);
 
@@ -192,6 +225,7 @@ test("reports an invalid Git pointer as a stable reason while preserving the che
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
+    await claimIssueRoot(join(root, "state"), "ISSUE-20261024-971");
     const prepared = await manager.prepare({ issueKey: "ISSUE-20261024-971", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     assert.ok(prepared.workingBranch);
     await writeFile(join(prepared.workspacePath, ".git"), `gitdir: ${join(root, "missing-metadata")}\n`);
@@ -225,6 +259,7 @@ test("serializes repository operations across manager instances sharing one stat
     await git(["init", "-b", "main", url]);
     await git(["-C", url, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
     const managers = [new WorktreeManager(root), new WorktreeManager(root)];
+    await claimIssueRoot(root, "ISSUE-20260805-001");
     const own = await managers[0]!.prepare({ issueKey: "ISSUE-20260805-001", workspaceName: "orders", url, baseBranch: "main", mode: "hotfix" });
     let active = 0;
     let maximumActive = 0;
@@ -262,6 +297,7 @@ for (const detached of [false, true])
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
       const issueKey = "ISSUE-20261018-996";
+      await claimIssueRoot(join(root, "state"), issueKey);
       const first = await manager.prepare({ issueKey, workspaceName: "first", url: remote, baseBranch: "main", mode: "hotfix" });
       // A second repository gives the same Issue a separate worktree and ref.
       const otherRemote = join(root, "other.git");
@@ -308,6 +344,7 @@ for (const missingBranch of [false, true])
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
       const input = { issueKey: "ISSUE-20261018-997", workspaceName: "local", url: remote, baseBranch: "main", mode: "hotfix" as const };
+      await claimIssueRoot(join(root, "state"), input.issueKey);
       const prepared = await manager.prepare(input);
       await writeFile(join(prepared.workspacePath, "local.txt"), "local commit\n");
       await git(["-C", prepared.workspacePath, "add", "."]);
@@ -345,6 +382,7 @@ for (const malformed of [true, false])
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
       const input = { issueKey: "ISSUE-20261018-992", workspaceName: "application", url: remote, baseBranch: "main", mode: "hotfix" as const };
+      await claimIssueRoot(join(root, "state"), input.issueKey);
       const prepared = await manager.prepare(input);
       await manager.remove(remote, prepared.workspacePath, prepared.workingBranch!);
       const ref = join(prepared.cachePath, "refs", "heads", prepared.workingBranch!);
@@ -485,6 +523,7 @@ for (const development of [false, true])
       await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "current"]);
       await git(["-C", source, "push", remote, "main"]);
       const expected = await git(["-C", source, "rev-parse", "HEAD"]);
+      if (development) await claimIssueRoot(join(root, "state"), "ISSUE-20261018-993");
       const prepared = development
         ? await manager.prepare({ issueKey: "ISSUE-20261018-993", workspaceName: "application", url: remote, baseBranch: "main", mode: "hotfix" })
         : await manager.prepareShared({ url: remote, baseBranch: "main" });
@@ -530,6 +569,7 @@ test("shares immutable latest baselines for read-only environments and creates p
     assert.equal(await git(["-C", refreshed.workspacePath, "rev-parse", "HEAD"]), refreshed.baseCommit);
     assert.equal((await worktreeManager.prepareShared({ url: remote, baseBranch: "main" })).workspacePath, refreshed.workspacePath);
 
+    await claimIssueRoot(stateRoot, "ISSUE-20260805-011");
     const hotfix = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-011", workspaceName: "remote", url: remote, baseBranch: "main", mode: "hotfix" });
     assert.equal(hotfix.workingBranch, "hotfix-issue-20260805-011");
     assert.equal(await git(["-C", hotfix.workspacePath, "branch", "--show-current"]), hotfix.workingBranch);
@@ -546,10 +586,12 @@ test("shares immutable latest baselines for read-only environments and creates p
     await assert.rejects(access(checkout), { code: "ENOENT" });
     assert.equal(await worktreeManager.openSharedCheckout(remote, commit), checkout);
     assert.equal(await readFile(join(checkout, "branch.txt"), "utf8"), "branch snapshot\n");
+    await claimIssueRoot(stateRoot, "ISSUE-20260805-012");
     const feature = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-012", workspaceName: "remote", url: remote, baseBranch: "main", mode: "feature" });
     assert.equal(feature.workingBranch, "feature-issue-20260805-012");
     assert.equal(await git(["-C", feature.workspacePath, "branch", "--show-current"]), feature.workingBranch);
 
+    await claimIssueRoot(stateRoot, "ISSUE-20260805-013");
     const unexpected = await worktreeManager.prepare({ issueKey: "ISSUE-20260805-013", workspaceName: "unexpected-name", url: remote, baseBranch: "main", mode: "hotfix" });
     await writeFile(join(unexpected.workspacePath, "uncommitted.txt"), "preserved\n", "utf8");
     await assert.rejects(
@@ -649,6 +691,7 @@ test("clean inspection handles non-ASCII branch headers and still rejects detach
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "seed"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
+    await claimIssueRoot(join(root, "state"), "ISSUE-20261025-992");
     const prepared = await manager.prepare({ issueKey: "ISSUE-20261025-992", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     for (const branch of ["修复/完整分支", "(detached)"]) {
       await git(["-C", prepared.workspacePath, "branch", "-m", branch]);
@@ -675,7 +718,7 @@ test("a failed first preparation discards the worktree, branch and private store
     const manager = new WorktreeManager(state);
     const worktree = { issueKey: "ISSUE-20261103-901", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" as const };
     // Issue roots are claimed at creation, before any preparation.
-    await mkdir(join(state, "workspaces", "issue-20261103-901"), { recursive: true });
+    await claimIssueRoot(state, worktree.issueKey);
     await assert.rejects(
       manager.prepareBatch({
         worktrees: [worktree],

@@ -16,6 +16,7 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services } from "../../src/db/schema.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../../src/workspace/git-credentials.ts";
 import { shellQuote } from "../../src/agent/issue-sandbox.ts";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 
@@ -89,6 +90,7 @@ test("bound Git push uses personal SSH and preserves target refs, rejecting othe
     const manager = new WorktreeManager(state);
     const correct = await createPersonalGitEnvironment({ gitPrivateKey: await readFile(path.join(root, "personal"), "utf8") }, [url]);
     identities.push(correct);
+    await claimIssueRoot(state, key);
     const own = await manager.withGitEnvironment(correct.env, () => manager.prepare({ issueKey: key, workspaceName: "repo", url, baseBranch: "main", mode: "feature" }));
     const runtimeRoot = path.dirname(own.workspacePath);
     const branch = `refs/heads/${own.workingBranch}`;

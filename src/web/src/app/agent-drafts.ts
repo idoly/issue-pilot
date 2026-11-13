@@ -85,10 +85,3 @@ export class AgentDraftStore {
     this.setVersion((value) => value + 1);
   }
 }
-
-export const defaultAgentDraftStore = new AgentDraftStore();
-
-/** Test and identity-change reset for panels that use the default store. */
-export function clearAgentDrafts(): void {
-  defaultAgentDraftStore.clearAll();
-}

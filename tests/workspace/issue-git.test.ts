@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services } from "../../src/db/schema.ts";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { WorktreeManager, repositoryStorePath } from "../../src/workspace/git.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { validateIssueGitStore } from "../../src/workspace/issue-git.ts";
@@ -38,7 +39,9 @@ test("conversation Git cannot create or switch branches and stages and commits o
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "initial"]);
     const manager = new WorktreeManager(state);
     const input = { issueKey: "ISSUE-20261023-001", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
+    await claimIssueRoot(state, input.issueKey);
     const own = await manager.prepare(input);
+    await claimIssueRoot(state, "ISSUE-20261023-002");
     const other = await manager.prepare({ ...input, issueKey: "ISSUE-20261023-002" });
     const shared = repositoryStorePath(state, source);
     const before = own.baseCommit;

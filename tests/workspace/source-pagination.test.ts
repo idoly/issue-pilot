@@ -14,6 +14,7 @@ import { environments, issueRepositories, issues, issueWorkspaces, serviceDeploy
 import { executeLocalCommand, type CommandExecutor } from "../../src/process.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
+import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import { TestAgentController } from "../http/fixture.ts";
@@ -37,6 +38,7 @@ async function fixture() {
   const seed = path.join(root, "seed");
   await runGit(["init", "-b", "main", seed]);
   await runGit(["-C", seed, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture baseline"]);
+  await claimIssueRoot(root, issue!.key);
   const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "application", url: seed, baseBranch: "main", mode: "hotfix" });
   const repository = prepared.workspacePath;
   await database.db.insert(issueRepositories).values({

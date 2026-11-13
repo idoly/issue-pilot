@@ -93,8 +93,8 @@ The private host runner allows up to 1800 seconds for graceful stop and 600 seco
 
 ## Web projection
 
-- ApplicationResources owns identity, configuration and per-Issue Agent drafts/failures. A submitted snapshot (ID/text/images) is independent of the next draft; receipt queries never resend it. Navigation can restore them; identity changes cancel old unsent work and generation checks reject late responses.
-- A stream is usable only after replay reaches snapshot_ready. Invalid frames invalidate the connection; reconnect replaces the projection instead of accepting a partial snapshot.
+- ApplicationResources owns identity, configuration and per-Issue Agent drafts/failures. Panels require this store explicitly; there is no module-global draft fallback. A submitted snapshot (ID/text/images) is independent of the next draft; receipt queries never resend it. Navigation can restore them; identity changes cancel old unsent work and generation checks reject late responses.
+- A stream is usable only after replay reaches snapshot_ready with a valid runState. After that snapshot, only issue_run_state changes execution state; Pi completion, business status and HTTP send acknowledgements do not infer it. Invalid frames invalidate the connection; reconnect replaces the projection instead of accepting a partial snapshot.
 - Stable entry IDs/contentIndex preserve block identity. Streaming is plain text; completed content uses Markdown. Tool details, Monaco and configuration code load on demand; editors and models are disposed independently.
 - ConversationProjection owns display reduction for replay, live batches and history pages. Tool-call and streaming-assistant indexes avoid repeatedly scanning history; snapshots use copy-on-write so an entire replay or batch needs at most one array copy while previously published snapshots remain unchanged.
 - Components with one latest-wins request lane use [latest.ts](../../src/web/src/data/latest.ts) for generation, abort and disposition; genuinely independent lanes (editors, parallel panels) keep separate tasks instead of a global request mutex.

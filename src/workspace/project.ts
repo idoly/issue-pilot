@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, ne, notInArray, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, notInArray, or } from "drizzle-orm";
 import { domainError } from "../domain/errors.ts";
 import path from "node:path";
 
@@ -7,7 +7,7 @@ import { agentSessions, environments, issueRelations, issueRepositories, issues,
 import type { EnvironmentKind, IssueType } from "../domain/contracts.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment } from "./git-credentials.ts";
-import { issueServiceIds, loadIssueDeployments, loadServiceRepositorySet } from "./issue-services.ts";
+import { loadIssueDeployments } from "./issue-services.ts";
 import type { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryStorePath, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareIssueRuntime, resolveRecordedRepository, type IssueRuntimeRepository, type RelatedIssueRuntime } from "./runtime.ts";
@@ -34,8 +34,8 @@ type IssueRepository = typeof issueRepositories.$inferSelect;
 
 function allowRepositoryRead(readRoots: Set<string>, sharedStore: string, root: string, developmentStore?: string): void {
   if (!developmentStore) readRoots.add(root);
-  // Isolated development stores only borrow baseline objects. Legacy linked worktrees still need their common directory.
-  readRoots.add(developmentStore && developmentStore !== sharedStore ? path.join(sharedStore, "objects") : sharedStore);
+  // Private development stores only borrow shared baseline objects.
+  readRoots.add(developmentStore ? path.join(sharedStore, "objects") : sharedStore);
 }
 type DeploymentRepository = Awaited<ReturnType<typeof loadDeploymentRepositories>>["repositories"][number];
 
@@ -250,48 +250,6 @@ export class IssueProjectManager {
     return relatedIssues;
   }
 
-  async hydrateReadOnlyRuntime(issue: ProjectIssue): Promise<string> {
-    await assertIssueRoot(this.stateRoot, issue.key);
-    const existingRepositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
-    if (existingRepositories.length && classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
-    const serviceIds = await issueServiceIds(this.database, issue);
-    const { repositories: deploymentRepositories } = await loadServiceRepositorySet(this.database, serviceIds, issue.environmentId);
-    const names = repositoryWorkspaceNames(deploymentRepositories.map(({ repository }) => repository.url));
-    const related = await this.prepareRelatedIssueRuntimes(issue.id);
-    const repositories = [];
-    for (const { repository, baseBranch } of deploymentRepositories) {
-      repositories.push({ url: repository.url, checkout: await this.worktrees.prepareShared({ url: repository.url, baseBranch }) });
-    }
-    const runtimeRoot = await prepareIssueRuntime(
-      this.stateRoot,
-      issue.key,
-      repositories.map(({ url, checkout }) => ({ name: names.get(url)!, repositoryPath: checkout.workspacePath })),
-      "read",
-      related,
-    );
-    const replacements = repositories.map(({ url, checkout }) => ({
-      url,
-      baseBranch: checkout.baseBranch,
-      workingBranch: null,
-      localPath: null,
-      workspaceName: null,
-      commitBefore: checkout.baseCommit,
-    }));
-    await this.database.transaction(async (transaction) => {
-      const now = new Date();
-      await replaceIssueRepositoryRows(transaction, issue.id, existingRepositories, replacements, now);
-      await transaction
-        .update(agentSessions)
-        .set({ workspacePath: runtimeRoot, updatedAt: now })
-        .where(and(eq(agentSessions.issueId, issue.id), ne(agentSessions.workspacePath, runtimeRoot)));
-      await transaction
-        .update(issueWorkspaces)
-        .set({ runtimeReady: true, releasedAt: null, lastError: null, updatedAt: now })
-        .where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
-    });
-    return runtimeRoot;
-  }
-
   async convertReadOnlyToDevelopment<T>(
     issue: ProjectIssue,
     developmentEnvironmentId: string,
@@ -316,6 +274,16 @@ export class IssueProjectManager {
     // Read-only Issues already have working files here. Worktree preparation claims
     // individual repository paths and refuses collisions without removing those files.
     const names = repositoryWorkspaceNames(repositories.map(({ repository }) => repository.url));
+    // Capture and validate the analyzed view before replacing any links. Recovery
+    // restores this view; it must not fetch a new baseline or rewrite durable rows.
+    const previousNames = issueRepositoryWorkspaceNames(existingRepositories);
+    const previousRuntime: IssueRuntimeRepository[] = [];
+    for (const repository of existingRepositories) {
+      const name = previousNames.get(repository.url)!;
+      const { root } = await resolveRecordedRepository(this.stateRoot, issue.key, repository, name, "read_only");
+      previousRuntime.push({ name, repositoryPath: root });
+    }
+    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     try {
       // A development worktree takes the same root name as the former read-only link.
       // Remove only manifest-owned links; recovery below restores them on failure.
@@ -341,12 +309,13 @@ export class IssueProjectManager {
               repositoryPath: worktree.workspacePath,
             })),
             "write",
+            relatedIssues,
           );
           return finalize({ prepared, repositories, existingRepositories, names });
         },
       });
     } catch (error) {
-      return this.recoverAfterFailure(error, "workspace_conversion_cleanup_failed", () => this.hydrateReadOnlyRuntime(issue));
+      return this.recoverAfterFailure(error, "workspace_conversion_cleanup_failed", () => prepareIssueRuntime(this.stateRoot, issue.key, previousRuntime, "read", relatedIssues));
     }
   }
 

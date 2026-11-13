@@ -121,7 +121,8 @@ test("serves recorded Issue code after restart without fetching or rebuilding hi
       .where(eq(issues.key, String(unrelated.id)));
     const projects = new IssueProjectManager(database.db, fixture.root);
     for (const issue of [record!, other!]) {
-      const workspacePath = await projects.hydrateReadOnlyRuntime(issue);
+      const { runtimeRoot: workspacePath } = await projects.prepare(issue, "test");
+      await database.db.update(issueWorkspaces).set({ runtimeReady: true }).where(eq(issueWorkspaces.issueId, issue.id));
       await database.db.insert(agentSessions).values({ issueId: issue.id, workspacePath, sessionFile: path.join(workspacePath, ".session-fixture.jsonl") });
     }
     await writeFile(path.join(remote, "README.md"), "advanced remote version");

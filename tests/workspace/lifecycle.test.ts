@@ -133,6 +133,7 @@ test("automatic release isolates a session failure and retries without rebuildin
         })
         .returning();
       await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
+      await claimIssueRoot(root, issue!.key);
       const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
       await database.db.insert(issueRepositories).values({
         issueId: issue!.id,
@@ -229,6 +230,7 @@ test("HTTP stays healthy during scheduled maintenance and a failed release prese
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "failed", runtimeReady: true });
     const remote = await createRemote(root, "startup");
+    await claimIssueRoot(root, issue!.key);
     const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     await database.db.insert(issueRepositories).values({
       issueId: issue!.id,
@@ -307,6 +309,7 @@ test("records an unmeasurable workspace instead of aborting the maintenance cycl
         })
         .returning();
       await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+      await claimIssueRoot(root, issue!.key);
       const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
       await database.db.insert(issueRepositories).values({
         issueId: issue!.id,
@@ -383,6 +386,7 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
         })
         .returning();
       await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true, updatedAt: new Date(index) });
+      await claimIssueRoot(root, issue!.key);
       const prepared = await worktrees.prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
       await database.db.insert(issueRepositories).values({
         issueId: issue!.id,
@@ -754,6 +758,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const remotes = await Promise.all([createRemote(root, "alpha"), createRemote(root, "beta")]);
     const worktrees = new WorktreeManager(root);
     const prepared = [];
+    await claimIssueRoot(root, issue!.key);
     for (const [index, remote] of remotes.entries()) {
       const worktree = await worktrees.prepare({ issueKey: issue!.key, workspaceName: index === 0 ? "alpha" : "beta", url: remote, baseBranch: "main", mode: "hotfix" });
       prepared.push(worktree);
@@ -1197,7 +1202,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     const worktrees = new WorktreeManager(root);
     const projects = new IssueProjectManager(database.db, root, worktrees);
     await claimIssueRoot(root, issue!.key);
-    const runtimeRoot = await projects.hydrateReadOnlyRuntime(issue!);
+    const { runtimeRoot } = await projects.prepare(issue!, "test");
     const sessionRoot = issueRoot(root, issue!.key);
     const sessionFile = path.join(sessionRoot, "analysis.jsonl");
     await mkdir(sessionRoot, { recursive: true, mode: 0o700 });
@@ -1248,12 +1253,23 @@ test("converts a ready test analysis to a development defect while preserving Is
       taskConcurrency: 1,
     });
 
+    const originalRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
+    const originalLink = await readlink(path.join(runtimeRoot, "conversion"));
+    const originalManifest = await readFile(path.join(runtimeRoot, ".issue-runtime.json"), "utf8");
+    // The upstream changes between analysis and conversion; rollback must keep the analyzed version.
+    const source = path.join(root, "conversion-source");
+    await writeFile(path.join(source, "README.md"), "new upstream baseline\n");
+    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-am", "advance"]);
+    await git(["-C", source, "push", remote, "main"]);
+
     const mutableDatabase = database.db as typeof database.db & { transaction: typeof database.db.transaction };
     const transaction = mutableDatabase.transaction.bind(mutableDatabase);
     let failFinalize = true;
     mutableDatabase.transaction = (async (operation: Parameters<typeof database.db.transaction>[0]) => {
       if (failFinalize) {
         failFinalize = false;
+        // Rollback must also work with the remote unavailable after preparation.
+        await rename(remote, `${remote}.offline`);
         throw new Error("simulated_conversion_transaction_failure");
       }
       return transaction(operation);
@@ -1269,11 +1285,15 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal(rolledBackIssue!.environmentId, testEnvironment.id);
     assert.equal(rolledBackIssue!.type, "smart_analysis");
     assert.equal(classifyRepositoryState(rolledBackRepositories), "read_only");
+    assert.deepEqual(rolledBackRepositories, originalRepositories);
+    assert.equal(await readlink(path.join(runtimeRoot, "conversion")), originalLink);
+    assert.equal(await readFile(path.join(runtimeRoot, ".issue-runtime.json"), "utf8"), originalManifest);
     assert.equal((await stat(issueRoot(root, issue!.key))).isDirectory(), true);
     assert.equal(path.resolve(runtimeRoot, await readlink(path.join(runtimeRoot, "conversion"))).startsWith(path.join(root, "git", "checkouts")), true);
     assert.equal(await readFile(sessionFile, "utf8"), '{"type":"session"}\n');
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.deepEqual(conversionEngine.enqueued, []);
+    await rename(`${remote}.offline`, remote);
 
     const converted = await lifecycle.convertIssueToDevelopment(issue!.id);
     assert.equal(converted.environmentId, devEnvironment.id);
@@ -1537,6 +1557,7 @@ test("cached storage eligibility cannot release a subsequently changed checkout"
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     const remote = await createRemote(root, "cache-safety");
+    await claimIssueRoot(root, issue!.key);
     const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     await database.db.insert(issueRepositories).values({
       issueId: issue!.id,
@@ -1792,6 +1813,7 @@ test("releasing a development Issue whose root is missing is refused and leaves 
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     const remote = await createRemote(root, "missing-root");
+    await claimIssueRoot(root, issue!.key);
     const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     await database.db.insert(issueRepositories).values({
       issueId: issue!.id,
@@ -1844,6 +1866,7 @@ test("a released Issue whose root is missing is never rebuilt from the shared br
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
     const remote = await createRemote(root, "released-root");
+    await claimIssueRoot(root, issue!.key);
     const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
     await database.db.insert(issueRepositories).values({
       issueId: issue!.id,

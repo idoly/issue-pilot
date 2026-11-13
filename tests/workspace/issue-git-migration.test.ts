@@ -13,7 +13,7 @@ import { environments, issueRepositories, issues, serviceDeployments, services }
 import { issueRepositoryStorePath, repositoryStorePath, retainedSnapshotRef, WorktreeManager } from "../../src/workspace/git.ts";
 import { isolateIssueWorktree, publishIssueBranch, publishedIssueBranchFile } from "../../src/workspace/issue-git.ts";
 import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
-import { issueRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 
 const exec = promisify(execFile);
 const git = async (args: string[]) => (await exec("git", args)).stdout.trim();
@@ -27,8 +27,10 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
     const manager = new WorktreeManager(state);
     const input = { issueKey: "ISSUE-20261023-001", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
+    await claimIssueRoot(state, input.issueKey);
     const own = await manager.prepare(input);
     const releasedKey = "ISSUE-20261023-002";
+    await claimIssueRoot(state, releasedKey);
     const released = await manager.prepare({ ...input, issueKey: releasedKey });
     await writeFile(path.join(released.workspacePath, "release-only.txt"), "reviewed released change");
     await git(["-C", released.workspacePath, "add", "release-only.txt"]);

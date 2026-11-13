@@ -14,7 +14,7 @@ class ClosingErrorEventSource extends EventTarget {
 }
 
 describe("AgentStreamController", () => {
-  it("reconnects after a malformed snapshot and validates live events on the fresh stream", async () => {
+  it.each([undefined, null, "unknown", 1])("rejects missing or invalid runState (%s) and validates the fresh stream", async (runState) => {
     vi.useFakeTimers();
     try {
       const sources: ClosingErrorEventSource[] = [],
@@ -35,7 +35,7 @@ describe("AgentStreamController", () => {
       try {
         controller.connect("ISSUE-20261030-001");
         const first = sources[0]!;
-        for (const runState of [null, "unknown", 1]) first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState }) }));
+        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState }) }));
         expect(onSnapshot).not.toHaveBeenCalled();
         expect(onError).toHaveBeenCalledTimes(1);
         expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
@@ -88,11 +88,11 @@ describe("AgentStreamController", () => {
         controller.connect("ISSUE-20261105-001");
         const first = sources[0]!;
         first.dispatchEvent(new MessageEvent("message", { data: userMessage }));
-        if (phase === "live") first.dispatchEvent(new MessageEvent("snapshot_ready", { data: "{}" }));
+        if (phase === "live") first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ runState: "idle" }) }));
         const accepted = onSnapshot.mock.calls.length;
         first.dispatchEvent(new MessageEvent("message", { data: "{incomplete" }));
         expect(first.closeCalls).toBe(1);
-        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: "{}" }));
+        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ runState: "idle" }) }));
         first.dispatchEvent(new MessageEvent("message", { data: userMessage }));
         expect(onSnapshot).toHaveBeenCalledTimes(accepted);
         expect(onEvent).not.toHaveBeenCalled();
@@ -100,7 +100,7 @@ describe("AgentStreamController", () => {
         await vi.advanceTimersByTimeAsync(1000);
         expect(sources).toHaveLength(2);
         sources[1]!.dispatchEvent(new MessageEvent("message", { data: userMessage }));
-        sources[1]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: "{}" }));
+        sources[1]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ runState: "idle" }) }));
         const replay = onSnapshot.mock.lastCall![1];
         expect(replay.entries).toHaveLength(1);
         expect(JSON.stringify(replay.entries)).toContain("persisted message");

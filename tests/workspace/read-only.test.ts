@@ -29,7 +29,7 @@ import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/worksp
 
 const execFileAsync = promisify(execFile);
 
-test("read-only recovery validates related context before preparing repositories", async () => {
+test("read-only preparation validates related context before preparing repositories", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-readonly-context-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
@@ -59,7 +59,7 @@ test("read-only recovery validates related context before preparing repositories
     await database.db.insert(issueRelations).values({ issueId: issue!.id, relatedIssueId: related!.id });
     const relatedRoot = issueRoot(root, related!.key);
     await mkdir(path.dirname(relatedRoot), { recursive: true });
-    // A stored session whose ancestor is now a regular file causes a real ENOTDIR boundary failure.
+    // A related Issue root replaced by a regular file must fail before repository preparation.
     await writeFile(relatedRoot, "preserve recovery evidence");
     const sessionFile = path.join(relatedRoot, ".session-current.jsonl");
     await database.db.insert(agentSessions).values({ issueId: related!.id, sessionFile, workspacePath: relatedRoot });
@@ -72,16 +72,16 @@ test("read-only recovery validates related context before preparing repositories
       return { cachePath: path.join(root, "cache"), workspacePath: checkout, baseBranch: "main", workingBranch: null, baseCommit: "fixture-commit" };
     };
     const projects = new IssueProjectManager(database.db, root, worktrees);
-    await assert.rejects(projects.hydrateReadOnlyRuntime(issue!), { code: "ENOTDIR" });
+    await assert.rejects(projects.prepare(issue!, "prod"), { message: "related_issue_context_unavailable" });
     assert.equal(preparations, 0);
     assert.equal(await readFile(relatedRoot, "utf8"), "preserve recovery evidence");
     assert.equal((await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).length, 0);
 
     await rm(relatedRoot);
     await mkdir(relatedRoot);
-    await projects.hydrateReadOnlyRuntime(issue!);
+    const prepared = await projects.prepare(issue!, "prod");
     assert.equal(preparations, 1);
-    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.runtimeReady, true);
+    assert.equal(prepared.runtimeReady, true);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });
@@ -103,7 +103,7 @@ async function createRemote(root: string): Promise<string> {
   return remote;
 }
 
-test("hydrates current read-only issue runtimes from deployment branches", async () => {
+test("prepares current read-only issue runtimes from deployment branches", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-read-only-runtime-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
@@ -136,8 +136,12 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     });
 
     const projects = new IssueProjectManager(database.db, root);
-    const recover = () => projects.hydrateReadOnlyRuntime(issue!);
-    assert.equal(await recover(), rootDirectory);
+    const prepare = async () => {
+      const prepared = await projects.prepare(issue!, "prod");
+      assert.equal(prepared.runtimeReady, true);
+      return prepared.runtimeRoot;
+    };
+    assert.equal(await prepare(), rootDirectory);
     const runtimeDatabase = database.db as typeof database.db & { transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> };
     const runTransaction = runtimeDatabase.transaction.bind(runtimeDatabase);
     const [repository] = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
@@ -146,13 +150,13 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     assert.equal(repository!.localPath, null);
     const checkoutRoot = await git(["-C", path.join(issueRoot(root, issue!.key), "remote"), "rev-parse", "--show-toplevel"]);
     assert.equal(path.relative(sharedCheckoutsRoot(root), checkoutRoot).startsWith(".."), false);
-    assert.equal(workspace!.runtimeReady, true);
+    assert.equal(workspace!.runtimeReady, false);
     assert.equal(session!.workspacePath, issueRoot(root, issue!.key));
     const unchangedAt = new Date(2_000);
     await database.db.update(issueRepositories).set({ updatedAt: unchangedAt }).where(eq(issueRepositories.issueId, issue!.id));
     await database.db.update(issueWorkspaces).set({ updatedAt: unchangedAt }).where(eq(issueWorkspaces.issueId, issue!.id));
     await database.db.update(agentSessions).set({ updatedAt: unchangedAt }).where(eq(agentSessions.issueId, issue!.id));
-    assert.equal(await recover(), rootDirectory);
+    assert.equal(await prepare(), rootDirectory);
     for (const table of [issueRepositories, issueWorkspaces, agentSessions]) {
       const [unchanged] = await database.db.select({ updatedAt: table.updatedAt }).from(table);
       assert.equal(unchanged!.updatedAt.getTime(), unchangedAt.getTime());
@@ -161,7 +165,7 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     await writeFile(path.join(source, "README.md"), "updated branch\n");
     await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-am", "advance main"]);
     await git(["-C", source, "push", remote, "main"]);
-    assert.equal(await recover(), rootDirectory);
+    assert.equal(await prepare(), rootDirectory);
     assert.equal(await readFile(path.join(issueRoot(root, issue!.key), "remote", "README.md"), "utf8"), "updated branch\n");
     assert.equal(await readFile(path.join(checkoutRoot, "README.md"), "utf8"), "baseline\n");
 
@@ -170,7 +174,7 @@ test("hydrates current read-only issue runtimes from deployment branches", async
     await registerTestRepositories(database.db, [extraRemote]);
     const [extraRepository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "extra", url: extraRemote }).returning();
     await database.db.insert(serviceDeploymentRepositories).values({ deploymentId: deployment!.id, repositoryId: extraRepository!.id, baseBranch: "missing" });
-    await assert.rejects(recover(), /couldn't find remote ref missing/);
+    await assert.rejects(prepare(), /couldn't find remote ref missing/);
     assert.deepEqual(
       (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url),
       [remote],
@@ -184,21 +188,21 @@ test("hydrates current read-only issue runtimes from deployment branches", async
       }
       return runTransaction(operation);
     }) as typeof runtimeDatabase.transaction;
-    await assert.rejects(recover(), /simulated_readonly_repository_transaction_failure/);
+    await assert.rejects(prepare(), /simulated_readonly_repository_transaction_failure/);
     assert.deepEqual(
       (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url),
       [remote],
     );
-    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.runtimeReady, true);
+    assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.runtimeReady, false);
     runtimeDatabase.transaction = runTransaction;
-    assert.equal(await recover(), rootDirectory);
+    assert.equal(await prepare(), rootDirectory);
     assert.deepEqual(
       (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).map(({ url }) => url),
       [remote, extraRemote],
     );
 
     await database.db.update(issueRepositories).set({ workingBranch: "unexpected-branch" }).where(eq(issueRepositories.issueId, issue!.id));
-    await assert.rejects(recover(), /readonly_repository_state_invalid/);
+    await assert.rejects(prepare(), /readonly_repository_state_invalid/);
     const [preserved] = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(preserved!.workingBranch, "unexpected-branch");
   } finally {
@@ -221,7 +225,6 @@ test("missing durable Issue roots stop project preparation before database or Gi
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       for (const environment of ["prod", "test", "dev"] as const) await assert.rejects(projects.prepare(issue, environment), { message: "issue_root_missing" });
-      await assert.rejects(projects.hydrateReadOnlyRuntime(issue), { message: "issue_root_missing" });
     }
     await assert.rejects(lstat(issueRoot(root, issue.key)), { code: "ENOENT" });
     await assert.rejects(lstat(path.join(root, "git")), { code: "ENOENT" });
