@@ -137,10 +137,10 @@ export function ApplicationParametersView() {
             }
           : {}),
       });
+      if (search.enabled !== value.issueSearch.enabled) void refreshCatalog().catch(() => undefined);
       if (request.isCurrent()) {
         apply(value);
         setSaved(true);
-        if (search.enabled !== value.issueSearch.enabled) void refreshCatalog().catch(() => undefined);
       }
     } catch (cause) {
       if (request.isCurrent()) {

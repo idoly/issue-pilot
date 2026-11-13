@@ -30,12 +30,18 @@ interface ApplicationResources {
 
 const ResourcesContext = createContext<ApplicationResources>();
 
-function latestLoader<Value>(load: () => Promise<Value>, apply: (value: Value) => void, reportError: (message: string) => void): () => Promise<Value> {
+function latestLoader<Value>(load: (signal: AbortSignal) => Promise<Value>, apply: (value: Value) => void, reportError: (message: string) => void): () => Promise<Value> {
   const latest = createLatestTask();
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    latest.cancel();
+  });
   return async () => {
+    if (disposed) throw new DOMException("Application resources were disposed", "AbortError");
     const request = latest.begin();
     try {
-      const value = await load();
+      const value = await load(request.signal);
       if (request.isCurrent()) {
         apply(value);
         reportError("");
@@ -100,13 +106,13 @@ export function ApplicationResourcesProvider(props: ParentProps) {
     if (disposed) throw new DOMException("Application resources were disposed", "AbortError");
     const request = peopleTask.begin();
     try {
-      const users = await loadUsers();
+      const users = await loadUsers(request.signal);
       if (!request.isCurrent()) return users;
       if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) {
         setCurrentUser(null);
         setCurrentUserSubject(null, false);
       }
-      const currentUser = await loadCurrentUser();
+      const currentUser = await loadCurrentUser(request.signal);
       if (!request.isCurrent()) return users;
       // Pin the resolved identity without replacing another tab's remembered choice.
       setCurrentUserSubject(currentUser.subject, false);

@@ -7,8 +7,9 @@ const state = vi.hoisted(() => ({
   user: undefined as unknown,
   load: vi.fn(),
   save: vi.fn(),
+  refreshCatalog: vi.fn(),
 }));
-vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user }) }));
+vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user, refreshCatalog: state.refreshCatalog }) }));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   loadApplicationParameters: state.load,
@@ -51,6 +52,7 @@ const parameterState = (overrides: Partial<typeof defaults> = {}, revision = 0):
 beforeEach(() => {
   state.load.mockReset();
   state.save.mockReset();
+  state.refreshCatalog.mockReset().mockResolvedValue({});
 });
 afterEach(() => cleanup());
 
@@ -314,4 +316,29 @@ test("revoking management access removes the form and ignores an in-flight save 
   await screen.findByLabelText("同时运行的工单");
   expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", false);
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a search setting saved after leaving parameters still refreshes application availability", async () => {
+  state.user = () => admin;
+  const previous = { ...parameterState(), issueSearch: { enabled: true, accountId: "a".repeat(32), tokenConfigured: true, revision: 1 } };
+  state.load.mockResolvedValue(previous);
+  let finish!: () => void;
+  state.save.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ ...previous, issueSearch: { ...previous.issueSearch, enabled: false, revision: 2 } });
+      }),
+  );
+  const view = render(() => <ApplicationParametersView />);
+  await screen.findByLabelText("同时运行的工单");
+  fireEvent.click(screen.getByRole("combobox", { name: "工单搜索" }));
+  fireEvent.click(await screen.findByRole("option", { name: "关闭" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "工单搜索" }).textContent).toBe("关闭"));
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
+  expect(state.save.mock.calls[0]![0].issueSearch).toMatchObject({ expectedRevision: 1, enabled: false });
+  view.unmount();
+  finish();
+  await waitFor(() => expect(state.refreshCatalog).toHaveBeenCalledOnce());
+  expect(state.save).toHaveBeenCalledOnce();
 });

@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Config } from "../data/client";
 
@@ -179,6 +179,34 @@ test("a stale save retains its draft and shows reload inside the edit dialog", a
   await within(dialog).findByRole("alert");
   expect(within(dialog).getByLabelText("服务名称")).toHaveProperty("value", "Retained draft");
   expect(within(dialog).getByRole("button", { name: "重新加载" })).toBeTruthy();
+});
+
+test("a service save finishing after navigation refreshes shared data without replacing the new draft", async () => {
+  let finish!: () => void;
+  state.save.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+  const [visible, setVisible] = createSignal(true, { ownedWrite: true });
+  render(() => (
+    <Show when={visible()}>
+      <ConfigurationView />
+    </Show>
+  ));
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  const previous = await screen.findByRole("dialog");
+  await waitFor(() => expect(within(previous).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+  fireEvent.click(within(previous).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
+  setVisible(false);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  setVisible(true);
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  const current = await screen.findByRole("dialog");
+  await fireEvent.input(within(current).getByLabelText("服务名称"), { target: { value: "Next draft" } });
+  finish();
+  await waitFor(() => expect(state.refresh).toHaveBeenCalledOnce());
+  expect(state.catalog).toHaveBeenCalledOnce();
+  expect(screen.getByRole("dialog")).toBe(current);
+  expect(within(current).getByLabelText("服务名称")).toHaveProperty("value", "Next draft");
+  expect(state.save).toHaveBeenCalledOnce();
 });
 
 for (const failed of ["configuration", "catalog"] as const)

@@ -142,7 +142,25 @@ for (const outcome of ["success", "failure"] as const)
     expect(screen.getByRole("dialog")).toBe(dialog);
     expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "Current draft");
     expect(screen.queryByText("old_user_save_failed")).toBeNull();
+    expect(state.refreshPeople).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);
   });
+
+test("a repository save finishing after navigation refreshes shared bindings without reloading the disposed list", async () => {
+  let finish!: () => void;
+  state.updateRepository.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+  const view = render(() => <RepositoryManagement />);
+  await screen.findByText("Repository");
+  fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(state.updateRepository).toHaveBeenCalledOnce());
+  view.unmount();
+  finish();
+  await waitFor(() => expect(state.refreshConfiguration).toHaveBeenCalledOnce());
+  expect(state.refreshCatalog).toHaveBeenCalledOnce();
+  expect(state.repositories).toHaveBeenCalledOnce();
+  expect(state.updateRepository).toHaveBeenCalledOnce();
+});
 
 test("credential popup opens directly, preserves blanks and reports stale writes without discarding the new value", async () => {
   state.user = () => personalOnly;

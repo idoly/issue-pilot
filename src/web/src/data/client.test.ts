@@ -11,7 +11,9 @@ import {
   listIssuePins,
   listIssues,
   loadCatalog,
+  loadConfig,
   loadCurrentUser,
+  loadUsers,
   loadSourceBlame,
   loadSourceCommit,
   loadSourceCommitFile,
@@ -202,16 +204,15 @@ describe("API client", () => {
     expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "DELETE" });
   });
 
-  it("passes cancellation to read-only list requests", async () => {
+  it("passes cancellation to application resource and list reads", async () => {
     const fetch = vi.fn().mockImplementation(async () => new Response("[]", { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const controller = new AbortController();
 
-    await listIssues(controller.signal);
-    await listIssuePins(controller.signal);
-
-    expect(fetch).toHaveBeenCalledWith("/api/issues", expect.objectContaining({ signal: controller.signal }));
-    expect(fetch).toHaveBeenCalledWith("/api/issue-pins", expect.objectContaining({ signal: controller.signal }));
+    for (const read of [listIssues, listIssuePins, loadCatalog, loadConfig, loadUsers, loadCurrentUser]) await read(controller.signal);
+    for (const path of ["/api/issues", "/api/issue-pins", "/api/catalog", "/api/config", "/api/users", "/api/me"]) {
+      expect(fetch).toHaveBeenCalledWith(path, expect.objectContaining({ signal: controller.signal }));
+    }
   });
 
   it("replaces an Issue's related Issues", async () => {

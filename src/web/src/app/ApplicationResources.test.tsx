@@ -201,6 +201,8 @@ describe("application configuration resources", () => {
 
     const staleRequest = resources.refreshConfiguration();
     const latestRequest = resources.refreshConfiguration();
+    expect(vi.mocked(client.loadConfig).mock.calls[0]?.[0]?.aborted).toBe(true);
+    expect(vi.mocked(client.loadConfig).mock.calls[1]?.[0]?.aborted).toBe(false);
     second.resolve(configuration("latest"));
     await latestRequest;
     await waitFor(() => expect(view.getByTestId("service-name").textContent).toBe("latest"));
@@ -222,4 +224,51 @@ describe("application configuration resources", () => {
     expect(resources.configuration().services[0]?.name).toBe("final");
     expect(resources.configurationError()).toBe("");
   });
+
+  for (const outcome of ["success", "failure"] as const)
+    it(`disposes application reads and ignores their late ${outcome}`, async () => {
+      const client = await import("../data/client");
+      const catalog = deferred<import("../data/client").ConfigCatalog>();
+      const config = deferred<Config>();
+      const identity = deferred<Person>();
+      vi.mocked(client.loadCatalog).mockReturnValueOnce(catalog.promise);
+      vi.mocked(client.loadConfig).mockReturnValueOnce(config.promise);
+      vi.mocked(client.loadCurrentUser).mockReturnValueOnce(identity.promise);
+      let resources!: ReturnType<typeof useApplicationResources>;
+      function Probe() {
+        resources = useApplicationResources();
+        return null;
+      }
+      const view = render(() => (
+        <ApplicationResourcesProvider>
+          <Probe />
+        </ApplicationResourcesProvider>
+      ));
+      const pending = resources.refreshConfiguration().catch(() => undefined);
+      await waitFor(() => expect(client.loadCurrentUser).toHaveBeenCalledOnce());
+      view.unmount();
+      if (outcome === "success") {
+        catalog.resolve({ environments: [], services: [], issueSearchEnabled: true });
+        config.resolve(configuration("disposed"));
+        identity.resolve({ subject: "disposed", name: "Disposed", email: "disposed@example.test", role: "developer" });
+      } else {
+        catalog.reject(new Error("late_catalog"));
+        config.reject(new Error("late_config"));
+        identity.reject(new Error("late_identity"));
+      }
+      await pending;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resources.catalog().issueSearchEnabled).toBeUndefined();
+      expect(resources.configurationLoaded()).toBe(false);
+      expect(resources.configurationError()).toBe("");
+      expect(resources.catalogError()).toBe("");
+      expect(resources.peopleError()).toBe("");
+      for (const loader of [client.loadConfig, client.loadCatalog, client.loadUsers, client.loadCurrentUser]) {
+        expect(vi.mocked(loader).mock.calls[0]?.[0]).toMatchObject({ aborted: true });
+      }
+      await expect(resources.refreshCatalog()).rejects.toMatchObject({ name: "AbortError" });
+      await expect(resources.refreshConfiguration()).rejects.toMatchObject({ name: "AbortError" });
+      expect(client.loadCatalog).toHaveBeenCalledOnce();
+      expect(client.loadConfig).toHaveBeenCalledOnce();
+    });
 });

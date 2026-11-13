@@ -101,9 +101,8 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     setOpen(true);
   };
   const refresh = async (owner: number) => {
-    if (owner !== generation) return;
-    setActionError("");
-    const results = await Promise.allSettled([load(), refreshConfiguration(), refreshCatalog()]);
+    if (owner === generation) setActionError("");
+    const results = await Promise.allSettled([owner === generation ? load() : undefined, refreshConfiguration(), refreshCatalog()]);
     if (owner !== generation) return;
     const failure = results.find((result) => result.status === "rejected");
     if (failure?.status === "rejected") setActionError(settingsError(failure.reason));

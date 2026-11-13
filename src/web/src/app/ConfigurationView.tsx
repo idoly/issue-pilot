@@ -713,7 +713,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   };
   const saveService = async () => {
     if (saving() || dbhubLoading() || !canConfigure()) return;
-    const owner = editorGeneration;
+    let owner = editorGeneration;
     const validationError = serviceValidationError();
     if (validationError) {
       showServiceSaveError(validationError);
@@ -731,9 +731,12 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, { ...definition, expectedRevision: serviceRevisionDraft });
       else await createService(definition);
-      if (owner !== editorGeneration) return;
-      closeServiceEditor();
-      await refresh(editorGeneration);
+      if (owner === editorGeneration) {
+        closeServiceEditor();
+        owner = editorGeneration;
+      }
+      // The write outlives its editor; refresh application data even after navigation.
+      await refresh(owner);
     } catch (error) {
       if (owner === editorGeneration) {
         setSaveConflict(error instanceof Error && error.message === "configuration_changed");

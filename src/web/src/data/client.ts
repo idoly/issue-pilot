@@ -338,10 +338,10 @@ async function previewBlob(path: string, signal?: AbortSignal): Promise<Blob> {
 const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponent(key)}${suffix}`;
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
 
-export const loadUsers = () => request<Person[]>("/api/users");
-export const loadCurrentUser = () => request<Person>("/api/me");
-export const loadCatalog = () => request<ConfigCatalog>("/api/catalog");
-export const loadConfig = () => request<Config>("/api/config");
+export const loadUsers = (signal?: AbortSignal) => request<Person[]>("/api/users", { signal });
+export const loadCurrentUser = (signal?: AbortSignal) => request<Person>("/api/me", { signal });
+export const loadCatalog = (signal?: AbortSignal) => request<ConfigCatalog>("/api/catalog", { signal });
+export const loadConfig = (signal?: AbortSignal) => request<Config>("/api/config", { signal });
 export const loadApplicationParameters = (signal?: AbortSignal) => request<ApplicationParameterEditorState>("/api/config/parameters?include=issueSearch", { signal });
 export const updateApplicationParameters = (input: ApplicationParameterUpdate) => jsonRequest<ApplicationParameterEditorState>("/api/config/parameters", "PUT", input);
 export const loadDingtalkSource = (signal?: AbortSignal) => request<DingtalkSourceResponse>("/api/dingtalk/source", { signal });

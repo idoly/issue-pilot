@@ -74,8 +74,7 @@ export function UserManagement() {
     setOpen(true);
   };
   const refresh = async (owner: number) => {
-    if (owner !== generation) return;
-    const results = await Promise.allSettled([load(), refreshPeople()]);
+    const results = await Promise.allSettled([owner === generation ? load() : undefined, refreshPeople()]);
     if (owner !== generation) return;
     const failure = results.find((result) => result.status === "rejected");
     if (failure?.status === "rejected") setError(settingsError(failure.reason));
