@@ -48,6 +48,19 @@ export function isStableErrorCode(value: string): boolean {
   return /^[a-z][a-z0-9_]*$/.test(value);
 }
 
+/**
+ * Match a stable code exactly, or its `code:detail` form, across the whole error chain.
+ * Substring matching would let one code satisfy another or an unrelated diagnostic.
+ */
+export function hasErrorCode(error: unknown, code: string): boolean {
+  return errorChain(error).some((candidate) => {
+    const message = candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
+    // SQLite triggers surface as "SQLITE_CONSTRAINT: trigger_code"; accept only that suffix form.
+    const lastSegment = message.slice(message.lastIndexOf(": ") + 2);
+    return message === code || message.startsWith(`${code}:`) || lastSegment === code;
+  });
+}
+
 /** Persisted and projected reasons must not carry paths, command lines or SQL parameters. */
 export function stableErrorReason(error: unknown, fallback: string): string {
   // A wrapper's own stable code names the actual condition; only a message that cannot be published

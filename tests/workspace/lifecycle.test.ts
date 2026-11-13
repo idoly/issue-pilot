@@ -1077,6 +1077,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     const reconstruct = async () => {
       await prepareIssueRuntime(root, issue!.key, [], "write");
+      // A reconstructed worktree is no longer released; the fixture must record that invariant explicitly.
+      await database.db.update(issueWorkspaces).set({ releasedAt: null }).where(eq(issueWorkspaces.issueId, issue!.id));
       const repositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
       const reconstructed = [];
       for (const repository of repositories) {

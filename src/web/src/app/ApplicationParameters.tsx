@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Select, Skeleton } from "../ui";
 import { errorMessage, loadApplicationParameters, updateApplicationParameters, type ApplicationParameterEditorState, type ApplicationParameterKey, type ApplicationParameters } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
 import { settingsError } from "./settings-error";
 
@@ -58,8 +59,7 @@ export function ApplicationParametersView() {
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [conflict, setConflict] = createSignal(false, { ownedWrite: true });
   const [saved, setSaved] = createSignal(false, { ownedWrite: true });
-  let generation = 0;
-  let loadRequest: AbortController | undefined;
+  const latest = createLatestTask();
   const isAdmin = () => currentUser()?.isAdmin === true;
   const busy = () => loading() || saving();
   const apply = (value: ApplicationParameterEditorState) => {
@@ -70,26 +70,21 @@ export function ApplicationParametersView() {
     setSearchDraft({ ...emptySearchDraft, enabled: value.issueSearch.enabled, accountId: value.issueSearch.accountId });
   };
   const load = async () => {
-    const owner = ++generation;
-    loadRequest?.abort();
-    const controller = new AbortController();
-    loadRequest = controller;
+    const request = latest.begin();
     setLoading(true);
     setError("");
     setSaved(false);
     try {
-      const value = await loadApplicationParameters(controller.signal);
-      if (owner === generation) {
+      const value = await loadApplicationParameters(request.signal);
+      if (request.isCurrent()) {
         apply(value);
         setConflict(false);
       }
     } catch (cause) {
-      if (owner === generation) setError(errorMessage(cause));
+      if (request.isCurrent()) setError(errorMessage(cause));
     } finally {
-      if (owner === generation) {
-        loadRequest = undefined;
-        setLoading(false);
-      }
+      if (request.isCurrent()) setLoading(false);
+      request.finish();
     }
   };
   const save = async () => {
@@ -126,7 +121,7 @@ export function ApplicationParametersView() {
     setSaving(true);
     setError("");
     setConflict(false);
-    const owner = generation;
+    const request = latest.begin();
     try {
       const value = await updateApplicationParameters({
         expectedRevision: current.revision,
@@ -142,27 +137,26 @@ export function ApplicationParametersView() {
             }
           : {}),
       });
-      if (owner === generation) {
+      if (request.isCurrent()) {
         apply(value);
         setSaved(true);
         if (search.enabled !== value.issueSearch.enabled) void refreshCatalog().catch(() => undefined);
       }
     } catch (cause) {
-      if (owner === generation) {
+      if (request.isCurrent()) {
         setError(settingsError(cause));
         if (errorMessage(cause) === "configuration_changed") setConflict(true);
       }
     } finally {
-      if (owner === generation) setSaving(false);
+      if (request.isCurrent()) setSaving(false);
+      request.finish();
     }
   };
   createEffect(
     () => ({ subject: currentUser()?.subject ?? "", admin: isAdmin() }),
     (identity, previous) => {
       if (identity.subject === previous?.subject && identity.admin === previous?.admin) return;
-      generation++;
-      loadRequest?.abort();
-      loadRequest = undefined;
+      latest.cancel();
       setState(null);
       setSearchDraft(emptySearchDraft);
       setSaving(false);
@@ -174,8 +168,7 @@ export function ApplicationParametersView() {
     },
   );
   onCleanup(() => {
-    generation++;
-    loadRequest?.abort();
+    latest.cancel();
   });
   return (
     <form

@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Modal, Select } from "../ui";
 import { errorMessage, listIssueSessions, readIssueSession, type IssueDetail, type IssueSessionSummary } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
+import { createLatestTask } from "../data/latest";
 import { ConversationProjection, type ConversationEntry } from "./conversation";
 import { ConversationItem } from "./AgentPanel";
 
@@ -14,11 +15,9 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
   const [nextOffset, setNextOffset] = createSignal<number | null>(null, { ownedWrite: true });
   const [busy, setBusy] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
-  let generation = 0,
-    controller: AbortController | undefined;
+  const latest = createLatestTask();
   const closeHistory = () => {
-    generation++;
-    controller?.abort();
+    latest.cancel();
     setHistoryOpen(false);
     setBusy(false);
     setError("");
@@ -34,14 +33,9 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
     },
   );
   onCleanup(() => {
-    generation++;
-    controller?.abort();
+    latest.cancel();
   });
-  const begin = () => {
-    controller?.abort();
-    controller = new AbortController();
-    return { owner: ++generation, signal: controller.signal };
-  };
+  const begin = () => latest.begin();
   const loadHistory = async () => {
     const task = begin();
     setHistoryOpen(true);
@@ -49,7 +43,7 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
     setError("");
     try {
       const values = await listIssueSessions(props.issue.id, task.signal);
-      if (generation !== task.owner) return;
+      if (!task.isCurrent()) return;
       const history = values.filter((session) => !session.current);
       setSessions(history);
       setEntries([]);
@@ -58,9 +52,10 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
       setSelected(first);
       if (first) await read(first);
     } catch (cause) {
-      if (generation === task.owner) setError(errorMessage(cause));
+      if (task.isCurrent()) setError(errorMessage(cause));
     } finally {
-      if (generation === task.owner) setBusy(false);
+      if (task.isCurrent()) setBusy(false);
+      task.finish();
     }
   };
   const read = async (id: string, offset = 0) => {
@@ -74,7 +69,7 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
     }
     try {
       const page = await readIssueSession(props.issue.id, id, offset, task.signal);
-      if (generation !== task.owner) return;
+      if (!task.isCurrent()) return;
       setEntries((current) => {
         const projection = new ConversationProjection(offset ? current : []);
         for (const event of page.events) projection.apply(event);
@@ -82,9 +77,10 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
       });
       setNextOffset(page.nextOffset);
     } catch (cause) {
-      if (generation === task.owner) setError(errorMessage(cause));
+      if (task.isCurrent()) setError(errorMessage(cause));
     } finally {
-      if (generation === task.owner) setBusy(false);
+      if (task.isCurrent()) setBusy(false);
+      task.finish();
     }
   };
   return (

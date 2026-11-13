@@ -10,7 +10,6 @@ import {
   createAgentMessageId,
   sendAgentMessage,
   agentMessageReceipt,
-  mergeAgentCostSource,
   type AgentCostSource,
   type AgentFooterStats,
   type IssueDetail,
@@ -18,6 +17,7 @@ import {
   type AgentRunState,
   type RunEvent,
 } from "../data/client";
+import { contextTokens, mergeFooterUsage, validAssistantUsage } from "../../../agent/usage.ts";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { IssueMarkdown, resolveIssueFileLink } from "./IssueMarkdown";
 import {
@@ -272,24 +272,15 @@ function footerAfterEvent(current: AgentFooterStats, event: RunEvent["event"]): 
         ? message.usage
         : undefined;
   if (!usage) return current;
-  const next = {
-    ...current,
-    input: current.input + usage.input,
-    output: current.output + usage.output,
-    cacheRead: current.cacheRead + usage.cacheRead,
-    cacheWrite: current.cacheWrite + usage.cacheWrite,
-    cost: current.cost + usage.cost.total,
-    costSource: mergeAgentCostSource(current.costSource, usage.cost),
-  };
+  const next = mergeFooterUsage(current, usage);
   if (message?.role !== "assistant") return next;
   const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-  const contextTokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-  // Match the snapshot's valid-usage rule; failed or empty requests cannot replace the last context estimate.
-  const validContext = message.stopReason !== "error" && message.stopReason !== "aborted" && contextTokens > 0;
+  // Shared with the server snapshot: failed or empty requests cannot replace the last context estimate.
+  const validContext = validAssistantUsage(message);
   return {
     ...next,
     latestCacheHitRate: promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : null,
-    contextPercent: validContext && current.contextWindow > 0 ? (contextTokens / current.contextWindow) * 100 : current.contextPercent,
+    contextPercent: validContext && current.contextWindow > 0 ? (contextTokens(usage) / current.contextWindow) * 100 : current.contextPercent,
   };
 }
 
@@ -572,7 +563,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       setProcessing(payload.runState ? payload.runState !== "idle" : payload.running === true);
       const running = payload.runState ? payload.runState !== "idle" : payload.running;
       const executionChanged = running !== undefined && running !== Boolean(props.issue.agentRunning);
-      if (statusChanged || executionChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
+      const revisionChanged = Boolean(payload.issueRevision && payload.issueRevision !== props.issue.revision);
+      if (statusChanged || executionChanged || revisionChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
       queueMicrotask(keepLatest);
     },
     onEvent: (envelope, generation) => {

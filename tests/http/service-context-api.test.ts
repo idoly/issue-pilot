@@ -5,7 +5,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import { createWorkspaceTool } from "../../src/agent/workspace-tool.ts";
 import type { IssueProjectManager } from "../../src/workspace/project.ts";
 import { issues, issueWorkspaces } from "../../src/db/schema.ts";
-import { applyIssueCredentials } from "../../src/configuration/user-credentials.ts";
+import { resolveIssueCapabilities } from "../../src/configuration/user-credentials.ts";
 import { projectCapabilityConfiguration } from "../../src/configuration/credentials.ts";
 import { listEnvironmentServices } from "../../src/workspace/issue-services.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
@@ -126,7 +126,7 @@ test("service configuration and generated descriptions share one source without 
         environmentKey: row.environment.key,
         serviceKey: row.service.key,
         serviceName: row.service.name,
-        config: applyIssueCredentials(projectCapabilityConfiguration(row.deployment.config), undefined, { dms: shared }),
+        config: resolveIssueCapabilities(projectCapabilityConfiguration(row.deployment.config), undefined, { dms: shared }).configuration,
       }));
     const tools = createCapabilityTools({ serviceKey: "entry", environmentKey: "dev", capabilities: ["dms"] }, {}, { serviceScopes: scopes });
     assert.deepEqual(

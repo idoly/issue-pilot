@@ -18,6 +18,29 @@ export interface AgentMessageRequest {
   subject: string;
 }
 
+type DeliveryState = "queued" | "started" | "rejected";
+
+const deliveryType = "issue-pilot-user-delivery";
+
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("agent_message_state_invalid");
+  return value as Record<string, unknown>;
+}
+
+function deliveryState(value: unknown, allowRejected = true): DeliveryState {
+  if (value !== "queued" && value !== "started" && value !== "rejected") throw new Error("agent_message_state_invalid");
+  if (!allowRejected && value === "rejected") throw new Error("agent_message_state_invalid");
+  return value;
+}
+
+/** One transition entry, validated in one place for receipts, pending work and cancellation. */
+function deliveryTransition(entry: { type: string; customType?: string; data?: unknown }): { entryId: string; state: DeliveryState } | undefined {
+  if (entry.type !== "custom" || entry.customType !== deliveryType) return undefined;
+  const data = object(entry.data);
+  if (data.version !== 1 || typeof data.entryId !== "string") throw new Error("agent_message_state_invalid");
+  return { entryId: data.entryId, state: deliveryState(data.state) };
+}
+
 export function agentMessageReceipt(manager: SessionManager, request: AgentMessageRequest) {
   const entries = manager.getEntries();
   const entry = entries.find(
@@ -33,31 +56,22 @@ export function agentMessageReceipt(manager: SessionManager, request: AgentMessa
   if (!entry || entry.type !== "custom") return undefined;
   const data = object(entry.data);
   const delivery = data.delivery ? object(data.delivery) : undefined;
-  let state: unknown = delivery?.state ?? "started";
+  // Legacy entries without a delivery snapshot are treated as already dispatched; transitions still override.
+  let state: DeliveryState = delivery?.state === undefined ? "started" : deliveryState(delivery.state);
   for (const item of entries) {
-    if (item.type === "custom" && item.customType === deliveryType && item.data && typeof item.data === "object" && "entryId" in item.data && item.data.entryId === entry.id)
-      state = object(item.data).state;
+    const transition = deliveryTransition(item);
+    if (transition?.entryId === entry.id) state = transition.state;
   }
-  if (state !== "queued" && state !== "started" && state !== "rejected") throw new Error("agent_message_state_invalid");
   return { state, message: data.message, images: data.images ?? [] };
-}
-
-const deliveryType = "issue-pilot-user-delivery";
-
-function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("agent_message_state_invalid");
-  return value as Record<string, unknown>;
 }
 
 /** Read only explicitly queued inputs; historical visible messages are never adopted as pending work. */
 export function pendingAgentMessages(manager: SessionManager, requestedId?: string): PendingAgentMessage[] {
   const branch = manager.getBranch();
-  const states = new Map<string, string>();
+  const states = new Map<string, DeliveryState>();
   for (const entry of branch) {
-    if (entry.type !== "custom" || entry.customType !== deliveryType) continue;
-    const data = object(entry.data);
-    if (data.version !== 1 || typeof data.entryId !== "string" || (data.state !== "queued" && data.state !== "started" && data.state !== "rejected")) throw new Error("agent_message_state_invalid");
-    states.set(data.entryId, data.state);
+    const transition = deliveryTransition(entry);
+    if (transition) states.set(transition.entryId, transition.state);
   }
   const pending: PendingAgentMessage[] = [];
   const known = new Set(states.keys());
@@ -67,19 +81,14 @@ export function pendingAgentMessages(manager: SessionManager, requestedId?: stri
     const data = object(entry.data);
     if (data.delivery === undefined) continue;
     const delivery = object(data.delivery);
-    if (
-      delivery.version !== 1 ||
-      (delivery.state !== "queued" && delivery.state !== "started") ||
-      typeof delivery.serviceId !== "string" ||
-      typeof delivery.environmentId !== "string" ||
-      typeof data.message !== "string"
-    )
+    if (delivery.version !== 1 || typeof delivery.serviceId !== "string" || typeof delivery.environmentId !== "string" || typeof data.message !== "string")
       throw new Error("agent_message_state_invalid");
+    const deliveryStatus = deliveryState(delivery.state, false);
     const images = data.images ?? [];
     if (!Array.isArray(images) || !images.every((image) => image && typeof image === "object" && image.type === "image" && typeof image.mimeType === "string" && typeof image.data === "string"))
       throw new Error("agent_message_state_invalid");
     known.add(entry.id);
-    if ((states.get(entry.id) ?? delivery.state) !== "queued") continue;
+    if ((states.get(entry.id) ?? deliveryStatus) !== "queued") continue;
     pending.push({ id: entry.id, message: data.message, images: images as ImageContent[], scope: { serviceId: delivery.serviceId, environmentId: delivery.environmentId } });
   }
   if (requestedId && !known.has(requestedId)) throw new Error("agent_message_state_changed");

@@ -14,12 +14,13 @@ import {
 } from "../configuration/parameters.ts";
 import { AgentRuntimeConfigurationError, inspectAgentResources, parseAgentRuntime } from "../configuration/pi-runtime.ts";
 import { applyIssueSandboxNetwork } from "../agent/issue-sandbox.ts";
+import { AgentBusyError } from "../agent/engine.ts";
 import { workspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
 import { selectDmsCredentials } from "../configuration/user-credentials.ts";
 import { applicationSettings, userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, ApiError, checkRevision, optionalText, record, text } from "./input.ts";
+import { agentModelSelection, ApiError, checkRevision, closedRecord, optionalText, record, text } from "./input.ts";
 import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "./issue-search-configuration.ts";
 import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "./service-configuration.ts";
@@ -159,7 +160,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
           },
         );
       } catch (error) {
-        if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, "global_configuration_has_running_issues");
+        if (error instanceof AgentBusyError) throw new ApiError(409, "global_configuration_has_running_issues");
         throw error;
       }
     });
@@ -176,9 +177,8 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
   app.put("/api/config/parameters", { logLevel: "silent" }, (request) =>
     runScopeExclusive(async () => {
       await requireAdmin(database, request);
-      const input = record(request.body);
-      if (input.expectedRevision === undefined || Object.keys(input).some((key) => !["expectedRevision", "overrides", "issueSearch"].includes(key)))
-        throw new ApiError(400, "invalid_application_parameters");
+      const input = closedRecord(request.body, ["expectedRevision", "overrides", "issueSearch"], "invalid_application_parameters");
+      if (input.expectedRevision === undefined) throw new ApiError(400, "invalid_application_parameters");
       let overrides;
       try {
         overrides = parseApplicationParameterOverrides(input.overrides);
@@ -249,7 +249,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
           },
         );
       } catch (error) {
-        if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "service_has_running_issues");
+        if (error instanceof AgentBusyError) throw new ApiError(409, "service_has_running_issues");
         throw error;
       }
     });
@@ -280,7 +280,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
           },
         );
       } catch (error) {
-        if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "service_has_running_issues");
+        if (error instanceof AgentBusyError) throw new ApiError(409, "service_has_running_issues");
         throw error;
       }
     }),
@@ -304,7 +304,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
           },
         );
       } catch (error) {
-        if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "service_has_running_issues");
+        if (error instanceof AgentBusyError) throw new ApiError(409, "service_has_running_issues");
         throw error;
       }
     });

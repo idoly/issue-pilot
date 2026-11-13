@@ -4,6 +4,7 @@ import { link, lstat, open, readdir, realpath, rename, stat, unlink, type FileHa
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { domainError } from "../domain/errors.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { assertIssueRoot, issueRoot } from "./state.ts";
 
@@ -46,7 +47,7 @@ function inside(root: string, selected: string): boolean {
 
 async function resolveWorkPath(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess): Promise<string> {
   if (relative.includes("\0") || relative.includes("\\") || path.isAbsolute(relative) || relative.split("/").some((segment) => segment === ".." || segment.toLowerCase() === ".git"))
-    throw new Error("invalid_issue_file_path");
+    throw domainError("invalid_issue_file_path");
   const root = await assertIssueRoot(stateRoot, issueKey);
   const requested = path.posix.normalize(relative || ".");
   const under = (prefix: string) => requested === prefix || requested.startsWith(prefix + "/");
@@ -68,20 +69,20 @@ async function resolveWorkPath(stateRoot: string, issueKey: string, relative: st
       .some((segment) => segment.toLowerCase() === ".git") ||
     (repository ? !inside(requestedRoot ?? (await repository.resolve()), target) : !allowed)
   )
-    throw new Error("invalid_issue_file_path");
+    throw domainError("invalid_issue_file_path");
   return target;
 }
 
 export async function listIssueWorkFiles(stateRoot: string, issueKey: string, relative = "", access: WorkFileAccess = {}): Promise<IssueWorkFile[]> {
   const target = await resolveWorkPath(stateRoot, issueKey, relative, access);
-  if (!(await lstat(target)).isDirectory()) throw new Error("issue_file_not_directory");
+  if (!(await lstat(target)).isDirectory()) throw domainError("issue_file_not_directory");
   const directory = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   const failures: unknown[] = [];
   try {
     const pinned = `/proc/self/fd/${directory.fd}`;
-    if ((await realpath(pinned)) !== target) throw new Error("invalid_issue_file_path");
+    if ((await realpath(pinned)) !== target) throw domainError("invalid_issue_file_path");
     const entries = await readdir(pinned, { withFileTypes: true });
-    if (entries.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw new Error("issue_file_directory_too_large");
+    if (entries.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw domainError("issue_file_directory_too_large");
     const results = await Promise.allSettled(
       entries
         .filter((entry) => entry.name.toLowerCase() !== ".git")
@@ -135,14 +136,14 @@ export async function openIssueWorkFile(stateRoot: string, issueKey: string, rel
       .filter(([prefix]) => /^\.related-issue-[0-9]{8}-[0-9]{3,}$/.test(prefix))
       .map(([, root]) => root),
   ];
-  if (isManagedIssueFile(relative) || issueRoots.some((root) => inside(root, target) && isManagedIssueFile(path.relative(root, target)))) throw new Error("managed_issue_file_private");
+  if (isManagedIssueFile(relative) || issueRoots.some((root) => inside(root, target) && isManagedIssueFile(path.relative(root, target)))) throw domainError("managed_issue_file_private");
   const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     // O_NOFOLLOW only protects the last component. A mutable ancestor can redirect open()
     // after realpath validation; check the owned descriptor before exposing any file bytes.
-    if ((await realpath(`/proc/self/fd/${handle.fd}`)) !== target) throw new Error("invalid_issue_file_path");
+    if ((await realpath(`/proc/self/fd/${handle.fd}`)) !== target) throw domainError("invalid_issue_file_path");
     const metadata = await handle.stat();
-    if (!metadata.isFile()) throw new Error("issue_file_not_regular");
+    if (!metadata.isFile()) throw domainError("issue_file_not_regular");
     return { handle, size: metadata.size, fileName: path.basename(target) };
   } catch (error) {
     try {

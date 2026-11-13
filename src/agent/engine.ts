@@ -9,10 +9,10 @@ import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-c
 
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
 import { stableErrorReason } from "../diagnostics.ts";
-import { applyIssueCredentials, loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
+import { loadIssueCredentialOwner, resolveIssueCapabilities } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { SharedCheckoutLease } from "../workspace/git.ts";
-import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, selectAgentConfiguration } from "../configuration/agent.ts";
+import { resolveAgentModel } from "../configuration/agent.ts";
 import { dingtalkMcpNames, loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
 import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
@@ -37,7 +37,8 @@ import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, applicationSettings, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
-import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, errorMessage, personGitIdentity, type AgentRunState, type CapabilityName, type DeploymentConfig, type EnvironmentKind } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, personGitIdentity, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import type { PiModelRuntime } from "./model-runtime.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
@@ -45,6 +46,14 @@ import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntime
 export interface AgentReservation {
   enqueue(issueId: string, message?: string): void;
   closeSession(issueId: string): Promise<void>;
+}
+
+/** The Issue already has a reservation, queued round or abort in progress. */
+export class AgentBusyError extends DomainError {
+  constructor() {
+    super("issue_already_running", "conflict");
+    this.name = "AgentBusyError";
+  }
 }
 
 export interface AgentController {
@@ -78,9 +87,8 @@ export class AgentEngine implements AgentController {
   private readonly onError: (error: unknown) => void;
   private readonly sessions = new Map<string, ManagedPiSession>();
   private readonly checkoutLeases = new Map<string, SharedCheckoutLease>();
-  // Sessions whose service scope changed during a round; they are retired when that round ends.
-  private readonly scopeChangedSessions = new WeakSet<ManagedPiSession>();
   private readonly personalGit = new Map<string, PersonalGitEnvironment>();
+  /** Developer Issues commit with the credential owner's identity; a sender's identity must not override it. */
   private readonly personalSessions = new Set<string>();
   private readonly piRuntime: PiSessionRuntime;
   private closePromise: Promise<void> | undefined;
@@ -132,7 +140,7 @@ export class AgentEngine implements AgentController {
     this.assertOpen();
     const reserved = [...new Set(issueIds)].sort();
     const reservedSet = new Set(reserved);
-    if (reserved.some((issueId) => this.isRunning(issueId) || this.steerQueue.has(issueId) || this.reservations.has(issueId) || this.aborts.has(issueId))) throw new Error("issue_already_running");
+    if (reserved.some((issueId) => this.isRunning(issueId) || this.steerQueue.has(issueId) || this.reservations.has(issueId) || this.aborts.has(issueId))) throw new AgentBusyError();
     for (const issueId of reserved) this.reservations.add(issueId);
     let active = true;
     const assertReserved = (issueId: string) => {
@@ -198,7 +206,7 @@ export class AgentEngine implements AgentController {
             messageIssue,
             userMessage,
             images,
-            (entryId) => (this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId)),
+            (entryId) => (this.isCurrentSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId)),
             prepareAdmission,
             request,
           );
@@ -207,7 +215,7 @@ export class AgentEngine implements AgentController {
           this.assertNotReserved(issueId);
           await assertIssueRoot(this.stateRoot, issue.key);
           // Earlier messages still queued for a later round keep their order; never steer past them.
-          if (this.sessions.get(issueId) !== managed || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
+          if (!this.isCurrentSession(issueId, managed) || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
             return;
           }
@@ -226,10 +234,10 @@ export class AgentEngine implements AgentController {
             }
             throw error;
           }
-          if (this.sessions.get(issueId) !== managed) throw new Error("agent_message_outcome_unknown");
+          if (!this.isCurrentSession(issueId, managed)) throw new Error("agent_message_outcome_unknown");
           await managed.session.steer(steered, images);
           // Pi may have accepted work before the old session was disposed; do not replay it.
-          if (this.sessions.get(issueId) !== managed) throw new Error("agent_message_outcome_unknown");
+          if (!this.isCurrentSession(issueId, managed)) throw new Error("agent_message_outcome_unknown");
           // The round can finish while Pi is still admitting the steer, leaving it undelivered in Pi's queue.
           // Take it back and queue it for the next round instead of reporting it as delivered. Pi may rewrite the
           // text (skills, templates, input handlers), so match by count; clearQueue() empties the whole queue,
@@ -238,7 +246,7 @@ export class AgentEngine implements AgentController {
             managed.session.clearQueue();
             requeueAgentMessage(managed.session.sessionManager, entryId);
             this.schedule(issueId, () =>
-              this.sessions.get(issueId) === managed ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
+              this.isCurrentSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
             );
             return;
           }
@@ -353,7 +361,7 @@ export class AgentEngine implements AgentController {
   }
 
   private assertNotReserved(issueId: string): void {
-    if (this.reservations.has(issueId) || this.aborts.has(issueId)) throw new Error("issue_already_running");
+    if (this.reservations.has(issueId) || this.aborts.has(issueId)) throw new AgentBusyError();
   }
 
   private publishRunState(issueId: string, previous: AgentRunState): void {
@@ -456,13 +464,13 @@ export class AgentEngine implements AgentController {
           if (error !== controller.signal.reason) this.reportError(error);
           try {
             const managed = this.sessions.get(issueId);
-            if (managed && this.scopeChangedSessions.has(managed)) await this.stopSession(issueId, managed);
+            if (managed && managed.scopeChanged) await this.stopSession(issueId, managed);
             await this.database.transaction(async (transaction) => {
               await transaction
                 .update(issues)
                 .set({ status: "open", updatedAt: new Date() })
                 .where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
-              await transaction.update(issueWorkspaces).set({ status: "ready", lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
+              await transaction.update(issueWorkspaces).set({ status: "ready", releasedAt: null, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
             });
             this.publishStatus(issueId, "cancelled");
           } catch (stateError) {
@@ -489,6 +497,7 @@ export class AgentEngine implements AgentController {
               .update(issueWorkspaces)
               .set({
                 status: "failed",
+                releasedAt: null,
                 lastError: stableErrorReason(error, "agent_run_failed"),
                 updatedAt: new Date(),
               })
@@ -540,7 +549,7 @@ export class AgentEngine implements AgentController {
     const gitIdentity = requestedGitIdentity ?? (await this.gitIdentity(issue.reporterSubject));
     const [preparingWorkspace] = await this.database
       .update(issueWorkspaces)
-      .set({ status: "preparing", runtimeReady: false, lastError: null, updatedAt: new Date() })
+      .set({ status: "preparing", runtimeReady: false, releasedAt: null, lastError: null, updatedAt: new Date() })
       .where(eq(issueWorkspaces.issueId, issue.id))
       .returning({ issueId: issueWorkspaces.issueId });
     if (!preparingWorkspace) throw new Error("issue_workspace_missing");
@@ -564,12 +573,10 @@ export class AgentEngine implements AgentController {
     await this.stopSession(issue.id);
     const owner = await loadIssueCredentialOwner(this.database, issue.id);
     if (environmentKind === "dev" && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
-    const globalConfiguration = await loadGlobalAgentConfiguration(this.database);
     // The owner's complete personal model group replaces the shared model and key; only its absence selects the shared group.
-    const personalModel = owner.credentials?.modelCredentials;
-    const modelApiKey = personalModel ? personalModel.apiKey : await loadSharedAgentApiKey(this.database);
-    if (!modelApiKey) throw new Error("model_api_key_not_configured");
-    const agentConfiguration = selectAgentConfiguration(globalConfiguration, personalModel);
+    const model = await resolveAgentModel(this.database, owner.credentials?.modelCredentials);
+    if (!model.apiKey) throw new Error("model_api_key_not_configured");
+    const agentConfiguration = model.configuration;
     let personalGit: PersonalGitEnvironment | undefined;
     if (owner.user.role === "developer") {
       const deployment = await loadIssueDeployments(this.database, issue);
@@ -606,18 +613,9 @@ export class AgentEngine implements AgentController {
     const serviceScopes = queryServices.map((row) => {
       const config = projectCapabilityConfiguration(row.deployment.config);
       const scope = { environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name };
-      // Resolve each capability separately so a missing DMS group does not block SLS, and vice versa.
+      // Each capability resolves independently so a missing DMS group does not block SLS, and vice versa.
       // Failed targets stay discoverable; the selected query reports its own credential error at execution time.
-      const resolved = { ...(config as DeploymentConfig) };
-      const credentialErrors: Partial<Record<CapabilityName, string>> = {};
-      for (const capability of CAPABILITY_KEYS) {
-        if (!config[capability]) continue;
-        try {
-          Object.assign(resolved, applyIssueCredentials({ [capability]: config[capability] }, owner.credentials, shared));
-        } catch (error) {
-          credentialErrors[capability] = errorMessage(error);
-        }
-      }
+      const { configuration: resolved, errors: credentialErrors } = resolveIssueCapabilities(config, owner.credentials, shared);
       return { ...scope, config: resolved, credentialErrors };
     });
     const deploymentConfig = serviceScopes.find((scope) => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
@@ -652,7 +650,7 @@ export class AgentEngine implements AgentController {
       onScopeChanged: (updatedRoots) => {
         if (updatedRoots) readRoots = updatedRoots;
         const current = this.sessions.get(issue.id);
-        if (current) this.scopeChangedSessions.add(current);
+        if (current) current.scopeChanged = true;
       },
     });
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
@@ -673,26 +671,19 @@ export class AgentEngine implements AgentController {
           return readRoots;
         },
         gitIdentity: commitIdentity,
-        modelApiKey,
+        modelApiKey: model.apiKey,
         workFiles: new IssueWorkFileStore(this.stateRoot, issue.key),
         systemPrompt: agentSystemPrompt(context),
         onEvent: (event) => this.publishPiEvent(issue.id, event),
       });
       this.sessions.set(issue.id, managed);
-      const sessionFile = manager.getSessionFile();
-      if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
-      await this.database
-        .insert(agentSessions)
-        .values({ issueId: issue.id, sessionFile, workspacePath: workDirectory })
-        .onConflictDoUpdate({
-          target: agentSessions.issueId,
-          set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
-        });
+      // sessionManagerLocked created or opened this file and is its sole binder; this round must not rebind it.
+      if (!manager.getSessionFile()) throw new Error("failed_to_initialize_agent_session");
       return { managed, hadMessages };
     });
     this.roundSignal(issue.id);
     await this.markRunning(issue.id, project.runtimeReady);
-    if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
+    this.assertCurrentSession(issue.id, managed);
     if (messageEntryId) await this.startQueuedMessage(issue, managed, messageEntryId);
 
     const repositoryContexts = project.repositories.map((repository) => ({
@@ -715,12 +706,7 @@ export class AgentEngine implements AgentController {
           relatedRoot: project.runtimeRoot,
           ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}),
         });
-    await managed.prompt(prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined, this.roundSignal(issue.id));
-    this.roundSignal(issue.id);
-    // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
-    if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
-    if (sharedRepositories || this.scopeChangedSessions.has(managed)) await this.stopSession(issue.id, managed);
-    await this.finalizeRun(issue.id);
+    await this.promptRound(issue.id, managed, prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined, sharedRepositories);
   }
 
   private async gitIdentity(subject: string): Promise<GitCommitIdentity> {
@@ -830,7 +816,7 @@ export class AgentEngine implements AgentController {
 
   private async startQueuedMessage(issue: AgentMessageScope & { id: string; key: string }, managed: ManagedPiSession, entryId: string): Promise<void> {
     await this.sessionQueue.run(issue.id, async () => {
-      if (this.sessions.get(issue.id) !== managed) throw new Error("agent_session_changed");
+      this.assertCurrentSession(issue.id, managed);
       await assertIssueRoot(this.stateRoot, issue.key);
       startAgentMessage(managed.session.sessionManager, entryId, issue);
       const next = pendingAgentMessages(managed.session.sessionManager)[0];
@@ -844,7 +830,7 @@ export class AgentEngine implements AgentController {
       const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
       if (!issue) throw new Error("issue_not_found");
       const selected = await this.sessionQueue.run(issueId, async () => {
-        if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
+        this.assertCurrentSession(issueId, managed);
         return selectAgentMessage(managed.session.sessionManager, issue, messageEntryId);
       });
       if (!selected) return;
@@ -855,14 +841,27 @@ export class AgentEngine implements AgentController {
     }
     this.roundSignal(issueId);
     await this.markRunning(issueId);
-    if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
+    this.assertCurrentSession(issueId, managed);
     if (messageEntryId && scope) await this.startQueuedMessage({ id: issueId, ...scope }, managed, messageEntryId);
-    await managed.prompt(promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined, this.roundSignal(issueId));
+    await this.promptRound(issueId, managed, promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined, false);
+  }
+
+  /** One round protocol for both a prepared session and a live session: prompt, verify, retire, finalize. */
+  private async promptRound(issueId: string, managed: ManagedPiSession, prompt: string, images: ImageContent[], command: string | undefined, retireAfterRound: boolean): Promise<void> {
+    await managed.prompt(prompt, images, command, this.roundSignal(issueId));
     this.roundSignal(issueId);
     // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
-    if (this.sessions.get(issueId) !== managed) throw new Error("agent_session_changed");
-    if (this.scopeChangedSessions.has(managed)) await this.stopSession(issueId, managed);
+    this.assertCurrentSession(issueId, managed);
+    if (retireAfterRound || managed.scopeChanged) await this.stopSession(issueId, managed);
     await this.finalizeRun(issueId);
+  }
+
+  private isCurrentSession(issueId: string, managed: ManagedPiSession): boolean {
+    return this.sessions.get(issueId) === managed;
+  }
+
+  private assertCurrentSession(issueId: string, managed: ManagedPiSession): void {
+    if (!this.isCurrentSession(issueId, managed)) throw new Error("agent_session_changed");
   }
 
   private async markRunning(issueId: string, runtimeReady?: boolean): Promise<void> {
@@ -878,6 +877,7 @@ export class AgentEngine implements AgentController {
         .set({
           status: "running",
           ...(runtimeReady !== undefined ? { runtimeReady } : {}),
+          releasedAt: null,
           lastError: null,
           updatedAt: new Date(),
         })
@@ -891,7 +891,7 @@ export class AgentEngine implements AgentController {
     await this.database.transaction(async (transaction) => {
       const [readyWorkspace] = await transaction
         .update(issueWorkspaces)
-        .set({ status: "ready", lastError: null, updatedAt: new Date() })
+        .set({ status: "ready", releasedAt: null, lastError: null, updatedAt: new Date() })
         .where(eq(issueWorkspaces.issueId, issueId))
         .returning({ issueId: issueWorkspaces.issueId });
       if (!readyWorkspace) throw new Error("issue_workspace_missing");

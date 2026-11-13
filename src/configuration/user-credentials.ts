@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { credentialOwnerSubject, type DeploymentConfig, type StoredDeploymentConfig, type DmsCredentials, type SlsCredentials } from "../domain/contracts.ts";
+import { credentialOwnerSubject, type CapabilityName, type DeploymentConfig, type StoredDeploymentConfig, type DmsCredentials, type SlsCredentials } from "../domain/contracts.ts";
 import { issues, subjects, userCredentials } from "../db/schema.ts";
 
 export async function loadIssueCredentialOwner(database: Database, issueId: string) {
@@ -13,39 +13,76 @@ export async function loadIssueCredentialOwner(database: Database, issueId: stri
   return { user, credentials };
 }
 
-export function selectDmsCredentials(credentials?: typeof userCredentials.$inferSelect, shared?: DmsCredentials | null): DmsCredentials {
+type CredentialGroup<Value> = { ok: true; value: Value } | { ok: false; error: string };
+type PersonalCredentials = typeof userCredentials.$inferSelect;
+type ConfiguredCapabilities = Pick<StoredDeploymentConfig, "dms" | "sls">;
+type SharedCredentials = { dms?: DmsCredentials | null; sls?: SlsCredentials | null };
+
+/**
+ * Completeness is one fact shared by selection, execution and status projection.
+ * An incomplete personal group fails; it never falls back to the shared group.
+ */
+function dmsCredentialGroup(credentials?: PersonalCredentials, shared?: DmsCredentials | null): CredentialGroup<DmsCredentials> {
   const url = credentials?.productionDmsUrl,
     authorization = credentials?.productionDmsAuthorization;
-  if (Boolean(url) !== Boolean(authorization)) throw new Error("personal_dms_credentials_incomplete");
+  if (Boolean(url) !== Boolean(authorization)) return { ok: false, error: "personal_dms_credentials_incomplete" };
   const selected = url && authorization ? { url, authorization } : shared;
-  if (!selected?.url || !selected.authorization) throw new Error("dms_credentials_not_configured");
-  return selected;
+  if (!selected?.url || !selected.authorization) return { ok: false, error: "dms_credentials_not_configured" };
+  return { ok: true, value: selected };
 }
 
-export function applyIssueCredentials(
-  configuration: Pick<StoredDeploymentConfig, "dms" | "sls">,
-  credentials?: typeof userCredentials.$inferSelect,
-  shared: { dms?: DmsCredentials | null; sls?: SlsCredentials | null } = {},
-): DeploymentConfig {
-  const result: DeploymentConfig = {};
-  if (configuration.dms) result.dms = { databases: configuration.dms.databases, ...selectDmsCredentials(credentials, shared.dms) };
-  if (configuration.sls) {
-    const personalId = credentials?.productionSlsAccessKeyId,
-      personalSecret = credentials?.productionSlsAccessKeySecret;
-    if (Boolean(personalId) !== Boolean(personalSecret)) throw new Error("personal_sls_credentials_incomplete");
-    const selected = personalId && personalSecret ? { accessKeyId: personalId, accessKeySecret: personalSecret } : shared.sls;
-    if (!selected?.accessKeyId || !selected.accessKeySecret) throw new Error("sls_credentials_not_configured");
-    result.sls = { ...configuration.sls, ...selected };
-  }
-  return result;
+function slsCredentialGroup(credentials?: PersonalCredentials, shared?: SlsCredentials | null): CredentialGroup<SlsCredentials> {
+  const accessKeyId = credentials?.productionSlsAccessKeyId,
+    accessKeySecret = credentials?.productionSlsAccessKeySecret;
+  if (Boolean(accessKeyId) !== Boolean(accessKeySecret)) return { ok: false, error: "personal_sls_credentials_incomplete" };
+  const selected = accessKeyId && accessKeySecret ? { accessKeyId, accessKeySecret } : shared;
+  if (!selected?.accessKeyId || !selected.accessKeySecret) return { ok: false, error: "sls_credentials_not_configured" };
+  return { ok: true, value: selected };
 }
-export function credentialStatus(credentials?: typeof userCredentials.$inferSelect) {
+
+export function selectDmsCredentials(credentials?: PersonalCredentials, shared?: DmsCredentials | null): DmsCredentials {
+  const group = dmsCredentialGroup(credentials, shared);
+  if (!group.ok) throw new Error(group.error);
+  return group.value;
+}
+
+export interface ResolvedIssueCapabilities {
+  configuration: DeploymentConfig;
+  /** The selection failure for one capability; other capabilities remain usable. */
+  errors: Partial<Record<CapabilityName, string>>;
+}
+
+/**
+ * Resolve each configured capability independently so a missing DMS group does not discard SLS.
+ * A failed group stays an error for that capability and is surfaced only when it is selected.
+ */
+export function resolveIssueCapabilities(configuration: ConfiguredCapabilities, credentials?: PersonalCredentials, shared: SharedCredentials = {}): ResolvedIssueCapabilities {
+  // Keep the configured scope even when its credential group fails: the target stays visible so
+  // service_query can report the actionable credential error instead of hiding the capability.
+  const resolved: DeploymentConfig = { ...(configuration as DeploymentConfig) };
+  const errors: Partial<Record<CapabilityName, string>> = {};
+  if (configuration.dms) {
+    const group = dmsCredentialGroup(credentials, shared.dms);
+    if (group.ok) resolved.dms = { databases: configuration.dms.databases, ...group.value };
+    else errors.dms = group.error;
+  }
+  if (configuration.sls) {
+    const group = slsCredentialGroup(credentials, shared.sls);
+    if (group.ok) resolved.sls = { ...configuration.sls, ...group.value };
+    else errors.sls = group.error;
+  }
+  return { configuration: resolved, errors };
+}
+
+export function credentialStatus(credentials?: PersonalCredentials) {
   const model = credentials?.modelCredentials;
+  const dms = credentials ? dmsCredentialGroup(credentials) : undefined;
+  const sls = credentials ? slsCredentialGroup(credentials) : undefined;
   return {
     model: model ? { provider: model.provider, model: model.model, thinkingLevel: model.thinkingLevel, codemode: model.codemode } : null,
     gitSshConfigured: Boolean(credentials?.gitPrivateKey),
-    // Status must match selection: a URL without Authorization (or the reverse) is an incomplete group.
-    ...(credentials?.productionDmsUrl && credentials.productionDmsAuthorization ? { productionDmsConfigured: true, productionDmsUrl: credentials.productionDmsUrl } : {}),
-    ...(credentials?.productionSlsAccessKeyId && credentials.productionSlsAccessKeySecret ? { productionSlsConfigured: true } : {}),
+    // Status uses the same completeness rule as selection, so both views cannot drift.
+    ...(dms?.ok ? { productionDmsConfigured: true, productionDmsUrl: dms.value.url } : {}),
+    ...(sls?.ok ? { productionSlsConfigured: true } : {}),
   };
 }

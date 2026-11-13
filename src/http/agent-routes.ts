@@ -4,6 +4,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { AgentBusyError } from "../agent/engine.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
@@ -11,10 +12,11 @@ import { agentDisplayEvent } from "../agent/event-display.ts";
 import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
-import { agentSessions, issues } from "../db/schema.ts";
+import { agentSessions, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
 import { ApiError, record, text } from "./input.ts";
+import { issueRevision } from "./issue-revision.ts";
 import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
@@ -120,7 +122,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         await requireIssue(database, issue.key);
       });
     } catch (error) {
-      if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
+      if (error instanceof AgentBusyError) throw new ApiError(409, error.message);
       throw error;
     }
     return reply.send({ ok: true });
@@ -205,7 +207,16 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       const contextWindow = models.find((candidate) => candidate.provider === provider && candidate.id === model)?.contextWindow ?? 0;
       const footer = sessionFooterStats(manager, contextWindow, autoCompact, sessionContext);
       const currentEvents = events.replayCurrent(issue.id);
-      const [currentIssue] = await database.db.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1);
+      const [current] = await database.db
+        .select({ issue: issues, workspace: issueWorkspaces, service: { key: services.key, name: services.name }, environmentKey: environments.key, assignee: subjects.displayName })
+        .from(issues)
+        .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id))
+        .innerJoin(services, eq(services.id, issues.serviceId))
+        .innerJoin(environments, eq(environments.id, issues.environmentId))
+        .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
+        .where(eq(issues.id, issue.id))
+        .limit(1);
+      if (!current) throw new ApiError(404, "issue_not_found");
       // Catalog loading and transcript validation can outlive the reader's authorization.
       // Refuse before sending SSE headers; the request keeps its initially selected identity.
       await requireCurrentUser(database, request);
@@ -215,7 +226,6 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       }
       // Preparation can overlap preClose; only a stream registered before that hook may start.
       if (closing) throw new ApiError(503, "agent_stream_closing");
-      if (!currentIssue) throw new ApiError(404, "issue_not_found");
       reply.hijack();
       hijacked = true;
       reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
@@ -275,7 +285,21 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         if (cleaned) return;
       }
       writer.write(
-        `event: snapshot_ready\ndata: ${JSON.stringify({ agent: { provider, model, thinkingLevel }, footer, running: engine.isRunning(issue.id), runState: engine.getRunState(issue.id), issueStatus: currentIssue.status })}\n\n`,
+        `event: snapshot_ready\ndata: ${JSON.stringify({
+          agent: { provider, model, thinkingLevel },
+          footer,
+          running: engine.isRunning(issue.id),
+          runState: engine.getRunState(issue.id),
+          issueStatus: current.issue.status,
+          issueRevision: issueRevision({
+            issue: current.issue,
+            service: current.service,
+            environmentKey: current.environmentKey,
+            assignee: current.assignee,
+            workspace: current.workspace ?? undefined,
+            runState: engine.getRunState(issue.id),
+          }),
+        })}\n\n`,
       );
       if (cleaned) return;
       heartbeat = setInterval(() => writer.write("event: heartbeat\ndata: {}\n\n"), issuePilotConfig.http.sseHeartbeatMs);
@@ -310,8 +334,8 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     try {
       await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request), { id, subject: person.subject });
     } catch (error) {
-      if (error instanceof Error && ["issue_already_running", "resolved_issue_cannot_run_agent", "agent_message_outcome_unknown", "agent_message_id_conflict"].includes(error.message))
-        throw new ApiError(409, error.message);
+      if (error instanceof AgentBusyError) throw new ApiError(409, error.message);
+      if (error instanceof Error && ["resolved_issue_cannot_run_agent", "agent_message_outcome_unknown", "agent_message_id_conflict"].includes(error.message)) throw new ApiError(409, error.message);
       throw error;
     }
     return reply.code(202).send();

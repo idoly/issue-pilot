@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Badge, Input, Modal } from "../ui";
 import { Search } from "../ui/icons";
 import { currentUserSubject, errorMessage, searchIssues, type IssueSearchHit } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
 import { statusBadge, statusLabel } from "./model";
 
@@ -22,11 +23,10 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
   const [hits, setHits] = createSignal<IssueSearchHit[]>();
   const [error, setError] = createSignal("");
   const [pending, setPending] = createSignal(false);
-  let request: AbortController | undefined;
+  const latest = createLatestTask();
   const enabled = () => catalog().issueSearchEnabled && currentUser();
   const cancel = () => {
-    request?.abort();
-    request = undefined;
+    latest.cancel();
     setPending(false);
   };
   const close = () => {
@@ -45,7 +45,7 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
   window.addEventListener("keydown", onKeyDown);
   onCleanup(() => {
     window.removeEventListener("keydown", onKeyDown);
-    request?.abort();
+    latest.cancel();
   });
   createEffect(
     () => enabled()?.subject,
@@ -57,22 +57,19 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
     const subject = enabled()?.subject;
     const value = query().trim();
     if (!subject || !value || pending() || hits()) return;
-    const controller = new AbortController();
-    request = controller;
-    const current = () => request === controller && !controller.signal.aborted && currentUserSubject() === subject && enabled()?.subject === subject;
+    const task = latest.begin();
+    const current = () => task.isCurrent() && !task.signal.aborted && currentUserSubject() === subject && enabled()?.subject === subject;
     setPending(true);
     setHits(undefined);
     setError("");
     try {
-      const found = await searchIssues(value, controller.signal);
+      const found = await searchIssues(value, task.signal);
       if (current()) setHits(found);
     } catch (cause) {
       if (current()) setError(errors[errorMessage(cause)] ?? "工单搜索失败，请稍后再试。");
     } finally {
-      if (current()) {
-        request = undefined;
-        setPending(false);
-      }
+      if (current()) setPending(false);
+      task.finish();
     }
   };
   return (

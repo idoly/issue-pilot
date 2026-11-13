@@ -7,6 +7,7 @@ interface AgentStreamSnapshot {
   running?: boolean;
   runState?: AgentRunState;
   issueStatus?: IssueStatus;
+  issueRevision?: string;
 }
 
 interface AgentStreamReplay {

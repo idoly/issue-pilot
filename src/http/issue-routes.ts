@@ -43,6 +43,7 @@ import {
 } from "./attachment-store.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
+import { issueRevision } from "./issue-revision.ts";
 import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
@@ -212,6 +213,10 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         service: serviceSummary,
         environmentKey: environments.key,
         workspaceStatus: issueWorkspaces.status,
+        workspaceUpdatedAt: issueWorkspaces.updatedAt,
+        workspaceRuntimeReady: issueWorkspaces.runtimeReady,
+        workspaceReleasedAt: issueWorkspaces.releasedAt,
+        workspaceLastError: issueWorkspaces.lastError,
       })
       .from(issues)
       .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
@@ -219,10 +224,20 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       .leftJoin(environments, eq(environments.id, issues.environmentId))
       .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id));
   type IssueSummaryRow = Awaited<ReturnType<typeof issueSummaryQuery>>[number];
-  const serializeIssueSummaryRow = ({ issue, assignee, service, environmentKey, workspaceStatus }: IssueSummaryRow) => {
+  const serializeIssueSummaryRow = ({
+    issue,
+    assignee,
+    service,
+    environmentKey,
+    workspaceStatus,
+    workspaceUpdatedAt,
+    workspaceRuntimeReady,
+    workspaceReleasedAt,
+    workspaceLastError,
+  }: IssueSummaryRow) => {
     if (!service) throw new Error("issue_service_not_found");
     if (environmentKey === null) throw new Error("issue_environment_not_found");
-    if (workspaceStatus === null) throw new Error("issue_workspace_not_found");
+    const runState = engine.getRunState(issue.id);
     return {
       id: issue.key,
       title: issue.title,
@@ -233,8 +248,23 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       assigneeSubject: issue.assigneeSubject,
       service,
       environmentKey,
-      workspaceStatus,
-      agentRunning: engine.isRunning(issue.id),
+      // The detail projection already treats an absent Workspace row as not created; summaries agree.
+      workspaceStatus: workspaceStatus ?? "not_created",
+      agentRunning: runState !== "idle",
+      revision: issueRevision({
+        issue,
+        service,
+        environmentKey,
+        assignee,
+        workspace: {
+          status: workspaceStatus,
+          updatedAt: workspaceUpdatedAt,
+          runtimeReady: workspaceRuntimeReady,
+          releasedAt: workspaceReleasedAt,
+          lastError: workspaceLastError,
+        },
+        runState,
+      }),
       resolvedAt: isoDate(issue.resolvedAt) ?? null,
       createdAt: isoDate(issue.createdAt),
       updatedAt: issue.updatedAt.toISOString(),

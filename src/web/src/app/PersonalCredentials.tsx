@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
+import { createLatestTask } from "../data/latest";
 import {
   loadPersonalCredentials,
   loadSharedDmsCredentials,
@@ -42,7 +43,7 @@ export function PersonalCredentials() {
   const [saveError, setSaveError] = createSignal("", { ownedWrite: true });
   const [conflict, setConflict] = createSignal(false, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
-  let generation = 0;
+  const latest = createLatestTask();
   const isAdmin = () => currentUser()?.isAdmin === true;
   const canEditPersonal = (group: Group) => group !== "git" || currentUser()?.role === "developer";
   const configured = (group: Group) =>
@@ -76,27 +77,29 @@ export function PersonalCredentials() {
     resetDrafts(null, false);
   };
   const load = async (admin: boolean) => {
-    const owner = ++generation;
+    const request = latest.begin();
     setStatus(null);
     setSharedDms(null);
     setSharedSls(null);
     setError("");
     try {
       const [value, dms, sls] = await Promise.all([loadPersonalCredentials(), admin ? loadSharedDmsCredentials() : null, admin ? loadSharedSlsCredentials() : null]);
-      if (owner === generation) {
+      if (request.isCurrent()) {
         setStatus(value);
         setSharedDms(dms);
         setSharedSls(sls);
       }
     } catch (cause) {
-      if (owner === generation) setError(settingsError(cause));
+      if (request.isCurrent()) setError(settingsError(cause));
+    } finally {
+      request.finish();
     }
   };
   createEffect(
     () => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}:${isAdmin()}`,
     (identity, previous) => {
       if (identity === previous) return;
-      generation++;
+      latest.cancel();
       close();
       setSaving(false);
       setStatus(null);
@@ -106,7 +109,7 @@ export function PersonalCredentials() {
     },
   );
   onCleanup(() => {
-    generation++;
+    latest.cancel();
   });
   const open = (group: Group) => {
     close();
@@ -129,37 +132,41 @@ export function PersonalCredentials() {
     </Show>
   );
   const saveModel = async (selection: AgentModelSelection | null, apiKey: string | undefined) => {
-    const owner = generation;
-    if (shared()) {
-      const apiKeyUpdate = selection ? (apiKey ? { apiKey: { mode: "replace" as const, value: apiKey } } : {}) : { apiKey: { mode: "clear" as const } };
-      await updateAgentConfiguration({ ...(selection ?? sharedModel()), runtime: configuration().agent.runtime, ...apiKeyUpdate });
-      await refreshConfiguration().catch(() => undefined);
-      if (owner === generation) close();
-      return;
-    }
-    const credentials = status();
-    if (!credentials) return;
-    const model: NonNullable<PersonalCredentialUpdate["model"]> = selection ? { mode: "replace", ...selection, ...(apiKey ? { apiKey } : {}) } : { mode: "clear" };
-    let value: Awaited<ReturnType<typeof updatePersonalCredentials>>;
+    const request = latest.begin();
     try {
-      value = await updatePersonalCredentials({ expectedRevision: credentials.revision, model });
-    } catch (error) {
-      if (owner === generation && error instanceof Error && error.message === "configuration_changed") setConflict(true);
-      throw error;
-    }
-    if (owner === generation) {
-      setStatus(value);
-      close();
+      if (shared()) {
+        const apiKeyUpdate = selection ? (apiKey ? { apiKey: { mode: "replace" as const, value: apiKey } } : {}) : { apiKey: { mode: "clear" as const } };
+        await updateAgentConfiguration({ ...(selection ?? sharedModel()), runtime: configuration().agent.runtime, ...apiKeyUpdate });
+        await refreshConfiguration().catch(() => undefined);
+        if (request.isCurrent()) close();
+        return;
+      }
+      const credentials = status();
+      if (!credentials) return;
+      const model: NonNullable<PersonalCredentialUpdate["model"]> = selection ? { mode: "replace", ...selection, ...(apiKey ? { apiKey } : {}) } : { mode: "clear" };
+      let value: Awaited<ReturnType<typeof updatePersonalCredentials>>;
+      try {
+        value = await updatePersonalCredentials({ expectedRevision: credentials.revision, model });
+      } catch (error) {
+        if (request.isCurrent() && error instanceof Error && error.message === "configuration_changed") setConflict(true);
+        throw error;
+      }
+      if (request.isCurrent()) {
+        setStatus(value);
+        close();
+      }
+    } finally {
+      request.finish();
     }
   };
-  const saveShared = async (group: "dms" | "sls", clear: boolean, owner: number) => {
+  const saveShared = async (group: "dms" | "sls", clear: boolean, request: { isCurrent(): boolean }) => {
     if (group === "dms") {
       const current = sharedDms();
       if (!current) throw new Error("shared_credentials_not_loaded");
       const value = await updateSharedDmsCredentials(
         clear ? { expectedRevision: current.revision, mode: "clear" } : { expectedRevision: current.revision, mode: "replace", url: url().trim(), authorization: secret() },
       );
-      if (owner === generation) setSharedDms(value);
+      if (request.isCurrent()) setSharedDms(value);
       return;
     }
     const current = sharedSls();
@@ -167,13 +174,12 @@ export function PersonalCredentials() {
     const value = await updateSharedSlsCredentials(
       clear ? { expectedRevision: current.revision, mode: "clear" } : { expectedRevision: current.revision, mode: "replace", accessKeyId: accessKeyId(), accessKeySecret: secret() },
     );
-    if (owner === generation) setSharedSls(value);
+    if (request.isCurrent()) setSharedSls(value);
   };
   const save = async (clear = false) => {
     const group = selected(),
       credentials = status();
     if (!group || !credentials || saving()) return;
-    const owner = generation;
     const supplied = Boolean(secret() || accessKeyId());
     if (!clear && !supplied) {
       if (targetConfigured(group) && (group !== "dms" || url().trim() === dmsUrl())) {
@@ -187,12 +193,13 @@ export function PersonalCredentials() {
       setSaveError("请填写完整凭证");
       return;
     }
+    const request = latest.begin();
     setSaving(true);
     setSaveError("");
     try {
       if (shared() && (group === "dms" || group === "sls")) {
-        await saveShared(group, clear, owner);
-        if (owner === generation) close();
+        await saveShared(group, clear, request);
+        if (request.isCurrent()) close();
         return;
       }
       const input: PersonalCredentialUpdate = { expectedRevision: credentials.revision };
@@ -200,17 +207,18 @@ export function PersonalCredentials() {
       if (group === "dms") input.production = { dms: clear ? { mode: "clear" } : { mode: "replace", url: url().trim(), authorization: secret() } };
       if (group === "sls") input.production = { sls: clear ? { mode: "clear" } : { mode: "replace", accessKeyId: accessKeyId(), accessKeySecret: secret() } };
       const value = await updatePersonalCredentials(input);
-      if (owner === generation) {
+      if (request.isCurrent()) {
         setStatus(value);
         close();
       }
     } catch (cause) {
-      if (owner === generation) {
+      if (request.isCurrent()) {
         setSaveError(settingsError(cause));
         setConflict(cause instanceof Error && cause.message === "configuration_changed");
       }
     } finally {
-      if (owner === generation) setSaving(false);
+      if (request.isCurrent()) setSaving(false);
+      request.finish();
     }
   };
   const reloadCredentials = () => {

@@ -1,19 +1,11 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTokens, type SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { mergeAgentCostSource, type AgentFooterStats } from "../domain/contracts.ts";
+import type { AgentFooterStats } from "../domain/contracts.ts";
+import { mergeFooterUsage, validAssistantUsage } from "./usage.ts";
 
 function addUsage(stats: AgentFooterStats, usage: Usage): void {
-  stats.input += usage.input;
-  stats.output += usage.output;
-  stats.cacheRead += usage.cacheRead;
-  stats.cacheWrite += usage.cacheWrite;
-  stats.cost += usage.cost.total;
-  stats.costSource = mergeAgentCostSource(stats.costSource, usage.cost);
-}
-
-function hasValidUsage(message: { role: string; stopReason?: string; usage?: Usage }): message is { role: string; usage: Usage } {
-  return message.role === "assistant" && message.stopReason !== "aborted" && message.stopReason !== "error" && Boolean(message.usage && calculateContextTokens(message.usage) > 0);
+  Object.assign(stats, mergeFooterUsage(stats, usage));
 }
 
 export function sessionFooterStats(
@@ -53,7 +45,7 @@ export function sessionFooterStats(
   if (contextWindow <= 0) return stats;
   const branch = manager.getBranch();
   const compactionIndex = branch.findLastIndex((entry) => entry.type === "compaction");
-  if (compactionIndex >= 0 && !branch.slice(compactionIndex + 1).some((entry) => entry.type === "message" && hasValidUsage(entry.message))) return stats;
+  if (compactionIndex >= 0 && !branch.slice(compactionIndex + 1).some((entry) => entry.type === "message" && validAssistantUsage(entry.message))) return stats;
 
   // SSE already resolves this same snapshot to identify its model; do not rebuild its context.
   const messages = (sessionContext ?? manager.buildSessionContext()).messages;
@@ -61,7 +53,7 @@ export function sessionFooterStats(
   let contextTokens = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
-    if (!hasValidUsage(message)) continue;
+    if (!validAssistantUsage(message)) continue;
     lastUsageIndex = index;
     contextTokens = calculateContextTokens(message.usage);
     break;

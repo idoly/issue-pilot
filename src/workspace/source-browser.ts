@@ -7,6 +7,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { domainError } from "../domain/errors.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
@@ -50,10 +51,10 @@ type SourceRevisionContext = {
 type ColdSnapshot = Awaited<ReturnType<typeof recordedSharedSnapshot>>;
 
 function normalizedRelativePath(value: string): string {
-  if (value.length > 4096 || value.includes("\0") || path.isAbsolute(value)) throw new Error("invalid_source_path");
+  if (value.length > 4096 || value.includes("\0") || path.isAbsolute(value)) throw domainError("invalid_source_path");
   const normalized = path.normalize(value || ".").replace(/\/+$/, "");
   if (normalized === ".") return "";
-  if (normalized === ".." || normalized.startsWith(`..${path.sep}`) || path.isAbsolute(normalized) || normalized.split(path.sep).includes(".git")) throw new Error("invalid_source_path");
+  if (normalized === ".." || normalized.startsWith(`..${path.sep}`) || path.isAbsolute(normalized) || normalized.split(path.sep).includes(".git")) throw domainError("invalid_source_path");
   return normalized;
 }
 
@@ -67,7 +68,7 @@ function sourcePath(relative: string): string {
 }
 
 function missingPathError(error: unknown): never {
-  if (error && typeof error === "object" && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) throw new Error("source_path_not_found");
+  if (error && typeof error === "object" && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) throw domainError("source_path_not_found");
   throw error;
 }
 
@@ -75,10 +76,10 @@ function missingPathError(error: unknown): never {
 function mutationPathError(error: unknown): never {
   if (error && typeof error === "object" && "code" in error) {
     const code = String(error.code);
-    if (code === "ENOENT" || code === "ENOTDIR") throw new Error("source_path_not_found");
+    if (code === "ENOENT" || code === "ENOTDIR") throw domainError("source_path_not_found");
     // Node's fs.rm reports directory/non-empty failures as ERR_FS_*; other runtimes use the errno names.
-    if (code === "ENOTEMPTY" || code === "EISDIR" || code === "ERR_FS_ENOTEMPTY" || code === "ERR_FS_EISDIR") throw new Error("source_path_not_empty");
-    if (code === "EEXIST") throw new Error("source_path_exists");
+    if (code === "ENOTEMPTY" || code === "EISDIR" || code === "ERR_FS_ENOTEMPTY" || code === "ERR_FS_EISDIR") throw domainError("source_path_not_empty");
+    if (code === "EEXIST") throw domainError("source_path_exists");
   }
   throw error;
 }
@@ -131,7 +132,7 @@ export class SourceBrowser {
     const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
     if (snapshot) {
       const entry = parent ? await this.snapshotEntry(snapshot, parent) : undefined;
-      if (entry?.mode.startsWith("100")) throw new Error("source_path_not_directory");
+      if (entry?.mode.startsWith("100")) throw domainError("source_path_not_directory");
       const entries =
         !parent || entry?.mode === "040000"
           ? await this.snapshotEntries(snapshot, parent ? `${snapshot.commit}:${parent}` : snapshot.commit).catch((error: unknown) => {
@@ -162,11 +163,11 @@ export class SourceBrowser {
     const context = await this.context(issue, repositoryName, selection);
     const directory = await this.resolvePath(context.root, relativePath);
     const metadata = await stat(directory);
-    if (!metadata.isDirectory()) throw new Error("source_path_not_directory");
+    if (!metadata.isDirectory()) throw domainError("source_path_not_directory");
     const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try {
       const pinned = `/proc/self/fd/${handle.fd}`;
-      if ((await realpath(pinned)) !== directory) throw new Error("source_path_outside_repository");
+      if ((await realpath(pinned)) !== directory) throw domainError("source_path_outside_repository");
       const entries = await readdir(pinned, { withFileTypes: true });
       const visible = entries
         .filter((entry) => entry.name !== ".git")
@@ -200,9 +201,9 @@ export class SourceBrowser {
     const selection = await this.selectRepository(issue, repositoryName);
     const snapshot = await this.coldSnapshot(issue, repositoryName, selection);
     if (snapshot) {
-      if (!selected) throw new Error("source_path_not_file");
+      if (!selected) throw domainError("source_path_not_file");
       const entry = await this.snapshotEntry(snapshot, selected);
-      if (entry?.mode === "040000") throw new Error("source_path_not_file");
+      if (entry?.mode === "040000") throw domainError("source_path_not_file");
       if (entry?.mode.startsWith("100")) {
         const content = await this.gitFile({ root: snapshot.store, workingBranch: null }, `${snapshot.commit}:${selected}`, "source_history_timeout", "source_path_not_found");
         const bytes = Buffer.from(content);
@@ -217,7 +218,7 @@ export class SourceBrowser {
     const snapshot = await recordedSharedSnapshot(this.stateRoot, issue.key, repository, repositoryName, state).catch(missingPathError);
     if (
       await managedGitDirectoryExists(snapshot.checkout).catch((error: unknown) => {
-        throw new Error("source_git_binding_invalid", { cause: error });
+        throw domainError("source_git_binding_invalid", { cause: error });
       })
     )
       return undefined;
@@ -226,7 +227,7 @@ export class SourceBrowser {
       ["-C", snapshot.store, "show-ref", "--verify", "--hash", "--", retainedSnapshotRef(snapshot.commit)],
       this.commandOptions(),
     );
-    if (retained.killed || retained.code !== 0 || retained.stdout.trim() !== snapshot.commit) throw new Error("source_git_binding_invalid");
+    if (retained.killed || retained.code !== 0 || retained.stdout.trim() !== snapshot.commit) throw domainError("source_git_binding_invalid");
     return snapshot;
   }
 
@@ -245,8 +246,8 @@ export class SourceBrowser {
         ...this.commandOptions(),
         input: Buffer.from(ancestors.join("\0") + "\0"),
       });
-      if (result.killed) throw new Error("source_history_timeout");
-      if (result.code !== 0) throw new Error("source_git_binding_invalid");
+      if (result.killed) throw domainError("source_history_timeout");
+      if (result.code !== 0) throw domainError("source_git_binding_invalid");
       const ancestor = result.stdout.split("\0").findIndex((kind) => kind === "blob" || kind === "commit");
       if (ancestor >= 0) {
         const prefix = ancestors[ancestor]!.slice(snapshot.commit.length + 1);
@@ -255,7 +256,7 @@ export class SourceBrowser {
       }
       if (ancestors.length === 64) return undefined;
     }
-    throw new Error("source_path_not_found");
+    throw domainError("source_path_not_found");
   }
 
   private async snapshotEntries(snapshot: ColdSnapshot, tree: string, selected?: string) {
@@ -264,23 +265,23 @@ export class SourceBrowser {
       ["-C", snapshot.store, "ls-tree", "-lz", tree, "--", ...(selected ? [selected] : [])],
       this.commandOptions(),
     );
-    if (result.killed) throw new Error("source_history_timeout");
-    if (result.code !== 0) throw new Error("source_git_binding_invalid");
+    if (result.killed) throw domainError("source_history_timeout");
+    if (result.code !== 0) throw domainError("source_git_binding_invalid");
     return result.stdout
       .split("\0")
       .filter(Boolean)
       .map((record) => {
         const match = /^(100644|100755|120000|040000|160000) (?:blob|tree|commit) [0-9a-f]{40} +([0-9]+|-)\t([\s\S]+)$/.exec(record);
-        if (!match) throw new Error("invalid_source_tree_response");
+        if (!match) throw domainError("invalid_source_tree_response");
         return { mode: match[1]!, size: match[2] === "-" ? null : Number(match[2]), name: match[3]! };
       });
   }
 
   async writeFile(issue: IssueReference, repositoryName: string, relativePath: string, content: string, expectedSha256: string): Promise<SourceFile> {
     const context = await this.writableContext(issue, repositoryName);
-    if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_source_hash");
+    if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw domainError("invalid_source_hash");
     const selected = normalizedRelativePath(relativePath);
-    if (!selected) throw new Error("source_path_not_file");
+    if (!selected) throw domainError("source_path_not_file");
     return this.withMutablePath(context, selected, true, async (candidate) => {
       let metadata;
       try {
@@ -288,20 +289,20 @@ export class SourceBrowser {
       } catch (error) {
         missingPathError(error);
       }
-      if (!metadata!.isFile()) throw new Error("source_path_not_file");
+      if (!metadata!.isFile()) throw domainError("source_path_not_file");
       const currentFile = await open(candidate, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       let current: Buffer;
       try {
         const currentMetadata = await currentFile.stat();
-        if (!currentMetadata.isFile()) throw new Error("source_path_not_file");
-        if (currentMetadata.size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+        if (!currentMetadata.isFile()) throw domainError("source_path_not_file");
+        if (currentMetadata.size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw domainError("source_file_too_large");
         current = await currentFile.readFile();
       } finally {
         await currentFile.close();
       }
-      if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw new Error("source_file_changed");
+      if (createHash("sha256").update(current).digest("hex") !== expectedSha256) throw domainError("source_file_changed");
       const next = Buffer.from(content, "utf8");
-      if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+      if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw domainError("source_file_too_large");
       const temporary = path.join(path.dirname(candidate), `.issue-pilot-${randomUUID()}.tmp`);
       const handle = await open(temporary, "wx", metadata!.mode & 0o777);
       const failures: unknown[] = [];
@@ -338,7 +339,7 @@ export class SourceBrowser {
     const context = await this.writableContext(issue, repositoryName);
     return this.withMutablePath(context, relativePath, false, async (candidate) => {
       const next = Buffer.from(content, "utf8");
-      if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+      if (next.byteLength > issuePilotConfig.limits.sourceBrowser.fileBytes) throw domainError("source_file_too_large");
       const temporary = path.join(path.dirname(candidate), `.issue-pilot-${randomUUID()}.tmp`);
       // An exclusive open owns only this temporary file; a collision must not delete another operation's file.
       const handle = await open(temporary, "wx", 0o644);
@@ -350,7 +351,7 @@ export class SourceBrowser {
         try {
           await link(temporary, candidate);
         } catch (error) {
-          if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+          if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw domainError("source_path_exists");
           throw error;
         }
       } catch (error) {
@@ -381,7 +382,7 @@ export class SourceBrowser {
       try {
         await mkdir(candidate);
       } catch (error) {
-        if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error("source_path_exists");
+        if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw domainError("source_path_exists");
         throw error;
       }
     });
@@ -412,7 +413,7 @@ export class SourceBrowser {
       });
       return;
     }
-    if (isInside(selectedSource, selectedDestination) || isInside(selectedDestination, selectedSource)) throw new Error("invalid_source_path");
+    if (isInside(selectedSource, selectedDestination) || isInside(selectedDestination, selectedSource)) throw domainError("invalid_source_path");
     await this.withMutablePath(context, relativePath, true, async (source) => {
       let sourceMetadata;
       try {
@@ -482,8 +483,8 @@ export class SourceBrowser {
     const context = await this.writableContext(issue, repositoryName);
     const selected = this.mutablePaths(paths);
     const tracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "ls-files", "-z", "--", ...selected], this.mutationOptions());
-    if (tracked.killed) throw new Error("source_discard_timeout");
-    if (tracked.code !== 0) throw new Error("source_discard_failed");
+    if (tracked.killed) throw domainError("source_discard_timeout");
+    if (tracked.code !== 0) throw domainError("source_discard_failed");
     const trackedPaths = tracked.stdout.split("\0").filter(Boolean);
     if (trackedPaths.length) await this.gitMutation(context, ["checkout", "--", ...trackedPaths], "source_discard_failed");
     await this.gitMutation(context, ["clean", "-fd", "--", ...selected], "source_discard_failed");
@@ -491,8 +492,8 @@ export class SourceBrowser {
 
   async createCommit(issue: IssueReference, repositoryName: string, message: string, author: { name: string; email: string }): Promise<void> {
     const value = message.trim();
-    if (!value || value.length > 4000 || value.includes("\0")) throw new Error("invalid_source_commit_message");
-    if (!author.name.trim() || !author.email.trim() || /[\x00-\x1f\x7f]/.test(author.name) || /[\x00-\x1f\x7f]/.test(author.email)) throw new Error("invalid_source_commit_author");
+    if (!value || value.length > 4000 || value.includes("\0")) throw domainError("invalid_source_commit_message");
+    if (!author.name.trim() || !author.email.trim() || /[\x00-\x1f\x7f]/.test(author.name) || /[\x00-\x1f\x7f]/.test(author.email)) throw domainError("invalid_source_commit_author");
     const context = await this.writableContext(issue, repositoryName);
     await this.gitMutation(context, ["-c", `user.name=${author.name.trim()}`, "-c", `user.email=${author.email.trim()}`, "commit", "-m", value], "source_commit_failed");
   }
@@ -504,7 +505,7 @@ export class SourceBrowser {
     options: { caseSensitive?: boolean; wordMatch?: boolean; signal?: AbortSignal } = {},
   ): Promise<{ matches: SourceSearchMatch[]; truncated: boolean }> {
     const value = query.trim();
-    if (!value || value.length > issuePilotConfig.limits.sourceBrowser.searchQueryCharacters || value.includes("\0")) throw new Error("invalid_source_query");
+    if (!value || value.length > issuePilotConfig.limits.sourceBrowser.searchQueryCharacters || value.includes("\0")) throw domainError("invalid_source_query");
     options.signal?.throwIfAborted();
     const context = await this.context(issue, repositoryName);
     const cutoff = new AbortController(),
@@ -518,7 +519,7 @@ export class SourceBrowser {
       try {
         event = JSON.parse(line) as typeof event;
       } catch {
-        throw new Error("invalid_source_search_response");
+        throw domainError("invalid_source_search_response");
       }
       if (event.type !== "match") return;
       if (matches.length === issuePilotConfig.limits.sourceBrowser.searchMatches) {
@@ -531,7 +532,7 @@ export class SourceBrowser {
         preview = data?.lines?.text,
         lineNumber = data?.line_number,
         column = data?.submatches?.[0]?.start;
-      if (!resultPath || typeof preview !== "string" || !Number.isSafeInteger(lineNumber) || !Number.isSafeInteger(column)) throw new Error("invalid_source_search_response");
+      if (!resultPath || typeof preview !== "string" || !Number.isSafeInteger(lineNumber) || !Number.isSafeInteger(column)) throw domainError("invalid_source_search_response");
       const normalized = sourcePath(normalizedRelativePath(resultPath.replace(/^\.\//, "")));
       matches.push({ path: normalized, line: lineNumber!, column: Buffer.from(preview).subarray(0, column!).toString("utf8").length + 1, preview: preview.replace(/[\r\n]+$/, "").slice(0, 1000) });
     };
@@ -574,8 +575,8 @@ export class SourceBrowser {
       options.signal?.throwIfAborted();
       if (result.stdout) consume(result.stdout);
       if (!truncated && pending) parseLine(pending);
-      if (!truncated && result.killed) throw new Error("source_search_timeout");
-      if (!truncated && result.code !== 0 && result.code !== 1) throw new Error("source_search_failed");
+      if (!truncated && result.killed) throw domainError("source_search_timeout");
+      if (!truncated && result.code !== 0 && result.code !== 1) throw domainError("source_search_failed");
     } catch (error) {
       options.signal?.throwIfAborted();
       if (!(error instanceof Error) || error.message !== "command_output_too_large") throw error;
@@ -587,10 +588,10 @@ export class SourceBrowser {
   async blame(issue: IssueReference, repositoryName: string, relativePath: string, line: number): Promise<SourceBlame> {
     const context = await this.context(issue, repositoryName);
     const selected = sourcePath(normalizedRelativePath(relativePath));
-    if (!selected || !Number.isSafeInteger(line) || line < 1) throw new Error("invalid_source_line");
+    if (!selected || !Number.isSafeInteger(line) || line < 1) throw domainError("invalid_source_line");
     const { content } = await this.workingFile(context, selected);
     const lineCount = content.split("\n").length;
-    if (line > lineCount) throw new Error("invalid_source_line");
+    if (line > lineCount) throw domainError("invalid_source_line");
     const withoutCommit = (subject: string): SourceBlame => ({ path: selected, line, commit: null, shortCommit: null, author: "", date: null, subject });
     if (!content || (content.endsWith("\n") && line === lineCount)) return withoutCommit(content ? "文件末尾" : "空文件");
     const result = await this.executor.execute(
@@ -598,18 +599,18 @@ export class SourceBrowser {
       ["-C", context.root, "blame", "--line-porcelain", "--root", "-L", `${line},${line}`, "--", selected],
       this.commandOptions(),
     );
-    if (result.killed) throw new Error("source_blame_timeout");
+    if (result.killed) throw domainError("source_blame_timeout");
     if (result.code !== 0) {
       const tracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "ls-files", "--error-unmatch", "--", selected], this.commandOptions());
       if (!tracked.killed && tracked.code === 1) return withoutCommit("未提交变更");
-      throw new Error("source_blame_failed");
+      throw domainError("source_blame_failed");
     }
     const lines = result.stdout.split("\n");
     const hash = lines[0]?.split(" ")[0] ?? "";
     const author = lines.find((entry) => entry.startsWith("author "))?.slice(7) ?? "";
     const timestamp = Number(lines.find((entry) => entry.startsWith("author-time "))?.slice(12));
     const subject = lines.find((entry) => entry.startsWith("summary "))?.slice(8) ?? "";
-    if (!/^[a-f0-9]{40}$/.test(hash) || !author || !Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > 8_640_000_000 || !subject) throw new Error("invalid_source_blame_response");
+    if (!/^[a-f0-9]{40}$/.test(hash) || !author || !Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > 8_640_000_000 || !subject) throw domainError("invalid_source_blame_response");
     const committed = !/^0{40}$/.test(hash);
     return {
       path: selected,
@@ -623,7 +624,7 @@ export class SourceBrowser {
   }
 
   async history(issue: IssueReference, repositoryName: string, relativePath = "", cursor?: SourceHistoryCursor, signal?: AbortSignal): Promise<SourceHistoryPage> {
-    if (cursor && (!/^[a-f0-9]{40}$/.test(cursor.revision) || !Number.isSafeInteger(cursor.offset) || cursor.offset <= 0)) throw new Error("invalid_source_history_cursor");
+    if (cursor && (!/^[a-f0-9]{40}$/.test(cursor.revision) || !Number.isSafeInteger(cursor.offset) || cursor.offset <= 0)) throw domainError("invalid_source_history_cursor");
     signal?.throwIfAborted();
     const context = cursor ? (await this.revisionContext(issue, repositoryName, cursor.revision)).source : await this.committedContext(issue, repositoryName);
     const selected = normalizedRelativePath(relativePath);
@@ -633,10 +634,10 @@ export class SourceBrowser {
         ...this.commandOptions(),
         ...(signal ? { signal } : {}),
       });
-      if (head.killed) throw new Error("source_history_timeout");
-      if (head.code !== 0) throw new Error("source_history_failed");
+      if (head.killed) throw domainError("source_history_timeout");
+      if (head.code !== 0) throw domainError("source_history_failed");
       revision = head.stdout.trim();
-      if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("invalid_source_history_response");
+      if (!/^[a-f0-9]{40}$/.test(revision)) throw domainError("invalid_source_history_response");
     }
     const offset = cursor?.offset ?? 0;
     const result = await this.executor.execute(
@@ -655,18 +656,18 @@ export class SourceBrowser {
       ],
       { ...this.commandOptions(), ...(signal ? { signal } : {}) },
     );
-    if (result.killed) throw new Error("source_history_timeout");
-    if (result.code !== 0) throw new Error("source_history_failed");
+    if (result.killed) throw domainError("source_history_timeout");
+    if (result.code !== 0) throw domainError("source_history_failed");
     const commits: SourceCommit[] = [];
     // NUL separates fields because Git rejects NUL in commit messages and identities; a record ends with its trailing NUL plus the newline Git adds.
     for (const rawRecord of result.stdout.split("\n")) {
       if (!rawRecord) continue;
       const fields = rawRecord.split("\0");
-      if (fields.length !== 6 || fields[5] !== "") throw new Error("invalid_source_history_response");
+      if (fields.length !== 6 || fields[5] !== "") throw domainError("invalid_source_history_response");
       const [hash, parentList, author, date, subject] = fields as [string, string, string, string, string, string];
       const parents = parentList ? parentList.split(" ") : [];
       if (!/^[a-f0-9]{40}$/.test(hash) || parents.some((parent) => !/^[a-f0-9]{40}$/.test(parent)) || !author || !date || Number.isNaN(Date.parse(date)) || subject.includes("\n"))
-        throw new Error("invalid_source_history_response");
+        throw domainError("invalid_source_history_response");
       commits.push({ hash, shortHash: hash.slice(0, 8), parents, author, date, subject });
     }
     const truncated = commits.length > issuePilotConfig.limits.sourceBrowser.historyCommits;
@@ -682,7 +683,7 @@ export class SourceBrowser {
       const limit = issuePilotConfig.limits.sourceBrowser.changeFiles;
       return { files: files.slice(0, limit), truncated: files.length > limit };
     } catch (error) {
-      if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_commit_too_large");
+      if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_commit_too_large");
       throw error;
     }
   }
@@ -690,16 +691,16 @@ export class SourceBrowser {
   async commitFile(issue: IssueReference, repositoryName: string, revision: string, relativePath: string): Promise<SourceCommitFileComparison> {
     const context = await this.revisionContext(issue, repositoryName, revision);
     const selected = sourcePath(normalizedRelativePath(relativePath));
-    if (!selected) throw new Error("invalid_source_path");
+    if (!selected) throw domainError("invalid_source_path");
     let files: SourceCommitFile[];
     try {
       files = await this.changedFiles(context, "");
     } catch (error) {
-      if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_commit_too_large");
+      if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_commit_too_large");
       throw error;
     }
     const file = files.find((candidate) => candidate.path === selected);
-    if (!file) throw new Error("source_commit_file_not_found");
+    if (!file) throw domainError("source_commit_file_not_found");
     const beforePath = file.previousPath ?? file.path;
     const before = file.status === "added" || !context.parent ? null : { path: beforePath, revision: context.parent, content: await this.revisionFile(context.source, context.parent, beforePath) };
     const after = file.status === "deleted" ? null : { path: file.path, revision, content: await this.revisionFile(context.source, revision, file.path) };
@@ -714,7 +715,7 @@ export class SourceBrowser {
       const limit = issuePilotConfig.limits.sourceBrowser.changeFiles;
       return { files: files.slice(0, limit), truncated: files.length > limit };
     } catch (error) {
-      if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_diff_too_large");
+      if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_diff_too_large");
       throw error;
     }
   }
@@ -722,16 +723,16 @@ export class SourceBrowser {
   async diffFile(issue: IssueReference, repositoryName: string, relativePath: string, staged = false): Promise<SourceWorkspaceFileComparison> {
     const context = await this.context(issue, repositoryName);
     const selected = sourcePath(normalizedRelativePath(relativePath));
-    if (!selected) throw new Error("invalid_source_path");
+    if (!selected) throw domainError("invalid_source_path");
     let files: SourceCommitFile[];
     try {
       files = await this.workspaceChangedFiles(context, "", staged);
     } catch (error) {
-      if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_diff_too_large");
+      if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_diff_too_large");
       throw error;
     }
     const file = files.find((candidate) => candidate.path === selected);
-    if (!file) throw new Error("source_diff_file_not_found");
+    if (!file) throw domainError("source_diff_file_not_found");
     const beforePath = file.previousPath ?? file.path;
     const before =
       file.status === "added"
@@ -761,21 +762,21 @@ export class SourceBrowser {
   }
 
   private async revisionContext(issue: IssueReference, repositoryName: string, revision: string): Promise<SourceRevisionContext> {
-    if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("invalid_source_revision");
+    if (!/^[a-f0-9]{40}$/.test(revision)) throw domainError("invalid_source_revision");
     const source = await this.committedContext(issue, repositoryName);
     const ancestor = await this.executor.execute(
       issuePilotConfig.runtime.sourceBrowser.gitExecutable,
       ["-C", source.root, "merge-base", "--is-ancestor", revision, source.head ?? "HEAD"],
       this.commandOptions(),
     );
-    if (ancestor.killed) throw new Error("source_history_timeout");
-    if (ancestor.code === 1) throw new Error("source_commit_not_found");
-    if (ancestor.code !== 0) throw new Error("source_history_failed");
+    if (ancestor.killed) throw domainError("source_history_timeout");
+    if (ancestor.code === 1) throw domainError("source_commit_not_found");
+    if (ancestor.code !== 0) throw domainError("source_history_failed");
     const parents = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", source.root, "rev-list", "--parents", "-n", "1", revision], this.commandOptions());
-    if (parents.killed) throw new Error("source_history_timeout");
-    if (parents.code !== 0) throw new Error("source_history_failed");
+    if (parents.killed) throw domainError("source_history_timeout");
+    if (parents.code !== 0) throw domainError("source_history_failed");
     const hashes = parents.stdout.trim().split(/\s+/);
-    if (hashes[0] !== revision || hashes.some((hash) => !/^[a-f0-9]{40}$/.test(hash))) throw new Error("invalid_source_history_response");
+    if (hashes[0] !== revision || hashes.some((hash) => !/^[a-f0-9]{40}$/.test(hash))) throw domainError("invalid_source_history_response");
     return { source, revision, parent: hashes[1] ?? null };
   }
 
@@ -783,8 +784,8 @@ export class SourceBrowser {
     const argumentsBeforeRange = ["-C", context.source.root, context.parent ? "diff" : "diff-tree", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C"];
     const range = context.parent ? [context.parent, context.revision] : ["--root", "--no-commit-id", "-r", context.revision];
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [...argumentsBeforeRange, ...range, "--", ...(selected ? [selected] : [])], this.commandOptions());
-    if (result.killed) throw new Error("source_history_timeout");
-    if (result.code !== 0) throw new Error("source_history_failed");
+    if (result.killed) throw domainError("source_history_timeout");
+    if (result.code !== 0) throw domainError("source_history_failed");
     return this.parseChangedFiles(result.stdout, "invalid_source_history_response");
   }
 
@@ -794,8 +795,8 @@ export class SourceBrowser {
       ["-C", context.root, "diff", ...(staged ? ["--cached"] : []), "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C", "--", ...(selected ? [selected] : [])],
       this.commandOptions(),
     );
-    if (result.killed) throw new Error("source_diff_timeout");
-    if (result.code !== 0) throw new Error("source_diff_failed");
+    if (result.killed) throw domainError("source_diff_timeout");
+    if (result.code !== 0) throw domainError("source_diff_failed");
     const files = this.parseChangedFiles(result.stdout, "invalid_source_diff_response");
     if (staged) return files;
     const untracked = await this.executor.execute(
@@ -803,8 +804,8 @@ export class SourceBrowser {
       ["-C", context.root, "ls-files", "--others", "--exclude-standard", "-z", "--", ...(selected ? [selected] : [])],
       this.commandOptions(),
     );
-    if (untracked.killed) throw new Error("source_diff_timeout");
-    if (untracked.code !== 0) throw new Error("source_diff_failed");
+    if (untracked.killed) throw domainError("source_diff_timeout");
+    if (untracked.code !== 0) throw domainError("source_diff_failed");
     const known = new Set(files.map((file) => file.path));
     for (const rawPath of untracked.stdout.split("\0").filter(Boolean)) {
       const filePath = sourcePath(normalizedRelativePath(rawPath));
@@ -815,26 +816,26 @@ export class SourceBrowser {
 
   private parseChangedFiles(output: string, invalidResponse: string): SourceCommitFile[] {
     if (!output) return [];
-    if (!output.endsWith("\0")) throw new Error(invalidResponse);
+    if (!output.endsWith("\0")) throw domainError(invalidResponse);
     const fields = output.slice(0, -1).split("\0");
     const files: SourceCommitFile[] = [];
     for (let index = 0; index < fields.length; ) {
       const rawStatus = fields[index++];
-      if (!rawStatus) throw new Error(invalidResponse);
+      if (!rawStatus) throw domainError(invalidResponse);
       const rename = /^[RC]\d{1,3}$/.test(rawStatus);
       const rawPreviousPath = rename ? fields[index++] : null;
       const rawPath = fields[index++];
-      if (!rawPath || (rename && !rawPreviousPath)) throw new Error(invalidResponse);
+      if (!rawPath || (rename && !rawPreviousPath)) throw domainError(invalidResponse);
       const filePath = sourcePath(normalizedRelativePath(rawPath));
       const previousPath = rawPreviousPath ? sourcePath(normalizedRelativePath(rawPreviousPath)) : null;
-      if (!filePath || previousPath === "") throw new Error(invalidResponse);
+      if (!filePath || previousPath === "") throw domainError(invalidResponse);
       let status: SourceCommitFile["status"];
       if (rawStatus === "A") status = "added";
       else if (rawStatus === "D") status = "deleted";
       else if (rawStatus === "M" || rawStatus === "T") status = "modified";
       else if (rawStatus.startsWith("R")) status = "renamed";
       else if (rawStatus.startsWith("C")) status = "copied";
-      else throw new Error(invalidResponse);
+      else throw domainError(invalidResponse);
       files.push({ status, path: filePath, previousPath });
     }
     return files;
@@ -856,13 +857,13 @@ export class SourceBrowser {
         strictStdoutUtf8: true,
       })
       .catch((error) => {
-        if (error instanceof Error && error.message === "command_stdout_not_utf8") throw new Error("source_file_binary");
-        if (error instanceof Error && error.message === "command_output_too_large") throw new Error("source_file_too_large");
+        if (error instanceof Error && error.message === "command_stdout_not_utf8") throw domainError("source_file_binary");
+        if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_file_too_large");
         throw error;
       });
-    if (result.killed) throw new Error(timeoutError);
-    if (result.code !== 0) throw new Error(commandError);
-    if (result.stdout.includes("\0")) throw new Error("source_file_binary");
+    if (result.killed) throw domainError(timeoutError);
+    if (result.code !== 0) throw domainError(commandError);
+    if (result.stdout.includes("\0")) throw domainError("source_file_binary");
     return result.stdout;
   }
 
@@ -871,21 +872,21 @@ export class SourceBrowser {
     const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     let content: Buffer, size: number;
     try {
-      if ((await realpath(`/proc/self/fd/${handle.fd}`)) !== file) throw new Error("source_path_outside_repository");
+      if ((await realpath(`/proc/self/fd/${handle.fd}`)) !== file) throw domainError("source_path_outside_repository");
       const metadata = await handle.stat();
-      if (!metadata.isFile()) throw new Error("source_path_not_file");
+      if (!metadata.isFile()) throw domainError("source_path_not_file");
       size = metadata.size;
-      if (size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw new Error("source_file_too_large");
+      if (size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw domainError("source_file_too_large");
       content = await handle.readFile();
     } finally {
       await handle.close();
     }
-    if (content.subarray(0, Math.min(content.length, 8192)).includes(0)) throw new Error("source_file_binary");
+    if (content.subarray(0, Math.min(content.length, 8192)).includes(0)) throw domainError("source_file_binary");
     let text: string;
     try {
       text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
     } catch {
-      throw new Error("source_file_binary");
+      throw domainError("source_file_binary");
     }
     return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size, sha256: createHash("sha256").update(content).digest("hex") };
   }
@@ -895,23 +896,23 @@ export class SourceBrowser {
       this.database.select({ runtimeReady: issueWorkspaces.runtimeReady }).from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)).limit(1),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
-    if (!workspace[0]?.runtimeReady) throw new Error("source_browser_unavailable");
+    if (!workspace[0]?.runtimeReady) throw domainError("source_browser_unavailable");
     const state = classifyRepositoryState(repositories);
-    if (state === "invalid") throw new Error("source_repository_state_invalid");
+    if (state === "invalid") throw domainError("source_repository_state_invalid");
     return { rows: repositories, state };
   }
 
   private async writableContext(issue: IssueReference, repositoryName: string): Promise<SourceContext> {
     const context = await this.context(issue, repositoryName);
     const expectedStore = context.store;
-    if (!expectedStore) throw new Error("source_read_only");
+    if (!expectedStore) throw domainError("source_read_only");
     const result = await this.executor.execute(
       issuePilotConfig.runtime.sourceBrowser.gitExecutable,
       ["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"],
       this.mutationOptions(),
     );
     // A killed or failed probe is not a binding mismatch; keep the two conditions distinguishable.
-    if (result.killed) throw new Error("source_git_timeout");
+    if (result.killed) throw domainError("source_git_timeout");
     const [gitDirectory, commonDirectory, workingDirectory, branch] = result.stdout.trim().split("\n");
     if (
       result.code !== 0 ||
@@ -921,17 +922,17 @@ export class SourceBrowser {
       !gitDirectory ||
       path.dirname(gitDirectory) !== path.join(expectedStore, "worktrees")
     )
-      throw new Error("source_git_binding_invalid");
+      throw domainError("source_git_binding_invalid");
     const pointer = (await readFile(path.join(gitDirectory, "gitdir"), "utf8")).trim();
-    if (path.resolve(gitDirectory, pointer) !== path.join(context.root, ".git")) throw new Error("source_git_binding_invalid");
+    if (path.resolve(gitDirectory, pointer) !== path.join(context.root, ".git")) throw domainError("source_git_binding_invalid");
     return context;
   }
 
   private mutablePaths(paths: string[]): string[] {
-    if (!paths.length || paths.length > issuePilotConfig.limits.sourceBrowser.changeFiles) throw new Error("invalid_source_path");
+    if (!paths.length || paths.length > issuePilotConfig.limits.sourceBrowser.changeFiles) throw domainError("invalid_source_path");
     return paths.map((value) => {
       const selected = sourcePath(normalizedRelativePath(value));
-      if (!selected) throw new Error("invalid_source_path");
+      if (!selected) throw domainError("invalid_source_path");
       return selected;
     });
   }
@@ -944,7 +945,7 @@ export class SourceBrowser {
     const failures: unknown[] = [];
     try {
       const descriptor = `/proc/self/fd/${directory.fd}`;
-      if ((await realpath(descriptor)) !== parent) throw new Error("source_path_outside_repository");
+      if ((await realpath(descriptor)) !== parent) throw domainError("source_path_outside_repository");
       return await operation(path.join(descriptor, path.basename(candidate)));
     } catch (error) {
       failures.push(error);
@@ -961,15 +962,15 @@ export class SourceBrowser {
 
   private async mutableDestination(context: SourceContext, relativePath: string, allowExisting = false): Promise<string> {
     const selected = normalizedRelativePath(relativePath);
-    if (!selected) throw new Error("invalid_source_path");
+    if (!selected) throw domainError("invalid_source_path");
     const candidate = path.resolve(context.root, selected);
-    if (!isInside(context.root, candidate)) throw new Error("invalid_source_path");
+    if (!isInside(context.root, candidate)) throw domainError("invalid_source_path");
     const parent = await this.resolvePath(context.root, path.dirname(selected));
-    if (path.dirname(candidate) !== parent) throw new Error("source_path_outside_repository");
+    if (path.dirname(candidate) !== parent) throw domainError("source_path_outside_repository");
     if (!allowExisting) {
       try {
         await lstat(candidate);
-        throw new Error("source_path_exists");
+        throw domainError("source_path_exists");
       } catch (error) {
         if (error instanceof Error && error.message === "source_path_exists") throw error;
         if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
@@ -988,16 +989,16 @@ export class SourceBrowser {
 
   private async gitMutation(context: SourceContext, args: string[], failure: string): Promise<void> {
     const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, ...args], this.mutationOptions());
-    if (result.killed) throw new Error(`${failure.replace(/_failed$/, "")}_timeout`);
-    if (result.code !== 0) throw new Error(failure);
+    if (result.killed) throw domainError(`${failure.replace(/_failed$/, "")}_timeout`);
+    if (result.code !== 0) throw domainError(failure);
   }
 
   private async selectRepository(issue: IssueReference, repositoryName: string) {
-    if (!repositoryNamePattern.test(repositoryName)) throw new Error("source_repository_not_found");
+    if (!repositoryNamePattern.test(repositoryName)) throw domainError("source_repository_not_found");
     const { rows, state } = await this.repositorySet(issue);
     const names = issueRepositoryWorkspaceNames(rows);
     const repository = rows.find((candidate) => names.get(candidate.url) === repositoryName);
-    if (!repository) throw new Error("source_repository_not_found");
+    if (!repository) throw domainError("source_repository_not_found");
     return { repository, state };
   }
 
@@ -1016,14 +1017,14 @@ export class SourceBrowser {
   private async resolvePath(root: string, relativePath: string): Promise<string> {
     const relative = normalizedRelativePath(relativePath);
     const candidate = path.resolve(root, relative);
-    if (!isInside(root, candidate)) throw new Error("invalid_source_path");
+    if (!isInside(root, candidate)) throw domainError("invalid_source_path");
     let resolved: string;
     try {
       resolved = await realpath(candidate);
     } catch (error) {
       missingPathError(error);
     }
-    if (!isInside(root, resolved)) throw new Error("source_path_outside_repository");
+    if (!isInside(root, resolved)) throw domainError("source_path_outside_repository");
     normalizedRelativePath(path.relative(root, resolved));
     return resolved;
   }

@@ -21,6 +21,7 @@ import { readIssueBranchCommit } from "../workspace/issue-git.ts";
 import { classifyRepositoryState } from "../workspace/state.ts";
 import { executeLocalCommand } from "../process.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { domainError } from "../domain/errors.ts";
 import { prepareIssueCommand } from "./issue-sandbox.ts";
 
 type Issue = typeof issues.$inferSelect;
@@ -60,7 +61,7 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
     args = input.operation === "stage" ? ["add", "-A", "--", ...input.paths] : ["reset", "-q", "HEAD", "--", ...input.paths];
   } else if ("message" in input) {
     const message = input.message.trim();
-    if (!message || message.includes("\0")) throw new Error("invalid_source_commit_message");
+    if (!message || message.includes("\0")) throw domainError("invalid_source_commit_message");
     args = ["commit", "-m", message];
   } else {
     if (!options.personalGit?.env.GIT_SSH_COMMAND || !/^(ssh:\/\/|[^/]+@[^:]+:)/.test(repository.url)) throw new Error("personal_git_ssh_credentials_required");
@@ -198,7 +199,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
           await database.transaction(async (tx) => {
             if (input.operation === "include") await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
             else await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
-            await tx.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+            await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
           });
           // Persist intent before cross-media preparation. A failed attempt retires the session too,
           // but only completed preparation grants the new paths to native tools in this round.
@@ -207,7 +208,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
             const prepare = () => projects.prepare(current, environmentKind, personalGit?.env);
             const project = await (options.checkoutLease ? options.checkoutLease.run(prepare) : prepare());
             signal?.throwIfAborted();
-            await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+            await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
             readRoots = project.readRoots;
           } finally {
             onScopeChanged?.(readRoots);

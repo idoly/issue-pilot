@@ -88,7 +88,11 @@ export async function resolveSecureAttachmentFile(attachmentRoot: string, object
   const attachmentPath = path.resolve(objectKey);
   if (path.dirname(attachmentPath) !== attachmentRoot) throw new Error("insecure_issue_attachment_file");
   await assertAttachmentRoot(attachmentRoot);
-  const metadata = await lstat(attachmentPath).catch(() => undefined);
+  // Absence is the only condition this validator may reinterpret; permission and I/O failures stay visible.
+  const metadata = await lstat(attachmentPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
+    throw error;
+  });
   validateAttachmentFile(metadata, expectedSize);
   return attachmentPath;
 }

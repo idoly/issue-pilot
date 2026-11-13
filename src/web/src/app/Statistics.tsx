@@ -2,6 +2,7 @@ import { Button, Select, Skeleton } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { fileSize, statusLabel, typeLabel } from "./model";
 
 type InsightView = "output" | "distribution" | "team" | "resources";
@@ -13,38 +14,33 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [view, setView] = createSignal<InsightView>("distribution", { ownedWrite: true });
   const [period, setPeriod] = createSignal<StatisticsPeriod>("30d", { ownedWrite: true });
-  let controller: AbortController | undefined;
+  const latest = createLatestTask();
   const [sampling, setSampling] = createSignal(false, { ownedWrite: true });
   const [sampleError, setSampleError] = createSignal("", { ownedWrite: true });
   const refresh = (force = false) => {
-    controller?.abort();
-    const request = new AbortController();
-    controller = request;
+    const request = latest.begin();
     setLoading(true);
     setLoadError("");
     void loadWorkspaceStats(request.signal, force)
       .then((value) => {
-        if (request.signal.aborted) return;
+        if (!request.isCurrent()) return;
         if (value.snapshot) setWorkspaceStats(value.snapshot);
         setSampling(value.sampling);
         setSampleError(value.error ? `统计更新失败（${value.error}）${value.snapshot ? "，已保留上次结果" : "，可重新采样"}` : "");
       })
       .catch((reason) => {
-        if (!request.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
+        if (request.isCurrent() && !request.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
       })
       .finally(() => {
-        if (!request.signal.aborted) {
-          controller = undefined;
-          setLoading(false);
-        }
+        if (request.isCurrent()) setLoading(false);
+        request.finish();
       });
   };
   const poll = () => {
-    if (view() === "resources" && !document.hidden && !controller) refresh();
+    if (view() === "resources" && !document.hidden && !latest.active) refresh();
   };
   const cancel = () => {
-    controller?.abort();
-    controller = undefined;
+    latest.cancel();
     setLoading(false);
   };
   createEffect(

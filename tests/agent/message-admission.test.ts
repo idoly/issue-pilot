@@ -17,7 +17,14 @@ import { eq } from "drizzle-orm";
 import { SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { AgentEngine } from "../../src/agent/engine.ts";
-import { assertSessionFileComplete, createPrivateSessionManager, type ManagedPiSession, type PiSessionRuntime, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
+import {
+  assertSessionFileComplete,
+  createPrivateSessionManager,
+  type GitCommitIdentity,
+  type ManagedPiSession,
+  type PiSessionRuntime,
+  type StartPiSessionOptions,
+} from "../../src/agent/pi-session.ts";
 import type { IssueProjectManager, PreparedIssueProject } from "../../src/workspace/project.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -629,3 +636,36 @@ for (const outcome of ["accepted", "late", "uncertain"] as const)
       await rm(root, { recursive: true, force: true });
     }
   });
+
+test("a developer-owner session keeps its personal Git identity when another sender writes", async () => {
+  const { root, database, issue } = await fixture();
+  const engine = new AgentEngine(database.db, root);
+  const internal = engine as unknown as { personalSessions: Set<string>; sessions: Map<string, ManagedPiSession> };
+  const manager = SessionManager.inMemory();
+  const identities: GitCommitIdentity[] = [];
+  internal.sessions.set(issue.id, {
+    session: { sessionManager: manager } as unknown as AgentSession,
+    streaming: false,
+    setGitIdentity(identity: GitCommitIdentity) {
+      identities.push(identity);
+    },
+    async prompt() {},
+    async stop() {},
+  } as unknown as ManagedPiSession);
+  (engine as unknown as { run(issueId: string, message?: string): Promise<void> }).run = async () => undefined;
+  const sender = { name: "Sender", email: "sender@example.test" };
+  try {
+    // The owner's personal identity is fixed for the session; the sender must not overwrite it.
+    internal.personalSessions.add(issue.id);
+    await engine.send(issue.id, "owner identity", sender);
+    assert.deepEqual(identities, []);
+    // Other Issues still adopt the caller's identity until a personal environment is attached.
+    internal.personalSessions.delete(issue.id);
+    await engine.send(issue.id, "sender identity", sender);
+    assert.deepEqual(identities, [sender]);
+  } finally {
+    await engine.close();
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

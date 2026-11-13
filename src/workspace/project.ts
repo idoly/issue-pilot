@@ -1,4 +1,5 @@
 import { and, asc, eq, isNotNull, ne, notInArray, or } from "drizzle-orm";
+import { domainError } from "../domain/errors.ts";
 import path from "node:path";
 
 import type { Database } from "../db/client.ts";
@@ -46,6 +47,21 @@ export interface PreparedDevelopmentConversion {
 }
 
 export type PreparedDevelopmentScopeMigration = PreparedDevelopmentConversion;
+
+/** The repository set a scope-transition plan was verified against. */
+export interface ExpectedRepository {
+  url: string;
+  baseBranch: string;
+}
+
+/** Refuse a plan whose target deployment changed before execution instead of re-resolving silently. */
+export function assertSameRepositorySet(actual: ReadonlyArray<ExpectedRepository>, expected: readonly ExpectedRepository[] | undefined): void {
+  if (!expected) return;
+  const key = ({ url, baseBranch }: ExpectedRepository) => `${url}\0${baseBranch}`;
+  const actualKeys = new Set(actual.map(key));
+  const expectedKeys = new Set(expected.map(key));
+  if (actualKeys.size !== expectedKeys.size || [...actualKeys].some((value) => !expectedKeys.has(value))) throw new Error("scope_transition_plan_stale");
+}
 
 type IssueRepositoryWriter = Pick<Database, "insert" | "delete">;
 type IssueRepositoryReplacement = Pick<IssueRepository, "url" | "baseBranch" | "workingBranch" | "localPath" | "workspaceName" | "commitBefore">;
@@ -124,7 +140,7 @@ export class IssueProjectManager {
     }
     await this.database
       .update(issueWorkspaces)
-      .set({ runtimeReady: true, lastError: null, updatedAt: new Date() })
+      .set({ runtimeReady: true, ...(state === "development_workspace" ? { releasedAt: null } : {}), lastError: null, updatedAt: new Date() })
       .where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     return runtimeRoot;
   }
@@ -168,18 +184,9 @@ export class IssueProjectManager {
         },
       });
     } catch (error) {
-      let cleanupFailed = error instanceof WorktreeRollbackFailure;
-      let recoveryError: unknown;
       // The working directory may contain persistent files unrelated to repository restore.
       // Worktree rollback owns its paths; do not remove the Issue directory here.
-      try {
-        await recoverRuntime();
-      } catch (caught) {
-        cleanupFailed = true;
-        recoveryError = caught;
-      }
-      if (cleanupFailed) throw new Error("workspace_restore_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_restore_cleanup_failed") });
-      throw error;
+      return this.recoverAfterFailure(error, "workspace_restore_cleanup_failed", recoverRuntime);
     }
   }
 
@@ -202,7 +209,7 @@ export class IssueProjectManager {
         try {
           agent.readRoots.add(await assertIssueRoot(this.stateRoot, related.issue.key));
           const state = classifyRepositoryState(repositoryRows);
-          if (repositoryRows.length && state === "invalid") throw new Error("source_repository_state_invalid");
+          if (repositoryRows.length && state === "invalid") throw domainError("source_repository_state_invalid");
           if (state !== "invalid") {
             for (const repository of repositoryRows) {
               const { root, store } = await resolveRecordedRepository(this.stateRoot, related.issue.key, repository, names.get(repository.url)!, state, agent.checkedCheckouts);
@@ -284,7 +291,7 @@ export class IssueProjectManager {
         .where(and(eq(agentSessions.issueId, issue.id), ne(agentSessions.workspacePath, runtimeRoot)));
       await transaction
         .update(issueWorkspaces)
-        .set({ runtimeReady: true, lastError: null, updatedAt: now })
+        .set({ runtimeReady: true, releasedAt: null, lastError: null, updatedAt: now })
         .where(and(eq(issueWorkspaces.issueId, issue.id), or(eq(issueWorkspaces.runtimeReady, false), isNotNull(issueWorkspaces.lastError))));
     });
     return runtimeRoot;
@@ -295,16 +302,21 @@ export class IssueProjectManager {
     developmentEnvironmentId: string,
     finalize: (conversion: PreparedDevelopmentConversion) => Promise<T>,
     credentialsApplied = false,
+    expectedRepositories?: readonly ExpectedRepository[],
   ): Promise<T> {
     if (!credentialsApplied)
       return this.withPersonalGit(issue.id, { serviceId: issue.serviceId, environmentId: developmentEnvironmentId }, () =>
-        this.convertReadOnlyToDevelopment(issue, developmentEnvironmentId, finalize, true),
+        this.convertReadOnlyToDevelopment(issue, developmentEnvironmentId, finalize, true, expectedRepositories),
       );
     const [{ repositories }, existingRepositories] = await Promise.all([
       loadIssueDeployments(this.database, { id: issue.id, serviceId: issue.serviceId, environmentId: developmentEnvironmentId }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (classifyRepositoryState(existingRepositories) !== "read_only") throw new Error("readonly_repository_state_invalid");
+    assertSameRepositorySet(
+      repositories.map(({ repository, baseBranch }) => ({ url: repository.url, baseBranch })),
+      expectedRepositories,
+    );
     const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     // Read-only Issues already have working files here. Worktree preparation claims
     // individual repository paths and refuses collisions without removing those files.
@@ -339,16 +351,7 @@ export class IssueProjectManager {
         },
       });
     } catch (error) {
-      let cleanupFailed = error instanceof WorktreeRollbackFailure;
-      let recoveryError: unknown;
-      try {
-        await this.hydrateReadOnlyRuntime(issue);
-      } catch (caught) {
-        cleanupFailed = true;
-        recoveryError = caught;
-      }
-      if (cleanupFailed) throw new Error("workspace_conversion_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_conversion_cleanup_failed") });
-      throw error;
+      return this.recoverAfterFailure(error, "workspace_conversion_cleanup_failed", () => this.hydrateReadOnlyRuntime(issue));
     }
   }
 
@@ -357,13 +360,20 @@ export class IssueProjectManager {
     target: { serviceId: string; environmentId: string },
     finalize: (migration: PreparedDevelopmentScopeMigration) => Promise<T>,
     credentialsApplied = false,
+    expectedRepositories?: readonly ExpectedRepository[],
   ): Promise<T> {
-    if (!credentialsApplied) return this.withPersonalGit(issue.id, target, () => this.migrateDevelopmentScope(issue, target, finalize, true));
+    if (!credentialsApplied) return this.withPersonalGit(issue.id, target, () => this.migrateDevelopmentScope(issue, target, finalize, true, expectedRepositories));
     const [{ repositories }, existingRepositories] = await Promise.all([
       loadIssueDeployments(this.database, { id: issue.id, ...target }),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     if (classifyRepositoryState(existingRepositories) !== "development_workspace") throw new Error("development_repository_state_invalid");
+    const existingByUrl = new Map(existingRepositories.map((repository) => [repository.url, repository]));
+    // Retained repositories keep the branch they were prepared from; only added ones use the target branch.
+    assertSameRepositorySet(
+      repositories.map(({ repository, baseBranch }) => ({ url: repository.url, baseBranch: existingByUrl.get(repository.url)?.baseBranch ?? baseBranch })),
+      expectedRepositories,
+    );
     const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     if (!(await pathExists(workspaceRoot))) throw new Error("workspace_missing");
     await assertManagedIssueWorkspaceLayout(
@@ -371,7 +381,6 @@ export class IssueProjectManager {
       existingRepositories.map((repository) => repository.localPath!),
     );
 
-    const existingByUrl = new Map(existingRepositories.map((repository) => [repository.url, repository]));
     const existingNames = issueRepositoryWorkspaceNames(existingRepositories);
     const targetUrls = new Set(repositories.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositories.filter((repository) => !targetUrls.has(repository.url));
@@ -428,17 +437,22 @@ export class IssueProjectManager {
         },
       });
     } catch (error) {
-      let cleanupFailed = error instanceof WorktreeRollbackFailure;
-      let recoveryError: unknown;
-      try {
-        await this.hydrateDevelopmentRuntime(issue);
-      } catch (caught) {
-        cleanupFailed = true;
-        recoveryError = caught;
-      }
-      if (cleanupFailed) throw new Error("workspace_scope_migration_cleanup_failed", { cause: new AggregateError([error, recoveryError].filter(Boolean), "workspace_scope_migration_cleanup_failed") });
-      throw error;
+      return this.recoverAfterFailure(error, "workspace_scope_migration_cleanup_failed", () => this.hydrateDevelopmentRuntime(issue));
     }
+  }
+
+  /** A failed preparation restores the previous runtime view; rollback and recovery failures are both preserved. */
+  private async recoverAfterFailure(error: unknown, failureCode: string, recover: () => Promise<unknown>): Promise<never> {
+    let cleanupFailed = error instanceof WorktreeRollbackFailure;
+    let recoveryError: unknown;
+    try {
+      await recover();
+    } catch (caught) {
+      cleanupFailed = true;
+      recoveryError = caught;
+    }
+    if (cleanupFailed) throw new Error(failureCode, { cause: new AggregateError([error, recoveryError].filter(Boolean), failureCode) });
+    throw error;
   }
 
   private async withPersonalGit<T>(issueId: string, target: { serviceId: string; environmentId: string }, operation: () => Promise<T>): Promise<T> {

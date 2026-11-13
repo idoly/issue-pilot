@@ -58,6 +58,8 @@ export interface StartPiSessionOptions {
 export interface ManagedPiSession {
   readonly session: AgentSession;
   readonly streaming: boolean;
+  /** Set when the Issue's service scope changed during the round; retire it when the round ends. */
+  scopeChanged?: boolean;
   setGitIdentity(identity: GitCommitIdentity): void;
   prompt(message: string, images?: ImageContent[], command?: string, signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;
@@ -412,9 +414,7 @@ export class PiSessionRuntime {
         stopped = false;
       return {
         ...managed,
-        get streaming() {
-          return managed.streaming;
-        },
+        scopeChanged: false,
         stop: () =>
           stopped
             ? Promise.resolve()

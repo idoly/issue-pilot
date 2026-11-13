@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { domainError } from "../domain/errors.ts";
 import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { issueRepositories } from "../db/schema.ts";
@@ -23,11 +24,11 @@ export async function recordedSharedSnapshot(stateRoot: string, issueKey: string
   const root = await assertIssueRoot(stateRoot, issueKey);
   const entry = path.join(root, entryName(name));
   const store = repositoryStorePath(stateRoot, repository.url);
-  if (!(await lstat(entry)).isSymbolicLink() || !(await lstat(store)).isDirectory() || (await realpath(store)) !== store) throw new Error("source_runtime_invalid");
+  if (!(await lstat(entry)).isSymbolicLink() || !(await lstat(store)).isDirectory() || (await realpath(store)) !== store) throw domainError("source_runtime_invalid");
   const commit = state === "read_only" ? repository.commitBefore : await readIssueBranchCommit(await developmentRepositoryStorePath(stateRoot, issueKey, repository.url), repository.workingBranch!);
-  if (!commit || !/^[a-f0-9]{40}$/.test(commit)) throw new Error("source_runtime_invalid");
+  if (!commit || !/^[a-f0-9]{40}$/.test(commit)) throw domainError("source_runtime_invalid");
   const checkout = path.join(sharedCheckoutsRoot(stateRoot), path.basename(store), commit);
-  if (path.resolve(root, await readlink(entry)) !== checkout) throw new Error("source_runtime_invalid");
+  if (path.resolve(root, await readlink(entry)) !== checkout) throw domainError("source_runtime_invalid");
   return { store, commit, checkout };
 }
 
@@ -45,7 +46,7 @@ export async function resolveRecordedRepository(
       const entry = path.join(await assertIssueRoot(stateRoot, issueKey), entryName(name));
       const metadata = await lstat(entry);
       const root = await realpath(entry);
-      if (!metadata.isDirectory() || !repository.localPath || path.resolve(repository.localPath) !== entry || root !== entry) throw new Error("source_runtime_invalid");
+      if (!metadata.isDirectory() || !repository.localPath || path.resolve(repository.localPath) !== entry || root !== entry) throw domainError("source_runtime_invalid");
       const store = await developmentRepositoryStorePath(stateRoot, issueKey, repository.url);
       await validateIssueWorktreeBinding(store, root, repository.workingBranch!);
       return { root, store };
@@ -54,7 +55,7 @@ export async function resolveRecordedRepository(
     return { root: await new WorktreeManager(stateRoot).openSharedCheckout(repository.url, commit, checkedCheckouts) };
   } catch (error) {
     if (error instanceof Error && (error.message === "source_runtime_invalid" || (error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
-    throw new Error("source_git_binding_invalid", { cause: error });
+    throw domainError("source_git_binding_invalid", { cause: error });
   }
 }
 function managedRepository(stateRoot: string, issueKey: string, repositoryPath: string, access: IssueRuntimeAccess): string {

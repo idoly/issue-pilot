@@ -8,6 +8,7 @@ import type { FastifyInstance } from "fastify";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { AgentBusyError } from "../../src/agent/engine.ts";
 import type { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
 import { AGENT_THINKING_LEVELS, type AgentRunState, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
@@ -59,7 +60,7 @@ export class TestAgentController {
 
   async runExclusive<T>(issueIds: string[], operation: (reservation: { enqueue(issueId: string, message?: string): void; closeSession(issueId: string): Promise<void> }) => Promise<T>): Promise<T> {
     const reserved = [...new Set(issueIds)];
-    if (reserved.some((issueId) => this.running.has(issueId) || this.reservations.has(issueId))) throw new Error("issue_already_running");
+    if (reserved.some((issueId) => this.running.has(issueId) || this.reservations.has(issueId))) throw new AgentBusyError();
     for (const issueId of reserved) this.reservations.add(issueId);
     try {
       return await operation({
@@ -72,7 +73,7 @@ export class TestAgentController {
   }
 
   async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>): Promise<void> {
-    if (this.reservations.has(issueId)) throw new Error("issue_already_running");
+    if (this.reservations.has(issueId)) throw new AgentBusyError();
     await authorize?.();
     if (this.databaseFile) {
       const database = openDatabase(this.databaseFile);
@@ -91,7 +92,7 @@ export class TestAgentController {
 
   async abort(issueId: string, authorize?: () => Promise<unknown>): Promise<void> {
     await authorize?.();
-    if (this.reservations.has(issueId)) throw new Error("issue_already_running");
+    if (this.reservations.has(issueId)) throw new AgentBusyError();
     this.running.delete(issueId);
     this.queued.delete(issueId);
   }

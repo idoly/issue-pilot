@@ -26,6 +26,7 @@ SQLite, JSONL, Git, attachments and work files jointly retain facts. There is no
 | --- | --- |
 | Paths, defaults and hard budgets | [root configuration](../../issue-pilot.config.ts), [config.ts](../../src/config.ts) |
 | Roles, states, work modes and business predicates | [domain/contracts.ts](../../src/domain/contracts.ts) |
+| Stable failure codes and transport-neutral categories | [domain/errors.ts](../../src/domain/errors.ts) |
 | Schema, bootstrap and immutable upgrades | [schema.ts](../../src/db/schema.ts), [bootstrap.ts](../../src/db/bootstrap.ts), [drizzle](../../drizzle) |
 | Configuration, credentials, projections and hot parameters | [configuration](../../src/configuration) |
 | Optional Issue vector search and generated index | [search](../../src/search), [issue-search-routes.ts](../../src/http/issue-search-routes.ts) |
@@ -62,6 +63,7 @@ Routes coordinate owners; they do not reimplement Git, attachment transactions, 
 | Agent | idle / queued / running; running includes preparation and cleanup |
 | agentRunning | Includes queued and executing work, not just runState=running |
 | Workspace | not_created / preparing / running / ready / stopped / failed; not a business conclusion |
+| Release | `released_at` is the sole marker, committed with the snapshot repository rows; runtime readiness is a separate generated view |
 
 Manual transitions are pending → resolved and resolved → open. Reopen does not automatically run Agent. Enums and mappings belong to [contracts.ts](../../src/domain/contracts.ts).
 
@@ -95,7 +97,8 @@ The private host runner allows up to 1800 seconds for graceful stop and 600 seco
 - A stream is usable only after replay reaches snapshot_ready. Invalid frames invalidate the connection; reconnect replaces the projection instead of accepting a partial snapshot.
 - Stable entry IDs/contentIndex preserve block identity. Streaming is plain text; completed content uses Markdown. Tool details, Monaco and configuration code load on demand; editors and models are disposed independently.
 - ConversationProjection owns display reduction for replay, live batches and history pages. Tool-call and streaming-assistant indexes avoid repeatedly scanning history; snapshots use copy-on-write so an entire replay or batch needs at most one array copy while previously published snapshots remain unchanged.
-- [issue-list.ts](../../src/web/src/app/issue-list.ts) owns one application snapshot for the queue, overview and statistics. Visible Issue/home views sample it every 10 seconds and on return to the tab, without interrupting an active request; navigation and explicit refresh invalidate older responses. Configuration and hidden tabs skip periodic sampling, disposal cancels it, and failures retain the last successful list. This is not server pagination or cross-client push.
+- Components with one latest-wins request lane use [latest.ts](../../src/web/src/data/latest.ts) for generation, abort and disposition; genuinely independent lanes (editors, parallel panels) keep separate tasks instead of a global request mutex.
+- [issue-list.ts](../../src/web/src/app/issue-list.ts) owns one application entity map for the queue, overview, statistics and selected detail. Summaries and details of the same Issue share an entry; the server `revision` covers Issue, Workspace, Agent and joined display facts, so views do not maintain field lists or parallel detail copies. Visible Issue/home views sample the list every 10 seconds and on return to the tab, without interrupting an active request; navigation and explicit refresh invalidate older responses. Configuration and hidden tabs skip periodic sampling, disposal cancels it, and failures retain the last successful list. This is not server pagination or cross-client push.
 - [Modal.tsx](../../src/web/src/ui/Modal.tsx) uses native modal dialogs for the top layer and background focus isolation; callers still own open state and whether cancellation is allowed. [Select.tsx](../../src/web/src/ui/Select.tsx) mounts dropdowns inside their containing dialog so the browser keeps them interactive.
 - [App.tsx](../../src/web/src/app/App.tsx) refreshes selected details when its own or a related Issue's sampled summary/execution fields change, or a related Issue disappears, and reloads on returning to the workspace. Per-selection/request guards reject stale details, while background refresh preserves drafts and open editors. Queue sampling does not navigate away when an existing Issue stops matching filters; explicit filter/identity changes and actual removal can choose another Issue. Agent lifecycle events refresh both details and the shared list; authoritative SSE runState includes cleanup and takes precedence over business completion or an older HTTP agentRunning flag.
 - SSE queue budgets, display budgets, source limits and durable session size are separate. Local budgets do not bound total process memory.

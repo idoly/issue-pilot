@@ -95,12 +95,7 @@ export async function requireIssue(database: { db: DatabaseReader }, key: string
 }
 
 export async function runIssueExclusive<T>(engine: AgentController, issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T> {
-  try {
-    return await engine.runExclusive(issueIds, operation);
-  } catch (error) {
-    if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
-    throw error;
-  }
+  return engine.runExclusive(issueIds, operation);
 }
 
 /** Operator-correctable refusals carry stable snake_case reasons; any other failure stays internal. */

@@ -67,6 +67,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0074_issue_search_configuration",
       "0075_derive_dbhub_connections",
       "0076_issue_data_publication",
+      "0077_workspace_release_state",
     ],
   );
   const previousJournal = {
@@ -533,7 +534,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const workspaceColumns = await client.execute("pragma table_info('issue_workspaces')");
     assert.deepEqual(
       workspaceColumns.rows.map((column) => column.name),
-      ["issue_id", "status", "runtime_ready", "last_error", "created_at", "updated_at"],
+      ["issue_id", "status", "runtime_ready", "last_error", "created_at", "updated_at", "released_at"],
     );
     const sessionColumns = await client.execute("pragma table_info('issue_pilot_sessions')");
     assert.deepEqual(

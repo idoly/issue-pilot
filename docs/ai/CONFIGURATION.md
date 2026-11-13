@@ -61,6 +61,8 @@ Owner = assignee, else reporter, and must be active. Selection belongs to [user-
 | DMS | Complete personal URL/Authorization in prod/test, else shared; incomplete personal group fails |
 | SLS | Complete personal AK ID/Secret in prod/test, else shared; incomplete personal group fails |
 
+[user-credentials.ts](../../src/configuration/user-credentials.ts) owns completeness once. DMS and SLS resolve independently into one result per configured capability: a failed group disables only that capability, and the tool boundary reports its error when that capability is selected. Model selection and its key resolve together, so a caller cannot pair a personal selection with the shared key or the reverse.
+
 Development evidence queries explicitly select prod/test. Credentials do not create targets. Shared model/runtime settings are global; deployments have no model override. Personal models replace selection and key, not the global runtime.
 
 Operator auth.json/models.json keys and headers do not reach application model requests. Request runtimes isolate the SQLite-selected key and disable host credential fallback. Initialization/close failures retain cleanup ownership. Verify with [model-runtime.test.ts](../../tests/agent/model-runtime.test.ts).

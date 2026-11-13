@@ -466,6 +466,8 @@ export const issueWorkspaces = sqliteTable(
       .references(() => issues.id, { onDelete: "cascade" }),
     status: text("status", { enum: WORKSPACE_STATUSES }).notNull().default("not_created"),
     runtimeReady: integer("runtime_ready", { mode: "boolean" }).notNull().default(false),
+    /** Set in the same transaction as the released repository rows; the sole release marker. */
+    releasedAt: date("released_at"),
     lastError: text("last_error"),
     ...timestamps,
   },

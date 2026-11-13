@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 import {
+  issueRepositoryStorePath,
   issueRepositoryWorkspaceNames,
   repositoryStorePath,
   repositoryWorkspaceNames,
@@ -602,20 +603,21 @@ test("clean inspection handles non-ASCII branch headers and still rejects detach
   }
 });
 
-test("a retry after a failed first preparation records the base the reused branch actually contains", async () => {
+test("a failed first preparation discards the worktree, branch and private store it created", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-retry-base-"));
   try {
     const source = join(root, "source"),
-      remote = join(root, "remote.git");
+      remote = join(root, "remote.git"),
+      state = join(root, "state");
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, "README.md"), "first\n");
     await git(["-C", source, "add", "."]);
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "first"]);
     await git(["clone", "--bare", source, remote]);
-    const manager = new WorktreeManager(join(root, "state"));
+    const manager = new WorktreeManager(state);
     const worktree = { issueKey: "ISSUE-20261103-901", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" as const };
     // Issue roots are claimed at creation, before any preparation.
-    await mkdir(join(root, "state", "workspaces", "issue-20261103-901"), { recursive: true });
+    await mkdir(join(state, "workspaces", "issue-20261103-901"), { recursive: true });
     await assert.rejects(
       manager.prepareBatch({
         worktrees: [worktree],
@@ -625,13 +627,16 @@ test("a retry after a failed first preparation records the base the reused branc
       }),
       /simulated_finalize_failure/,
     );
-    // Production moves on before the retry; the branch left by the failed attempt still points at the old base.
+    // An unrecorded attempt must leave no worktree, branch or private store for a later retry to adopt.
+    await assert.rejects(access(join(state, "workspaces", "issue-20261103-901", "repo")), { code: "ENOENT" });
+    await assert.rejects(access(issueRepositoryStorePath(state, worktree.issueKey, remote)), { code: "ENOENT" });
+    await assert.rejects(git(["-C", remote, "show-ref", "--verify", "refs/heads/hotfix-issue-20261103-901"]));
+    // Production moves on before the retry; the fresh branch starts at the new base.
     await writeFile(join(source, "README.md"), "second\n");
     await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-am", "second"]);
     await git(["-C", source, "push", remote, "main"]);
     const prepared = await manager.prepare(worktree);
     const head = await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]);
-    await git(["-C", prepared.workspacePath, "merge-base", "--is-ancestor", prepared.baseCommit, head]);
     assert.equal(prepared.baseCommit, head);
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -8,7 +8,7 @@ import { connectMcp, type McpConnector, type McpSession } from "../mcp/client.ts
 import { DingtalkError, dingtalkIssueRecord, dingtalkAttachments, parseDingtalkTable, readDingtalkFields, readDingtalkRecord, resolveDingtalkColumns } from "../mcp/dingtalk.ts";
 import type { DingtalkImportResponse, DingtalkSourceResponse } from "../mcp/dingtalk-contracts.ts";
 import { downloadDingtalkAttachments } from "./dingtalk-attachments.ts";
-import { ApiError, choice, record, text } from "./input.ts";
+import { ApiError, choice, closedRecord, text } from "./input.ts";
 import type { IssueCreationScopeResolver, IssueCreator } from "./issue-routes.ts";
 import { authorizeWorkMode, requireCurrentUser, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
@@ -72,8 +72,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
   app.post(
     "/api/dingtalk/import",
     handle(async (request, signal): Promise<DingtalkImportResponse> => {
-      const input = record(request.body);
-      if (Object.keys(input).some((key) => !["url", "serviceKey", "workMode", "priority", "startAgent", "assigneeSubject"].includes(key))) throw new ApiError(400, "invalid_dingtalk_import");
+      const input = closedRecord(request.body, ["url", "serviceKey", "workMode", "priority", "startAgent", "assigneeSubject"], "invalid_dingtalk_import");
       const table = parseDingtalkTable(text(input.url, "dingtalk_url", 4096)),
         workMode = choice(input.workMode, "work_mode", ISSUE_WORK_MODES),
         priority = choice(input.priority, "priority", ISSUE_PRIORITIES),

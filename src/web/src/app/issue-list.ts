@@ -1,41 +1,80 @@
-import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
-import { errorMessage, listIssues, type IssueExecutionItem } from "../data/client";
+import { type Accessor, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { errorMessage, listIssues, type IssueDetail, type IssueExecutionItem } from "../data/client";
+import { createLatestTask } from "../data/latest";
 
-/** One application-owned snapshot for the queue, overview and statistics. */
+interface IssueEntity {
+  summary: IssueExecutionItem;
+  detail?: IssueDetail;
+}
+
+function summaryFromDetail(detail: IssueDetail): IssueExecutionItem {
+  return {
+    id: detail.id,
+    title: detail.title,
+    priority: detail.priority,
+    type: detail.type,
+    status: detail.status,
+    assignee: detail.assignee,
+    assigneeSubject: detail.assigneeSubject,
+    service: detail.service,
+    environmentKey: detail.environmentKey,
+    revision: detail.revision,
+    ...(detail.createdAt ? { createdAt: detail.createdAt } : {}),
+    updatedAt: detail.updatedAt,
+    workspaceStatus: detail.workspace.status,
+    agentRunning: detail.agentRunning === true,
+    resolvedAt: detail.resolvedAt ?? null,
+  };
+}
+
+/**
+ * One application-owned entity map for the queue, overview, statistics and selected detail.
+ * Summaries and details of the same Issue share an entry; the server revision decides when
+ * the detail must be refetched, so views do not maintain parallel copies.
+ */
 export function createIssueList(scope: Accessor<string | false> = () => "issues") {
-  const [items, setItems] = createSignal<IssueExecutionItem[]>([], { ownedWrite: true });
+  const [entities, setEntities] = createSignal<ReadonlyMap<string, IssueEntity>>(new Map(), { equals: false });
+  let previousItems: IssueExecutionItem[] = [];
+  const items = createMemo(() => {
+    const next = [...entities().values()].map(({ summary }) => summary);
+    // Detail-only updates keep the same summary objects; a stable array prevents list effects from re-running.
+    if (next.length === previousItems.length && next.every((item, index) => item === previousItems[index])) return previousItems;
+    previousItems = next;
+    return next;
+  });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [refreshing, setRefreshing] = createSignal(false, { ownedWrite: true });
   const [error, setError] = createSignal("", { ownedWrite: true });
-  let generation = 0;
-  let controller: AbortController | undefined;
+  const latest = createLatestTask();
   let disposed = false;
   const cancel = () => {
-    generation++;
-    controller?.abort();
-    controller = undefined;
+    latest.cancel();
     setRefreshing(false);
   };
   const refresh = async () => {
     if (disposed) return;
-    cancel();
-    const owner = generation;
-    const request = new AbortController();
-    controller = request;
+    const request = latest.begin();
     setRefreshing(true);
     try {
       const values = await listIssues(request.signal);
-      if (owner !== generation) return;
-      setItems(values);
+      if (!request.isCurrent()) return;
+      setEntities((previous) => {
+        const next = new Map<string, IssueEntity>();
+        for (const summary of values) {
+          const detail = previous.get(summary.id)?.detail;
+          next.set(summary.id, detail ? { summary, detail } : { summary });
+        }
+        return next;
+      });
       setError("");
     } catch (cause) {
-      if (owner === generation && !request.signal.aborted) setError(errorMessage(cause));
+      if (request.isCurrent() && !request.signal.aborted) setError(errorMessage(cause));
     } finally {
-      if (owner === generation) {
-        controller = undefined;
+      if (request.isCurrent()) {
         setLoading(false);
         setRefreshing(false);
       }
+      request.finish();
     }
   };
   createEffect(scope, (active) => {
@@ -44,7 +83,7 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
   });
   // Automatic samples never cancel slow reads. Explicit mutations/refreshes supersede older snapshots.
   const sample = () => {
-    if (!document.hidden && scope() && !controller) void refresh();
+    if (!document.hidden && scope() && !latest.active) void refresh();
   };
   const timer = window.setInterval(sample, 10_000);
   document.addEventListener("visibilitychange", sample);
@@ -54,8 +93,29 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
     document.removeEventListener("visibilitychange", sample);
     cancel();
   });
+  const setDetail = (detail: IssueDetail) => {
+    if (disposed) return;
+    setEntities((previous) => {
+      const next = new Map(previous);
+      // Keep the list summary (and its ordering/createdAt) until the next list refresh.
+      next.set(detail.id, { summary: previous.get(detail.id)?.summary ?? summaryFromDetail(detail), detail });
+      return next;
+    });
+  };
+  const clearDetail = (id: string) => {
+    setEntities((previous) => {
+      const entity = previous.get(id);
+      if (!entity?.detail) return previous;
+      const next = new Map(previous);
+      next.set(id, { summary: entity.summary });
+      return next;
+    });
+  };
   return {
     items,
+    detail: (id: string) => entities().get(id)?.detail,
+    setDetail,
+    clearDetail,
     loading,
     refreshing,
     error,
@@ -63,7 +123,13 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
     created(issue: IssueExecutionItem) {
       if (disposed) return;
       cancel();
-      setItems((current) => [issue, ...current.filter((item) => item.id !== issue.id)]);
+      setEntities((previous) => {
+        const next = new Map<string, IssueEntity>();
+        const detail = previous.get(issue.id)?.detail;
+        next.set(issue.id, detail ? { summary: issue, detail } : { summary: issue });
+        for (const [id, entity] of previous) if (id !== issue.id) next.set(id, entity);
+        return next;
+      });
       void refresh();
     },
   };

@@ -213,9 +213,11 @@ export class IssueScopeTransitionManager {
     this.assertExpected(initialPlan, expectation);
     if (initialPlan.action === "none") return this.issue(issueId);
     const recordTransition = this.transitionAudit(issueId, actorSubject, initialPlan);
+    // The plan's repository set is the execution input; a changed deployment refuses instead of re-resolving.
+    const expectedRepositories = [...initialPlan.repositories.retained, ...initialPlan.repositories.added].map(({ url, baseBranch }) => ({ url, baseBranch }));
     if (initialPlan.action === "convert_to_development") {
       try {
-        return await this.workspaces.convertIssueToDevelopment(issueId, expectation.expectedIssueUpdatedAt, recordTransition, authorize);
+        return await this.workspaces.convertIssueToDevelopment(issueId, expectation.expectedIssueUpdatedAt, recordTransition, authorize, expectedRepositories);
       } catch (error) {
         if (error instanceof Error && error.message === "scope_transition_plan_stale") throw new ScopeTransitionRefusal(error.message);
         throw error;
@@ -234,6 +236,7 @@ export class IssueScopeTransitionManager {
         expectation.expectedIssueUpdatedAt,
         recordTransition,
         authorize,
+        expectedRepositories,
       );
     }
     return this.engine.runExclusive([issueId], async (reservation) => {
@@ -273,7 +276,7 @@ export class IssueScopeTransitionManager {
         .returning();
       if (!changed) throw new ScopeTransitionRefusal("scope_transition_plan_stale");
       await transaction.delete(issueRepositories).where(eq(issueRepositories.issueId, issueId));
-      await transaction.update(issueWorkspaces).set({ status: "not_created", runtimeReady: false, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));
+      await transaction.update(issueWorkspaces).set({ status: "not_created", runtimeReady: false, releasedAt: null, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issueId));
       await this.transitionAudit(issueId, actorSubject, plan)(transaction, now);
       return changed;
     });

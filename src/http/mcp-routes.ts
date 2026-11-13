@@ -4,6 +4,7 @@ import { mcpServices, issues } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configuration/mcp.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
+import { AgentBusyError } from "../agent/engine.ts";
 import { ApiError, record } from "./input.ts";
 import { requireAdmin, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
@@ -34,7 +35,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
         },
       );
     } catch (error) {
-      if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "mcp_has_running_issues");
+      if (error instanceof AgentBusyError) throw new ApiError(409, "mcp_has_running_issues");
       if (error instanceof ApiError) throw error;
       const chain = error instanceof Error ? error.cause : undefined;
       if (chain instanceof Error && /UNIQUE constraint/.test(chain.message)) throw new ApiError(409, "mcp_name_conflict");

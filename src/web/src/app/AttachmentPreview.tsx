@@ -4,6 +4,7 @@ import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from
 import { Copy, Paperclip, ZoomIn, ZoomOut } from "../ui/icons";
 import { copyText as copyToClipboard } from "../ui/clipboard";
 import { fetchAttachment, type IssueDetail } from "../data/client";
+import { createLatestTask } from "../data/latest";
 
 import { attachmentPreviewKind } from "./file-preview";
 import { issuePilotConfig } from "../../../../issue-pilot.config";
@@ -22,15 +23,14 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
   const [copyError, setCopyError] = createSignal("", { ownedWrite: true });
   const [imageZoom, setImageZoom] = createSignal(1, { ownedWrite: true });
   const [imageDragging, setImageDragging] = createSignal(false, { ownedWrite: true });
-  let requestSequence = 0;
-  let controller: AbortController | undefined;
+  const latest = createLatestTask();
+  const copyTask = createLatestTask();
   let imageViewport: HTMLDivElement | undefined;
   let imageDrag: { pointerId: number; x: number; y: number; scrollLeft: number; scrollTop: number } | undefined;
 
   const reset = () => {
-    requestSequence += 1;
-    controller?.abort();
-    controller = undefined;
+    latest.cancel();
+    copyTask.cancel();
     const url = untrack(objectUrl);
     if (url) URL.revokeObjectURL(url);
     setObjectUrl("");
@@ -50,26 +50,26 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
       issueKey = untrack(() => props.issueKey);
     reset();
     if (!attachment || attachment.size > issuePilotConfig.web.filePreviewBytes || attachmentPreviewKind(attachment) === "unsupported") return;
-    const sequence = ++requestSequence;
-    controller = new AbortController();
+    const task = latest.begin();
     setLoading(true);
-    const file = props.loadFile ? props.loadFile(controller.signal) : fetchAttachment(issueKey, attachment.id, controller.signal);
+    const file = props.loadFile ? props.loadFile(task.signal) : fetchAttachment(issueKey, attachment.id, task.signal);
     void file
       .then(async (blob) => {
-        if (sequence !== requestSequence) return;
+        if (!task.isCurrent()) return;
         if (blob.size > issuePilotConfig.web.filePreviewBytes) throw new Error("file_preview_too_large");
         if (attachmentPreviewKind(attachment) === "text") {
           const content = await blob.text();
-          if (sequence === requestSequence) setText(content);
+          if (task.isCurrent()) setText(content);
         } else {
           setObjectUrl(URL.createObjectURL(blob));
         }
       })
       .catch((cause) => {
-        if (sequence === requestSequence) setError(cause instanceof Error ? (cause.message === "file_preview_too_large" ? previewTooLarge : cause.message) : "attachment_preview_failed");
+        if (task.isCurrent()) setError(cause instanceof Error ? (cause.message === "file_preview_too_large" ? previewTooLarge : cause.message) : "attachment_preview_failed");
       })
       .finally(() => {
-        if (sequence === requestSequence) setLoading(false);
+        if (task.isCurrent()) setLoading(false);
+        task.finish();
       });
   });
   onCleanup(reset);
@@ -121,14 +121,16 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
     setImageDragging(false);
   };
   const copyText = async () => {
-    const sequence = requestSequence;
+    const request = copyTask.begin();
     setCopied(false);
     setCopyError("");
     try {
       await copyToClipboard(text());
-      if (sequence === requestSequence) setCopied(true);
+      if (request.isCurrent()) setCopied(true);
     } catch {
-      if (sequence === requestSequence) setCopyError("复制失败，请选中文字后手动复制。");
+      if (request.isCurrent()) setCopyError("复制失败，请选中文字后手动复制。");
+    } finally {
+      request.finish();
     }
   };
 

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, mkdtemp, open, readdir, readlink, realpath, rmdir } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, readdir, readlink, realpath, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -43,6 +43,15 @@ export interface PreparedWorktree {
   baseBranch: string;
   workingBranch: string | null;
   baseCommit: string;
+}
+
+/** Ownership collected while preparing, used only if the batch is rolled back. */
+interface PreparedWorktreeAttempt {
+  prepared: PreparedWorktree;
+  privateStore: string;
+  createdPrivateStore: boolean;
+  /** Stores whose issue branch was created by this attempt and may be deleted on rollback. */
+  createdBranchStores: string[];
 }
 
 export interface RestoreWorktreeInput {
@@ -383,6 +392,10 @@ export class WorktreeManager {
   }
 
   async prepare(input: PrepareWorktreeInput): Promise<PreparedWorktree> {
+    return (await this.prepareAttempt(input)).prepared;
+  }
+
+  private async prepareAttempt(input: PrepareWorktreeInput): Promise<PreparedWorktreeAttempt> {
     const issueKey = normalizeIssueKey(input.issueKey);
     this.validateRepositoryInput(input);
     const repositoryKey = repositoryHash(input.url, 20);
@@ -397,7 +410,7 @@ export class WorktreeManager {
   }
 
   async prepareBatch<T>(input: PrepareWorktreeBatchInput<T>): Promise<T> {
-    const created: Array<{ input: PrepareWorktreeInput; workspacePath: string }> = [];
+    const created: Array<{ input: PrepareWorktreeInput; workspacePath: string; attempt?: PreparedWorktreeAttempt }> = [];
     const prepared: PreparedWorktree[] = [];
     const workspaceRoots = new Map<string, boolean>();
     for (const worktree of input.worktrees) {
@@ -410,15 +423,20 @@ export class WorktreeManager {
         const workspacePath = this.resolveIssueWorkspacePath(root, worktree.workspaceName, worktree.existingWorkspacePath);
         const workspaceExists = await pathExists(workspacePath);
         if (workspaceExists && !worktree.existingWorkspacePath) throw new Error("workspace_path_already_exists");
-        if (!workspaceExists) created.push({ input: worktree, workspacePath });
-        prepared.push(await this.prepare(worktree));
+        const entry: { input: PrepareWorktreeInput; workspacePath: string; attempt?: PreparedWorktreeAttempt } | undefined = workspaceExists ? undefined : { input: worktree, workspacePath };
+        if (entry) created.push(entry);
+        const attempt = await this.prepareAttempt(worktree);
+        if (entry) entry.attempt = attempt;
+        prepared.push(attempt.prepared);
       }
       return await input.finalize(prepared);
     } catch (error) {
       const rollbackErrors: unknown[] = [];
       for (const createdWorktree of created.reverse()) {
         try {
-          if (await pathExists(createdWorktree.workspacePath))
+          // A completed attempt owns everything it created. A failed attempt may still have left a worktree.
+          if (createdWorktree.attempt) await this.discardPrepared(createdWorktree.attempt);
+          else if (await pathExists(createdWorktree.workspacePath))
             await this.remove(
               createdWorktree.input.url,
               createdWorktree.workspacePath,
@@ -439,6 +457,40 @@ export class WorktreeManager {
       if (rollbackErrors.length) throw new WorktreeRollbackFailure(new AggregateError([error, ...rollbackErrors], "worktree_rollback_failed"));
       throw error;
     }
+  }
+
+  /**
+   * Remove only the worktree, branch and private store created by an unrecorded attempt.
+   * Publishing here would make a failed preparation look like a completed one.
+   */
+  private async discardPrepared(attempt: PreparedWorktreeAttempt): Promise<void> {
+    const { prepared, privateStore, createdPrivateStore, createdBranchStores } = attempt;
+    const failures: unknown[] = [];
+    if (await pathExists(prepared.workspacePath)) {
+      try {
+        await this.git(["-C", privateStore, "worktree", "remove", prepared.workspacePath]);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (prepared.workingBranch) {
+      for (const store of createdBranchStores) {
+        try {
+          const commit = (await this.git(["-C", store, "rev-parse", "--verify", `refs/heads/${prepared.workingBranch}`])).trim();
+          await this.git(["-C", store, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`, commit]);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    }
+    if (createdPrivateStore) {
+      try {
+        await rm(privateStore, { recursive: true });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) throw new WorktreeRollbackFailure(new AggregateError(failures, "worktree_rollback_failed"));
   }
 
   async removeBatch(input: RemoveWorktreeBatchInput): Promise<void> {
@@ -688,11 +740,12 @@ export class WorktreeManager {
     await this.git(["-C", cachePath, "worktree", "add", "--relative-paths", workspacePath, input.workingBranch]);
   }
 
-  private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktree> {
+  private async prepareLocked(input: PrepareWorktreeInput, issueKey: string, repositoryKey: string): Promise<PreparedWorktreeAttempt> {
     await this.assertBranchReference(input.baseBranch);
     const privateStore = issueRepositoryStorePath(this.stateRoot, issueKey, input.url);
+    const privateStoreExisted = await managedGitDirectoryExists(privateStore);
     const sharedStore = input.workingBranch ? resolve(this.repositoriesRoot, repositoryKey) : await this.updateCache(input, repositoryKey);
-    const cachePath = input.workingBranch || (await managedGitDirectoryExists(privateStore)) ? await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url) : sharedStore;
+    const cachePath = input.workingBranch || privateStoreExisted ? await developmentRepositoryStorePath(this.stateRoot, issueKey, input.url) : sharedStore;
     if (cachePath !== sharedStore && !input.workingBranch)
       await this.git(["-C", cachePath, "fetch", "--no-tags", sharedStore, `+refs/remotes/origin/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`]);
 
@@ -722,7 +775,8 @@ export class WorktreeManager {
           ? ["-C", cachePath, "worktree", "add", "--relative-paths", workspacePath, workingBranch]
           : ["-C", cachePath, "worktree", "add", "--relative-paths", "-b", workingBranch, workspacePath, baseRef],
       );
-      // An unrecorded branch left by an earlier failed attempt keeps its own history; record the base it actually contains.
+      // A branch left by an interrupted process keeps its own history; record the base it actually contains.
+      // A failed preparation rolled back by this process leaves nothing to adopt.
       if (!input.workingBranch) baseCommit = branchExists ? (await this.git(["-C", cachePath, "merge-base", workingBranch, baseRef])).trim() : upstreamCommit!;
     }
     const upstream = await this.git(["-C", workspacePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).then(
@@ -745,7 +799,13 @@ export class WorktreeManager {
         throw error;
       }
     }
-    return { cachePath: privateStore, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit };
+    const createdPrivateStore = cachePath === sharedStore && !privateStoreExisted && (await managedGitDirectoryExists(privateStore));
+    return {
+      prepared: { cachePath: privateStore, workspacePath, baseBranch: input.baseBranch, workingBranch, baseCommit },
+      privateStore,
+      createdPrivateStore,
+      createdBranchStores: branchExists ? [] : cachePath === sharedStore ? [sharedStore, privateStore] : [privateStore],
+    };
   }
 
   private resolveIssueWorkspacePath(issueRoot: string, workspaceName: string, existingWorkspacePath?: string): string {

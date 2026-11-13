@@ -96,7 +96,7 @@ Pi resources use the runtime user's getAgentDir(). No application-private skills
 
 ## Conversation and cost projection
 
-[events.ts](../../src/agent/events.ts) projects the current active branch, hiding internal context-edit/usage entries while footer accounting includes applicable usage. SDK nested-call records must not be interpreted as success when incomplete.
+[events.ts](../../src/agent/events.ts) projects the current active branch, hiding internal context-edit/usage entries while footer accounting includes applicable usage. [usage.ts](../../src/agent/usage.ts) owns cumulative token/cost merging and the valid-assistant-context rule for both the server snapshot and live Web events. SDK nested-call records must not be interpreted as success when incomplete.
 
 [event-display.ts](../../src/agent/event-display.ts) bounds tool text at the root-configured 40,000 characters before HTTP serialization and as a Web fallback. Keep head/tail and displayTruncated; do not mutate JSONL or model results. Images, details, nestedCalls and total history are not bounded by this text rule. SSE/history use the same projection.
 

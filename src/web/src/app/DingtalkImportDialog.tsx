@@ -11,6 +11,7 @@ import {
   type IssueWorkMode,
   type Person,
 } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
 import { priorityOptions, workModeOptions } from "./model";
 
@@ -66,19 +67,13 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
   const [workMode, setWorkMode] = createSignal<IssueWorkMode>("production_analysis", { ownedWrite: true });
   const [service, setService] = createSignal("", { ownedWrite: true });
   const [priority, setPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
-  let generation = 0,
-    disposed = false,
-    controller: AbortController | undefined;
-  const begin = () => {
-    controller?.abort();
-    controller = new AbortController();
-    return { owner: ++generation, signal: controller.signal };
-  };
-  const current = (owner: number) => !disposed && owner === generation;
+  const latest = createLatestTask();
+  let disposed = false;
+  const begin = () => latest.begin();
+  const current = (task: { isCurrent(): boolean }) => !disposed && task.isCurrent();
   onCleanup(() => {
     disposed = true;
-    generation++;
-    controller?.abort();
+    latest.cancel();
   });
   const modes = createMemo(() =>
     workModeOptions.filter(
@@ -99,7 +94,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
     const task = begin();
     try {
       const response = await loadDingtalkSource(task.signal);
-      if (!current(task.owner)) return;
+      if (!current(task)) return;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
       setSource(response);
       setUrl(response.url);
@@ -107,9 +102,10 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       setError(response.connection.available ? "" : "尚未配置可用的钉钉导入连接，请联系管理员在全局 MCP 连接中配置。");
       if (response.environment) setWorkMode(modes().find((mode) => issueScopeForWorkMode(mode.value).environmentKind === response.environment)?.value ?? workMode());
     } catch (error) {
-      if (current(task.owner)) setError(message(error));
+      if (current(task)) setError(message(error));
     } finally {
-      if (current(task.owner)) setBusy("");
+      if (current(task)) setBusy("");
+      task.finish();
     }
   };
   void defaults();
@@ -120,7 +116,7 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
     setError("");
     try {
       const response = await importDingtalkRecords({ url: url().trim(), serviceKey: service(), workMode: workMode(), priority: priority(), startAgent: true }, task.signal);
-      if (!current(task.owner)) return;
+      if (!current(task)) return;
       if (response.user.subject !== subject) throw new Error("invalid_current_subject");
       setResults((values) => [...values.filter((row) => row.issueKey !== response.issueKey), response]);
       setUrl("");
@@ -130,9 +126,10 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
         if (response.connectionCleanup !== "failed" && props.onOpenIssue(response.issueKey)) props.onClose();
       }
     } catch (error) {
-      if (current(task.owner)) setError(message(error));
+      if (current(task)) setError(message(error));
     } finally {
-      if (current(task.owner)) setBusy("");
+      if (current(task)) setBusy("");
+      task.finish();
     }
   };
   return (

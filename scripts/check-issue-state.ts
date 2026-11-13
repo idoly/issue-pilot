@@ -93,6 +93,17 @@ try {
     if (missing) throw new Error(`issue_workspace_missing:${missing.key}`);
     const invalid = database.prepare("SELECT key FROM issues WHERE (status = 'resolved') <> (resolved_at IS NOT NULL) LIMIT 1").get();
     if (invalid) throw new Error(`issue_resolution_state_invalid:${invalid.key}`);
+    const releaseMismatch = database
+      .prepare(
+        `SELECT i.key FROM issues AS i JOIN issue_workspaces AS w ON w.issue_id = i.id
+         WHERE (w.released_at IS NOT NULL) <> (
+           EXISTS (SELECT 1 FROM issue_repositories AS r WHERE r.issue_id = i.id)
+           AND NOT EXISTS (SELECT 1 FROM issue_repositories AS r WHERE r.issue_id = i.id AND (r.local_path IS NOT NULL OR r.working_branch IS NULL))
+         )
+         LIMIT 1`,
+      )
+      .get();
+    if (releaseMismatch) throw new Error(`workspace_release_state_invalid:${releaseMismatch.key}`);
     const keys = database
       .prepare("SELECT key FROM issues")
       .all()

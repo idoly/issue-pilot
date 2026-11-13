@@ -2,11 +2,12 @@ import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration, Capab
 import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { subjects, issues, userCredentials, applicationSettings } from "../db/schema.ts";
+import { AgentBusyError } from "../agent/engine.ts";
 import { CAPABILITY_CREDENTIAL_FIELDS } from "../configuration/contracts.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
 import { CAPABILITY_KEYS, USER_ROLES, type AgentModelSelection } from "../domain/contracts.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, ApiError, checkRevision, choice, record, text } from "./input.ts";
+import { agentModelSelection, ApiError, checkRevision, choice, closedRecord, record, text } from "./input.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 function userSubject(value: unknown): string {
@@ -89,9 +90,8 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
     });
     app.put(url, { logLevel: "silent" }, async (request, _reply) => {
       await requireAdmin(database, request);
-      const input = record(request.body);
-      if (Object.keys(input).some((key) => !["mode", "expectedRevision", ...fields].includes(key)) || (input.mode === "clear" && fields.some((field) => input[field] !== undefined)))
-        throw new ApiError(400, `invalid_shared_${kind}_credentials`);
+      const input = closedRecord(request.body, ["mode", "expectedRevision", ...fields], `invalid_shared_${kind}_credentials`);
+      if (input.mode === "clear" && fields.some((field) => input[field] !== undefined)) throw new ApiError(400, `invalid_shared_${kind}_credentials`);
       if (input.mode !== "clear" && input.mode !== "replace") throw new ApiError(400, "invalid_credential_update");
       let update: Pick<typeof applicationSettings.$inferInsert, "sharedDmsCredentials" | "sharedSlsCredentials">;
       try {
@@ -224,7 +224,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
         return personalStatus(user?.role, saved);
       },
     ).catch((error) => {
-      if (error instanceof ApiError) throw error;
+      if (error instanceof ApiError || error instanceof AgentBusyError) throw error;
       app.log.error(errorDiagnostic(error));
       throw new ApiError(500, "user_credentials_save_failed");
     });

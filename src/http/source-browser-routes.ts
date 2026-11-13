@@ -5,35 +5,6 @@ import { withSharedCheckout } from "../workspace/git.ts";
 import { ApiError } from "./input.ts";
 import { requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
-const notFoundErrors = new Set(["source_repository_not_found", "source_path_not_found", "source_commit_not_found", "source_commit_file_not_found", "source_diff_file_not_found"]);
-const conflictErrors = new Set([
-  "source_browser_unavailable",
-  "source_repository_state_invalid",
-  "source_runtime_invalid",
-  "source_git_binding_invalid",
-  "source_read_only",
-  "source_file_changed",
-  "source_path_exists",
-  "source_path_not_empty",
-  "source_stage_failed",
-  "source_unstage_failed",
-  "source_discard_failed",
-  "source_commit_failed",
-]);
-const requestErrors = new Set([
-  "invalid_source_path",
-  "invalid_source_query",
-  "invalid_source_history_cursor",
-  "invalid_source_revision",
-  "invalid_source_line",
-  "invalid_source_hash",
-  "invalid_source_commit_message",
-  "invalid_source_commit_author",
-  "source_path_not_directory",
-  "source_path_not_file",
-  "source_path_outside_repository",
-]);
-const contentErrors = new Set(["source_file_binary", "source_file_too_large", "source_commit_too_large", "source_diff_too_large"]);
 const sourceFileBodyLimit = issuePilotConfig.limits.sourceBrowser.fileBytes;
 
 function headerValue(value: string | string[] | undefined, required = false): string {
@@ -54,19 +25,6 @@ function booleanHeader(value: string | string[] | undefined, fallback: boolean):
   throw new ApiError(400, "invalid_source_request");
 }
 
-async function sourceOperation<T>(operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "source_browser_failed";
-    if (notFoundErrors.has(message)) throw new ApiError(404, message);
-    if (conflictErrors.has(message)) throw new ApiError(409, message);
-    if (requestErrors.has(message)) throw new ApiError(400, message);
-    if (contentErrors.has(message)) throw new ApiError(413, message);
-    throw error;
-  }
-}
-
 type SourceRequest = FastifyRequest<{ Params: { key: string } }>;
 type GitRequest = FastifyRequest<{ Params: { key: string }; Body: { paths?: unknown } }>;
 type Issue = Awaited<ReturnType<typeof requireIssue>>;
@@ -82,7 +40,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
       reply.raw.once("close", closed);
       try {
         const issue = await requireIssue(database, request.params.key);
-        return await sourceOperation(() => withSharedCheckout(() => operation(issue, request, controller.signal)));
+        return await withSharedCheckout(() => operation(issue, request, controller.signal));
       } catch (error) {
         if (controller.signal.aborted) {
           reply.hijack();
@@ -113,7 +71,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
     return runIssueExclusive(engine, [issue.id], async () => {
       const person = await requireCurrentUser(database, request);
       const current = await requireIssue(database, issue.key);
-      return sourceOperation(() => operation(current, person));
+      return operation(current, person);
     });
   };
   app.put<{ Params: { key: string }; Body: string }>(

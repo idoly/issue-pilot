@@ -540,6 +540,13 @@
       "when": 1794528000000,
       "tag": "0076_issue_data_publication",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "6",
+      "when": 1794614400000,
+      "tag": "0077_workspace_release_state",
+      "breakpoints": true
     }
   ]
 }

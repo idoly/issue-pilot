@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Select, Skeleton } from "../ui";
 import { errorMessage, loadApplicationEndpoints, type ApplicationEndpoint } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { copyText } from "../ui/clipboard";
 import { useApplicationResources } from "./ApplicationResources";
 
@@ -18,20 +19,19 @@ export function EndpointConfiguration() {
   const [copied, setCopied] = createSignal("", { ownedWrite: true });
   const [copyError, setCopyError] = createSignal("", { ownedWrite: true });
   const [format, setFormat] = createSignal<(typeof clientFormats)[number]["value"]>("json", { ownedWrite: true });
-  let controller: AbortController | undefined;
+  const latest = createLatestTask();
   const load = async () => {
-    controller?.abort();
-    const request = new AbortController();
-    controller = request;
+    const request = latest.begin();
     setLoading(true);
     setError("");
     try {
       const value = await loadApplicationEndpoints(request.signal);
-      if (!request.signal.aborted) setEndpoints(value.endpoints);
+      if (request.isCurrent()) setEndpoints(value.endpoints);
     } catch (cause) {
-      if (!request.signal.aborted) setError(errorMessage(cause));
+      if (request.isCurrent()) setError(errorMessage(cause));
     } finally {
-      if (!request.signal.aborted) setLoading(false);
+      if (request.isCurrent()) setLoading(false);
+      request.finish();
     }
   };
   createEffect(
@@ -43,7 +43,7 @@ export function EndpointConfiguration() {
       void load();
     },
   );
-  onCleanup(() => controller?.abort());
+  onCleanup(() => latest.cancel());
   const url = (endpoint: ApplicationEndpoint) => new URL(endpoint.path, window.location.origin).href;
   const client = () => clientFormats.find((client) => client.value === format())!;
   const configuration = (endpoint: ApplicationEndpoint) => {

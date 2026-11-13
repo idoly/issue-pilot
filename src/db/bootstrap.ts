@@ -22,7 +22,7 @@ async function recoverInterruptedIssues(database: DatabaseConnection): Promise<v
          AND status NOT IN ('resolved', 'open')`,
       `UPDATE issues AS i SET status = CASE w.status WHEN 'ready' THEN 'pending' ELSE 'open' END, updated_at = unixepoch()
        FROM issue_workspaces AS w WHERE i.status = 'in_progress' AND w.issue_id = i.id AND w.status IN ('ready', 'failed')`,
-      `UPDATE issue_workspaces SET status = 'failed', last_error = coalesce(last_error, 'agent_interrupted_by_api_restart'), updated_at = unixepoch()
+      `UPDATE issue_workspaces SET status = 'failed', released_at = NULL, last_error = coalesce(last_error, 'agent_interrupted_by_api_restart'), updated_at = unixepoch()
        WHERE status IN ('preparing', 'running')`,
     ],
     "write",

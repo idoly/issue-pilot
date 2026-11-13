@@ -38,7 +38,7 @@ test("the offline CLI upgrades a previous database and moves durable files, then
     const before = new DatabaseSync(fixture.databaseFile);
     try {
       before.exec(
-        "DROP TABLE user_preferences; DROP TABLE application_settings; ALTER TABLE mcp_services DROP COLUMN deployment_id; ALTER TABLE subjects DROP COLUMN revision; ALTER TABLE services DROP COLUMN revision; ALTER TABLE repositories DROP COLUMN revision; ALTER TABLE repositories DROP COLUMN repository_group; ALTER TABLE user_credentials DROP COLUMN revision; ALTER TABLE global_agent_configuration DROP COLUMN api_key; ALTER TABLE user_credentials DROP COLUMN model_credentials;",
+        "DROP TABLE user_preferences; DROP TABLE application_settings; ALTER TABLE mcp_services DROP COLUMN deployment_id; ALTER TABLE subjects DROP COLUMN revision; ALTER TABLE services DROP COLUMN revision; ALTER TABLE repositories DROP COLUMN revision; ALTER TABLE repositories DROP COLUMN repository_group; ALTER TABLE user_credentials DROP COLUMN revision; ALTER TABLE global_agent_configuration DROP COLUMN api_key; ALTER TABLE user_credentials DROP COLUMN model_credentials; ALTER TABLE issue_workspaces DROP COLUMN released_at;",
       );
       before.exec(
         "PRAGMA foreign_keys=ON; DROP TRIGGER issues_retired_type_insert; DROP TRIGGER issues_retired_type_update; DROP TRIGGER issues_type_valid_insert; DROP TRIGGER issues_type_valid_update; DROP TRIGGER scope_transitions_retired_mode_insert; DROP TRIGGER scope_transitions_retired_mode_update; ALTER TABLE issue_attachments DROP COLUMN working_file_name;",

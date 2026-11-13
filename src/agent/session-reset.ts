@@ -94,7 +94,7 @@ export async function resetIssueSession(
       await transaction.update(issues).set({ status: "open", updatedAt: new Date() }).where(eq(issues.id, issue.id));
       await transaction
         .update(issueWorkspaces)
-        .set({ status: "ready", lastError: null, updatedAt: new Date() })
+        .set({ status: "ready", releasedAt: null, lastError: null, updatedAt: new Date() })
         .where(and(eq(issueWorkspaces.issueId, issue.id), eq(issueWorkspaces.runtimeReady, true), inArray(issueWorkspaces.lastError, ["model_response_failed", "model_response_idle_timeout"])));
     });
   } catch (error) {

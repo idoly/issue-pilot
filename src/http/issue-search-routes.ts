@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { WorkersAiError } from "../search/cloudflare.ts";
 import type { IssueSearchSettings } from "../search/contracts.ts";
 import { IssueSearchIndex, IssueSearchIndexRequired } from "../search/issue-index.ts";
-import { ApiError, record, text } from "./input.ts";
+import { ApiError, closedRecord, text } from "./input.ts";
 import { loadIssueSearchSettings } from "./issue-search-configuration.ts";
 import { requireAdmin, requireCurrentUser, type ApiRouteContext } from "./route-context.ts";
 
@@ -60,15 +60,13 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
     }
   };
   app.post("/api/issue-search", { bodyLimit: 4096 }, (request, reply) => {
-    const input = record(request.body);
-    if (Object.keys(input).some((key) => key !== "query")) throw new ApiError(400, "invalid_issue_search_request");
+    const input = closedRecord(request.body, ["query"], "invalid_issue_search_request");
     const query = text(input.query, "issue_search_query", 500);
     return run(request, reply, false, (state, signal, verify) => index.search(state, query, signal, verify));
   });
   app.post("/api/issue-search/refresh", { bodyLimit: 4096 }, (request, reply) => {
-    const input = record(request.body);
-    if (Object.keys(input).some((key) => key !== "after") || (input.after !== undefined && (typeof input.after !== "string" || !/^[0-9a-f-]{36}$/i.test(input.after))))
-      throw new ApiError(400, "invalid_issue_search_cursor");
+    const input = closedRecord(request.body, ["after"], "invalid_issue_search_cursor");
+    if (input.after !== undefined && (typeof input.after !== "string" || !/^[0-9a-f-]{36}$/i.test(input.after))) throw new ApiError(400, "invalid_issue_search_cursor");
     const after = input.after as string | undefined;
     return run(request, reply, true, (state, signal, verify) => index.refresh(state, after, signal, verify));
   });

@@ -159,6 +159,8 @@ export interface IssueListItem {
   assigneeSubject: string | null;
   service: { key: string; name: string };
   environmentKey: string;
+  /** Opaque server change token covering Issue, Workspace and Agent state. */
+  revision?: string;
   createdAt?: string;
   updatedAt: string;
 }
@@ -190,6 +192,8 @@ export interface IssueScopeTransitionHistoryItem {
 export interface IssueDetail extends IssueListItem {
   editVersion: string;
   description: string;
+  workspaceStatus?: WorkspaceStatus;
+  resolvedAt?: string | null;
   agentRunning?: boolean;
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };

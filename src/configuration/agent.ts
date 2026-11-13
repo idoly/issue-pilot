@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { globalAgentConfiguration } from "../db/schema.ts";
-import type { AgentConfiguration, AgentModelDefinition, AgentModelSelection } from "../domain/contracts.ts";
+import type { AgentConfiguration, AgentModelDefinition, AgentModelSelection, PersonalModelCredentials } from "../domain/contracts.ts";
 import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 
 export async function loadGlobalAgentConfiguration(database: Pick<Database, "select">): Promise<AgentConfiguration> {
@@ -20,6 +20,22 @@ export async function loadGlobalAgentConfiguration(database: Pick<Database, "sel
 /** Personal model fields replace the shared selection without projecting its API key. */
 export function selectAgentConfiguration(shared: AgentConfiguration, personal?: AgentModelSelection | null): AgentConfiguration {
   return personal ? { ...shared, provider: personal.provider, model: personal.model, thinkingLevel: personal.thinkingLevel, codemode: personal.codemode } : shared;
+}
+
+export interface ResolvedAgentModel {
+  configuration: AgentConfiguration;
+  apiKey: string;
+}
+
+/**
+ * Select the configuration and its key together. A complete personal group owns both;
+ * without one, the shared group and its key apply. Callers cannot pair one source's
+ * selection with another source's key.
+ */
+export async function resolveAgentModel(database: Pick<Database, "select">, personal?: PersonalModelCredentials | null): Promise<ResolvedAgentModel> {
+  const shared = await loadGlobalAgentConfiguration(database);
+  if (personal) return { configuration: selectAgentConfiguration(shared, personal), apiKey: personal.apiKey };
+  return { configuration: shared, apiKey: await loadSharedAgentApiKey(database) };
 }
 
 // The shared API key belongs to the global provider and is never part of the projected configuration.

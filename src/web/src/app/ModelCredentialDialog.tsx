@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-j
 import type { JSX } from "@solidjs/web";
 import { Button, Modal, PasswordInput, Select } from "../ui";
 import { AGENT_CODEMODE_MODES, type AgentModelOption, type AgentModelSelection } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { settingsError } from "./settings-error";
 
 const codemodeLabels = { off: "关闭", on: "开启", only: "仅 Codemode" } as const;
@@ -35,14 +36,14 @@ export function ModelCredentialDialog(props: {
   const modelsOf = (value: string) => props.models.filter((option) => option.provider === value);
   const thinkingLevelsOf = (value: string, id: string) => props.models.find((option) => option.provider === value && option.id === id)?.thinkingLevels ?? [];
   const keyPreserved = () => props.keyConfigured && provider() === props.initial.provider;
-  let generation = 0;
+  const latest = createLatestTask();
   // A target change invalidates both secret drafts and results of already-submitted writes.
   createEffect(
     () => (props.open ? JSON.stringify([props.draftKey, props.initial, props.keyConfigured]) : ""),
     (key, previous) => {
       // Effects rerun on any dependency update; only a real target or initial-value change resets the draft.
       if (key === previous) return;
-      generation++;
+      latest.cancel();
       setApiKey("");
       setError("");
       setSaving(false);
@@ -56,7 +57,7 @@ export function ModelCredentialDialog(props: {
     },
   );
   onCleanup(() => {
-    generation++;
+    latest.cancel();
   });
   const selectProvider = (value: string) => {
     const first = modelsOf(value)[0];
@@ -71,19 +72,20 @@ export function ModelCredentialDialog(props: {
   };
   const run = async (operation: () => Promise<void>) => {
     if (saving() || props.onReload) return;
-    const owner = generation;
+    const request = latest.begin();
     setSaving(true);
     props.onSavingChange(true);
     setError("");
     try {
       await operation();
     } catch (cause) {
-      if (owner === generation) setError(settingsError(cause));
+      if (request.isCurrent()) setError(settingsError(cause));
     } finally {
-      if (owner === generation) {
+      if (request.isCurrent()) {
         setSaving(false);
         props.onSavingChange(false);
       }
+      request.finish();
     }
   };
   const save = () => {

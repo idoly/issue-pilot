@@ -2,7 +2,8 @@ import { eq, inArray } from "drizzle-orm";
 import { loadCapabilitySwitches } from "../configuration/capability-switches.ts";
 import { capabilitySwitches, environments, issues, serviceDeployments } from "../db/schema.ts";
 import { CAPABILITY_KEYS } from "../domain/contracts.ts";
-import { ApiError, choice, record } from "./input.ts";
+import { AgentBusyError } from "../agent/engine.ts";
+import { ApiError, choice, closedRecord } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 export function registerCapabilityRoutes(context: ApiRouteContext) {
@@ -14,8 +15,8 @@ export function registerCapabilityRoutes(context: ApiRouteContext) {
   app.patch<{ Params: { key: string } }>("/api/capabilities/:key", async (request) => {
     await requireDeveloper(database, request);
     const key = choice(request.params.key, "capability", CAPABILITY_KEYS);
-    const input = record(request.body);
-    if (typeof input.enabled !== "boolean" || Object.keys(input).some((field) => field !== "enabled")) throw new ApiError(400, "invalid_capability_switch");
+    const input = closedRecord(request.body, ["enabled"], "invalid_capability_switch");
+    if (typeof input.enabled !== "boolean") throw new ApiError(400, "invalid_capability_switch");
     const enabled = input.enabled;
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
@@ -40,7 +41,7 @@ export function registerCapabilityRoutes(context: ApiRouteContext) {
           },
         );
       } catch (error) {
-        if (error instanceof ApiError && error.message === "issue_already_running") throw new ApiError(409, "capability_has_running_issues");
+        if (error instanceof AgentBusyError) throw new ApiError(409, "capability_has_running_issues");
         throw error;
       }
     });

@@ -15,6 +15,9 @@ import type { SourcePanel } from "./CodeBrowser";
 import { createIssueList } from "./issue-list";
 
 function summaryChanged(detail: IssueDetail | IssueExecutionItem, summary: IssueExecutionItem): boolean {
+  // The server revision covers Issue, Workspace and Agent state in one token.
+  if (detail.revision && summary.revision) return detail.revision !== summary.revision;
+  // Partial fixtures and older projections without a revision keep the explicit field comparison.
   const fields = ["title", "priority", "type", "status", "assignee", "assigneeSubject", "environmentKey", "updatedAt"] as const;
   return (
     fields.some((field) => detail[field] !== summary[field]) ||
@@ -115,7 +118,11 @@ function AppWorkspace(props: { initialView?: AppView }) {
   const linkedIssue = linkedIssueFromUrl();
   const [view, setView] = createSignal<AppView>(props.initialView ?? (linkedIssue ? "issues" : "dashboard"), { ownedWrite: true });
   const [selectedId, setSelectedId] = createSignal(linkedIssue, { ownedWrite: true });
-  const [issue, setIssue] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
+  const issueList = createIssueList(() => (view() === "configuration" ? false : view()));
+  const issue = () => {
+    const id = selectedId();
+    return id ? (issueList.detail(id) ?? null) : null;
+  };
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueReloadToken, setIssueReloadToken] = createSignal(0, { ownedWrite: true });
@@ -163,7 +170,6 @@ function AppWorkspace(props: { initialView?: AppView }) {
   };
   window.addEventListener("popstate", onHistoryNavigation);
   onCleanup(() => window.removeEventListener("popstate", onHistoryNavigation));
-  const issueList = createIssueList(() => (view() === "configuration" ? false : view()));
   let issueWorkspace: HTMLElement | undefined;
   let selectionGeneration = 0;
   const issueRefreshes = new Map<string, number>();
@@ -184,7 +190,6 @@ function AppWorkspace(props: { initialView?: AppView }) {
       setSourceExpanded(false);
       setSourceDirty(false);
       if (!id) {
-        setIssue(null);
         setLoading(false);
         return;
       }
@@ -202,11 +207,11 @@ function AppWorkspace(props: { initialView?: AppView }) {
               setQueueReveal({ key: id, subject: assignee });
             }
           }
-          if (isCurrent()) setIssue(value);
+          if (isCurrent()) issueList.setDetail(value);
         })
         .catch((error) => {
           if (!isCurrent()) return;
-          setIssue(null);
+          issueList.clearDetail(id);
           setIssueError(error instanceof Error ? error.message : "工单加载失败");
         })
         .finally(() => {
@@ -246,7 +251,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
     try {
       const refreshed = await getIssue(issueKey);
       if (isCurrent()) {
-        setIssue(refreshed);
+        issueList.setDetail(refreshed);
         setIssueError("");
       }
       return refreshed;

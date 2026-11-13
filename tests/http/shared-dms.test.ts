@@ -4,7 +4,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { createApiFixture, createService, createIssue, servicePayload } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { applicationSettings, serviceDeployments, userCredentials } from "../../src/db/schema.ts";
-import { applyIssueCredentials } from "../../src/configuration/user-credentials.ts";
+import { resolveIssueCapabilities } from "../../src/configuration/user-credentials.ts";
 const headers: Record<string, string> = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const shared = { url: "https://shared.example.test/sse", authorization: "Bearer shared-dms-secret" };
 const scope = { databases: [{ instanceAlias: "ORDERS", schemaName: "orders", instanceId: "1", instanceHost: "db", instancePort: "3306", databaseId: "2" }] };
@@ -89,12 +89,12 @@ test("DMS selects complete personal credentials before shared credentials in bot
     const [personal] = await db.db.select().from(userCredentials);
     assert.ok(personal);
     const stored = { dms: { ...scope, url: "https://retired.example.test/sse", authorization: "Bearer retired" } };
-    assert.deepEqual(applyIssueCredentials(stored, personal, { dms: shared }).dms, { ...scope, url: personal.productionDmsUrl, authorization: personal.productionDmsAuthorization });
-    assert.deepEqual(applyIssueCredentials(stored, undefined, { dms: shared }).dms, { ...scope, ...shared });
-    assert.throws(() => applyIssueCredentials(stored), /dms_credentials_not_configured/);
-    assert.throws(() => applyIssueCredentials(stored, { ...personal, productionDmsUrl: "" }, { dms: shared }), /personal_dms_credentials_incomplete/);
-    assert.throws(() => applyIssueCredentials(stored, { ...personal, productionDmsAuthorization: "" }, { dms: shared }), /personal_dms_credentials_incomplete/);
-    assert.equal(applyIssueCredentials({}, personal, { dms: shared }).dms, undefined);
+    assert.deepEqual(resolveIssueCapabilities(stored, personal, { dms: shared }).configuration.dms, { ...scope, url: personal.productionDmsUrl, authorization: personal.productionDmsAuthorization });
+    assert.deepEqual(resolveIssueCapabilities(stored, undefined, { dms: shared }).configuration.dms, { ...scope, ...shared });
+    assert.equal(resolveIssueCapabilities(stored).errors.dms, "dms_credentials_not_configured");
+    assert.equal(resolveIssueCapabilities(stored, { ...personal, productionDmsUrl: "" }, { dms: shared }).errors.dms, "personal_dms_credentials_incomplete");
+    assert.equal(resolveIssueCapabilities(stored, { ...personal, productionDmsAuthorization: "" }, { dms: shared }).errors.dms, "personal_dms_credentials_incomplete");
+    assert.equal(resolveIssueCapabilities({}, personal, { dms: shared }).configuration.dms, undefined);
     assert.equal(stored.dms.authorization, "Bearer retired");
   } finally {
     await db.close();

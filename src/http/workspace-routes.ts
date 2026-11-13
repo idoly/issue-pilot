@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { create as contentDisposition } from "content-disposition";
 import { issueRelations, issues } from "../db/schema.ts";
 import { withSharedCheckout } from "../workspace/git.ts";
+import { AgentBusyError } from "../agent/engine.ts";
+import { DomainError } from "../domain/errors.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES } from "../domain/contracts.ts";
@@ -57,11 +59,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     return value;
   };
   const workFileError = (error: unknown): never => {
-    const code = error instanceof Error ? error.message : "";
-    if (["invalid_issue_file_path", "issue_file_not_directory", "issue_file_not_regular", "managed_issue_file_private"].includes(code)) throw new ApiError(400, code);
-    if (["source_git_binding_invalid", "source_runtime_invalid"].includes(code)) throw new ApiError(409, code);
-    if (code === "source_path_not_found") throw new ApiError(404, "issue_file_not_found");
-    if (code === "issue_file_directory_too_large") throw new ApiError(413, code);
+    if (error instanceof DomainError && error.code === "source_path_not_found") throw new ApiError(404, "issue_file_not_found");
     if (error && typeof error === "object" && "code" in error) {
       if (error.code === "ENOENT" || error.code === "ENOTDIR") throw new ApiError(404, "issue_file_not_found");
       if (error.code === "ELOOP") throw new ApiError(400, "invalid_issue_file_path");
@@ -107,7 +105,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   };
   const transitionError = (error: unknown): never => {
     if (error instanceof ScopeTransitionRefusal || error instanceof WorkspaceConversionRefusal || error instanceof WorkspaceScopeMigrationRefusal) throwRefusal(error);
-    if (error instanceof Error && error.message === "issue_already_running") throw new ApiError(409, error.message);
+    if (error instanceof AgentBusyError) throw new ApiError(409, error.message);
     throw error;
   };
 

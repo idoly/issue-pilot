@@ -20,6 +20,13 @@ export function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** One boundary rule for closed request bodies; the route keeps its own public error code. */
+export function closedRecord(value: unknown, allowed: readonly string[], code: string): Record<string, unknown> {
+  const input = record(value);
+  if (Object.keys(input).some((key) => !allowed.includes(key))) throw new ApiError(400, code);
+  return input;
+}
+
 export function text(value: unknown, name: string, maximum = 10_000): string {
   if (typeof value !== "string" || !value.trim() || value.length > maximum) throw new ApiError(400, `invalid_${name}`);
   return value.trim();

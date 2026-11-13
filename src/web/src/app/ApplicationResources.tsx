@@ -1,6 +1,7 @@
 import { type Accessor, type ParentProps, createContext, createEffect, createSignal, onCleanup, useContext } from "solid-js";
 
 import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { AgentDraftStore } from "./agent-drafts";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
@@ -30,19 +31,21 @@ interface ApplicationResources {
 const ResourcesContext = createContext<ApplicationResources>();
 
 function latestLoader<Value>(load: () => Promise<Value>, apply: (value: Value) => void, reportError: (message: string) => void): () => Promise<Value> {
-  let generation = 0;
+  const latest = createLatestTask();
   return async () => {
-    const current = ++generation;
+    const request = latest.begin();
     try {
       const value = await load();
-      if (current === generation) {
+      if (request.isCurrent()) {
         apply(value);
         reportError("");
       }
       return value;
     } catch (error) {
-      if (current === generation) reportError(errorMessage(error));
+      if (request.isCurrent()) reportError(errorMessage(error));
       throw error;
+    } finally {
+      request.finish();
     }
   };
 }
@@ -87,24 +90,24 @@ export function ApplicationResourcesProvider(props: ParentProps) {
     },
     setConfigurationError,
   );
-  let peopleGeneration = 0,
-    disposed = false;
+  const peopleTask = createLatestTask();
+  let disposed = false;
   onCleanup(() => {
     disposed = true;
-    peopleGeneration++;
+    peopleTask.cancel();
   });
   const refreshPeople = async () => {
     if (disposed) throw new DOMException("Application resources were disposed", "AbortError");
-    const owner = ++peopleGeneration;
+    const request = peopleTask.begin();
     try {
       const users = await loadUsers();
-      if (owner !== peopleGeneration) return users;
+      if (!request.isCurrent()) return users;
       if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) {
         setCurrentUser(null);
         setCurrentUserSubject(null, false);
       }
       const currentUser = await loadCurrentUser();
-      if (owner !== peopleGeneration) return users;
+      if (!request.isCurrent()) return users;
       // Pin the resolved identity without replacing another tab's remembered choice.
       setCurrentUserSubject(currentUser.subject, false);
       setPeople(users);
@@ -112,14 +115,16 @@ export function ApplicationResourcesProvider(props: ParentProps) {
       setPeopleError("");
       return users;
     } catch (error) {
-      if (owner === peopleGeneration) setPeopleError(errorMessage(error));
+      if (request.isCurrent()) setPeopleError(errorMessage(error));
       throw error;
+    } finally {
+      request.finish();
     }
   };
   const selectCurrentUser = (subject: string) => {
     const user = people().find((candidate) => candidate.subject === subject);
     if (!user) return;
-    peopleGeneration++;
+    peopleTask.cancel();
     setCurrentUserSubject(subject);
     setCurrentUser(user);
   };
