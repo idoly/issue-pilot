@@ -14,7 +14,7 @@ import { SerialQueue } from "../../src/serial.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
 
-for (const channel of ["list", "history", "SSE"] as const)
+for (const channel of ["list", "history", "query", "SSE"] as const)
   for (const explicit of [false, true])
     test(`${channel} reauthorizes the ${explicit ? "explicit" : "implicit"} reader after waiting`, { timeout: 10_000 }, async () => {
       const f = await createApiFixture();
@@ -64,6 +64,15 @@ for (const channel of ["list", "history", "SSE"] as const)
         const root = issueRoot(f.root, String(issue.id));
         const manager = await createPrivateSessionManager(root, root);
         manager.appendCustomEntry("issue-pilot-user", { message: "Saved conversation" });
+        const queryId = manager.appendMessage({
+          role: "toolResult",
+          toolCallId: "query",
+          toolName: "service_query",
+          isError: false,
+          content: [{ type: "text", text: "Saved conversation" }],
+          details: { provider: "aliyun-sls-cli" },
+          timestamp: 1,
+        });
         const sessionFile = manager.getSessionFile()!;
         await database.db.insert(agentSessions).values({ issueId, sessionFile, workspacePath: root });
         const original = await readFile(sessionFile);
@@ -71,7 +80,14 @@ for (const channel of ["list", "history", "SSE"] as const)
         const reader = "reader@example.test";
         await database.db.insert(subjects).values({ subject: reader, role: "product", createdAt: new Date(0) });
         const address = await app.listen({ host: "127.0.0.1", port: 0 });
-        const suffix = channel === "list" ? "sessions" : channel === "history" ? `sessions/${manager.getSessionId()}` : "agent-stream";
+        const suffix =
+          channel === "list"
+            ? "sessions"
+            : channel === "history"
+              ? `sessions/${manager.getSessionId()}`
+              : channel === "query"
+                ? `sessions/${manager.getSessionId()}/query-results/${queryId}`
+                : "agent-stream";
         const url = `${address}/api/issues/${issue.id}/${suffix}`;
         const headers: Record<string, string> = explicit ? { "x-issue-pilot-subject": reader } : {};
         pending = fetch(url, { headers, signal: AbortSignal.timeout(5_000) });

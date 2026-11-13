@@ -20,6 +20,7 @@ import {
 import { contextTokens, mergeFooterUsage, validAssistantUsage } from "../../../agent/usage.ts";
 import { ArrowDown, ChevronRight } from "../ui/icons";
 import { IssueMarkdown, resolveIssueFileLink } from "./IssueMarkdown";
+import { QueryResult } from "./QueryResult";
 import {
   activityForEvent,
   ConversationProjection,
@@ -38,7 +39,7 @@ import { AgentStreamController } from "./agent-stream";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
 import type { AgentDraftImage, SubmittedAgentMessage, AgentDraftStore } from "./agent-drafts";
 
-function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "tool" }> }) {
+function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "tool" }>; userSubject?: string }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
   const label = createMemo(() => toolLabel(props.entry, props.issue.workingDirectory));
   const labelParts = createMemo(() => toolLabelParts(label()));
@@ -69,6 +70,9 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
           </Show>
         </code>
         <span class="agent-tool-state">{{ running: "执行中", complete: "完成", error: "失败" }[props.entry.status]}</span>
+        <Show when={props.entry.parentToolCallId}>
+          <span class="agent-tool-timing">子查询</span>
+        </Show>
         <Show when={props.entry.result?.displayTruncated}>
           <span class="agent-tool-timing" title="页面只保留输出开头和结尾，未修改会话原始记录">
             显示已截断
@@ -109,7 +113,7 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
           <div class="agent-tool-timing">嵌套调用记录不完整</div>
         </Show>
         <Show when={text()}>
-          <pre class="agent-tool-output">{text()}</pre>
+          <QueryResult entry={props.entry} text={text()} issueKey={props.issue.id} userSubject={props.userSubject} />
         </Show>
         <Show when={outputFile()}>
           {(href) => (
@@ -197,7 +201,7 @@ function AssistantBlock(props: { issue: IssueDetail; block: Extract<Conversation
   );
 }
 
-export function ConversationItem(props: { issue: IssueDetail; entry: ConversationEntry }) {
+export function ConversationItem(props: { issue: IssueDetail; entry: ConversationEntry; userSubject?: string }) {
   // Match render callbacks take an argument; zero-argument functions are accessors that can recreate DOM.
   return (
     <Switch>
@@ -226,7 +230,7 @@ export function ConversationItem(props: { issue: IssueDetail; entry: Conversatio
         }}
       </Match>
       <Match when={props.entry.kind === "tool"}>
-        <ToolEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "tool" }>} />
+        <ToolEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "tool" }>} userSubject={props.userSubject} />
       </Match>
       <Match when={props.entry.kind === "summary"}>
         <SessionSummaryEntry issue={props.issue} entry={props.entry as Extract<ConversationEntry, { kind: "summary" }>} />
@@ -310,7 +314,7 @@ function footerMetrics(footer: AgentFooterStats) {
   ].filter((metric) => metric.text);
 }
 
-export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<unknown>; drafts: AgentDraftStore }) {
+export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<unknown>; drafts: AgentDraftStore; userSubject?: string }) {
   const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [runState, setRunState] = createSignal<AgentRunState | undefined>(undefined, { ownedWrite: true });
@@ -409,6 +413,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   };
   let aborting = false;
   const handlePanelKeyDown = (event: KeyboardEvent & { currentTarget: HTMLElement }) => {
+    // Portal events can reach the panel even though the native dialog owns keyboard interaction.
+    if (event.target instanceof Element && event.target.closest("dialog[open]")) return;
     if (event.key === "Escape") {
       if (props.hidden || event.defaultPrevented || event.isComposing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (!canInterrupt()) return;
@@ -823,7 +829,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         >
           <div ref={conversation} class="agent-conversation" role="log" aria-live="polite">
             <For each={entries()} keyed={(entry) => entry.id}>
-              {(entry) => <ConversationItem issue={props.issue} entry={entry()} />}
+              {(entry) => <ConversationItem issue={props.issue} entry={entry()} userSubject={props.userSubject} />}
             </For>
             <Show when={!entries().length && (snapshotReady() || !error())}>
               <div class="agent-empty">{snapshotReady() ? "还没有对话" : "正在加载对话…"}</div>

@@ -422,7 +422,7 @@ export async function queryDms(
       }
       // Inline results share the capability result budget; larger result sets must use export.
       if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes) throw new Error("dms_mcp_result_too_large_use_export");
-      return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name });
+      return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name, instanceAlias: database.instanceAlias, schema: input.schema });
     });
   } catch (error) {
     if (signal?.aborted) throw error;

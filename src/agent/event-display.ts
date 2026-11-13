@@ -3,7 +3,7 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { RunEvent } from "./events.ts";
 
-type ToolDisplayResult = { content: Array<TextContent | ImageContent>; displayTruncated?: boolean };
+type ToolDisplayResult = { content: Array<TextContent | ImageContent>; displayTruncated?: boolean; structuredContent?: unknown };
 
 export function boundedText(value: string, maximumCharacters: number): string {
   if (value.length <= maximumCharacters) return value;
@@ -23,8 +23,11 @@ export function displayToolResult<T extends ToolDisplayResult>(result: T): T {
     .join("\n");
   const images = result.content.filter((part): part is ImageContent => part.type === "image");
   const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
+  const display = { ...result };
+  // This SDK-only duplicate is for nested execution, not a second unbounded Web payload.
+  delete display.structuredContent;
   return {
-    ...result,
+    ...display,
     ...(text.length > issuePilotConfig.web.agentToolOutputCharacters ? { displayTruncated: true } : {}),
     content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images],
   };
@@ -34,6 +37,8 @@ export function agentDisplayEvent(envelope: RunEvent): RunEvent {
   const event = envelope.event;
   if (event.type === "tool_execution_end") return { ...envelope, event: { ...event, result: displayToolResult(event.result) } };
   if (event.type === "tool_execution_update") return { ...envelope, event: { ...event, partialResult: displayToolResult(event.partialResult) } };
-  if (event.type === "message_end" && event.message.role === "toolResult") return { ...envelope, event: { ...event, message: displayToolResult(event.message) } };
+  if ((event.type === "message_start" || event.type === "message_end") && event.message.role === "toolResult") return { ...envelope, event: { ...event, message: displayToolResult(event.message) } };
+  if (event.type === "turn_end") return { ...envelope, event: { ...event, toolResults: event.toolResults.map(displayToolResult) } };
+  if (event.type === "agent_end") return { ...envelope, event: { ...event, messages: event.messages.map((message) => (message.role === "toolResult" ? displayToolResult(message) : message)) } };
   return envelope;
 }

@@ -12,6 +12,7 @@ import { agentDisplayEvent } from "../agent/event-display.ts";
 import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
+import { readQueryResult } from "../agent/query-results.ts";
 import { agentSessions, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
@@ -89,6 +90,24 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const transcript = sessionTranscript(manager, issue.id),
       page = transcript.slice(offset, offset + 50).map(agentDisplayEvent);
     return { events: page, nextOffset: offset + page.length < transcript.length ? offset + page.length : null };
+  });
+
+  app.get<{ Params: { key: string; sessionId: string; entryId: string } }>("/api/issues/:key/sessions/:sessionId/query-results/:entryId", async (request, reply) => {
+    await requireCurrentUser(database, request);
+    const issue = await requireIssue(database, request.params.key);
+    const text = await runScopeExclusive(async () => {
+      await requireCurrentUser(database, request);
+      let manager: Awaited<ReturnType<typeof readIssueSessionHistory>>;
+      try {
+        manager = await readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
+      } catch (error) {
+        if (error instanceof Error && error.message === "agent_session_not_found") throw new ApiError(404, "agent_session_not_found");
+        throw error;
+      }
+      await requireCurrentUser(database, request);
+      return readQueryResult(manager, request.params.entryId);
+    });
+    return reply.type("text/plain; charset=utf-8").send(text);
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/reset-session", async (request, reply) => {

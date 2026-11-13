@@ -14,7 +14,8 @@ export async function copyText(text: string): Promise<void> {
   input.value = text;
   input.readOnly = true;
   input.style.cssText = "position:fixed;left:-9999px;top:0";
-  document.body.append(input);
+  // A native modal makes the rest of the document inert, including a body-level copy target.
+  (active?.closest("dialog[open]") ?? document.body).append(input);
   try {
     input.focus({ preventScroll: true });
     input.select();

@@ -150,7 +150,7 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
           </Show>
           <Show when={entries().length}>
             <div class="agent-panel session-history ip-scrollbar ip-scrollbar-dark" role="region" aria-label="历史对话" aria-busy={busy() ? "true" : "false"} tabindex={0}>
-              <For each={entries()}>{(entry) => <ConversationItem issue={props.issue} entry={entry} />}</For>
+              <For each={entries()}>{(entry) => <ConversationItem issue={props.issue} entry={entry} userSubject={currentUser()?.subject} />}</For>
             </div>
           </Show>
           <Show when={nextOffset() !== null}>

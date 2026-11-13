@@ -589,6 +589,11 @@ export const readIssueSession = (key: string, sessionId: string, offset = 0, sig
   request<{ events: import("../../../agent/events").RunEvent[]; nextOffset: number | null }>(issuePath(key, `/sessions/${encodeURIComponent(sessionId)}?offset=${offset}`), {
     ...(signal ? { signal } : {}),
   });
+export async function readIssueQueryResult(key: string, reference: import("../../../agent/query-results").QueryResultReference, signal: AbortSignal): Promise<string> {
+  const response = await fetch(issuePath(key, `/sessions/${encodeURIComponent(reference.sessionId)}/query-results/${encodeURIComponent(reference.entryId)}`), { headers: requestHeaders(), signal });
+  if (!response.ok) throw await requestError(response);
+  return response.text();
+}
 export const resetIssueSession = (key: string, expectedSessionId: string) => jsonRequest<{ sessionId: string }>(issuePath(key, "/reset-session"), "POST", { expectedSessionId });
 export const abortAgent = (key: string) => request<void>(issuePath(key, "/abort"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });

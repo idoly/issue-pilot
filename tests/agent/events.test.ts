@@ -206,6 +206,29 @@ test("buffer budgets count displayed tool text and retain raw results for other 
   stop();
 });
 
+test("all SDK copies of query output use the display bound without changing model or durable results", () => {
+  const text = "x".repeat(issuePilotConfig.web.agentToolOutputCharacters + 1);
+  const result = { content: [{ type: "text" as const, text }], details: { provider: "aliyun-sls-cli" }, structuredContent: { records: [{ text }] } };
+  const message = { role: "toolResult" as const, toolCallId: "query", toolName: "service_query", isError: false, ...result, timestamp: 1 };
+  const assistant = { role: "assistant" as const, api: "openai-responses" as const, provider: "fixture", model: "fixture", content: [], stopReason: "toolUse" as const, usage, timestamp: 1 };
+  const events: RunEvent["event"][] = [
+    { type: "tool_execution_end", toolCallId: "query", toolName: "service_query", isError: false, result },
+    { type: "tool_execution_update", toolCallId: "query", toolName: "service_query", args: {}, partialResult: result },
+    { type: "message_start", message },
+    { type: "message_end", message },
+    { type: "turn_end", message: assistant, toolResults: [message] },
+    { type: "agent_end", messages: [assistant, message], willRetry: false },
+  ];
+  for (const event of events) {
+    const displayed = JSON.stringify(agentDisplayEvent({ id: "event", issueId: "issue", createdAt: "2026-11-14T00:00:00Z", event }));
+    assert.ok(!displayed.includes(text), event.type);
+    assert.ok(!displayed.includes('"structuredContent"'), event.type);
+    assert.match(displayed, /"displayTruncated":true/);
+  }
+  assert.equal(message.content[0]!.text, text);
+  assert.equal(result.structuredContent.records[0]!.text, text);
+});
+
 test("unbounded tool metadata still consumes the replay buffer budget", () => {
   const bus = new AgentEventBus(),
     failures: unknown[] = [];

@@ -31,7 +31,7 @@ test("history, SSE and MCP do not follow a replaced Issue directory", { timeout:
     const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
     const route = `${address}/api/issues/${issue.id}`;
     const get = (suffix: string) => fetch(`${route}/${suffix}`, { signal: AbortSignal.timeout(3_000) });
-    for (const suffix of ["sessions", `sessions/${manager.getSessionId()}`, "agent-stream"]) {
+    for (const suffix of ["sessions", `sessions/${manager.getSessionId()}`, `sessions/${manager.getSessionId()}/query-results/entry`, "agent-stream"]) {
       const response = await get(suffix);
       if (response.ok) await response.body?.cancel();
       assert.equal(response.status, 500, suffix);

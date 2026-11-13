@@ -10,7 +10,7 @@ The application issues no login session. X-Issue-Pilot-Subject selects a DB user
 
 [requireCurrentUser](../../src/http/route-context.ts) requires active identity, pins implicit selection by createdAt/subject, and reloads authorization after relevant waits. Deactivation never switches identity. developer and isAdmin are independent.
 
-Session lists and history pages reauthorize inside the configuration scope after waiting. SSE reauthorizes after catalog/transcript preparation and before sending headers; a deactivated reader receives an ordinary error, not a successful replay. This admission check does not revoke an already established stream. Regression: [session-read-identity.test.ts](../../tests/http/session-read-identity.test.ts).
+Session lists, history pages and complete query reads reauthorize inside the configuration scope after waiting. Complete query reads also reauthorize after session preparation. SSE reauthorizes after catalog/transcript preparation and before sending headers; a deactivated reader receives an ordinary error, not a successful replay. This admission check does not revoke an already established stream. Regression: [session-read-identity.test.ts](../../tests/http/session-read-identity.test.ts).
 
 Not every GET checks identity: examples include /api/issues, /api/issues/:key, /api/users, /api/catalog and /api/config. Assignee/reporter relations are not read access control. API/MCP private,no-store headers are not authorization or encryption.
 
@@ -30,6 +30,7 @@ Native browser EventSource does not send the page-selected subject header. Witho
 | PATCH /api/issues/:key | 200, complete metadata form, not arbitrary partial merge |
 | POST .../agent-messages | 202, empty body, input admitted |
 | GET .../agent-messages/:id | Sender-scoped durable receipt; queued / started / rejected / unknown |
+| GET .../sessions/:sessionId/query-results/:entryId | Exact saved successful native query text, text/plain, private/no-store; validated Issue/reset chain and displayed branch, at most 1 MiB UTF-8. Unknown/non-query entries are 404; oversized results are 413. No filesystem path input or query execution. |
 | POST .../abort | 200 after current/queued cancellation cleanup |
 | POST .../retry | 202 when unresolved and reservation checks permit |
 | PATCH .../status | Manual pending → resolved or resolved → open; Web rereads after a transition conflict without repeating the write |

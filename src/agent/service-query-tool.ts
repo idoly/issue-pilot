@@ -67,13 +67,13 @@ export function createCapabilityTools(
         const credentialError = scope.credentialErrors?.[capability];
         if (credentialError) throw new Error(credentialError);
         try {
-          const result: AgentToolResult<unknown> =
+          const result =
             capability === "dms"
               ? await (options.dms
                   ? options.dms.query(input as CapabilityInputs["dms"], scope.config.dms!, signal, workFiles)
                   : queryDms(input as CapabilityInputs["dms"], scope.config.dms!, signal, undefined, workFiles))
               : await readSlsLogs(input as CapabilityInputs["sls"], scope.config.sls!, signal);
-          return structuredJsonResult(result);
+          return structuredJsonResult({ ...result, details: { ...result.details, environment: scope.environmentKey, service: scope.serviceKey } });
         } catch (error) {
           if (!(error instanceof DmsOperationError)) throw error;
           // Only expose stable codes and measured metadata, never the SDK error or its cause.

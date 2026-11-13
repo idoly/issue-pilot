@@ -869,7 +869,7 @@ test("calls only MCP executeScript and binds it to the configured deployment dat
   const result = await queryDms({ schema: "orders", script: "SELECT COUNT(*) FROM suppliers;", logic: false }, configured, undefined, fixture.connect);
 
   assert.deepEqual(fixture.calls, [{ name: "executeScript", args: { database_id: "123", script: "SELECT COUNT(*) FROM suppliers", logic: false }, aborted: false }]);
-  assert.deepEqual(result.details, { provider: "aliyun-dms-mcp", tool: "executeScript" });
+  assert.deepEqual(result.details, { provider: "aliyun-dms-mcp", tool: "executeScript", instanceAlias: configured.databases[0]!.instanceAlias, schema: "orders" });
   assert.equal(JSON.parse(result.content[0]!.text).result.content[0].text, '[{"id":1}]');
   assert.doesNotMatch(JSON.stringify(result), /fixture-token/);
   assert.equal(fixture.closes(), 1);

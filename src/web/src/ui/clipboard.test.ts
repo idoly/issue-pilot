@@ -40,4 +40,23 @@ describe("browser clipboard", () => {
     await expect(copyText("commit")).rejects.toThrow("clipboard_write_failed");
     expect(document.querySelector("textarea")).toBeNull();
   });
+  it("keeps the fallback target inside the active modal so it is not inert", async () => {
+    const dialog = document.createElement("dialog");
+    dialog.open = true;
+    const button = document.createElement("button");
+    dialog.append(button);
+    document.body.append(dialog);
+    button.focus();
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => {
+        expect(document.activeElement?.closest("dialog")).toBe(dialog);
+        expect((document.activeElement as HTMLTextAreaElement).value).toBe("dialog field");
+        return true;
+      },
+    });
+    await copyText("dialog field");
+    expect(document.activeElement).toBe(button);
+    expect(document.querySelector("textarea")).toBeNull();
+  });
 });

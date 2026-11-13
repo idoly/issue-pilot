@@ -1687,6 +1687,125 @@ summary.agent-tool-head > svg {
 .agent-tool-timing {
   color: var(--agent-dim);
 }
+.agent-query-result {
+  --ui-primary: var(--agent-accent);
+  --ui-border: var(--agent-border-muted);
+  --ui-button-default-bg: transparent;
+  --ui-button-default-color: var(--agent-text);
+  --ui-button-default-hover-bg: var(--agent-bg);
+  --ui-button-default-hover-color: var(--agent-accent);
+  min-width: 0;
+  margin-top: 12px;
+}
+.agent-query-meta {
+  color: var(--agent-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.agent-query-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.agent-query-result .ui-input-affix-wrapper {
+  background: transparent;
+}
+.agent-query-result .ui-input {
+  color: var(--agent-text);
+}
+.agent-query-result .ui-input::placeholder {
+  color: var(--agent-muted);
+}
+.agent-query-result .ui-segmented {
+  background: var(--agent-bg);
+}
+.agent-query-result .ui-segmented button {
+  color: var(--agent-muted);
+}
+.agent-query-result .ui-segmented button[aria-checked="true"] {
+  background: var(--agent-tool-success-bg);
+  color: var(--agent-accent);
+}
+.agent-query-scroll {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 8px;
+  border: 1px solid var(--agent-border-muted);
+}
+.agent-query-scroll:focus-visible {
+  outline: 2px solid var(--agent-accent);
+  outline-offset: 2px;
+}
+.agent-query-scroll table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font: 12px / 1.5 var(--agent-code-font);
+}
+.agent-query-scroll th,
+.agent-query-scroll td {
+  min-width: 100px;
+  max-width: 400px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--agent-border-muted);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-query-scroll th {
+  position: sticky;
+  top: 0;
+  background: var(--agent-tool-success-bg);
+}
+.agent-query-scroll .agent-query-row-action {
+  min-width: 60px;
+  width: 60px;
+}
+.agent-query-sort {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-query-sort:focus-visible {
+  outline: 2px solid var(--agent-accent);
+  outline-offset: 2px;
+}
+.query-record {
+  overflow-wrap: anywhere;
+}
+.query-record dl,
+.query-record dd {
+  margin: 0;
+}
+.query-record-field {
+  padding-block: 12px;
+  border-top: 1px solid var(--ui-border);
+}
+.query-record dt {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-weight: 600;
+}
+.query-record pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px / 1.6 var(--app-code-font, monospace);
+}
 .agent-tool-timing {
   margin-top: 5px;
   font: var(--agent-font-size) / 1.5 var(--agent-code-font);

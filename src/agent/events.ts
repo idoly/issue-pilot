@@ -2,6 +2,7 @@ import type { ImageContent, NestedToolCalls } from "@earendil-works/pi-ai";
 import type { AgentRunState } from "../domain/contracts.ts";
 import { sessionEntryToContextMessages, type JsonAgentSessionEvent, type SessionManager } from "@earendil-works/pi-coding-agent";
 import { agentDisplayEvent } from "./event-display.ts";
+import { savedQueryCompletion, type QueryResultReference } from "./query-results.ts";
 
 type ToolCompletionEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_end" }>;
 type ToolUpdateEvent = Extract<JsonAgentSessionEvent, { type: "tool_execution_update" }>;
@@ -10,7 +11,7 @@ type MessageEndEvent = Extract<JsonAgentSessionEvent, { type: "message_end" }>;
 type AgentWireEvent =
   | Exclude<JsonAgentSessionEvent, ToolCompletionEvent | ToolUpdateEvent | MessageEndEvent>
   | (MessageEndEvent & { message: MessageEndEvent["message"] & { displayTruncated?: boolean } })
-  | (ToolCompletionEvent & { result: ToolCompletionEvent["result"] & { nestedCalls?: NestedToolCalls; displayTruncated?: boolean } })
+  | (ToolCompletionEvent & { result: ToolCompletionEvent["result"] & { nestedCalls?: NestedToolCalls; displayTruncated?: boolean; queryResult?: QueryResultReference } })
   | (ToolUpdateEvent & { partialResult: ToolUpdateEvent["partialResult"] & { displayTruncated?: boolean } })
   | { type: "session_reset" }
   | { type: "issue_run_state"; state: AgentRunState }
@@ -221,6 +222,11 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
   const events: RunEvent[] = [];
   for (const entry of manager.getBranch()) {
     const createdAt = timestamp(entry.timestamp);
+    const query = savedQueryCompletion(manager.getSessionId(), entry);
+    if (query) {
+      events.push({ id: entry.id, issueId, createdAt, event: query });
+      continue;
+    }
     if (entry.type === "custom") {
       if (entry.customType === "issue-pilot-user") {
         const customData = entry.data as { message?: unknown; images?: unknown } | undefined;

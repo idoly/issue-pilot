@@ -9,9 +9,11 @@ import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
+import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
+import { persistNestedQuery, savedQueryCompletion } from "../../src/agent/query-results.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { issueRelations, issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
+import { agentSessions, issueRelations, issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
 import { issueRepositoryStorePath, repositoryStorePath } from "../../src/workspace/git.ts";
 import { isolateIssueWorktree } from "../../src/workspace/issue-git.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
@@ -465,6 +467,138 @@ try {
   const conversationWidth = await page.locator(".agent-conversation").evaluate((element) => element.getBoundingClientRect().width);
   assert.ok(transcriptWidth > 960 && Math.abs(transcriptWidth - conversationWidth) < 2, `Conversation width ${conversationWidth} does not fill ${transcriptWidth}`);
   await page.setViewportSize({ width: 1680, height: 1050 });
+
+  const queryMetadata = {
+    region: "cn-hangzhou",
+    project: "fixture-project",
+    logstore: "application-log",
+    from: 1_700_000_000,
+    to: 1_700_003_600,
+    timezone: "Asia/Shanghai",
+    queryMode: "query",
+    order: "newest_first",
+    pagination: "offset",
+    returnedRows: 65,
+    possiblyIncomplete: false,
+  };
+  const queryRecords = Array.from({ length: 65 }, (_, index) => ({
+    id: index,
+    message: `fixture log ${index}`,
+    level: index % 2 ? "INFO" : "WARN",
+    latency: index,
+    details: { enabled: false, trace: "x".repeat(220) },
+    source: "<img src=x onerror=alert(1)>",
+  }));
+  const queryText = JSON.stringify({ query: queryMetadata, records: queryRecords });
+  publish({ type: "tool_execution_start", toolCallId: "query-table", toolName: "service_query", args: { capability: "sls", environment: "test", service: "browser" } });
+  publish({
+    type: "tool_execution_end",
+    toolCallId: "query-table",
+    toolName: "service_query",
+    isError: false,
+    result: { content: [{ type: "text", text: queryText }], details: { provider: "aliyun-sls-cli", ...queryMetadata } },
+  });
+  const queryCard = page.locator("details.agent-tool", { has: page.getByLabel("工具 sls test/browser", { exact: true }) });
+  await queryCard.waitFor();
+  assert.equal(await queryCard.locator("table, pre").count(), 0, "query results remain lazy while collapsed");
+  await queryCard.locator("summary").click();
+  await queryCard.getByRole("table").waitFor();
+  assert.equal(await queryCard.locator("tbody tr").count(), 50);
+  assert.equal(await queryCard.locator("img").count(), 0);
+  await queryCard.getByRole("button", { name: "按 id 升序排列", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await queryCard.locator('th[aria-sort="ascending"]').waitFor();
+  await page.keyboard.press("Enter");
+  await queryCard.locator('th[aria-sort="descending"]').waitFor();
+  assert.equal(await queryCard.locator("tbody tr").first().locator("td").nth(1).textContent(), "64");
+  await page.keyboard.press("Enter");
+  await queryCard.locator("th[aria-sort]").waitFor({ state: "detached" });
+  await queryCard.getByRole("button", { name: "下一页", exact: true }).click();
+  await queryCard.getByText("51–65 / 65 条", { exact: true }).waitFor();
+  assert.equal(await queryCard.locator("tbody tr").count(), 15);
+  await queryCard.getByRole("textbox", { name: "筛选本次查询结果" }).fill("wArN");
+  await queryCard.getByText("1–33 / 33 条", { exact: true }).waitFor();
+  await queryCard.getByRole("radio", { name: "原文", exact: true }).click();
+  await queryCard.locator("pre").waitFor();
+  assert.equal(await queryCard.locator("pre").textContent(), queryText);
+  await page.keyboard.press("ArrowLeft");
+  await queryCard.getByRole("table").waitFor();
+  assert.equal(await queryCard.getByRole("textbox").inputValue(), "wArN");
+  await queryCard.getByRole("button", { name: "复制筛选结果", exact: true }).click();
+  await queryCard.getByText("已复制筛选结果（33 条）", { exact: true }).waitFor();
+  assert.deepEqual(
+    JSON.parse(await page.evaluate(() => navigator.clipboard.readText())),
+    queryRecords.filter((row) => row.level === "WARN"),
+  );
+  const recordOpener = queryCard.getByRole("button", { name: "查看第 1 条记录", exact: true });
+  await recordOpener.click();
+  const recordDialog = page.getByRole("dialog", { name: "查询记录 · 第 1 条", exact: true });
+  await recordDialog.waitFor();
+  assert.ok((await recordDialog.innerText()).includes("x".repeat(220)), "record details retain the entire long field");
+  const browserClipboard = await page.evaluateHandle(() => navigator.clipboard);
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+  try {
+    await recordDialog.getByRole("button", { name: "复制字段 details", exact: true }).click();
+    await recordDialog.getByText("已复制字段 details", { exact: true }).waitFor();
+    assert.deepEqual(JSON.parse(await browserClipboard.evaluate((clipboard) => clipboard.readText())), queryRecords[0].details);
+  } finally {
+    await page.evaluate((clipboard) => Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard }), browserClipboard);
+    await browserClipboard.dispose();
+  }
+  const abortRequests = [];
+  const trackAbort = (request) => {
+    if (request.method() === "POST" && request.url().endsWith(`/api/issues/${issue.key}/abort`)) abortRequests.push(request.url());
+  };
+  page.on("request", trackAbort);
+  engine.running.add(issue.id);
+  publish({ type: "issue_run_state", state: "running" });
+  await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  assert.deepEqual(abortRequests, [], "Escape in a record dialog must not abort the active Agent");
+  await recordDialog.waitFor({ state: "hidden" });
+  assert.ok(await isFocused(recordOpener), "record dialog restores focus to the original row");
+  page.off("request", trackAbort);
+  engine.running.delete(issue.id);
+  publish({ type: "issue_run_state", state: "idle" });
+  await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor({ state: "hidden" });
+  for (const width of [1680, 980, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const bounds = await queryCard.evaluate((element) => {
+      const scroll = element.querySelector(".agent-query-scroll");
+      return { right: element.getBoundingClientRect().right, width: element.clientWidth, content: element.scrollWidth, scrollHeight: scroll.clientHeight };
+    });
+    assert.ok(bounds.right <= width && bounds.content <= bounds.width && bounds.scrollHeight <= 360, `Query table overflows at ${width}px: ${JSON.stringify(bounds)}`);
+    if (width === 390) {
+      await queryCard.getByRole("textbox", { name: "筛选本次查询结果" }).fill("fixture log 64");
+      await queryCard.getByText("1–1 / 1 条", { exact: true }).waitFor();
+      await queryCard.getByRole("radio", { name: "原文", exact: true }).click();
+      await queryCard.locator("pre").waitFor();
+      await queryCard.getByRole("radio", { name: "表格", exact: true }).click();
+      await queryCard.getByRole("textbox").fill("wArN");
+      await queryCard.getByText("1–33 / 33 条", { exact: true }).waitFor();
+      await recordOpener.click();
+      await recordDialog.waitFor();
+      const recordBounds = await recordDialog.boundingBox();
+      assert.ok(recordBounds.x >= 0 && recordBounds.x + recordBounds.width <= width);
+      await recordDialog.getByRole("button", { name: "关闭", exact: true }).click();
+      await recordDialog.waitFor({ state: "hidden" });
+    }
+    if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) {
+      await mkdir(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, { recursive: true });
+      await queryCard.locator("summary").scrollIntoViewIfNeeded();
+      await page.locator(".agent-panel").screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `query-result-${width}.png`) });
+    }
+  }
+  const queryScroll = queryCard.getByRole("region", { name: "查询结果表格，可滚动" });
+  await queryScroll.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(() => document.querySelector(".agent-query-scroll").scrollLeft > 0);
+  await queryCard.locator("summary").click();
+  await queryCard.getByRole("table").waitFor({ state: "detached" });
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  await page.locator(".agent-scroll").evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
 
   for (let index = 1; index <= 40; index += 1) publish({ type: "issue_user", message: `Browser history entry ${index}` });
   await page.getByText("Browser history entry 40", { exact: true }).waitFor();
@@ -1058,6 +1192,73 @@ try {
   } finally {
     synchronization.close();
   }
+  // Real JSONL + HTTP reads + live SSE, then a fresh replay. No cloud query or result-file fixture.
+  const evidenceIssue = await createIssue(app, "browser", "dev", "Stored query evidence");
+  const evidenceId = engine.enqueued.at(-1);
+  const evidenceRoot = issueRoot(root, evidenceIssue.id);
+  const evidenceSession = await createPrivateSessionManager(evidenceRoot, evidenceRoot);
+  const evidenceDatabase = openDatabase(databaseFile);
+  try {
+    await evidenceDatabase.db.insert(agentSessions).values({ issueId: evidenceId, sessionFile: evidenceSession.getSessionFile(), workspacePath: evidenceRoot });
+  } finally {
+    evidenceDatabase.close();
+  }
+  engine.running.clear();
+  await page.goto(`${origin}/?issue=${evidenceIssue.id}`);
+  // Wait for the stream snapshot before publishing a live child result.
+  await page.getByText("还没有对话", { exact: true }).waitFor();
+  const completeRows = Array.from({ length: 70 }, (_, id) => ({ id, message: `complete row ${id} ${"evidence ".repeat(90)}` }));
+  const completeText = JSON.stringify({ query: { ...queryMetadata, returnedRows: completeRows.length }, records: completeRows });
+  const nestedQuery = persistNestedQuery(evidenceSession, {
+    type: "tool_execution_end",
+    toolName: "service_query",
+    toolCallId: "script/1",
+    parentToolCallId: "script",
+    isError: false,
+    result: { content: [{ type: "text", text: completeText }], details: { provider: "aliyun-sls-cli", environment: "test", service: "browser" } },
+  });
+  events.publish({ id: randomUUID(), issueId: evidenceId, createdAt: new Date().toISOString(), event: nestedQuery });
+  const savedCard = page.locator("details.agent-tool", { has: page.getByLabel("工具 sls test/browser", { exact: true }) });
+  const fullReads = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/query-results/")) fullReads.push(request.url());
+  });
+  await savedCard.waitFor();
+  assert.equal(await savedCard.getByText("子查询", { exact: true }).count(), 1);
+  await savedCard.locator("summary").click();
+  assert.equal(fullReads.length, 0);
+  await savedCard.getByRole("button", { name: "查看完整结果", exact: true }).click();
+  await savedCard.getByRole("table").waitFor();
+  assert.equal(await savedCard.locator("tbody tr").count(), 50);
+  await savedCard.getByRole("button", { name: "下一页", exact: true }).click();
+  await savedCard.getByText("51–70 / 70 条", { exact: true }).waitFor();
+  await savedCard.getByRole("radio", { name: "原文", exact: true }).click();
+  assert.equal(await savedCard.locator("pre").textContent(), completeText);
+  assert.equal(fullReads.length, 1);
+
+  const dmsText = JSON.stringify({ tool: "executeScript", result: { content: [{ type: "text", text: "| id | state |\n| --- | --- |\n| 7 | ready |" }] } });
+  const dmsEntry = evidenceSession.appendMessage({
+    role: "toolResult",
+    toolName: "service_query",
+    toolCallId: "dms",
+    isError: false,
+    timestamp: Date.now(),
+    content: [{ type: "text", text: dmsText }],
+    details: { provider: "aliyun-dms-mcp", environment: "test", service: "browser", schema: "orders" },
+  });
+  events.publish({ id: randomUUID(), issueId: evidenceId, createdAt: new Date().toISOString(), event: savedQueryCompletion(evidenceSession.getSessionId(), evidenceSession.getEntry(dmsEntry)) });
+  const dmsCard = page.locator("details.agent-tool", { has: page.getByLabel("工具 dms test/browser", { exact: true }) });
+  await dmsCard.locator("summary").click();
+  await dmsCard.getByRole("cell", { name: "ready", exact: true }).waitFor();
+  await page.reload();
+  await savedCard.locator("summary").click();
+  await savedCard.getByRole("button", { name: "查看完整结果", exact: true }).click();
+  await savedCard.getByRole("table").waitFor();
+  assert.equal(await savedCard.locator("tbody tr").count(), 50);
+  assert.equal(fullReads.length, 2);
+  await dmsCard.locator("summary").click();
+  await dmsCard.getByRole("cell", { name: "ready", exact: true }).waitFor();
+
   const unexpected = failures.filter((failure) => !/^Failed to load resource: the server responded with a status of 409/.test(failure));
   assert.deepEqual(unexpected, []);
   const inspection = openDatabase(databaseFile);
@@ -1107,6 +1308,9 @@ try {
           "agent draft survives navigation",
           "lazy loading and icons",
           "real SSE",
+          "SLS result table mounts lazily, filters/pages locally, preserves raw text and scrolls by keyboard without narrow-screen overflow",
+          "query sorting, complete filtered JSON copy and long-field details preserve data; modal fallback copy, Escape and focus work without aborting the Agent",
+          "nested native evidence persists in JSONL, reads complete results on demand and survives reload; DMS Markdown tables render live and on replay",
           "Markdown fence and link parsing",
           "cross-paragraph selection",
           "thinking rendered inline without disclosure controls",

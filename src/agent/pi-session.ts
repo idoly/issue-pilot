@@ -28,6 +28,7 @@ import type { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { createPiModelRuntime, type PiModelRuntime } from "./model-runtime.ts";
 import { createCapabilityTools, type ServiceToolScope } from "./service-query-tool.ts";
 import { sessionToolAllowlist, type AgentSessionContext } from "./context.ts";
+import { completedQueries, persistNestedQuery } from "./query-results.ts";
 
 export interface GitCommitIdentity {
   name: string;
@@ -568,6 +569,20 @@ export class PiSessionRuntime {
         if (wireEvent.type === "message_end" && wireEvent.message.role === "assistant") modelResponseFailed = wireEvent.message.stopReason === "error";
         else if (wireEvent.type === "agent_settled" && wireEvent.aborted) modelResponseFailed = false;
         watchdog.observe(wireEvent);
+        if (wireEvent.type === "tool_execution_end" && wireEvent.parentToolCallId) {
+          let saved;
+          try {
+            saved = persistNestedQuery(options.manager, wireEvent);
+          } catch (cause) {
+            const failure = new Error("agent_query_result_persist_failed", { cause });
+            rejectIdle?.(failure);
+            void session.abort().catch(() => undefined);
+            throw failure;
+          }
+          if (saved) options.onEvent(saved);
+        } else if (wireEvent.type === "turn_end") {
+          for (const saved of completedQueries(options.manager, wireEvent)) options.onEvent(saved);
+        }
         options.onEvent(wireEvent);
       });
       let stop: Promise<void> | undefined,

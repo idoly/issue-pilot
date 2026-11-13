@@ -51,7 +51,7 @@ function AgentWorkspace(props: {
   onDirtyChange: (dirty: boolean) => void;
   onResize: (panel: SourcePanel, size: number) => void;
 }) {
-  const { agentDrafts } = useApplicationResources();
+  const { agentDrafts, currentUser } = useApplicationResources();
   return (
     <section
       class={`agent-workspace${props.sourceExpanded ? " source-open" : ""}${props.sourceExpanded && !props.sourceAgentOpen ? " agent-closed" : ""}`}
@@ -62,7 +62,7 @@ function AgentWorkspace(props: {
           工单详情刷新失败：{props.refreshError}
         </div>
       </Show>
-      <AgentPanel issue={props.issue} drafts={agentDrafts} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} />
+      <AgentPanel issue={props.issue} drafts={agentDrafts} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} userSubject={currentUser()?.subject} />
       <Show when={props.sourceExpanded}>
         <CodeBrowser
           issueKey={props.issue.id}

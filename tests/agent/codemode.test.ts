@@ -6,10 +6,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext, type Tool, type ImageContent, type TextContent } from "@earendil-works/pi-ai";
-import { obj } from "@earendil-works/pi-schema";
+import { obj, unknown as unknownSchema } from "@earendil-works/pi-schema";
 import { defineTool, ModelRuntime, SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentCodemodeMode } from "../../src/domain/contracts.ts";
 import { PiSessionRuntime, createPrivateSessionManager, type StartPiSessionOptions } from "../../src/agent/pi-session.ts";
+import { readQueryResult } from "../../src/agent/query-results.ts";
+import { sessionTranscript, type RunEvent } from "../../src/agent/events.ts";
 
 async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessionOptions> = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-codemode-"));
@@ -70,6 +72,138 @@ function evidenceTool(url: string) {
   });
 }
 const call = (code: string, id = "script") => fauxAssistantMessage(fauxToolCall("codemode", { code }, { id }), { stopReason: "toolUse" });
+
+for (const nested of [false, true])
+  test(`${nested ? "Codemode" : "direct"} native query references are already durable when published`, async () => {
+    let executions = 0;
+    const text = JSON.stringify({ records: [{ payload: "private fixture rows".repeat(3_000) }] });
+    const f = await fixture(nested ? "on" : "off", {
+      workspaceTool: defineTool({
+        name: "service_query",
+        label: "Fixture query",
+        description: "Return native query evidence.",
+        parameters: obj({}),
+        outputSchema: unknownSchema(),
+        execute: async () => {
+          executions++;
+          return {
+            content: [{ type: "text", text: '{"records":[{"before":"mutable hook"}]}' }],
+            structuredContent: { records: [{ before: "mutable hook" }] },
+            details: { provider: "aliyun-sls-cli" },
+          };
+        },
+      }),
+    });
+    let managed;
+    const published: RunEvent["event"][] = [];
+    await mkdir(path.join(f.root, "extensions"));
+    await writeFile(
+      path.join(f.root, "extensions", "query-result.ts"),
+      `export default pi => pi.on("tool_result", event => {
+      if (event.toolName === "service_query") return { content: [{ type: "text", text: ${JSON.stringify(text)} }], details: event.details, structuredContent: JSON.parse(${JSON.stringify(text)}) };
+    });\n`,
+    );
+    const observe = f.options.onEvent;
+    f.options.onEvent = (event: RunEvent["event"]) => {
+      if (event.type === "tool_execution_end" && event.result.queryResult) {
+        const reopened = SessionManager.open(f.options.manager.getSessionFile()!);
+        assert.equal(readQueryResult(reopened, event.result.queryResult.entryId), text);
+        published.push(event);
+      }
+      observe(event as JsonAgentSessionEvent);
+    };
+    f.faux.setResponses([
+      nested
+        ? call("const result = await tools.service_query({}); return result.records.length;")
+        : fauxAssistantMessage(fauxToolCall("service_query", {}, { id: "direct" }), { stopReason: "toolUse" }),
+      (context) => {
+        if (nested) assert.ok(!JSON.stringify(context.messages).includes("private fixture rows"));
+        return fauxAssistantMessage("Query complete.");
+      },
+    ]);
+    try {
+      managed = await f.runtime.start(f.options);
+      await managed.prompt("Read evidence.");
+      assert.equal(executions, 1);
+      assert.equal(published.length, 1);
+      const reopened = SessionManager.open(f.options.manager.getSessionFile()!);
+      const replay = sessionTranscript(reopened, "fixture").filter(({ event }) => event.type === "tool_execution_end" && event.toolName === "service_query");
+      assert.deepEqual(
+        replay.map(({ event }) => event),
+        published,
+      );
+      assert.equal(reopened.getEntries().filter((entry) => entry.type === "custom" && entry.customType === "issue-pilot-query-result").length, nested ? 1 : 0);
+    } finally {
+      await managed?.stop();
+      await f.close();
+    }
+  });
+
+test("nested query persistence failure fails the round even when the script catches tool failure", async (t) => {
+  const f = await fixture("on", {
+    workspaceTool: defineTool({
+      name: "service_query",
+      label: "Fixture",
+      description: "Fixture",
+      parameters: obj({}),
+      execute: async () => ({ content: [{ type: "text", text: '{"records":[]}' }], details: { provider: "aliyun-sls-cli" } }),
+    }),
+  });
+  const append = f.options.manager.appendCustomEntry.bind(f.options.manager);
+  t.mock.method(f.options.manager, "appendCustomEntry", (kind: string, data?: unknown) => {
+    if (kind === "issue-pilot-query-result") throw new Error("synthetic disk write failure");
+    return append(kind, data);
+  });
+  f.faux.setResponses([call('try { await tools.service_query({}); } catch { } return "ignored failure";'), fauxAssistantMessage("must not succeed")]);
+  let managed;
+  try {
+    managed = await f.runtime.start(f.options);
+    await assert.rejects(managed.prompt("Read evidence."), /agent_query_result_persist_failed/);
+    await managed.stop();
+    assert.equal(f.events.filter((event) => event.type === "tool_execution_end" && "queryResult" in event.result).length, 0);
+    assert.equal(f.options.manager.getEntries().filter((entry) => entry.type === "custom" && entry.customType === "issue-pilot-query-result").length, 0);
+  } finally {
+    await managed?.stop();
+    await f.close();
+  }
+});
+
+test("cancelling Codemode after a query preserves its saved result without repeating the query", async () => {
+  let executions = 0;
+  const f = await fixture("on", {
+    workspaceTool: defineTool({
+      name: "service_query",
+      label: "Fixture",
+      description: "Fixture",
+      parameters: obj({}),
+      execute: async () => {
+        executions++;
+        return { content: [{ type: "text", text: '{"records":[{"saved":true}]}' }], details: { provider: "aliyun-sls-cli" } };
+      },
+    }),
+  });
+  const abort = new AbortController();
+  const observe = f.options.onEvent;
+  f.options.onEvent = (event: RunEvent["event"]) => {
+    observe(event as JsonAgentSessionEvent);
+    if (event.type === "tool_execution_end" && event.result.queryResult) abort.abort();
+  };
+  f.faux.setResponses([call('await tools.service_query({}); await new Promise(resolve => setTimeout(resolve, 60_000)); return "done";')]);
+  let managed;
+  try {
+    managed = await f.runtime.start(f.options);
+    await managed.prompt("Read then cancel.", [], undefined, abort.signal);
+    await managed.stop();
+    const reopened = SessionManager.open(f.options.manager.getSessionFile()!);
+    const saved = sessionTranscript(reopened, "fixture").find(({ event }) => event.type === "tool_execution_end" && event.result.queryResult);
+    assert.ok(saved?.event.type === "tool_execution_end" && saved.event.result.queryResult);
+    assert.equal(readQueryResult(reopened, saved.event.result.queryResult.entryId), '{"records":[{"saved":true}]}');
+    assert.equal(executions, 1);
+  } finally {
+    await managed?.stop();
+    await f.close();
+  }
+});
 
 for (const retryEnabled of [false, true])
   test(`rejects a final model stream failure without running partial tools (retry ${retryEnabled})`, async () => {

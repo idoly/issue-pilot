@@ -3,10 +3,11 @@ import type { AssistantMessage, ImageContent, NestedToolCalls, TextContent } fro
 
 import { displayToolResult } from "../../../agent/event-display";
 import type { RunEvent } from "../data/client";
+import type { QueryResultReference } from "../../../agent/query-results";
 
 export { boundedText } from "../../../agent/event-display";
 
-type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown; nestedCalls?: NestedToolCalls; displayTruncated?: boolean };
+type ToolResult = { content: Array<TextContent | ImageContent>; details?: unknown; nestedCalls?: NestedToolCalls; displayTruncated?: boolean; queryResult?: QueryResultReference };
 type DisplayBlock = { type: "text"; value: string } | { type: "image"; data: string; mimeType: string };
 type CompletedMessage = Extract<RunEvent["event"], { type: "message_end" }>["message"];
 
@@ -22,7 +23,18 @@ export type ConversationEntry =
       hasToolCalls?: boolean;
       usage?: AssistantMessage["usage"];
     }
-  | { id: string; kind: "tool"; toolCallId: string; name: string; status: "running" | "complete" | "error"; startedAt: string; durationMs?: number; arguments?: unknown; result?: ToolResult }
+  | {
+      id: string;
+      kind: "tool";
+      toolCallId: string;
+      parentToolCallId?: string;
+      name: string;
+      status: "running" | "complete" | "error";
+      startedAt: string;
+      durationMs?: number;
+      arguments?: unknown;
+      result?: ToolResult;
+    }
   | { id: string; kind: "summary"; summaryType: "compaction" | "branch"; summary: string; tokensBefore?: number }
   | { id: string; kind: "custom"; label: string; blocks: DisplayBlock[] }
   | { id: string; kind: "bash"; command: string; output: string; exitCode?: number; cancelled: boolean; truncated: boolean };
@@ -171,7 +183,7 @@ export class ConversationProjection {
       if (entry.type === "custom_message" && entry.display) this.put({ id: entry.id, kind: "custom", label: entry.customType, blocks: displayBlocks(entry.content) });
     }
     if ((event.type === "tool_execution_start" || event.type === "tool_execution_update" || event.type === "tool_execution_end") && event.toolCallId && event.toolName) {
-      if (event.parentToolCallId) return;
+      if (event.parentToolCallId && !(event.type === "tool_execution_end" && event.result.queryResult)) return;
       const index = this.tools.get(event.toolCallId);
       const previous = index === undefined ? undefined : (this.entries[index] as Extract<ConversationEntry, { kind: "tool" }>);
       const rawResult = event.type === "tool_execution_update" ? event.partialResult : event.type === "tool_execution_end" ? event.result : previous?.result;
@@ -183,6 +195,7 @@ export class ConversationProjection {
           id: previous?.id ?? envelope.id,
           kind: "tool",
           toolCallId: event.toolCallId,
+          ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
           name: event.toolName,
           status: event.type === "tool_execution_end" ? (event.isError ? "error" : "complete") : "running",
           startedAt: previous?.startedAt ?? envelope.createdAt,
@@ -251,7 +264,11 @@ export function toolLabel(entry: Extract<ConversationEntry, { kind: "tool" }>, w
   if (name === "ls") return `ls ${path() || "."}`;
   if (name === "edit") return `edit ${path()}`.trim();
   if (name === "write") return `write ${path()}`.trim();
-  if (name === "service_query") return `${value("capability")} ${value("environment")}/${value("service")}`.trim();
+  if (name === "service_query") {
+    const details = entry.result?.details as { provider?: string; environment?: string; service?: string } | undefined;
+    const capability = value("capability") || (details?.provider === "aliyun-dms-mcp" ? "dms" : details?.provider === "aliyun-sls-cli" ? "sls" : "查询");
+    return `${capability} ${value("environment") || details?.environment || ""}/${value("service") || details?.service || ""}`.trim();
+  }
   const labels: Record<string, string> = { nacos: "config", sls: "logs" };
   return labels[name] ?? name;
 }
