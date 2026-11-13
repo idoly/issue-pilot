@@ -228,6 +228,12 @@ export interface WorkspaceStats {
   workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
 
+export interface WorkspaceStatsState {
+  snapshot: WorkspaceStats | null;
+  sampling: boolean;
+  error: string | null;
+}
+
 export interface IssueMetadataInput {
   title: string;
   description: string;
@@ -375,7 +381,7 @@ export const issueWorkFileUrl = (key: string, path: string) => issuePath(key, `/
 export async function fetchIssueWorkFile(key: string, path: string, signal?: AbortSignal): Promise<Blob> {
   return previewBlob(issueWorkFileUrl(key, path), signal);
 }
-export const loadWorkspaceStats = (signal?: AbortSignal, refresh = false) => request<WorkspaceStats>(`/api/workspaces/stats${refresh ? "?refresh=true" : ""}`, signal ? { signal } : undefined);
+export const loadWorkspaceStats = (signal?: AbortSignal, refresh = false) => request<WorkspaceStatsState>(`/api/workspaces/stats${refresh ? "?refresh=true" : ""}`, signal ? { signal } : undefined);
 
 type SourceHeader = "Path" | "Query" | "Revision" | "Line" | "Sha256" | "Case-Sensitive" | "Word-Match" | "Staged" | "Recursive" | "Destination" | "Overwrite" | "Offset";
 

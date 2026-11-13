@@ -125,9 +125,11 @@ export class WorkspaceLifecycleManager {
   private currentPolicy: WorkspaceLifecyclePolicy;
   private readonly queue = new SerialQueue();
   private readonly issueQueue = new KeyedSerialQueue();
-  private statsRequest: { fresh: boolean; promise: Promise<WorkspaceStatistics> } | undefined;
-  private statisticsCache: { createdAt: number; value: WorkspaceStatistics } | undefined;
-  private workspaceBytesCache: { expiresAt: number; values: Map<string, number>; sharedGitBytes?: number } | undefined;
+  private statsRequest: Promise<WorkspaceStatistics> | undefined;
+  private lastStatistics: WorkspaceStatistics | null = null;
+  private statisticsError: string | null = null;
+  private sampling = 0;
+  private statisticsRevision = 0;
   private maintenanceTimer:
     | {
         handle: ReturnType<typeof setTimeout> | undefined;
@@ -187,7 +189,7 @@ export class WorkspaceLifecycleManager {
     const rescheduled = policy.maintenanceIntervalMs !== this.currentPolicy.maintenanceIntervalMs;
     this.currentPolicy = policy;
     this.statsRequest = undefined;
-    this.invalidateMeasurements();
+    this.statisticsRevision++;
     if (rescheduled) this.scheduleMaintenance();
   }
 
@@ -217,11 +219,6 @@ export class WorkspaceLifecycleManager {
     timer.handle.unref();
   }
 
-  // Statistics reuse the last sample for one maintenance cycle; the page shows sampledAt and can force a refresh.
-  private get workspaceBytesCacheMs(): number {
-    return this.currentPolicy.maintenanceIntervalMs > 0 ? this.currentPolicy.maintenanceIntervalMs : 5_000;
-  }
-
   async inspectIssue(issueId: string): Promise<WorkspaceInspection> {
     if (this.stopping) throw new Error("workspace_lifecycle_closing");
     return this.issueQueue.run(issueId, async () => {
@@ -230,56 +227,74 @@ export class WorkspaceLifecycleManager {
     });
   }
 
-  async stats(refresh = false): Promise<WorkspaceStatistics> {
+  /** HTTP reads never wait behind filesystem/Git work. Cold start and explicit retry share one sample. */
+  readStats(refresh = false): { snapshot: WorkspaceStatistics | null; sampling: boolean; error: string | null } {
     if (this.stopping) throw new Error("workspace_lifecycle_closing");
-    // A refresh must not reuse a scan that may have started from cached measurements.
-    if (this.statsRequest && (!refresh || this.statsRequest.fresh)) return this.statsRequest.promise;
-    if (!refresh && this.statisticsCache && Date.now() - this.statisticsCache.createdAt <= this.workspaceBytesCacheMs) return this.statisticsCache.value;
+    if (!this.sampling && (refresh || (!this.lastStatistics && !this.statisticsError))) {
+      // Sampling records the failure for readers; the background caller must also consume its rejection.
+      void this.sampleStats().catch(() => undefined);
+    }
+    return { snapshot: this.lastStatistics, sampling: this.sampling > 0, error: this.statisticsError };
+  }
+
+  async sampleStats(): Promise<WorkspaceStatistics> {
+    if (this.stopping) throw new Error("workspace_lifecycle_closing");
+    if (this.statsRequest) return this.statsRequest;
+    this.sampling++;
+    this.statisticsError = null;
+    const revision = this.statisticsRevision;
     const promise = this.exclusive(async () => {
-      const policy = this.policy;
-      const issueRows = await this.issueRows();
-      const repositories = await this.database.select().from(issueRepositories);
-      const repositoriesByIssue = new Map<string, IssueRepository[]>();
-      for (const repository of repositories) {
-        const group = repositoriesByIssue.get(repository.issueId) ?? [];
-        group.push(repository);
-        repositoriesByIssue.set(repository.issueId, group);
-      }
-      const cached = !refresh && this.workspaceBytesCache && this.workspaceBytesCache.expiresAt > Date.now() ? this.workspaceBytesCache : undefined;
-      const measuredBytes = cached?.values;
-      const inspections = await pMap(
-        issueRows,
-        (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id))),
-        { concurrency: policy.taskConcurrency, stopOnError: false },
-      );
-      const sharedGitBytes = cached?.sharedGitBytes ?? (await directoryBytes(gitRoot(this.stateRoot)));
-      const value: WorkspaceStatistics = {
-        sampledAt: new Date().toISOString(),
-        totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
-        sharedGitBytes,
-        policy: {
-          retentionHours: Number.isFinite(policy.retentionMs) ? policy.retentionMs / 3_600_000 : null,
-          highWaterBytes: policy.highWaterBytes,
-          targetBytes: policy.targetBytes,
-          maintenanceIntervalMinutes: policy.maintenanceIntervalMs / 60_000,
-        },
-        workspaces: inspections,
-      };
-      // A queued write or policy change can supersede a sample while it is running.
-      if (this.statsRequest === request) {
-        const now = Date.now();
-        this.workspaceBytesCache = { expiresAt: now + this.workspaceBytesCacheMs, values: new Map(inspections.map((workspace) => [workspace.issueId, workspace.bytes])), sharedGitBytes };
-        this.statisticsCache = { createdAt: now, value };
-      }
+      const value = await this.sampleStatistics();
+      this.publishStatistics(value, revision);
       return value;
     });
-    const request = { fresh: refresh, promise };
-    this.statsRequest = request;
+    this.statsRequest = promise;
     try {
       return await promise;
+    } catch (error) {
+      if (revision === this.statisticsRevision) this.statisticsError = stableErrorReason(error, "workspace_statistics_failed");
+      throw error;
     } finally {
-      if (this.statsRequest === request) this.statsRequest = undefined;
+      this.sampling--;
+      if (this.statsRequest === promise) this.statsRequest = undefined;
     }
+  }
+
+  private async sampleStatistics(measuredBytes?: Map<string, number>): Promise<WorkspaceStatistics> {
+    const policy = this.policy;
+    const issueRows = await this.issueRows();
+    const repositories = await this.database.select().from(issueRepositories);
+    const repositoriesByIssue = new Map<string, IssueRepository[]>();
+    for (const repository of repositories) {
+      const group = repositoriesByIssue.get(repository.issueId) ?? [];
+      group.push(repository);
+      repositoriesByIssue.set(repository.issueId, group);
+    }
+    const inspections = await pMap(
+      issueRows,
+      (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id))),
+      { concurrency: policy.taskConcurrency, stopOnError: false },
+    );
+    const sharedGitBytes = await directoryBytes(gitRoot(this.stateRoot));
+    return {
+      sampledAt: new Date().toISOString(),
+      totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
+      sharedGitBytes,
+      policy: {
+        retentionHours: Number.isFinite(policy.retentionMs) ? policy.retentionMs / 3_600_000 : null,
+        highWaterBytes: policy.highWaterBytes,
+        targetBytes: policy.targetBytes,
+        maintenanceIntervalMinutes: policy.maintenanceIntervalMs / 60_000,
+      },
+      workspaces: inspections,
+    };
+  }
+
+  private publishStatistics(value: WorkspaceStatistics, revision: number): void {
+    // Policy changes and queued lifecycle writes supersede in-flight samples, but retain the last successful display.
+    if (revision !== this.statisticsRevision) return;
+    this.lastStatistics = value;
+    this.statisticsError = null;
   }
 
   async releaseIssue(issueId: string, authorize?: () => Promise<unknown>): Promise<WorkspaceReleaseResult> {
@@ -343,10 +358,11 @@ export class WorkspaceLifecycleManager {
 
   async maintain(): Promise<{ totalBytes: number; released: WorkspaceReleaseResult[]; blocked: Array<{ issueKey: string; reason: string }>; failures: Array<{ issueKey: string; error: unknown }> }> {
     this.statsRequest = undefined;
-    this.invalidateMeasurements();
+    this.statisticsRevision++;
+    const revision = this.statisticsRevision;
+    this.sampling++;
+    this.statisticsError = null;
     return this.exclusive(async () => {
-      // Automatic release changes workspace state, so a cached sample must not outlive this maintenance pass.
-      this.invalidateMeasurements();
       const policy = this.policy;
       const issueRows = await this.issueRows();
       const failures: Array<{ issueKey: string; error: unknown }> = [];
@@ -436,10 +452,26 @@ export class WorkspaceLifecycleManager {
           if (!attemptedIssues.has(candidate.issue.id)) await releaseCandidate(candidate);
         }
       }
-      // A partial total must not seed the statistics cache; the next stats call rescans instead.
-      if (!measurementIncomplete) this.workspaceBytesCache = { expiresAt: Date.now() + this.workspaceBytesCacheMs, values: workspaceBytes };
+      // Failed measurements must not replace a previously complete snapshot with a partial total.
+      if (measurementIncomplete) {
+        if (revision === this.statisticsRevision) this.statisticsError = "workspace_measurement_incomplete";
+      } else {
+        try {
+          this.publishStatistics(await this.sampleStatistics(workspaceBytes), revision);
+        } catch (error) {
+          if (revision === this.statisticsRevision) this.statisticsError = stableErrorReason(error, "workspace_statistics_failed");
+          this.maintenanceTimer?.report(new Error("workspace_statistics_failed", { cause: error }));
+        }
+      }
       return { totalBytes, released, blocked, failures };
-    });
+    })
+      .catch((error) => {
+        if (revision === this.statisticsRevision) this.statisticsError = stableErrorReason(error, "workspace_statistics_failed");
+        throw error;
+      })
+      .finally(() => {
+        this.sampling--;
+      });
   }
 
   private async completedReleases(candidates: IssueRow[]): Promise<Set<string>> {
@@ -921,7 +953,7 @@ export class WorkspaceLifecycleManager {
   private withIssueReservation<T>(issueId: string, operation: (reservation: AgentReservation) => Promise<T>, rethrow: (error: unknown) => never, authorize?: () => Promise<unknown>): Promise<T> {
     // Later readers must queue behind this write rather than join a pre-write sample.
     this.statsRequest = undefined;
-    this.invalidateMeasurements();
+    this.statisticsRevision++;
     return this.exclusive(() =>
       this.issueQueue.run(issueId, async () => {
         // Keep HTTP policy at the caller, but recheck it after both lifecycle and inspection waits.
@@ -930,16 +962,9 @@ export class WorkspaceLifecycleManager {
           return await this.engine.runExclusive([issueId], operation);
         } catch (error) {
           return rethrow(error);
-        } finally {
-          this.invalidateMeasurements();
         }
       }),
     );
-  }
-
-  private invalidateMeasurements(): void {
-    this.workspaceBytesCache = undefined;
-    this.statisticsCache = undefined;
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {

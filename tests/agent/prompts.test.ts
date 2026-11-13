@@ -29,6 +29,7 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.doesNotMatch(prompt, /service_query/);
     assert.doesNotMatch(prompt, /Call them through the Issue's entry service/);
     assert.doesNotMatch(prompt, /Production\/test MCP access is read-only/);
+    assert.equal(prompt.includes("Development change review:"), mode === "development");
     if (mode !== "development") assert.match(prompt, /All repository workspaces are read-only/);
   }
   const withCapabilities = agentSystemPrompt({
@@ -48,7 +49,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(runtimeTimeContext(now), new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(promptWithRuntimeTime("sls latest record", now), /User request:\nsls latest record/);
 
-  const readOnlyRepositories = [{ url: "git@example/repo.git", branch: "main", path: "/workspace/repo", readOnly: true }];
+  const readOnlyRepositories = [{ url: "git@example/repo.git", branch: "main", baseCommit: "1234567890abcdef1234567890abcdef12345678", path: "/workspace/repo", readOnly: true }];
   const continuation = continuationPrompt("ISSUE-20260810-001", readOnlyRepositories, "/issues/issue-20260810-001/attachments", undefined, now);
   assert.match(continuation, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(continuation, /shared read-only snapshots of the latest configured deployment branches/);
@@ -67,6 +68,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   );
   assert.match(initial, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(initial, /Investigate, verify the available evidence/);
+  assert.ok(initial.includes(`recorded baseline: ${readOnlyRepositories[0]!.baseCommit}`));
 
   const related = continuationPrompt("ISSUE-20260810-003", readOnlyRepositories, "/issues/issue-20260810-003/attachments", undefined, now, ["ISSUE-20260809-099"]);
   assert.match(related, /\.related-issue-20260809-099\.json/);
@@ -76,6 +78,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(related, /Never edit or delete its files/);
 
   const writable = continuationPrompt("ISSUE-20260810-002", [{ ...readOnlyRepositories[0]!, readOnly: false }], "/issues/issue-20260810-002/attachments", undefined, now);
+  assert.ok(writable.includes(`recorded baseline: ${readOnlyRepositories[0]!.baseCommit}`));
   assert.match(writable, /defect_fix and feature_development, make only the minimum changes required/);
   assert.match(writable, /Project checks are optional and task-specific/);
   assert.match(writable, /Never claim a build or test passed when it was not run/);

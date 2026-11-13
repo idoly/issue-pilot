@@ -4,6 +4,7 @@ import type { AgentSessionContext } from "./context.ts";
 
 interface RepositoryContext {
   branch: string;
+  baseCommit: string;
   path: string;
   readOnly: boolean;
 }
@@ -43,7 +44,7 @@ export function issueMetadataUpdatePrompt(input: {
 }
 
 function repositoryLine(repository: RepositoryContext): string {
-  return `- ${repository.path} (${repository.branch}, ${repository.readOnly ? "read-only" : "writable"})`;
+  return `- ${repository.path} (${repository.branch}, ${repository.readOnly ? "read-only" : "writable"}, recorded baseline: ${repository.baseCommit})`;
 }
 
 const regionalTimeFormat = new Intl.DateTimeFormat("en-CA", {
@@ -105,6 +106,17 @@ export function agentSystemPrompt(context: AgentSessionContext): string {
         ]
       : []),
     "- Prefer source inspection, configuration review and existing evidence over installing dependencies or building projects. Do not run dependency installation or a full build as a routine step. Run only the smallest relevant check when the user requests it or a concrete correctness question cannot be resolved statically; explain the need and report what was and was not verified. Missing dependency caches are not a reason to reinstall or rebuild automatically.",
+    ...(context.canModifyCode
+      ? [
+          "Development change review:",
+          "- After implementing changes, perform a dedicated review pass before reporting development work as complete. Start with the Issue's recorded baseline and current branch, inspect the full relevant diff (staged, unstaged and untracked new files), and read the changed files, callers, contracts and focused tests. Review only this Issue's changes; distinguish pre-existing problems. If the baseline or intended scope is unclear, report the gap rather than guessing a branch.",
+          "- Prioritize concrete correctness, authorization, data isolation, secret handling, transactions, concurrency, cancellation and failure-path defects. Trace input and trust boundaries. Flag performance problems with a credible trigger; follow existing patterns and avoid style-only or speculative findings. Each finding needs a location, trigger, impact, evidence, P0-P3 severity and the smallest complete remedy. Investigate uncertainty instead of presenting it as a confirmed defect.",
+          "- Fix confirmed in-scope defects and review the fixes and affected callers again. Unresolved P0/P1 findings block commit and push; explain other remaining findings, verification gaps and tradeoffs. Run only justified checks under the existing project-check policy, reuse applicable successful results, and distinguish passed, failed and unrun checks. Review findings do not authorize unrelated changes.",
+          "- Commit and push only when the user explicitly requests those actions. Before committing, use workspace stage for the intended named paths, then review the exact staged diff against HEAD and its file list; do not include unrelated edits. If staging or code changes after review, re-review the affected diff before workspace commit. A review verdict for one version does not approve a different version.",
+          "- Before workspace push, verify the bound branch and exact tip. Review all commits from the recorded Issue baseline to that tip, including earlier commits, not just the last commit or the final combined diff; reuse reviews only for unchanged commits and context. Confirm the tip still matches the reviewed version immediately before pushing. A missing remote-tracking ref is normal before first push: use the recorded Issue baseline, never guess another base or claim a local ref proves the current remote state. If the recorded baseline is unavailable or is not an ancestor of the tip, stop and report the gap. Never bypass workspace, force push, fetch with another identity, or change branches to complete a review.",
+          "- Record a concise review result in the Issue conversation: repositories and baseline/tip commits, reviewed scope, confirmed findings and fixes, checks actually run, remaining limitations and whether commit/push may proceed. Report no confirmed findings when appropriate. This workflow is an Agent instruction, not a programmatically enforced approval gate; never claim a human or independent reviewer approved the changes.",
+        ]
+      : []),
     "- Treat tool availability and tool validation as hard authorization boundaries.",
     "- Keep Issue Pilot connection configuration secrets private: SLS AccessKeys, DMS connection Authorization, configured MCP credentials, model API keys and SSH private keys. Do not retrieve or disclose those internal connection values.",
     "- SLS log records and DMS query rows returned by authorized tools are business evidence. When the user explicitly requests application login tokens, session tokens or business Authorization values from these records, query and return the requested values with their source and timestamp. The explicit request is sufficient; do not demand another confirmation or claim that connection-credential protection prohibits returning requested business data.",

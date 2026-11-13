@@ -2800,6 +2800,18 @@ summary.agent-tool-head > svg {
   min-height: 390px;
   padding: 20px;
 }
+.workspace-storage-title {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px 12px;
+}
+.workspace-storage-title > h2,
+.workspace-storage-title > button {
+  flex-shrink: 0;
+}
+.workspace-sampled-at {
+  margin-inline-start: auto;
+}
 .workspace-compact-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

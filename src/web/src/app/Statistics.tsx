@@ -14,7 +14,8 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const [view, setView] = createSignal<InsightView>("distribution", { ownedWrite: true });
   const [period, setPeriod] = createSignal<StatisticsPeriod>("30d", { ownedWrite: true });
   let controller: AbortController | undefined;
-  let requested = false;
+  const [sampling, setSampling] = createSignal(false, { ownedWrite: true });
+  const [sampleError, setSampleError] = createSignal("", { ownedWrite: true });
   const refresh = (force = false) => {
     controller?.abort();
     const request = new AbortController();
@@ -23,25 +24,47 @@ export function Statistics(props: { issues: IssueListItem[] }) {
     setLoadError("");
     void loadWorkspaceStats(request.signal, force)
       .then((value) => {
-        if (!request.signal.aborted) setWorkspaceStats(value);
+        if (request.signal.aborted) return;
+        if (value.snapshot) setWorkspaceStats(value.snapshot);
+        setSampling(value.sampling);
+        setSampleError(value.error ? `统计更新失败（${value.error}）${value.snapshot ? "，已保留上次结果" : "，可重新采样"}` : "");
       })
       .catch((reason) => {
         if (!request.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
       })
       .finally(() => {
-        if (!request.signal.aborted) setLoading(false);
+        if (!request.signal.aborted) {
+          controller = undefined;
+          setLoading(false);
+        }
       });
+  };
+  const poll = () => {
+    if (view() === "resources" && !document.hidden && !controller) refresh();
+  };
+  const cancel = () => {
+    controller?.abort();
+    controller = undefined;
+    setLoading(false);
   };
   createEffect(
     () => view() === "resources",
     (active) => {
-      if (active && !requested) {
-        requested = true;
-        refresh();
-      }
+      if (active && !document.hidden) refresh();
+      else cancel();
     },
   );
-  onCleanup(() => controller?.abort());
+  const visibility = () => {
+    if (document.hidden) cancel();
+    else poll();
+  };
+  const timer = window.setInterval(poll, 10_000);
+  document.addEventListener("visibilitychange", visibility);
+  onCleanup(() => {
+    window.clearInterval(timer);
+    document.removeEventListener("visibilitychange", visibility);
+    cancel();
+  });
 
   const periodDays = createMemo(() => Number.parseInt(period(), 10));
   const filteredIssues = createMemo(() => {
@@ -94,11 +117,19 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   };
   const releaseState = (workspace: WorkspaceStats["workspaces"][number]) => {
     if (workspace.blockedReason === "workspace_not_development") return "只读工单，保留工作文件";
-    if (workspace.blockedReason === "workspace_released") return "代码已释放，保留工作文件";
+    if (workspace.blockedReason === "workspace_released") return "代码已释放，保留历史与文件";
     if (workspace.blockedReason === "workspace_runtime_not_ready") return "代码已释放，运行视图待恢复";
     if (workspace.blockedReason === "workspace_runtime_restore_failed") return "代码已释放，视图恢复失败";
     if (workspace.issueStatus !== "resolved") return "解决后纳入";
-    if (workspace.releasable) return "等待策略回收";
+    if (workspace.releasable) {
+      const hours = workspaceStats()?.policy.retentionHours;
+      if (hours !== null && hours !== undefined && workspace.resolvedAt) {
+        const due = new Date(workspace.resolvedAt).getTime() + hours * 3_600_000;
+        if (due > Date.now()) return `保留至 ${new Date(due).toLocaleDateString()}`;
+        return "等待定期维护";
+      }
+      return "按容量策略回收";
+    }
     const labels: Record<string, string> = {
       issue_already_running: "Agent 运行中",
       workspace_busy: "Agent 运行中",
@@ -253,14 +284,24 @@ export function Statistics(props: { issues: IssueListItem[] }) {
       </div>
       <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "resources"}>
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
-          <div class="statistics-title">
+          <div class="statistics-title workspace-storage-title">
             <h2 id="workspace-capacity-title">工作区存储</h2>
             <span>{storedWorkspaces().length} 个占用空间</span>
-            <Button size="small" disabled={loading()} onClick={() => refresh(true)}>
-              刷新统计
+            <Show when={workspaceStats()}>{(stats) => <span class="workspace-sampled-at">采样于 {new Date(stats().sampledAt).toLocaleString()} · 释放时重新检查</span>}</Show>
+            <Button size="small" disabled={loading() || sampling()} onClick={() => refresh(true)}>
+              重新采样
             </Button>
           </div>
-          <Show when={workspaceStats()}>{(stats) => <div class="workspace-policy">采样于 {new Date(stats().sampledAt).toLocaleTimeString()} · 释放时重新检查</div>}</Show>
+          <Show when={sampling()}>
+            <div class="workspace-policy" role="status">
+              后台采样中，完成后自动更新
+            </div>
+          </Show>
+          <Show when={loadError() || sampleError()}>
+            <div class="queue-error" role="alert">
+              {loadError() || sampleError()}
+            </div>
+          </Show>
           <Show
             when={!loading() || workspaceStats() !== null}
             fallback={
@@ -270,71 +311,70 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             }
           >
             <Show
-              when={!loadError()}
+              when={workspaceStats()}
               fallback={
-                <div class="queue-error" role="alert">
-                  {loadError()}
-                </div>
+                <Show when={!loadError() && !sampleError()}>
+                  <div class="empty-band">首次采样尚未完成</div>
+                </Show>
               }
             >
-              <Show when={workspaceStats()}>
-                {(stats) => (
-                  <>
-                    <div class="workspace-compact-summary">
-                      <div class="workspace-current-usage">
-                        <span>工单目录占用</span>
-                        <strong>{fileSize(stats().totalBytes)}</strong>
-                      </div>
-                      <div>
-                        <span>回收触发线</span>
-                        <strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong>
-                      </div>
-                      <div class="workspace-reclaim">
-                        <span title="包含保留的附件、对话、工作文件和私有 Git 历史，实际释放量取决于代码目录">回收候选占用</span>
-                        <strong>{fileSize(candidateWorkspaceBytes())}</strong>
-                      </div>
+              {(stats) => (
+                <>
+                  <div class="workspace-compact-summary">
+                    <div class="workspace-current-usage">
+                      <span>工单目录占用</span>
+                      <strong>{fileSize(stats().totalBytes)}</strong>
                     </div>
-                    <div class="workspace-capacity-control">
-                      <Show when={stats().policy.highWaterBytes > 0}>
-                        <div class="workspace-capacity-meter" aria-label={`工单目录占用为回收触发线的 ${Math.round(capacityPercent())}%`}>
-                          <div>
-                            <i style={{ width: `${capacityPercent()}%` }} />
-                          </div>
-                          <span>{Math.round(capacityPercent())}%</span>
+                    <div>
+                      <span>回收触发线</span>
+                      <strong>{stats().policy.highWaterBytes > 0 ? fileSize(stats().policy.highWaterBytes) : "未启用"}</strong>
+                    </div>
+                    <div class="workspace-reclaim">
+                      <span title="包含保留的附件、对话、工作文件和私有 Git 历史，实际释放量取决于代码目录">回收候选占用</span>
+                      <strong>{fileSize(candidateWorkspaceBytes())}</strong>
+                    </div>
+                  </div>
+                  <div class="workspace-capacity-control">
+                    <Show when={stats().policy.highWaterBytes > 0}>
+                      <div class="workspace-capacity-meter" aria-label={`工单目录占用为回收触发线的 ${Math.round(capacityPercent())}%`}>
+                        <div>
+                          <i style={{ width: `${capacityPercent()}%` }} />
                         </div>
-                      </Show>
-                      <div class="workspace-policy">
-                        {stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}
+                        <span>{Math.round(capacityPercent())}%</span>
                       </div>
-                    </div>
+                    </Show>
                     <div class="workspace-policy">
-                      <span>共享 Git 占用</span> <strong>{fileSize(stats().sharedGitBytes)}</strong> · 单独保留，不计入工单目录回收阈值
+                      {stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}
                     </div>
-                    <div class="workspace-compact-list compact-scroll">
-                      <div class="workspace-compact-head">
-                        <span>工单</span>
-                        <span>状态</span>
-                        <span>占用</span>
-                        <span>自动回收</span>
-                      </div>
-                      <For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的工单</div>}>
-                        {(workspace) => (
-                          <div>
-                            <strong>{workspace.issueKey}</strong>
-                            <span>{statusLabel[workspace.issueStatus]}</span>
-                            <span>{fileSize(workspace.bytes)}</span>
-                            <small
-                              title={workspace.blockedReason && /^[a-z][a-z0-9_]*$/.test(workspace.blockedReason) ? `${releaseState(workspace)} [${workspace.blockedReason}]` : releaseState(workspace)}
-                            >
-                              {releaseState(workspace)}
-                            </small>
-                          </div>
-                        )}
-                      </For>
+                  </div>
+                  <div class="workspace-policy">
+                    <span>共享 Git 占用</span> <strong>{fileSize(stats().sharedGitBytes)}</strong> · 单独保留，不计入工单目录回收阈值
+                  </div>
+                  <div class="workspace-policy">占用包含代码、私有 Git 历史、附件、会话及工作文件；释放代码不会删除整张工单。保留期从解决时间起算，超出容量阈值可提前回收符合条件的代码。</div>
+                  <div class="workspace-compact-list compact-scroll">
+                    <div class="workspace-compact-head">
+                      <span>工单</span>
+                      <span>状态</span>
+                      <span>占用</span>
+                      <span>自动回收</span>
                     </div>
-                  </>
-                )}
-              </Show>
+                    <For each={storedWorkspaces()} fallback={<div class="empty-band">当前没有占用空间的工单</div>}>
+                      {(workspace) => (
+                        <div>
+                          <strong>{workspace.issueKey}</strong>
+                          <span>{statusLabel[workspace.issueStatus]}</span>
+                          <span>{fileSize(workspace.bytes)}</span>
+                          <small
+                            title={workspace.blockedReason && /^[a-z][a-z0-9_]*$/.test(workspace.blockedReason) ? `${releaseState(workspace)} [${workspace.blockedReason}]` : releaseState(workspace)}
+                          >
+                            {releaseState(workspace)}
+                          </small>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </>
+              )}
             </Show>
           </Show>
         </section>

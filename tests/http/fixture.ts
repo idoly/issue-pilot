@@ -209,3 +209,16 @@ export async function createIssue(app: FastifyInstance, serviceKey: string, envi
   assert.equal(response.statusCode, 201, response.body);
   return json(response);
 }
+
+/** Wait only in tests: the public statistics read deliberately returns before sampling completes. */
+export async function workspaceStatistics(app: FastifyInstance, refresh = false) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const response = await app.inject({ url: `/api/workspaces/stats${refresh && attempt === 0 ? "?refresh=true" : ""}` });
+    assert.equal(response.statusCode, 200, response.body);
+    const state = response.json();
+    assert.equal(state.error, null);
+    if (!state.sampling && state.snapshot) return state.snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("workspace statistics did not complete");
+}

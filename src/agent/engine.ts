@@ -697,6 +697,7 @@ export class AgentEngine implements AgentController {
 
     const repositoryContexts = project.repositories.map((repository) => ({
       branch: repository.workingBranch ?? repository.baseBranch,
+      baseCommit: repository.baseCommit,
       path: repository.workspacePath,
       readOnly: repository.access === "read",
     }));

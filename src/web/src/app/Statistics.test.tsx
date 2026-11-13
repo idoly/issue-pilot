@@ -12,7 +12,9 @@ vi.mock("../data/client", async (importOriginal) => ({
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.resetAllMocks();
+  vi.restoreAllMocks();
 });
 
 function issue(overrides: Partial<IssueListItem>): IssueListItem {
@@ -174,11 +176,11 @@ test("distinguishes retained files from reclaim candidates and actual safety fai
       ),
     ],
   };
-  vi.mocked(loadWorkspaceStats).mockResolvedValue(stats);
+  vi.mocked(loadWorkspaceStats).mockResolvedValue({ snapshot: stats, sampling: false, error: null });
   render(() => <Statistics issues={[]} />);
   fireEvent.click(screen.getByRole("tab", { name: "资源" }));
   expect(await screen.findByText("只读工单，保留工作文件")).toBeTruthy();
-  expect(screen.getByText("代码已释放，保留工作文件")).toBeTruthy();
+  expect(screen.getByText("代码已释放，保留历史与文件")).toBeTruthy();
   expect(screen.getByText("仓库目录缺失")).toBeTruthy();
   expect(screen.getByText("代码已释放，视图恢复失败")).toBeTruthy();
   expect(screen.getByText("代码已释放，运行视图待恢复")).toBeTruthy();
@@ -196,7 +198,7 @@ test("distinguishes retained files from reclaim candidates and actual safety fai
   expect(screen.getByText("回收触发线")).toBeTruthy();
 });
 
-test("storage loads only on its first visit and explicit refresh bypasses the server snapshot", async () => {
+test("storage reads on navigation and explicit sampling requests a background refresh", async () => {
   const stats: WorkspaceStats = {
     sampledAt: "2026-10-25T08:00:00.000Z",
     totalBytes: 0,
@@ -204,7 +206,7 @@ test("storage loads only on its first visit and explicit refresh bypasses the se
     policy: { retentionHours: 168, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 15 },
     workspaces: [],
   };
-  vi.mocked(loadWorkspaceStats).mockResolvedValue(stats);
+  vi.mocked(loadWorkspaceStats).mockResolvedValue({ snapshot: stats, sampling: false, error: null });
   render(() => <Statistics issues={[]} />);
   expect(loadWorkspaceStats).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab", { name: "资源" }));
@@ -213,28 +215,100 @@ test("storage loads only on its first visit and explicit refresh bypasses the se
   expect(vi.mocked(loadWorkspaceStats).mock.calls[0]![1]).toBe(false);
   fireEvent.click(screen.getByRole("tab", { name: "团队" }));
   fireEvent.click(screen.getByRole("tab", { name: "资源" }));
-  expect(loadWorkspaceStats).toHaveBeenCalledTimes(1);
-  await waitFor(() => expect(screen.getByRole("button", { name: "刷新统计" })).toHaveProperty("disabled", false));
-  fireEvent.click(screen.getByRole("button", { name: "刷新统计" }));
   await waitFor(() => expect(loadWorkspaceStats).toHaveBeenCalledTimes(2));
-  expect(vi.mocked(loadWorkspaceStats).mock.calls[1]![1]).toBe(true);
+  await waitFor(() => expect(screen.getByRole("button", { name: "重新采样" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "重新采样" }));
+  await waitFor(() => expect(loadWorkspaceStats).toHaveBeenCalledTimes(3));
+  expect(vi.mocked(loadWorkspaceStats).mock.calls[2]![1]).toBe(true);
 });
 
 test("storage failures can be retried without visiting another page", async () => {
   vi.mocked(loadWorkspaceStats)
     .mockRejectedValueOnce(new Error("stats_unavailable"))
     .mockResolvedValue({
-      sampledAt: "2026-10-25T08:00:00.000Z",
-      totalBytes: 0,
-      sharedGitBytes: 0,
-      policy: { retentionHours: null, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 0 },
-      workspaces: [],
+      sampling: false,
+      error: null,
+      snapshot: {
+        sampledAt: "2026-10-25T08:00:00.000Z",
+        totalBytes: 0,
+        sharedGitBytes: 0,
+        policy: { retentionHours: null, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 0 },
+        workspaces: [],
+      },
     });
   render(() => <Statistics issues={[]} />);
   fireEvent.click(screen.getByRole("tab", { name: "资源" }));
   expect((await screen.findByRole("alert")).textContent).toContain("stats_unavailable");
-  await waitFor(() => expect(screen.getByRole("button", { name: "刷新统计" })).toHaveProperty("disabled", false));
-  fireEvent.click(screen.getByRole("button", { name: "刷新统计" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "重新采样" })).toHaveProperty("disabled", false));
+  fireEvent.click(screen.getByRole("button", { name: "重新采样" }));
   await screen.findByText("当前没有占用空间的工单");
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("resource polling preserves snapshots through updates and failures, and pauses offscreen", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  const stats: WorkspaceStats = {
+    sampledAt: "2026-11-13T00:00:00Z",
+    totalBytes: 8192,
+    sharedGitBytes: 0,
+    policy: { retentionHours: 168, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 15 },
+    workspaces: [],
+  };
+  vi.mocked(loadWorkspaceStats)
+    .mockResolvedValueOnce({ snapshot: null, sampling: true, error: null })
+    .mockResolvedValueOnce({ snapshot: stats, sampling: false, error: null })
+    .mockResolvedValueOnce({ snapshot: stats, sampling: true, error: null })
+    .mockResolvedValueOnce({ snapshot: stats, sampling: false, error: "workspace_statistics_failed" })
+    .mockRejectedValueOnce(new Error("network_failed"))
+    .mockResolvedValue({ snapshot: { ...stats, totalBytes: 16384 }, sampling: false, error: null });
+  const view = render(() => <Statistics issues={[]} />);
+  fireEvent.click(screen.getByRole("tab", { name: "资源" }));
+  await screen.findByText("后台采样中，完成后自动更新");
+  expect(screen.getByRole("button", { name: "重新采样" })).toHaveProperty("disabled", true);
+  await vi.advanceTimersByTimeAsync(10_000);
+  await screen.findByText("8.0 KB");
+  fireEvent.click(screen.getByRole("button", { name: "重新采样" }));
+  await screen.findByText("后台采样中，完成后自动更新");
+  expect(screen.getByText("8.0 KB")).toBeTruthy();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect((await screen.findByRole("alert")).textContent).toContain("已保留上次结果");
+  expect(screen.getByText("8.0 KB")).toBeTruthy();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect((await screen.findByRole("alert")).textContent).toBe("network_failed");
+  expect(screen.getByText("8.0 KB")).toBeTruthy();
+  expect(loadWorkspaceStats).toHaveBeenCalledTimes(5);
+  hidden.mockReturnValue(true);
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(loadWorkspaceStats).toHaveBeenCalledTimes(5);
+  hidden.mockReturnValue(false);
+  document.dispatchEvent(new Event("visibilitychange"));
+  await screen.findByText("16 KB");
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "团队" }));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(loadWorkspaceStats).toHaveBeenCalledTimes(6);
+  view.unmount();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(loadWorkspaceStats).toHaveBeenCalledTimes(6);
+});
+
+test("retention starts at resolution and old Issue keys do not imply eligibility", async () => {
+  const resolvedAt = new Date().toISOString();
+  const due = new Date(Date.now() + 168 * 3_600_000).toLocaleDateString();
+  vi.mocked(loadWorkspaceStats).mockResolvedValue({
+    sampling: false,
+    error: null,
+    snapshot: {
+      sampledAt: resolvedAt,
+      totalBytes: 8192,
+      sharedGitBytes: 0,
+      policy: { retentionHours: 168, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMinutes: 15 },
+      workspaces: [{ issueKey: "ISSUE-20260101-001", issueStatus: "resolved", workspaceStatus: "ready", resolvedAt, bytes: 8192, releasable: true, blockedReason: null }],
+    },
+  });
+  render(() => <Statistics issues={[]} />);
+  fireEvent.click(screen.getByRole("tab", { name: "资源" }));
+  expect(await screen.findByText(`保留至 ${due}`)).toBeTruthy();
 });

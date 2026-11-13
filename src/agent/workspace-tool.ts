@@ -223,6 +223,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
               repositories: rows.map((row) => ({
                 name: names.get(row.url),
                 branch: row.workingBranch ?? row.baseBranch,
+                baseCommit: row.commitBefore,
                 path: row.localPath ?? path.join(runtimeRoot, names.get(row.url)!),
                 writable: environmentKind === "dev",
               })),

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
+import { createApiFixture, createIssue, createService, modelCatalog, workspaceStatistics } from "./fixture.ts";
 import { applicationParameterDefaults, applicationParameters } from "../../src/configuration/parameters.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { buildApi } from "../../src/http/api.ts";
@@ -52,7 +52,7 @@ test("applies saved application parameters without reserving Issues or closing s
     // Omitted keys fall back to the project configuration default.
     assert.equal(state.values.slsExecutionMs, applicationParameterDefaults.slsExecutionMs);
     assert.deepEqual((await get()).values, state.values);
-    assert.equal((await f.app.inject({ method: "GET", url: "/api/workspaces/stats" })).json().policy.maintenanceIntervalMinutes, 1);
+    assert.equal((await workspaceStatistics(f.app)).policy.maintenanceIntervalMinutes, 1);
 
     const stale = await put({ expectedRevision: 0, overrides: {} });
     assert.equal(stale.statusCode, 409);
@@ -99,11 +99,7 @@ test("unrelated hot parameters keep the workspace measurement cache and executio
   try {
     await createService(f.app, "Parameter sampling");
     const issue = await createIssue(f.app, "parameter-sampling");
-    const stats = async () => {
-      const result = await f.app.inject({ url: "/api/workspaces/stats" });
-      assert.equal(result.statusCode, 200, result.body);
-      return result.json();
-    };
+    const stats = (refresh = false) => workspaceStatistics(f.app, refresh);
     const save = async (expectedRevision: number, overrides: object) => {
       const result = await f.app.inject({ method: "PUT", url: "/api/config/parameters", headers, payload: { expectedRevision, overrides } });
       assert.equal(result.statusCode, 200, result.body);
@@ -114,7 +110,7 @@ test("unrelated hot parameters keep the workspace measurement cache and executio
     assert.deepEqual(await stats(), before);
     assert.deepEqual(f.engine.concurrencyUpdates, []);
     await save(1, { mcpExecutionMs: 60_000, workspaceRetentionMs: 7_200_000 });
-    const changed = await stats();
+    const changed = await stats(true);
     assert.equal(changed.policy.retentionHours, 2);
     assert.equal(changed.totalBytes, before.totalBytes + 4_096);
   } finally {

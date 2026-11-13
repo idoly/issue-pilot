@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueKeySequences, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
-import { issueEditVersion, createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
+import { workspaceStatistics, issueEditVersion, createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
 
 test("every edit requires a valid version before metadata, attachments or session state can change", async () => {
   const f = await createApiFixture();
@@ -794,9 +794,7 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     });
     assert.equal(acceptedSearchModes.statusCode, 409);
     assert.equal((await json(acceptedSearchModes)).error, "source_browser_unavailable");
-    const stats = await fixture.app.inject({ method: "GET", url: "/api/workspaces/stats" });
-    assert.equal(stats.statusCode, 200);
-    const body = (await json(stats)) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };
+    const body = (await workspaceStatistics(fixture.app)) as { totalBytes: number; policy: Record<string, unknown>; workspaces: Array<Record<string, unknown>> };
     assert.equal(typeof body.totalBytes, "number");
     assert.deepEqual(Object.keys(body.policy).sort(), ["highWaterBytes", "maintenanceIntervalMinutes", "retentionHours", "targetBytes"]);
     assert.equal(

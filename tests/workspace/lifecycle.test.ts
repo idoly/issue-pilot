@@ -177,9 +177,9 @@ for (const failureStage of ["session", "runtime"] as const)
       assert.equal(first.failures.length, 1);
       assert.equal(first.failures[0]!.issueKey, created[0]!.key);
       assert.ok(first.failures[0]!.error === failure || (first.failures[0]!.error instanceof Error && first.failures[0]!.error.cause === failure));
-      const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).stats();
+      const independentlyMeasured = await new WorkspaceLifecycleManager(database.db, root, scopedEngine as never, manager.policy).sampleStats();
       assert.equal(first.totalBytes, independentlyMeasured.totalBytes);
-      assert.equal((await manager.stats()).totalBytes, independentlyMeasured.totalBytes);
+      assert.equal((await manager.sampleStats()).totalBytes, independentlyMeasured.totalBytes);
       await access(paths[2]!);
       assert.equal(scopedEngine.closed.includes(created[2]!.id), false);
       if (failureStage === "session") await access(paths[0]!);
@@ -408,7 +408,7 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
     }
     const policy = { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 };
     await writeFile(path.join(gitRoot(root), "shared-accounting-probe"), Buffer.alloc(2 * 1024 ** 2, 11));
-    const initial = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).stats();
+    const initial = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).sampleStats();
     const sharedUsage = await execFileAsync("du", ["-sk", "--", gitRoot(root)]);
     assert.equal(initial.sharedGitBytes, Number(sharedUsage.stdout.trim().split(/\s+/, 1)[0]) * 1024);
     assert.ok(initial.sharedGitBytes >= 2 * 1024 ** 2);
@@ -426,10 +426,10 @@ test("quota maintenance keeps retained Issue bytes and continues to the next wor
       result.released.map((item) => item.issueKey),
       created.map((item) => item.key),
     );
-    const fresh = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).stats();
+    const fresh = await new WorkspaceLifecycleManager(database.db, root, quotaEngine as never, policy).sampleStats();
     assert.equal(result.totalBytes, fresh.totalBytes);
-    assert.equal((await manager.stats()).totalBytes, fresh.totalBytes);
-    assert.equal((await manager.stats()).sharedGitBytes, fresh.sharedGitBytes);
+    assert.equal((await manager.sampleStats()).totalBytes, fresh.totalBytes);
+    assert.equal((await manager.sampleStats()).sharedGitBytes, fresh.sharedGitBytes);
     assert.ok(fresh.workspaces.find((item) => item.issueId === created[0]!.id)!.bytes >= 4 * 1024 ** 2);
     assert.equal((await readFile(path.join(issueRoot(root, created[0]!.key), "retained.bin"))).length, 4 * 1024 ** 2);
     const repeated = await manager.maintain();
@@ -581,7 +581,7 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   assert.equal(stopped, true);
 });
 
-test("shares one statistics scan, caches completed results and refreshes on request or expiry", async (context) => {
+test("shares one statistics scan and retains the complete snapshot until an explicit or scheduled update", async (context) => {
   const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,
     highWaterBytes: 0,
@@ -614,8 +614,8 @@ test("shares one statistics scan, caches completed results and refreshes on requ
     return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
   };
 
-  const first = manager.stats();
-  const second = manager.stats();
+  const first = manager.sampleStats();
+  const second = manager.sampleStats();
   await started;
   assert.equal(inspections, 1);
   releaseFirst();
@@ -623,16 +623,16 @@ test("shares one statistics scan, caches completed results and refreshes on requ
   assert.deepEqual(secondResult, firstResult);
   assert.equal(inspections, 1);
 
-  const cached = await manager.stats();
+  const cached = manager.readStats().snapshot!;
   assert.equal(inspections, 1);
   assert.equal(cached.sampledAt, firstResult.sampledAt);
-  await manager.stats(true);
+  await manager.sampleStats();
   assert.equal(inspections, 2);
   assert.deepEqual(knownMeasurements, [undefined, undefined]);
   context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   context.mock.timers.tick(5_001);
-  await manager.stats();
-  assert.equal(inspections, 3);
+  manager.readStats();
+  assert.equal(inspections, 2);
 });
 
 test("bounds concurrent Workspace inspections while preserving Issue order", async () => {
@@ -670,7 +670,7 @@ test("bounds concurrent Workspace inspections while preserving Issue order", asy
     return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
   };
 
-  const statistics = manager.stats();
+  const statistics = manager.sampleStats();
   await concurrencyReached;
   assert.equal(started, 2);
   assert.equal(active, 2);
@@ -851,7 +851,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       true,
     );
     await unlink(ignoredEvidence);
-    const statsBeforeRelease = await lifecycle.stats();
+    const statsBeforeRelease = await lifecycle.sampleStats();
     assert.equal(statsBeforeRelease.totalBytes > 0, true);
     assert.equal(statsBeforeRelease.workspaces[0]?.releasable, true);
     const checkpoint = path.join(path.dirname(prepared[0]!.workspacePath), "checkpoint.json");
@@ -1573,15 +1573,15 @@ test("cached storage eligibility cannot release a subsequently changed checkout"
       maintenanceIntervalMs: 0,
       taskConcurrency: 1,
     });
-    const initial = await manager.stats();
+    const initial = await manager.sampleStats();
     assert.equal(initial.workspaces[0]!.releasable, true);
     await writeFile(path.join(prepared.workspacePath, "README.md"), "new working changes\n");
-    assert.equal((await manager.stats()).sampledAt, initial.sampledAt);
-    assert.equal((await manager.stats()).workspaces[0]!.releasable, true);
+    assert.equal(manager.readStats().snapshot?.sampledAt, initial.sampledAt);
+    assert.equal(manager.readStats().snapshot?.workspaces[0]!.releasable, true);
     await assert.rejects(manager.releaseIssue(issue!.id), /workspace_has_changes/);
     assert.equal(await readFile(path.join(prepared.workspacePath, "README.md"), "utf8"), "new working changes\n");
-    assert.equal((await manager.stats()).workspaces[0]!.blockedReason, "workspace_has_changes");
-    const forced = await manager.stats(true);
+    assert.equal((await manager.sampleStats()).workspaces[0]!.blockedReason, "workspace_has_changes");
+    const forced = await manager.sampleStats();
     assert.equal(forced.workspaces[0]!.releasable, false);
   } finally {
     await database.close();
@@ -1607,29 +1607,29 @@ test("statistics reuse one sample across a maintenance cycle unless refreshed", 
     inspections += 1;
     return { issueId: issue.id, issueKey: issue.key, issueStatus: "open", workspaceStatus: "not_created", resolvedAt: null, bytes: 0, releasable: false, blockedReason: "issue_not_resolved" };
   };
-  const first = await manager.stats();
+  const first = await manager.sampleStats();
   assert.equal(inspections, 1);
   context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   // A page revisit within the maintenance cycle serves the sampled snapshot instead of rescanning the fleet.
   context.mock.timers.tick(5 * 60_000);
-  const cached = await manager.stats();
+  const cached = manager.readStats().snapshot!;
   assert.equal(inspections, 1);
   assert.equal(cached.sampledAt, first.sampledAt);
   // Automatic maintenance changes workspace state, so its cache must not outlive that pass.
   await manager.maintain();
-  const maintained = await manager.stats();
+  const maintained = manager.readStats().snapshot!;
   assert.equal(inspections, 2);
   assert.notEqual(maintained.sampledAt, first.sampledAt);
   // The explicit refresh still measures.
-  await manager.stats(true);
+  await manager.sampleStats();
   assert.equal(inspections, 3);
-  // Expiry after one maintenance cycle measures again.
+  // Reads keep the last completed snapshot; only scheduled or explicit sampling does I/O.
   context.mock.timers.tick(15 * 60_000 + 1);
-  await manager.stats();
-  assert.equal(inspections, 4);
+  manager.readStats();
+  assert.equal(inspections, 3);
 });
 
-test("overlapping refreshes share a fresh sample instead of the ordinary scan already in flight", async () => {
+test("overlapping refreshes share the active fresh sample", async () => {
   const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
     retentionMs: Number.POSITIVE_INFINITY,
     highWaterBytes: 0,
@@ -1668,15 +1668,15 @@ test("overlapping refreshes share a fresh sample instead of the ordinary scan al
       blockedReason: "issue_not_resolved",
     };
   };
-  const first = manager.stats();
+  const first = manager.sampleStats();
   await started;
-  const refreshed = manager.stats(true);
-  const alsoRefreshed = manager.stats(true);
+  const refreshed = manager.sampleStats();
+  const alsoRefreshed = manager.sampleStats();
   releaseFirst();
   const [firstResult, refreshedResult, alsoRefreshedResult] = await Promise.all([first, refreshed, alsoRefreshed]);
-  assert.equal(inspections, 2);
+  assert.equal(inspections, 1);
   assert.equal(firstResult.totalBytes, 1);
-  assert.equal(refreshedResult.totalBytes, 2);
+  assert.equal(refreshedResult.totalBytes, 1);
   assert.equal(alsoRefreshedResult, refreshedResult);
 });
 
@@ -1728,17 +1728,17 @@ test("statistics requested after a queued release see the released workspace", a
     released = true;
     return { issueKey: row.issue.key, releasedBytes: 0, remainingBytes: 0, alreadyReleased: false };
   };
-  const statistics = manager.stats(true);
+  const statistics = manager.sampleStats();
   await started;
   const release = manager.releaseIssue(row.issue.id);
-  const afterRelease = manager.stats(true);
+  const afterRelease = manager.sampleStats();
   finish();
   assert.equal((await statistics).workspaces[0]!.blockedReason, null);
   await release;
   const current = await afterRelease;
   assert.equal(scans, 2);
   assert.equal(current.workspaces[0]!.blockedReason, "workspace_released");
-  assert.equal(await manager.stats(), current);
+  assert.equal(manager.readStats().snapshot, current);
 });
 
 test("a failed release whose workspace cannot be measured does not stop maintenance of other candidates", async () => {
@@ -1893,6 +1893,99 @@ test("a released Issue whose root is missing is never rebuilt from the shared br
     assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)))[0]!.status, "resolved");
   } finally {
     await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("snapshot reads remain immediate during sampling, preserve failures, and drain on shutdown", async () => {
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, ".", engine as never, {
+    retentionMs: Infinity,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+    taskConcurrency: 1,
+  });
+  const internal = manager as unknown as { issueRows(): Promise<never[]> };
+  let gate = deferred();
+  let fail = false;
+  let scans = 0;
+  internal.issueRows = async () => {
+    scans++;
+    await gate.promise;
+    if (fail) throw new Error("du command failed: /private/secret");
+    return [];
+  };
+  assert.deepEqual(manager.readStats(), { snapshot: null, sampling: true, error: null });
+  const first = manager.sampleStats();
+  await new Promise((resolve) => setImmediate(resolve));
+  for (let count = 0; count < 10; count++) assert.equal(manager.readStats().sampling, true);
+  assert.equal(scans, 1);
+  gate.resolve();
+  const snapshot = await first;
+  assert.equal(manager.readStats().snapshot, snapshot);
+
+  gate = deferred();
+  fail = true;
+  assert.deepEqual(manager.readStats(true), { snapshot, sampling: true, error: null });
+  const failed = assert.rejects(manager.sampleStats(), /du command failed/);
+  gate.resolve();
+  await failed;
+  assert.deepEqual(manager.readStats(), { snapshot, sampling: false, error: "workspace_statistics_failed" });
+  for (let count = 0; count < 10; count++) manager.readStats();
+  assert.equal(scans, 2, "ordinary polling must not retry a failed scan");
+
+  fail = false;
+  gate = deferred();
+  manager.readStats(true);
+  const retry = manager.sampleStats();
+  let stopped = false;
+  const closing = manager.stop().then(() => {
+    stopped = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  gate.resolve();
+  await Promise.all([retry, closing]);
+  assert.equal(scans, 3);
+  assert.equal(stopped, true);
+});
+
+test("maintenance publishes a complete snapshot without rescanning measured Issue roots", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-background-snapshot-"));
+  const manager = new WorkspaceLifecycleManager({ select: () => ({ from: async () => [] }) } as never, root, engine as never, {
+    retentionMs: Infinity,
+    highWaterBytes: 0,
+    targetBytes: 0,
+    maintenanceIntervalMs: 0,
+    taskConcurrency: 1,
+  });
+  const row = { issue: { id: "sample", key: "ISSUE-20261113-999", status: "open" }, workspace: null, environmentKind: "test" };
+  const internal = manager as unknown as {
+    issueRows(): Promise<(typeof row)[]>;
+    inspectLocked(issueRow: typeof row, repositories?: unknown, bytes?: number): Promise<WorkspaceInspection>;
+  };
+  internal.issueRows = async () => [row];
+  const originalInspection = internal.inspectLocked.bind(manager);
+  let measuredBytes: number | undefined;
+  internal.inspectLocked = async (row, repositories, bytes) => {
+    measuredBytes = bytes;
+    assert.equal(manager.readStats().sampling, true);
+    assert.equal(manager.readStats().snapshot, null);
+    return originalInspection(row, repositories, bytes);
+  };
+  try {
+    await mkdir(issueRoot(root, row.issue.key), { recursive: true });
+    await writeFile(path.join(issueRoot(root, row.issue.key), "report.txt"), "x".repeat(8192));
+    const result = await manager.maintain();
+    const state = manager.readStats();
+    assert.ok(measuredBytes && measuredBytes >= 8192);
+    assert.equal(state.snapshot?.totalBytes, result.totalBytes);
+    assert.equal(state.snapshot?.sharedGitBytes, 0);
+    assert.equal(state.snapshot?.workspaces[0]?.blockedReason, "workspace_not_development");
+    assert.equal(state.sampling, false);
+    assert.equal(state.error, null);
+  } finally {
+    await manager.stop();
     await rm(root, { recursive: true, force: true });
   }
 });

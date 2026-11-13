@@ -291,12 +291,21 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
         return {
           session: {},
           streaming: false,
-          async prompt() {
+          async prompt(message: string) {
+            const currentIssue = options.context.canModifyCode ? devIssue! : prodIssue!;
+            const recorded = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, currentIssue.id));
+            for (const repository of recorded) assert.ok(message.includes(`recorded baseline: ${repository.commitBefore}`));
             if (starts.length !== 1) return;
             const bash = bashFor(options);
             const direct = shellQuote(path.join(extraCheckout, "README.md"));
             await bash(`test ! -r ${direct} && printf SCOPE_OK`);
-            await options.workspaceTool!.execute("include", { operation: "include", service: "extra" }, undefined, undefined, {} as never);
+            const included = await options.workspaceTool!.execute("include", { operation: "include", service: "extra" }, undefined, undefined, {} as never);
+            const result = included.structuredContent as { repositories: Array<{ name: string; baseCommit: string }> };
+            const [extraBinding] = await database.db
+              .select()
+              .from(issueRepositories)
+              .where(and(eq(issueRepositories.issueId, currentIssue.id), eq(issueRepositories.url, extraRemote)));
+            assert.equal(result.repositories.find((repository) => repository.name === "extra")!.baseCommit, extraBinding!.commitBefore);
             await bash('test "$(git -C extra show HEAD:README.md)" = "production baseline" && printf SCOPE_OK');
             await options.workspaceTool!.execute("remove", { operation: "remove", service: "extra" }, undefined, undefined, {} as never);
             await bash(`test ! -r ${direct} && printf SCOPE_OK`);

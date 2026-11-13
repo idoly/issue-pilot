@@ -94,8 +94,8 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   });
 
   app.get<{ Querystring: { refresh?: string } }>("/api/workspaces/stats", async (request, _reply) => {
-    const stats = await workspaces.stats(request.query.refresh === "true");
-    return { ...stats, workspaces: stats.workspaces.map(serializeInspection) };
+    const { snapshot, ...state } = workspaces.readStats(request.query.refresh === "true");
+    return { ...state, snapshot: snapshot ? { ...snapshot, workspaces: snapshot.workspaces.map(serializeInspection) } : null };
   });
 
   const transitionTarget = (body: unknown) => {
