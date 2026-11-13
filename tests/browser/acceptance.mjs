@@ -38,6 +38,8 @@ try {
   }
   assert.equal((await app.inject({ method: "POST", url: "/api/services", payload: groupedService })).statusCode, 201);
   const created = await createIssue(app, "browser", "dev", "Browser acceptance fixture");
+  const searchTargetTitle = "审批提交后一直转圈";
+  const searchTarget = await createIssue(app, "browser", "dev", searchTargetTitle);
   const database = openDatabase(databaseFile);
   let issue;
   try {
@@ -89,6 +91,71 @@ try {
   page.on("requestfailed", (request) => {
     if (!request.failure()?.errorText.includes("ERR_ABORTED")) failures.push(`${request.url()}: ${request.failure()?.errorText}`);
   });
+  const searchRequests = [];
+  await page.route("**/api/catalog", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), issueSearchEnabled: true } });
+  });
+  await page.route("**/api/issue-search", async (route) => {
+    searchRequests.push({ method: route.request().method(), body: route.request().postDataJSON() });
+    await route.fulfill({
+      json: [
+        { key: issue.key, title: issue.title, status: "open", assignee: null },
+        { key: searchTarget.id, title: searchTargetTitle, status: "open", assignee: null },
+      ],
+    });
+  });
+  await Promise.all([page.waitForResponse("**/api/catalog"), page.goto(`${origin}/?issue=${issue.key}`)]);
+  await page.getByRole("button", { name: "浏览工单代码", exact: true }).waitFor();
+  const searchOpener = page.getByRole("radio", { name: "工单", exact: true });
+  const searchDialog = page.getByRole("dialog", { name: "查找相似工单" });
+  const searchInput = searchDialog.getByRole("textbox", { name: "工单搜索词" });
+  const firstResult = searchDialog.getByRole("link", { name: issue.title, exact: true });
+  const secondResult = searchDialog.getByRole("link", { name: searchTargetTitle, exact: true });
+  const isFocused = (locator) => locator.evaluate((element) => document.activeElement === element);
+  await searchOpener.focus();
+  await page.keyboard.press("Alt+k");
+  assert.ok(await isFocused(searchInput), "Alt+K focuses the search field");
+  await searchInput.fill(searchTargetTitle);
+  for (const ime of [{ isComposing: true }, { keyCode: 229 }]) {
+    assert.ok(
+      await searchInput.evaluate((input, init) => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })), ime),
+      "composition Enter remains available to the IME",
+    );
+  }
+  assert.deepEqual(searchRequests, []);
+  await page.keyboard.press("Enter");
+  await secondResult.waitFor();
+  assert.ok(await isFocused(searchInput), "search results do not steal focus");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowDown");
+  assert.ok(await isFocused(firstResult), "ArrowDown from the search field focuses the first result");
+  await page.keyboard.press("ArrowDown");
+  assert.ok(await isFocused(secondResult), "ArrowDown advances to the next result");
+  await page.keyboard.press("ArrowUp");
+  assert.ok(await isFocused(firstResult), "ArrowUp returns to the previous result");
+  await page.keyboard.press("ArrowUp");
+  assert.ok(await isFocused(searchInput), "ArrowUp from the first result returns to the search field");
+  await page.keyboard.press("ArrowUp");
+  assert.ok(await isFocused(secondResult), "ArrowUp from the search field focuses the last result");
+  await page.keyboard.press("Escape");
+  await searchDialog.waitFor({ state: "hidden" });
+  assert.ok(await isFocused(searchOpener), "Escape restores focus to the opener");
+  const expectedSearch = { method: "POST", body: { query: searchTargetTitle } };
+  assert.deepEqual(searchRequests, [expectedSearch]);
+  await page.keyboard.press("Alt+k");
+  await searchInput.fill(searchTargetTitle);
+  await page.keyboard.press("Enter");
+  await secondResult.waitFor();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await searchDialog.waitFor({ state: "hidden" });
+  await page.getByRole("heading", { name: searchTargetTitle, exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("issue"), searchTarget.id);
+  assert.ok(await isFocused(searchOpener), "opening a result restores focus to the surviving opener");
+  assert.deepEqual(searchRequests, [expectedSearch, expectedSearch]);
+  await page.unroute("**/api/catalog");
+  await page.unroute("**/api/issue-search");
   await page.goto(`${origin}/?issue=${issue.key}`);
   await page.getByRole("button", { name: "浏览工单代码", exact: true }).waitFor();
   assert.equal(await page.evaluate(() => performance.getEntriesByType("resource").some((entry) => /\/(monaco-|editor\.|CodeBrowser-|SettingsView-)/.test(entry.name))), false);
@@ -107,6 +174,38 @@ try {
   await issueEditor.getByRole("listbox", { name: "编辑工单处理人", exact: true }).waitFor();
   await page.keyboard.press("Escape");
   await issueEditor.getByRole("listbox").waitFor({ state: "hidden" });
+  assert.ok(await isFocused(assignee), "Escape closes only the assignee dropdown and restores its trigger");
+  await page.keyboard.press("Enter");
+  await issueEditor.getByRole("listbox", { name: "编辑工单处理人", exact: true }).getByRole("option").first().waitFor();
+  await page.keyboard.press("Enter");
+  const clearAssignee = issueEditor.getByRole("button", { name: "清除 编辑工单处理人", exact: true });
+  await page.keyboard.press("Tab");
+  assert.ok(await isFocused(clearAssignee), "Tab reaches the assignee clear button");
+  await page.keyboard.press("Enter");
+  assert.equal(await clearAssignee.count(), 0, "Enter activates the clear button instead of opening the dropdown");
+  assert.equal(await issueEditor.getByRole("listbox").count(), 0);
+  assert.ok(await isFocused(assignee), "clearing returns focus to the trigger");
+  const cc = issueEditor.getByRole("combobox", { name: "编辑工单抄送人", exact: true });
+  await cc.click();
+  const ccFilter = issueEditor.getByRole("searchbox", { name: "搜索 编辑工单抄送人", exact: true });
+  const ccList = issueEditor.getByRole("listbox", { name: "编辑工单抄送人", exact: true });
+  assert.ok(await isFocused(ccFilter), "the searchable dropdown focuses its filter");
+  const firstCc = ccList.getByRole("option").first();
+  await firstCc.waitFor();
+  assert.equal(await firstCc.getAttribute("aria-selected"), "false");
+  for (const ime of [{ isComposing: true }, { keyCode: 229 }]) {
+    const handled = await ccFilter.evaluate((input, init) => !input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })), ime);
+    assert.equal(handled, false, "composition Enter must remain available to the input method");
+    assert.equal(await firstCc.getAttribute("aria-selected"), "false");
+  }
+  await page.keyboard.press("Enter");
+  assert.equal(await firstCc.getAttribute("aria-selected"), "true", "ordinary Enter selects the highlighted option");
+  await page.keyboard.press("Backspace");
+  assert.equal(await firstCc.getAttribute("aria-selected"), "false");
+  await page.keyboard.press("Escape");
+  await ccList.waitFor({ state: "hidden" });
+  assert.ok(await isFocused(cc), "Escape closes only the searchable dropdown and restores its trigger");
+  assert.equal(await issueTitle.inputValue(), "Unsaved native dialog draft");
   const descriptionInput = issueEditor.getByRole("textbox", { name: "编辑工单描述", exact: true });
   const descriptionHeight = () => descriptionInput.evaluate((input) => input.clientHeight);
   await descriptionInput.fill("");
@@ -990,6 +1089,8 @@ try {
         checks: [
           "real HTTP and SQLite",
           "isolated Git worktree",
+          "search keyboard navigation, focus restoration, IME guards and one POST per explicit search",
+          "Select preserves IME Enter, supports keyboard clearing and dismisses only its dropdown inside a native modal",
           "JSON render",
           "find",
           "edit/save",

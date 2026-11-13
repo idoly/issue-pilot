@@ -116,6 +116,74 @@ describe("local UI controls", () => {
     view.unmount();
   });
 
+  it("starts and moves keyboard highlights only on enabled options", async () => {
+    const change = vi.fn();
+    render(() => (
+      <Select
+        aria-label="选择"
+        onChange={change}
+        options={[
+          { value: "a", label: "A", disabled: true },
+          { value: "b", label: "B" },
+          { value: "c", label: "C", disabled: true },
+          { value: "d", label: "D" },
+          { value: "e", label: "E", disabled: true },
+        ]}
+      />
+    ));
+    const trigger = screen.getByRole("combobox");
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const b = await screen.findByRole("option", { name: "B" });
+    const d = screen.getByRole("option", { name: "D" });
+    const expectHighlight = (option: HTMLElement) => waitFor(() => expect(trigger.getAttribute("aria-activedescendant")).toBe(option.id));
+    expect(trigger.getAttribute("aria-activedescendant")).toBe(b.id);
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    await expectHighlight(d);
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    await expectHighlight(b);
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    await expectHighlight(d);
+    fireEvent.keyDown(trigger, { key: "ArrowUp" });
+    await expectHighlight(b);
+    fireEvent.keyDown(trigger, { key: "End" });
+    await expectHighlight(d);
+    fireEvent.keyDown(trigger, { key: "Home" });
+    await expectHighlight(b);
+    await fireEvent.mouseEnter(screen.getByRole("option", { name: "C" }));
+    expect(trigger.getAttribute("aria-activedescendant")).toBe(b.id);
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    expect(change).toHaveBeenCalledExactlyOnceWith("b");
+  });
+
+  it("keeps a highlight with its option when options move and clears it when none are enabled", async () => {
+    const disabled = { value: "a", label: "Alpha", disabled: true };
+    const beta = { value: "", label: "Beta" };
+    const delta = { value: "d", label: "Delta" };
+    const [options, setOptions] = createSignal([disabled, beta, delta], { ownedWrite: true });
+    const change = vi.fn();
+    render(() => <Select aria-label="选择" showSearch options={options()} onChange={change} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    const input = await screen.findByRole("searchbox");
+    const deltaOption = () => screen.getByRole("option", { name: "Delta" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    await waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe(deltaOption().id));
+    setOptions([delta, disabled, beta]);
+    await waitFor(() => expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Delta", "Alpha", "Beta"]));
+    expect(input.getAttribute("aria-activedescendant")).toBe(deltaOption().id);
+    fireEvent.input(input, { target: { value: "Alpha" } });
+    await waitFor(() => expect(screen.queryByRole("option", { name: "Delta" })).toBeNull());
+    expect(input.hasAttribute("aria-activedescendant")).toBe(false);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.hasAttribute("aria-activedescendant")).toBe(false);
+    expect(change).not.toHaveBeenCalled();
+    fireEvent.input(input, { target: { value: "Beta" } });
+    const betaOption = await screen.findByRole("option", { name: "Beta" });
+    expect(input.getAttribute("aria-activedescendant")).toBe(betaOption.id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(change).toHaveBeenCalledExactlyOnceWith("");
+  });
+
   for (const state of [{ disabled: true }, { loading: true }])
     it(`ignores keyboard removal while ${state.disabled ? "disabled" : "loading"}`, () => {
       const change = vi.fn();

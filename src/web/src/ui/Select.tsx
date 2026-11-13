@@ -31,7 +31,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false, { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
-  const [active, setActive] = createSignal(0, { ownedWrite: true });
+  const [highlight, setHighlight] = createSignal<string | undefined>(undefined, { ownedWrite: true });
   const [position, setPosition] = createSignal<JSX.CSSProperties>({}, { ownedWrite: true });
   let root!: HTMLDivElement;
   let trigger!: HTMLDivElement;
@@ -50,6 +50,13 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
         : `${option.value} ${typeof option.label === "string" ? option.label : ""}`.toLowerCase().includes(query().trim().toLowerCase());
     }),
   );
+  const enabledOptions = createMemo(() => visible().filter((option) => !option.disabled));
+  const activeIndex = createMemo(() => {
+    const value = highlight();
+    return visible().findIndex((option) => !option.disabled && (value === undefined || option.value === value));
+  });
+  const activeOptionId = () => (activeIndex() >= 0 ? `${id}-option-${activeIndex()}` : undefined);
+  const revealHighlight = () => popup?.querySelector<HTMLElement>(`[data-option-index="${activeIndex()}"]`)?.scrollIntoView?.({ block: "nearest" });
   const place = () => {
     if (!open() || !trigger) return;
     const rect = trigger.getBoundingClientRect();
@@ -74,19 +81,16 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
   const show = () => {
     if (inactive()) return;
     setOpen(true);
-    setActive(
-      Math.max(
-        0,
-        visible().findIndex((option) => selected().includes(option.value)),
-      ),
-    );
+    const values = selected();
+    const options = enabledOptions();
+    setHighlight(options.find((option) => values.includes(option.value))?.value);
     place();
     queueMicrotask(() => {
       if (open()) {
         place();
         search?.focus();
         // A selected value far down the list must be visible where the highlight starts.
-        popup?.querySelector<HTMLElement>(`[data-option-index="${active()}"]`)?.scrollIntoView?.({ block: "nearest" });
+        revealHighlight();
       }
     });
   };
@@ -102,24 +106,24 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
     }
   };
   const move = (direction: number) => {
-    const options = visible();
+    const options = enabledOptions();
     if (!options.length) return;
-    let next = active();
-    for (let step = 0; step < options.length; step += 1) {
-      next = (next + direction + options.length) % options.length;
-      if (!options[next]?.disabled) break;
-    }
-    setActive(next);
-    popup?.querySelector<HTMLElement>(`[data-option-index="${next}"]`)?.scrollIntoView?.({ block: "nearest" });
+    const value = visible()[activeIndex()]?.value;
+    const index = options.findIndex((option) => option.value === value);
+    const next = index < 0 ? (direction > 0 ? 0 : options.length - 1) : (index + direction + options.length) % options.length;
+    setHighlight(options[next]?.value);
+    revealHighlight();
   };
   const onKeyDown: JSX.EventHandler<HTMLElement, KeyboardEvent> = (event) => {
-    if (event.isComposing || inactive()) return;
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || inactive()) return;
     if (event.key === "Escape" && open()) {
       event.preventDefault();
       event.stopPropagation();
       close(true);
       return;
     }
+    // Nested buttons retain native activation; Escape above still dismisses the dropdown.
+    if (event.target !== trigger && event.target !== search) return;
     if (event.key === "Tab") {
       close(true);
       return;
@@ -138,16 +142,15 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
     // The filter input keeps its own Home/End (caret movement); only the trigger moves the highlight.
     if (open() && event.target === trigger && ["Home", "End"].includes(event.key)) {
       event.preventDefault();
-      const next = event.key === "Home" ? 0 : Math.max(0, visible().length - 1);
-      setActive(next);
-      popup?.querySelector<HTMLElement>(`[data-option-index="${next}"]`)?.scrollIntoView?.({ block: "nearest" });
+      setHighlight(enabledOptions().at(event.key === "Home" ? 0 : -1)?.value);
+      revealHighlight();
       return;
     }
     if (event.key === "Enter" || (event.key === " " && event.target === trigger)) {
       event.preventDefault();
       if (!open()) show();
       else {
-        const option = visible()[active()];
+        const option = visible()[activeIndex()];
         if (option) choose(option);
       }
     }
@@ -186,7 +189,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
         aria-controls={open() ? `${id}-list` : undefined}
         aria-haspopup="listbox"
         aria-disabled={inactive() ? "true" : undefined}
-        aria-activedescendant={open() && visible()[active()] ? `${id}-option-${active()}` : undefined}
+        aria-activedescendant={open() ? activeOptionId() : undefined}
         onKeyDown={onKeyDown}
         onClick={() => (open() ? close() : show())}
       >
@@ -227,6 +230,7 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
             onClick={(event) => {
               event.stopPropagation();
               props.onClear?.();
+              (open() && search ? search : trigger).focus();
             }}
           >
             <X size={12} />
@@ -246,11 +250,11 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
                 // Focus moves into this input while open; it must report the active option to assistive tech.
                 aria-controls={`${id}-list`}
                 aria-autocomplete="list"
-                aria-activedescendant={visible()[active()] ? `${id}-option-${active()}` : undefined}
+                aria-activedescendant={activeOptionId()}
                 value={query()}
                 onInput={(event) => {
                   setQuery(event.currentTarget.value);
-                  setActive(0);
+                  setHighlight(undefined);
                 }}
               />
             </Show>
@@ -264,8 +268,10 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
                     class="ui-select-popup-list-item"
                     aria-selected={selected().includes(option.value) ? "true" : "false"}
                     aria-disabled={option.disabled ? "true" : undefined}
-                    data-active={active() === index() ? "true" : undefined}
-                    onMouseEnter={() => setActive(index())}
+                    data-active={activeIndex() === index() ? "true" : undefined}
+                    onMouseEnter={() => {
+                      if (!option.disabled) setHighlight(option.value);
+                    }}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => choose(option)}
                   >
