@@ -67,7 +67,7 @@ Ordinary startup does not compare all Issue records with filesystem entries. Cre
 
 ## Attachments
 
-[attachment-store.ts](../../src/http/attachment-store.ts) streams uploads once into private staging under `control`, calculates size/SHA-256 and syncs the sealed 0400 file. On the same filesystem, publish that inode under a new no-clobber name in the Issue root, remove the staging name, and sync the root before committing metadata. There is no attachment copy or backup. Reads verify direct root ownership, regular-file type, exact 0400, size and hash. Recheck the opened descriptor's real location and send from that descriptor, avoiding check/reopen races.
+[attachments.ts](../../src/workspace/attachments.ts) streams uploads once into private staging under `control`, calculates size/SHA-256 and syncs the sealed 0400 file. On the same filesystem, publish that inode under a new no-clobber name in the Issue root, remove the staging name, and sync the root before committing metadata. There is no attachment copy or backup. Reads verify direct root ownership, regular-file type, exact 0400, size and hash. Recheck the opened descriptor's real location and send from that descriptor, avoiding check/reopen races.
 
 Mutation reserves the Issue and closes the old session before applying files; it does not repair abnormal roots. Keep the old original addressable until the transaction replaces its active record with an exact retirement record. After commit, verify and unlink only those recorded originals. A failed unlink leaves the record and evidence for the next successful edit; no directory sweep claims unrepresented files. Preserve primary and cleanup failures; cleanup failure does not undo a committed edit.
 

@@ -80,7 +80,7 @@ Cancellation/timeout terminates the process group and cleans credentials. Do not
 
 ### MCP and Codemode
 
-Inbound /mcp operates Issues; service MCP provides deployment tools; global DingTalk connections serve application imports only. Do not combine their authority. MySQL uses configured external MCP; retired adapters do not execute.
+Inbound /mcp operates Issues; service MCP provides deployment tools; global connections (no deployment_id) serve DingTalk imports only, and deployment-bound rows are service tools regardless of name. Do not combine their authority. MySQL uses configured external MCP; retired adapters do not execute.
 
 DMS/SLS can run through Codemode tools.service_query. off exposes direct tools, on combines direct/orchestrated use, only primarily uses orchestration discovery. Execution is process-wide FIFO, one script at a time; root queue budgets are 120 seconds/32 entries. Cancelled waiters do not execute; script parallelism does not bypass Issue/repository/DMS constraints.
 

@@ -14,7 +14,7 @@ AI reference. [Index](README.md) · [Human configuration guide](../CONFIGURATION
 
 bootstrapUser inserts only into an empty user table; changing it does not rename existing users. Bootstrap synchronizes default environment names. SQLite remains authoritative; deployment model overrides and retired YAML import/export must not return.
 
-Service, repository and user edits, personal credentials and shared DMS/SLS credential updates require a nonnegative safe-integer expectedRevision from their current read projection. Missing or invalid revisions return invalid_configuration_revision (400); stale revisions return configuration_changed (409), before writes or session disposal. Creation does not require a revision. Keep drafts on conflict and reread before merging; never omit the revision or pair an old draft with a newer revision to force a save. Owner: [input.ts](../../src/http/input.ts).
+Service, repository and user edits, personal credentials and shared DMS/SLS credential updates require a nonnegative safe-integer expectedRevision from their current read projection. Missing or invalid revisions return invalid_configuration_revision (400); stale revisions return configuration_changed (409), before writes or session disposal. Creation does not require a revision. Keep drafts on conflict and reread before merging; never omit the revision or pair an old draft with a newer revision to force a save. Owner: [domain/input.ts](../../src/domain/input.ts).
 
 ## Operator model catalog
 
@@ -44,7 +44,7 @@ NODE
 
 ## Identity and permissions
 
-[route-context.ts](../../src/http/route-context.ts) treats X-Issue-Pilot-Subject as a selector, not authentication. A trusted gateway must authenticate, overwrite incoming identity and prevent bypass. Some catalog/detail GETs have no identity check; there is no per-Issue ACL.
+[access.ts](../../src/configuration/access.ts) treats X-Issue-Pilot-Subject as a selector, not authentication. A trusted gateway must authenticate, overwrite incoming identity and prevent bypass. Some catalog/detail GETs have no identity check; there is no per-Issue ACL. Root http.identity only controls whether the Web offers the account switcher; see [HTTP identity](HTTP.md#identity-and-access).
 
 Without an explicit subject, select the first active user by createdAt/subject and pin it to the request. Reload authorization after relevant waits; deactivation never switches identity. developer and isAdmin are independent checks.
 
@@ -65,7 +65,7 @@ Owner = assignee, else reporter, and must be active. Selection belongs to [user-
 
 Development evidence queries explicitly select prod/test. Credentials do not create targets. Shared model/runtime settings are global; deployments have no model override. Personal models replace selection and key, not the global runtime.
 
-Operator auth.json/models.json keys and headers do not reach application model requests. Request runtimes isolate the SQLite-selected key and disable host credential fallback. Initialization/close failures retain cleanup ownership. Verify with [model-runtime.test.ts](../../tests/agent/model-runtime.test.ts).
+Operator auth.json/models.json keys and headers do not reach application model requests. Request runtimes isolate the SQLite-selected key and disable host credential fallback. [PiSessionRuntime](../../src/agent/pi-session.ts) requires that key for every session and builds each runtime through its keyed-runtime factory; there is no unkeyed Operator runtime path, and tests inject a fake factory rather than bypass the key. The shared Operator runtime only lists the model catalog. Initialization/close failures retain cleanup ownership. Verify with [model-runtime.test.ts](../../tests/agent/model-runtime.test.ts).
 
 Personal SSH uses -F /dev/null, IdentityAgent=none and BatchMode; SSH config aliases, ProxyJump and interactive passphrases are not used. Put non-default ports in the repository URL, e.g. ssh://git@git.example.test:2222/team/repo.git. The host user verifies known_hosts in advance; saving credentials is not a connectivity test. Owner: [git-credentials.ts](../../src/workspace/git-credentials.ts).
 
@@ -75,7 +75,7 @@ Personal SSH uses -F /dev/null, IdentityAgent=none and BatchMode; SSH config ali
 - Connection secrets never enter prompts, tool input, argv, diagnostics or ordinary logs. Explicitly requested authorized business tokens from DMS/SLS may be returned with source/time; they do not expand query scope.
 - Unchanged UI secrets are retained by omitting fields/requests. API empty strings do not mean retain. Clearing is explicit; replacement requires a complete group. Changed DMS URL requires Authorization again; changed model provider cannot retain another provider's key.
 - Shared models live in global_agent_configuration, personal models in user_credentials, shared DMS/SLS in application_settings with separate revisions, not deployments.
-- Credential/model writes reserve affected Issues and close old sessions; active work conflicts. Parameter updates use a different path and must not become a global session rebuild.
+- Credential/model writes reserve affected Issues and close old sessions; active work conflicts. [impact.ts](../../src/configuration/impact.ts) owns which Issues each service, capability, repository URL, user or global change affects; its rules may over-approximate but must not narrow. Parameter updates use a different path and must not become a global session rebuild.
 
 Owners: [user-routes.ts](../../src/http/user-routes.ts), [configuration-routes.ts](../../src/http/configuration-routes.ts), [read.ts](../../src/configuration/read.ts).
 
@@ -114,7 +114,7 @@ This setting does not provision a browser, site login or general UDP/ICMP capabi
 
 The repository catalog owns URL, name and independent group. Services bind repositories; prod/test deployments own baselines and targets. Dev baselines derive from the same service's prod deployment. Recorded Issue paths/branches remain historical and cannot be guessed from changed configuration.
 
-Service writes require an explicit deployments array; omission is not clearing. Keep drafts on revision conflict. Repository URL cascades advance service revisions; group-only edits do not rebind Issues. Owner: [service-configuration.ts](../../src/http/service-configuration.ts).
+Service writes require an explicit deployments array; omission is not clearing. Keep drafts on revision conflict. Repository URL cascades advance service revisions; group-only edits do not rebind Issues. Owner: [service-deployments.ts](../../src/configuration/service-deployments.ts).
 
 - DMS records instanceAlias/schema intent; the server resolves actual instances/databaseId using the selected credentials, not client-supplied host/ID guesses.
 - SLS records region/project/logstores or multiple targets. A configured * still requires a concrete logstore at call time; there is no custom target name.
@@ -125,7 +125,7 @@ See [dbhub.ts](../../src/configuration/dbhub.ts), [dbhub.toml](../../scripts/dbh
 
 ## Service MCP and DingTalk
 
-Service MCP supports HTTPS Streamable HTTP, SSE and stdio. Connections require deployment ownership, allowed environment and Issue entry/included service scope. Global connections without deployment_id are not Agent tools. Default/user-preference DingTalk import connections are application-only. Pi owns discovery, connections and shutdown.
+Service MCP supports HTTPS Streamable HTTP, SSE and stdio. Connections require deployment ownership, allowed environment and Issue entry/included service scope. Ownership is structural: enabled deployment-bound rows are service tools whatever their name, and global rows without deployment_id are never Agent tools. DingTalk import selects only an enabled global row named by the preference (default `dingtalk`); a preference naming a deployment-bound row yields dingtalk_mcp_not_configured. Owners: [service-mcp.ts](../../src/configuration/service-mcp.ts), [dingtalk-routes.ts](../../src/http/dingtalk-routes.ts). Pi owns discovery, connections and shutdown.
 
 Global connection management, private reads and testing are admin-only. Discovery and close must both succeed for a successful test. Read-only hints are descriptive, not authorization; preserve budgets, cancellation and input/result checks.
 

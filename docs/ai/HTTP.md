@@ -8,11 +8,13 @@ These are current source contracts, not a generated complete schema. Route owner
 
 The application issues no login session. X-Issue-Pilot-Subject selects a DB user; it is not authentication. A trusted gateway must authenticate, overwrite client identity and protect Web/API/download/SSE/MCP without direct-access bypass. There is no per-Issue ACL.
 
-[requireCurrentUser](../../src/http/route-context.ts) requires active identity, pins implicit selection by createdAt/subject, and reloads authorization after relevant waits. Deactivation never switches identity. developer and isAdmin are independent.
+[requireCurrentUser](../../src/configuration/access.ts) requires active identity, pins implicit selection by createdAt/subject, and reloads authorization after relevant waits. Deactivation never switches identity. developer and isAdmin are independent.
 
 Session lists, history pages and complete query reads reauthorize inside the configuration scope after waiting. Complete query reads also reauthorize after session preparation. SSE reauthorizes after catalog/transcript preparation and before sending headers; a deactivated reader receives an ordinary error, not a successful replay. This admission check does not revoke an already established stream. Regression: [session-read-identity.test.ts](../../tests/http/session-read-identity.test.ts).
 
 Not every GET checks identity: examples include /api/issues, /api/issues/:key, /api/users, /api/catalog and /api/config. Assignee/reporter relations are not read access control. API/MCP private,no-store headers are not authorization or encryption.
+
+Root `http.identity` (server-only, default "selectable") selects the Web identity mode; buildApi's identity option overrides it for tests. GET /api/me returns the person plus identityLocked (true for "gateway"). When locked, the Web hides the account switcher, never sends a page-selected subject header and forgets the remembered choice; it keeps the resolved subject only as a late-response guard. Requests issued before the first /api/me response may still carry a previously remembered subject, so the gateway must overwrite it. Server identity resolution is identical in both modes; the flag is not authentication.
 
 Native browser EventSource does not send the page-selected subject header. Without a trusted gateway identity binding, the server uses its implicit user selection. Protect SSE as well as ordinary fetches.
 
@@ -22,10 +24,10 @@ Native browser EventSource does not send the page-selected subject header. Witho
 
 | Request | Meaning |
 | --- | --- |
-| GET /health | {"ok":true}; no model/external-service health guarantee |
+| GET /health | {"ok":true} after a lock-free `SELECT 1` on the open database connection; 503 {"ok":false,"error":"database_unavailable"} when it fails. Fastify also answers 503 while closing. No model/external-service health guarantee |
 | GET /api/me, /api/catalog | Current user and service/environment catalog |
-| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging |
-| GET /api/issues/:key | Details, workspace, attachments, repositories, relations and scope history from one SQLite read snapshot. Live Agent state and filesystem availability are sampled separately. |
+| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging. Summaries (and the detail, which extends them) include reporterSubject and sorted ccSubjects, loaded by a correlated subquery in the same statement. The revision does not hash them separately: the reporter is immutable and every CC write must bump issues.updated_at in its transaction. |
+| GET /api/issues/:key | Details, workspace (status, sourceAvailable, runtimeReady, lastError, retryable), attachments, repositories, relations and scope history from one SQLite read snapshot. Live Agent state and filesystem availability are sampled separately. |
 | POST /api/issues | 201, persisted and scheduled, not model completion |
 | PATCH /api/issues/:key | 200, complete metadata form, not arbitrary partial merge |
 | POST .../agent-messages | 202, empty body, input admitted |
@@ -68,7 +70,7 @@ Creation requires title, priority, serviceKey and workMode. Mappings belong to [
 }
 ```
 
-Replace the example service with a configured service. Dev requires active developer creator and credential owner; reassigning to a non-developer fails. Unassigned Issues use reporter credentials and do not enter a personal assignee queue.
+Replace the example service with a configured service. Dev requires active developer creator and credential owner; reassigning to a non-developer fails. Unassigned Issues use reporter credentials and appear in no one's assigned queue scope.
 
 Attachments use multipart: issue holds complete JSON; files can carry uploads. Issue creation and edit check the current active subject before staging multipart files, then reauthorize after queue waits. Originals are part of Issue transactions, not an independent upload-write API. HTTP file streaming has no business file-size/count ceiling, but fields, transport and proxies retain limits. MCP Base64 and pasted Agent images have distinct budgets.
 
@@ -142,7 +144,7 @@ Each import shares its start-time timeout signal, with client disconnect cancell
 
 ## Async execution, SSE and paging
 
-GET .../agent-stream sends durable/current replay, then snapshot_ready, then live events/heartbeat. Ordinary frames have id/data; named frames have event. Snapshot includes model/footer/run state/Issue state.
+GET .../agent-stream sends durable/current replay, then snapshot_ready, then live events/heartbeat. Ordinary frames have id/data; named frames have event. Snapshot always includes agent model, footer, runState, issueStatus and issueRevision.
 
 Shutdown ends admitted streams. A request still preparing when shutdown starts cannot start a stream and receives 503 agent_stream_closing if still connected and otherwise valid.
 
@@ -179,7 +181,7 @@ Owner: [server.ts](../../src/mcp/server.ts). Tests: [application-mcp.test.ts](..
 
 ## Errors and retry
 
-Ordinary errors usually return {"error":"stable_code"}; framework routing errors are exceptions. After file/SSE headers, failure may terminate the connection instead of returning JSON. Owners throw `DomainError(code, category)` and the HTTP boundary maps the category once; routes do not keep code-to-status catalogs or infer status from message text. Issue summaries, detail and SSE snapshots carry the same opaque change token (`revision` on HTTP projections, `issueRevision` on SSE). Its fixed-length digest covers Issue, Workspace, Agent and joined display facts without including the source text. Clients compare tokens for equality.
+Ordinary errors usually return {"error":"stable_code"}; framework routing errors are exceptions. After file/SSE headers, failure may terminate the connection instead of returning JSON. Owners throw `DomainError(code, category)` and the [HTTP boundary](../../src/http/api.ts) maps the category once (bad_request 400, forbidden 403, not_found 404, conflict 409, payload_too_large 413, rate_limited 429, internal 500, upstream 502); routes do not keep code-to-status catalogs or infer status from message text. `ApiError` is reserved for a route's own request-shape or transport-state refusals (for example 408 cancellation or 503 closing). Request parsing shared by routes and configuration owners lives in [domain/input.ts](../../src/domain/input.ts). SQLite constraint failures are translated once by [constraints.ts](../../src/db/constraints.ts) from the driver's structured constraint code: UNIQUE/primary key → `conflict`, foreign key → `resource_in_use`, and the schema triggers `issue_deployment_required`, `deployment_is_used_by_issues` and `issue_resolution_state_invalid` → their own code, all 409; other trigger codes stay internal, and query parameters are never read. `OperationError` outcomes and operational failure codes found anywhere in the chain take precedence over a nested constraint. A route that names a fallback code for unexpected failures (for example `user_credentials_save_failed`) passes classified failures through unchanged. The [DMS](../../src/capabilities/dms.ts) and [MCP client](../../src/mcp/client.ts) owners throw their stable `dms_*`/`mcp_*` failures as `upstream` (502) `DomainError`s whose message is the code, so tool results keep the same text; the DMS scope test and MCP connection test log the code and publish any other failure as `dms_scope_resolve_failed`/`mcp_connection_failed` 502. Lifecycle and scope-transition refusals are conflict `DomainError`s that keep the owner failure as cause; they republish only stable codes, never `OperationError` outcomes, [operational failure codes](../../src/domain/errors.ts) or unpublishable messages. Issue summaries, detail and SSE snapshots carry the same opaque change token (`revision` on HTTP projections, `issueRevision` on SSE). Its fixed-length digest covers Issue, Workspace, Agent and joined display facts without including the source text. Clients compare tokens for equality.
 
 | Condition | Required handling |
 | --- | --- |

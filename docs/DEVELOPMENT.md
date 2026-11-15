@@ -74,7 +74,7 @@ node --experimental-strip-types --test --test-concurrency=2 tests/http/issue-api
 
 ## 可重复的真实浏览器验收
 
-`npm run test:browser` 使用临时工单、Git、HTTP/SSE 和生产 Web 构建，需要独立安装的 Playwright。可通过 `ISSUE_PILOT_PLAYWRIGHT_MODULE` 指向其 `index.mjs`，通过 `ISSUE_PILOT_BROWSER_WEB_ROOT` 选择独立构建，`ISSUE_PILOT_BROWSER_ARTIFACTS` 选择临时截图目录。
+`npm run test:browser` 使用临时工单、Git、HTTP/SSE 和生产 Web 构建，需要独立安装的 Playwright。可通过 `ISSUE_PILOT_PLAYWRIGHT_MODULE` 指向其 `index.mjs`，通过 `ISSUE_PILOT_BROWSER_WEB_ROOT` 选择独立构建，`ISSUE_PILOT_BROWSER_ARTIFACTS` 选择临时截图目录。设置 `ISSUE_PILOT_BROWSER_WS` 时连接测试容器内的 Playwright `run-server`；验收需要以 `--unsafe` 启动该服务，以便传入浏览器启动参数。
 
 本机保留 `mcr.microsoft.com/playwright:v1.64.1-noble` 测试镜像。已有只读 smoke 入口：
 
