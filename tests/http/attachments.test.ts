@@ -18,7 +18,7 @@ import {
   removeWrittenAttachments,
   resolveSecureAttachmentFile,
   publishPendingAttachments,
-} from "../../src/http/attachment-store.ts";
+} from "../../src/workspace/attachments.ts";
 import { claimIssueRoot, issueRoot, removeEmptyIssueRoot } from "../../src/workspace/state.ts";
 
 for (const stage of ["open", "close"] as const)

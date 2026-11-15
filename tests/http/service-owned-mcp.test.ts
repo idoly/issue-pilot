@@ -5,11 +5,11 @@ import { createApiFixture, createService } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { mcpServices, serviceDeployments, services, environments, userPreferences } from "../../src/db/schema.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { dingtalkMcpNames, serviceMcpConnections } from "../../src/configuration/service-mcp.ts";
+import { serviceMcpConnections } from "../../src/configuration/service-mcp.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
 import { compile } from "@earendil-works/pi-schema";
 
-test("service descriptions and executable MCP selection use deployment ownership and exclude import connections", async () => {
+test("service descriptions and executable MCP selection use deployment ownership; import connections are the global rows", async () => {
   const f = await createApiFixture(),
     database = openDatabase(f.databaseFile);
   try {
@@ -27,14 +27,22 @@ test("service descriptions and executable MCP selection use deployment ownership
       { id: "selected-tool", name: "Selected evidence", url: "https://selected.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: selected.deployment.id },
       { id: "other-tool", name: "Other evidence", url: "https://other.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: other.deployment.id },
       { id: "unowned", name: "Unowned evidence", url: "https://unowned.example.test/mcp", transport: "streamable_http", enabled: true },
-      { id: "import", name: "dingtalk", url: "https://imports.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: selected.deployment.id },
+      { id: "global-import", name: "dingtalk", url: "https://imports.example.test/mcp", transport: "streamable_http", enabled: true },
+      // Ownership, not the name or a user preference, decides: deployment-bound rows are service tools.
+      { id: "service-dingtalk", name: "dingtalk-service", url: "https://service-dingtalk.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: selected.deployment.id },
       { id: "custom-import", name: "imports-custom", url: "https://custom-import.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: selected.deployment.id },
     ]);
     const rows = await database.db.select().from(mcpServices);
     assert.deepEqual(
-      serviceMcpConnections(rows, [selected.deployment.id], await dingtalkMcpNames(database.db)).map((row) => row.id),
-      ["selected-tool"],
+      serviceMcpConnections(rows, [selected.deployment.id])
+        .map((row) => row.id)
+        .sort(),
+      ["custom-import", "selected-tool", "service-dingtalk"],
     );
+    // A preference naming a deployment-bound row cannot select it for import.
+    const source = await f.app.inject({ method: "GET", url: "/api/dingtalk/source", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject } });
+    assert.equal(source.statusCode, 200);
+    assert.deepEqual(source.json().connection, { available: false, name: "imports-custom" });
     const dms = {
       url: "https://dms.example.test/sse",
       authorization: "Bearer private-fixture",
@@ -44,11 +52,13 @@ test("service descriptions and executable MCP selection use deployment ownership
     const config = (await f.app.inject({ method: "GET", url: "/api/config" })).json();
     const service = config.services.find((row: { key: string }) => row.key === "selected");
     assert.match(service.context, /Selected evidence|configured_test/);
-    assert.doesNotMatch(service.context, /Other evidence|Unowned evidence|imports-custom|dingtalk|MCP（全局）|private-fixture|SLS/);
+    assert.match(service.context, /imports-custom/);
+    assert.doesNotMatch(service.context, /Other evidence|Unowned evidence|imports\.example|MCP（全局）|private-fixture|SLS/);
     assert.deepEqual(service.deployments.find((row: { environmentKey: string }) => row.environmentKey === "test").capabilities, ["dms"]);
     const description = await f.app.inject({ method: "GET", url: "/api/services/selected/configuration-description", headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject } });
     assert.match(description.json().context, /Selected evidence/);
-    assert.doesNotMatch(description.body, /Other evidence|Unowned evidence|imports-custom|MCP（全局）/);
+    assert.match(description.json().context, /imports-custom/);
+    assert.doesNotMatch(description.body, /Other evidence|Unowned evidence|imports\.example|MCP（全局）/);
     // Configuration controls availability, irrespective of a test/prod label.
     const [tool] = createCapabilityTools({ serviceKey: "selected", environmentKey: "test", capabilities: ["dms", "sls"] }, { dms });
     assert.ok(tool);

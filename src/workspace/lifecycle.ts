@@ -11,16 +11,17 @@ import pMap from "p-map";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { applicationParameters } from "../configuration/parameters.ts";
 import type { ApplicationParameters } from "../configuration/contracts.ts";
-import { AgentBusyError, type AgentController, type AgentReservation } from "../agent/engine.ts";
-import { stableErrorReason } from "../diagnostics.ts";
+import { AgentBusyError, type AgentController, type AgentReservation } from "../agent/contracts.ts";
+import { errorChain, isStableErrorCode, stableErrorReason } from "../diagnostics.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces } from "../db/schema.ts";
-import { errorMessage, isWorkspaceBusy, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
+import { isIssueActive, isWorkspaceBusy, scopeTransitionRefusal, type IssueScopeState, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
+import { DomainError, OPERATIONAL_FAILURE_CODES } from "../domain/errors.ts";
 import { KeyedSerialQueue, SerialQueue } from "../serial.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows, type ExpectedRepository } from "./project.ts";
 import { inspectReleasedRepositories } from "./runtime.ts";
-import { assertIssueLayoutCurrent, assertManagedIssueWorkspaceLayout, classifyRepositoryState, gitRoot, issueRoot, pathExists } from "./state.ts";
+import { assertIssueLayoutCurrent, assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, gitRoot, issueRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,12 +77,14 @@ type WorkspaceStatistics = {
   workspaces: WorkspaceInspection[];
 };
 
-class WorkspaceRefusal extends Error {
-  readonly reason: string;
+/** Operator-correctable lifecycle refusal: a stable conflict code that HTTP maps once, keeping the owner failure as cause. */
+class WorkspaceRefusal extends DomainError {
+  constructor(reason: string, options?: ErrorOptions) {
+    super(reason, "conflict", options);
+  }
 
-  constructor(reason: string) {
-    super(reason);
-    this.reason = reason;
+  get reason(): string {
+    return this.code;
   }
 }
 
@@ -91,13 +94,30 @@ export class WorkspaceRestoreRefusal extends WorkspaceRefusal {}
 export class WorkspaceConversionRefusal extends WorkspaceRefusal {}
 export class WorkspaceScopeMigrationRefusal extends WorkspaceRefusal {}
 
+/**
+ * Republish an owner failure as this operation's refusal only when it is a stable, operator-correctable code.
+ * Typed domain failures, uncertain outcomes, operational state damage and unstable messages keep the original
+ * error so HTTP reports their real category, outcome and diagnostics.
+ */
+function refuseWith(Refusal: new (reason: string, options?: ErrorOptions) => WorkspaceRefusal, error: unknown, reason?: string): never {
+  if (error instanceof DomainError || !(error instanceof Error) || !isStableErrorCode(error.message)) throw error;
+  if (errorChain(error).some((cause) => cause instanceof OperationError) || OPERATIONAL_FAILURE_CODES.has(error.message)) throw error;
+  throw new Refusal(reason ?? error.message, { cause: error });
+}
+
 type Issue = typeof issues.$inferSelect;
 type IssueWorkspace = typeof issueWorkspaces.$inferSelect;
 type TransitionAudit = (writer: Pick<Database, "insert">, now: Date) => Promise<void>;
 type IssueRepository = typeof issueRepositories.$inferSelect;
-type IssueRow = { issue: Issue; workspace: IssueWorkspace | null; environmentKind: typeof environments.$inferSelect.kind };
+/** Every Issue owns exactly one Workspace; row readers refuse a missing one instead of passing null downstream. */
+type IssueRow = { issue: Issue; workspace: IssueWorkspace; environmentKind: typeof environments.$inferSelect.kind };
 
-async function directoryBytes(candidate: string): Promise<number> {
+function issueScopeState({ issue, workspace, environmentKind }: IssueRow): IssueScopeState {
+  return { environmentKind, issueType: issue.type, status: issue.status, workspaceStatus: workspace.status };
+}
+
+/** Complete apparent disk usage of a path in bytes; a missing path measures zero. */
+export async function directoryBytes(candidate: string): Promise<number> {
   if (!(await pathExists(candidate))) return 0;
   const { diskUsageMs, diskUsageOutputBytes } = issuePilotConfig.limits.process;
   // A nonzero exit can include a lower bound. It cannot serve as a complete measurement.
@@ -131,9 +151,17 @@ export class WorkspaceLifecycleManager {
     | undefined;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
+  private readonly measure: (candidate: string) => Promise<number>;
 
-  constructor(database: Database, stateRoot: string, engine: AgentController, policy: WorkspaceLifecyclePolicy = workspaceLifecyclePolicy()) {
+  constructor(
+    database: Database,
+    stateRoot: string,
+    engine: AgentController,
+    policy: WorkspaceLifecyclePolicy = workspaceLifecyclePolicy(),
+    options: { measure?: (candidate: string) => Promise<number> } = {},
+  ) {
     assertWorkspaceLifecyclePolicy(policy);
+    this.measure = options.measure ?? directoryBytes;
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.engine = engine;
@@ -259,7 +287,7 @@ export class WorkspaceLifecycleManager {
       (issueRow) => this.issueQueue.run(issueRow.issue.id, () => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id), false)),
       { concurrency: policy.taskConcurrency, stopOnError: false },
     );
-    const sharedGitBytes = await directoryBytes(gitRoot(this.stateRoot));
+    const sharedGitBytes = await this.measure(gitRoot(this.stateRoot));
     return {
       sampledAt: new Date().toISOString(),
       totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
@@ -300,10 +328,7 @@ export class WorkspaceLifecycleManager {
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.reopenLocked(await this.issueRow(issueId), reservation),
-      (error) => {
-        if (error instanceof WorkspaceRestoreRefusal) throw error;
-        throw new WorkspaceRestoreRefusal(errorMessage(error));
-      },
+      (error) => refuseWith(WorkspaceRestoreRefusal, error),
       authorize,
     );
   }
@@ -318,10 +343,7 @@ export class WorkspaceLifecycleManager {
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.convertLocked(await this.issueRow(issueId), reservation, expectedIssueUpdatedAt, recordTransition, expectedRepositories),
-      (error) => {
-        if (error instanceof WorkspaceConversionRefusal) throw error;
-        throw new WorkspaceConversionRefusal(errorMessage(error));
-      },
+      (error) => refuseWith(WorkspaceConversionRefusal, error),
       authorize,
     );
   }
@@ -337,12 +359,7 @@ export class WorkspaceLifecycleManager {
     return this.withIssueReservation(
       issueId,
       async (reservation) => this.migrateDevelopmentScopeLocked(await this.issueRow(issueId), target, expectedIssueUpdatedAt, reservation, recordTransition, expectedRepositories),
-      (error) => {
-        if (error instanceof WorkspaceScopeMigrationRefusal) throw error;
-        const message = errorMessage(error);
-        if (message === "workspace_has_changes") throw new WorkspaceScopeMigrationRefusal("scope_transition_removed_repository_changed");
-        throw new WorkspaceScopeMigrationRefusal(message);
-      },
+      (error) => refuseWith(WorkspaceScopeMigrationRefusal, error, error instanceof Error && error.message === "workspace_has_changes" ? "scope_transition_removed_repository_changed" : undefined),
       authorize,
     );
   }
@@ -362,7 +379,7 @@ export class WorkspaceLifecycleManager {
         issueRows,
         async ({ issue }) => {
           try {
-            return { issueId: issue.id, bytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) };
+            return { issueId: issue.id, bytes: await this.measure(issueRoot(this.stateRoot, issue.key)) };
           } catch (error) {
             failures.push({ issueKey: issue.key, error });
             return undefined;
@@ -384,7 +401,7 @@ export class WorkspaceLifecycleManager {
       const attemptedIssues = new Set<string>();
       // An unmeasured workspace has no known bytes, so it is left for the next cycle instead of being released blind.
       const candidates = issueRows.filter(
-        ({ issue, environmentKind, workspace }) => environmentKind === "dev" && issue.status === "resolved" && (workspaceBytes.get(issue.id) ?? 0) > 0 && !workspace?.releasedAt,
+        ({ issue, environmentKind, workspace }) => environmentKind === "dev" && issue.status === "resolved" && (workspaceBytes.get(issue.id) ?? 0) > 0 && !workspace.releasedAt,
       );
       const releaseCandidate = async (candidate: IssueRow) => {
         const { id, key } = candidate.issue;
@@ -393,13 +410,13 @@ export class WorkspaceLifecycleManager {
             this.engine.runExclusive([id], async (reservation) => {
               const current = await this.issueRow(id);
               attemptedIssues.add(id);
-              if (current.workspace?.releasedAt) return;
+              if (current.workspace.releasedAt) return;
               try {
                 return await this.releaseLocked(current, reservation);
               } catch (error) {
                 // A release can fail after writing to disk. Refresh its size before returning the reservation.
                 try {
-                  updateBytes(id, await directoryBytes(issueRoot(this.stateRoot, key)));
+                  updateBytes(id, await this.measure(issueRoot(this.stateRoot, key)));
                 } catch (measurementError) {
                   measurementIncomplete = true;
                   throw new AggregateError([error, measurementError], "workspace_maintenance_measurement_failed");
@@ -431,9 +448,7 @@ export class WorkspaceLifecycleManager {
         }
       }
       if (policy.highWaterBytes > 0 && totalBytes > policy.highWaterBytes) {
-        const quotaCandidates = [...candidates].sort(
-          (left, right) => (left.workspace?.updatedAt.getTime() ?? left.issue.updatedAt.getTime()) - (right.workspace?.updatedAt.getTime() ?? right.issue.updatedAt.getTime()),
-        );
+        const quotaCandidates = [...candidates].sort((left, right) => left.workspace.updatedAt.getTime() - right.workspace.updatedAt.getTime());
         for (const candidate of quotaCandidates) {
           if (totalBytes <= policy.targetBytes) break;
           if (!attemptedIssues.has(candidate.issue.id)) await releaseCandidate(candidate);
@@ -469,17 +484,11 @@ export class WorkspaceLifecycleManager {
     recordTransition?: TransitionAudit,
     expectedRepositories?: readonly ExpectedRepository[],
   ): Promise<Issue> {
-    const { issue, workspace } = issueRow;
+    const { issue } = issueRow;
     if (issue.updatedAt.toISOString() !== expectedIssueUpdatedAt) throw new WorkspaceScopeMigrationRefusal("scope_transition_plan_stale");
     const [targetEnvironment] = await this.database.select().from(environments).where(eq(environments.id, target.environmentId)).limit(1);
-    if (
-      issueRow.environmentKind !== "dev" ||
-      targetEnvironment?.kind !== "dev" ||
-      !["defect_fix", "feature_development"].includes(issue.type) ||
-      !["open", "pending"].includes(issue.status) ||
-      workspace?.status !== "ready"
-    )
-      throw new WorkspaceScopeMigrationRefusal("issue_not_migratable_between_development_scopes");
+    const refusal = scopeTransitionRefusal("migrate_development", issueScopeState(issueRow), targetEnvironment?.kind);
+    if (refusal) throw new WorkspaceScopeMigrationRefusal(refusal);
 
     await reservation.closeSession(issue.id);
     const migrated = await this.projects.migrateDevelopmentScope(
@@ -549,11 +558,10 @@ export class WorkspaceLifecycleManager {
     recordTransition?: TransitionAudit,
     expectedRepositories?: readonly ExpectedRepository[],
   ): Promise<Issue> {
-    const { issue, workspace } = issueRow;
+    const { issue } = issueRow;
     if (expectedIssueUpdatedAt && issue.updatedAt.toISOString() !== expectedIssueUpdatedAt) throw new WorkspaceConversionRefusal("scope_transition_plan_stale");
-    if (!["prod", "test"].includes(issueRow.environmentKind) || issue.type !== "smart_analysis" || !["open", "pending"].includes(issue.status) || workspace?.status !== "ready") {
-      throw new WorkspaceConversionRefusal("issue_not_convertible_to_development");
-    }
+    const refusal = scopeTransitionRefusal("convert_to_development", issueScopeState(issueRow), "dev");
+    if (refusal) throw new WorkspaceConversionRefusal(refusal);
     const [developmentEnvironment] = await this.database.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     if (!developmentEnvironment) throw new WorkspaceConversionRefusal("development_environment_not_found");
     await reservation.closeSession(issue.id);
@@ -607,15 +615,14 @@ export class WorkspaceLifecycleManager {
       reservation.enqueue(issue.id);
       return converted;
     } catch (error) {
-      if (error instanceof WorkspaceConversionRefusal) throw error;
-      throw new WorkspaceConversionRefusal(errorMessage(error));
+      refuseWith(WorkspaceConversionRefusal, error);
     }
   }
 
   private async reopenLocked(issueRow: IssueRow, reservation: AgentReservation): Promise<Issue> {
     const { issue, workspace } = issueRow;
     if (issue.status !== "resolved") throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
-    if (this.engine.isRunning(issue.id) || (workspace && isWorkspaceBusy(workspace.status))) throw new WorkspaceRestoreRefusal("issue_already_running");
+    if (isIssueActive({ agentRunning: this.engine.isRunning(issue.id), workspaceStatus: workspace.status })) throw new WorkspaceRestoreRefusal("issue_already_running");
     if (issueRow.environmentKind !== "dev") {
       await reservation.closeSession(issue.id);
       return this.markReopened(issue);
@@ -625,11 +632,15 @@ export class WorkspaceLifecycleManager {
     const repositoryState = classifyRepositoryState(repositories);
     const workspaceRoot = issueRoot(this.stateRoot, issue.key);
     if (repositoryState === "development_workspace") {
-      if (!(await pathExists(workspaceRoot))) throw new WorkspaceRestoreRefusal("workspace_missing");
+      // The root owner rejects redirected roots; only a missing root is the operator-facing refusal.
+      await assertIssueRoot(this.stateRoot, issue.key).catch((error: unknown) => {
+        if (error instanceof Error && error.message === "issue_root_missing") throw new WorkspaceRestoreRefusal("workspace_missing", { cause: error });
+        throw error;
+      });
       try {
         issueRepositoryWorkspaceNames(repositories);
       } catch (error) {
-        throw new WorkspaceRestoreRefusal(errorMessage(error));
+        refuseWith(WorkspaceRestoreRefusal, error);
       }
       await assertManagedIssueWorkspaceLayout(
         workspaceRoot,
@@ -639,7 +650,7 @@ export class WorkspaceLifecycleManager {
       return this.markReopened(issue);
     }
     if (repositoryState !== "development_snapshot") throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
-    if (!workspace?.releasedAt) throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
+    if (!workspace.releasedAt) throw new WorkspaceRestoreRefusal("development_repository_state_invalid");
     let names: Map<string, string>;
     let commits: Map<string, string>;
     try {
@@ -647,7 +658,7 @@ export class WorkspaceLifecycleManager {
       names = issueRepositoryWorkspaceNames(repositories);
       commits = await inspectReleasedRepositories(this.stateRoot, issue.key, repositories, names);
     } catch (error) {
-      throw new WorkspaceRestoreRefusal(errorMessage(error));
+      refuseWith(WorkspaceRestoreRefusal, error);
     }
 
     await reservation.closeSession(issue.id);
@@ -672,7 +683,7 @@ export class WorkspaceLifecycleManager {
         }),
       );
     } catch (error) {
-      throw error instanceof WorkspaceRestoreRefusal ? error : new WorkspaceRestoreRefusal(errorMessage(error));
+      refuseWith(WorkspaceRestoreRefusal, error);
     }
   }
 
@@ -748,7 +759,7 @@ export class WorkspaceLifecycleManager {
       (error) => {
         if (error instanceof IssueDeletionRefusal) throw error;
         if (error instanceof AgentBusyError) throw new IssueDeletionRefusal(error.message);
-        if (error instanceof Error && ["workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new IssueDeletionRefusal(error.message);
+        if (error instanceof Error && ["workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new IssueDeletionRefusal(error.message, { cause: error });
         throw error;
       },
       authorize,
@@ -767,14 +778,14 @@ export class WorkspaceLifecycleManager {
     try {
       names = issueRepositoryWorkspaceNames(repositories);
     } catch (error) {
-      throw new WorkspaceReleaseRefusal(errorMessage(error));
+      refuseWith(WorkspaceReleaseRefusal, error);
     }
     if (repositoryState === "development_snapshot") {
       // releasedAt is committed with the snapshot repository rows; it is the release marker, not a status inference.
-      if (!workspace?.releasedAt) throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
+      if (!workspace.releasedAt) throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
       if (inspection.blockedReason !== "workspace_released") throw new WorkspaceReleaseRefusal(inspection.blockedReason ?? "development_repository_state_invalid");
       await reservation.closeSession(issue.id);
-      return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true, remainingBytes: await directoryBytes(issueRoot(this.stateRoot, issue.key)) };
+      return { issueKey: issue.key, releasedBytes: 0, alreadyReleased: true, remainingBytes: await this.measure(issueRoot(this.stateRoot, issue.key)) };
     }
     if (repositoryState !== "development_workspace") throw new WorkspaceReleaseRefusal("development_repository_state_invalid");
     // A missing root also lost the Issue's private Git store. Marking it released would let a later
@@ -784,7 +795,7 @@ export class WorkspaceLifecycleManager {
     try {
       mode = developmentWorktreeMode(issue.type);
     } catch (error) {
-      throw new WorkspaceReleaseRefusal(errorMessage(error));
+      refuseWith(WorkspaceReleaseRefusal, error);
     }
     await reservation.closeSession(issue.id);
     try {
@@ -804,12 +815,12 @@ export class WorkspaceLifecycleManager {
         },
       });
     } catch (error) {
-      if (error instanceof WorktreeRollbackFailure) throw new WorkspaceReleaseRefusal("workspace_release_rollback_failed");
-      if (error instanceof Error && ["workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new WorkspaceReleaseRefusal(error.message);
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOTEMPTY") throw new WorkspaceReleaseRefusal("workspace_has_untracked_files");
+      if (error instanceof WorktreeRollbackFailure) throw new WorkspaceReleaseRefusal("workspace_release_rollback_failed", { cause: error });
+      if (error instanceof Error && ["workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new WorkspaceReleaseRefusal(error.message, { cause: error });
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOTEMPTY") throw new WorkspaceReleaseRefusal("workspace_has_untracked_files", { cause: error });
       throw error;
     }
-    const remainingBytes = await directoryBytes(issueRoot(this.stateRoot, issue.key));
+    const remainingBytes = await this.measure(issueRoot(this.stateRoot, issue.key));
     return { issueKey: issue.key, releasedBytes: Math.max(0, inspection.bytes - remainingBytes), alreadyReleased: false, remainingBytes };
   }
 
@@ -830,18 +841,18 @@ export class WorkspaceLifecycleManager {
   private async inspectLocked(issueRow: IssueRow, knownRepositories?: IssueRepository[], knownBytes?: number, inspectReleased = true): Promise<WorkspaceInspection> {
     const { issue, workspace, environmentKind } = issueRow;
     const workspaceRoot = issueRoot(this.stateRoot, issue.key);
-    const bytes = knownBytes ?? (await directoryBytes(workspaceRoot));
+    const bytes = knownBytes ?? (await this.measure(workspaceRoot));
     let blockedReason: string | null = null;
     if (environmentKind !== "dev") blockedReason = "workspace_not_development";
     else if (issue.status !== "resolved") blockedReason = "issue_not_resolved";
     else if (this.engine.isRunning(issue.id)) blockedReason = "issue_already_running";
-    else if (workspace && isWorkspaceBusy(workspace.status)) blockedReason = "workspace_busy";
+    else if (isWorkspaceBusy(workspace.status)) blockedReason = "workspace_busy";
     else if (!(await pathExists(workspaceRoot))) blockedReason = "workspace_missing";
     else {
       const repositories = knownRepositories ?? (await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)));
       const state = classifyRepositoryState(repositories);
       if (state === "development_snapshot") {
-        if (!workspace?.releasedAt) blockedReason = "development_repository_state_invalid";
+        if (!workspace.releasedAt) blockedReason = "development_repository_state_invalid";
         else
           try {
             // Capacity samples only need to know that these worktrees have already been removed.
@@ -851,7 +862,7 @@ export class WorkspaceLifecycleManager {
             blockedReason = stableErrorReason(error, "workspace_runtime_inspection_failed");
           }
       } else if (state !== "development_workspace") blockedReason = "development_repository_state_invalid";
-      else if (workspace?.releasedAt) blockedReason = "development_repository_state_invalid";
+      else if (workspace.releasedAt) blockedReason = "development_repository_state_invalid";
       else
         try {
           issueRepositoryWorkspaceNames(repositories);
@@ -868,7 +879,7 @@ export class WorkspaceLifecycleManager {
       issueId: issue.id,
       issueKey: issue.key,
       issueStatus: issue.status,
-      workspaceStatus: workspace?.status ?? "not_created",
+      workspaceStatus: workspace.status,
       resolvedAt: issue.resolvedAt?.toISOString() ?? null,
       bytes,
       releasable: blockedReason === null,
@@ -885,9 +896,10 @@ export class WorkspaceLifecycleManager {
       .where(eq(issues.id, issueId))
       .limit(1);
     if (!issueRow) throw new Error("issue_not_found");
-    if (!issueRow.workspace) throw new Error(`issue_workspace_missing:${issueRow.issue.key}`);
+    const { workspace } = issueRow;
+    if (!workspace) throw new Error(`issue_workspace_missing:${issueRow.issue.key}`);
     await assertIssueLayoutCurrent(this.stateRoot, issueRow.issue.key);
-    return issueRow;
+    return { ...issueRow, workspace };
   }
 
   private async issueRows(): Promise<IssueRow[]> {
@@ -897,9 +909,10 @@ export class WorkspaceLifecycleManager {
       .innerJoin(environments, eq(environments.id, issues.environmentId))
       .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id))
       .orderBy(asc(issues.updatedAt));
-    const invalid = rows.find((row) => !row.workspace);
-    if (invalid) throw new Error(`issue_workspace_missing:${invalid.issue.key}`);
-    return rows;
+    return rows.map(({ workspace, ...row }) => {
+      if (!workspace) throw new Error(`issue_workspace_missing:${row.issue.key}`);
+      return { ...row, workspace };
+    });
   }
 
   private withIssueReservation<T>(issueId: string, operation: (reservation: AgentReservation) => Promise<T>, rethrow: (error: unknown) => never, authorize?: () => Promise<unknown>): Promise<T> {

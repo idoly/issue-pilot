@@ -1,4 +1,4 @@
-import type { StoredDeploymentConfig } from "../domain/contracts.ts";
+import { isDevelopmentEnvironment, type EnvironmentKind, type StoredDeploymentConfig } from "../domain/contracts.ts";
 import { publicMcpUrl } from "./mcp.ts";
 import { projectCapabilityConfiguration } from "./credentials.ts";
 
@@ -18,14 +18,14 @@ function section(title: string, fields: readonly Field[]): string {
 
 /** Render public configuration once for both the UI and model context. */
 export function deploymentContext(
-  environment: { key: string; name: string },
+  environment: { kind: EnvironmentKind; name: string },
   configuration: StoredDeploymentConfig,
   mcp: readonly { id: string; name: string; url: string; transport: string; enabled: boolean; deploymentId?: string | null }[],
   mcpCredentials: readonly { id: string; authorization: string }[] = [],
   includePrivateDbHub = false,
 ): string {
   const sections = [`### ${environment.name}环境`];
-  if (environment.key === "dev") return [...sections, "代码基线继承正式分支，不单独设置；查询能力继承正式和测试环境，来源保持只读。"].join("\n\n");
+  if (isDevelopmentEnvironment(environment.kind)) return [...sections, "代码基线继承正式分支，不单独设置；查询能力继承正式和测试环境，来源保持只读。"].join("\n\n");
   if (configuration.dbhub)
     for (const target of configuration.dbhub)
       sections.push(

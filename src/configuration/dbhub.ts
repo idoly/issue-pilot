@@ -3,11 +3,12 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import type { mcpServices, serviceDeployments } from "../db/schema.ts";
 import { DBHUB_DATABASES, type DbHubTarget } from "../domain/contracts.ts";
-import { ApiError, choice, record, text } from "../http/input.ts";
+import { DomainError } from "../domain/errors.ts";
+import { choice, record, text } from "../domain/input.ts";
 
 export function parseDbHubTargets(value: unknown): DbHubTarget[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new ApiError(400, "invalid_dbhub_targets");
+  if (!Array.isArray(value)) throw new DomainError("invalid_dbhub_targets", "bad_request");
   const seen = new Set<string>();
   return value.map((raw) => {
     const input = record(raw);
@@ -18,11 +19,11 @@ export function parseDbHubTargets(value: unknown): DbHubTarget[] {
     );
     const host = text(input.host, "dbhub_host", 255);
     const port = input.port ?? DBHUB_DATABASES.find((database) => database.value === type)!.port;
-    if (/\s|[/\\\0@?#]/.test(host) || !Number.isInteger(port) || Number(port) < 1 || Number(port) > 65535) throw new ApiError(400, "invalid_dbhub_target");
-    if (typeof input.password !== "string" || !input.password.length || input.password.includes("\0")) throw new ApiError(400, "invalid_dbhub_password");
+    if (/\s|[/\\\0@?#]/.test(host) || !Number.isInteger(port) || Number(port) < 1 || Number(port) > 65535) throw new DomainError("invalid_dbhub_target", "bad_request");
+    if (typeof input.password !== "string" || !input.password.length || input.password.includes("\0")) throw new DomainError("invalid_dbhub_password", "bad_request");
     const target = { type, host, port: Number(port), username: text(input.username, "dbhub_username", 255), password: input.password, database: text(input.database, "dbhub_database", 255) };
     const identity = JSON.stringify([type, host, port, target.database]);
-    if (seen.has(identity)) throw new ApiError(400, "duplicate_dbhub_target");
+    if (seen.has(identity)) throw new DomainError("duplicate_dbhub_target", "bad_request");
     seen.add(identity);
     return target;
   });
@@ -60,7 +61,7 @@ export function dbHubConnections(deployments: readonly (typeof serviceDeployment
   const ids = new Set(explicit.map((row) => row.id));
   const names = new Set(explicit.map((row) => row.name));
   for (const row of connections) {
-    if (ids.has(row.id) || names.has(row.name)) throw new ApiError(409, "mcp_name_conflict");
+    if (ids.has(row.id) || names.has(row.name)) throw new DomainError("mcp_name_conflict", "conflict");
     ids.add(row.id);
     names.add(row.name);
   }

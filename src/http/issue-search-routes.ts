@@ -1,9 +1,8 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { WorkersAiError } from "../search/cloudflare.ts";
 import type { IssueSearchSettings } from "../search/contracts.ts";
-import { IssueSearchIndex, IssueSearchIndexRequired } from "../search/issue-index.ts";
+import { IssueSearchIndex } from "../search/issue-index.ts";
 import { ApiError, closedRecord, text } from "./input.ts";
-import { loadIssueSearchSettings } from "./issue-search-configuration.ts";
+import { loadIssueSearchSettings } from "../search/settings.ts";
 import { requireAdmin, requireCurrentUser, type ApiRouteContext } from "./route-context.ts";
 
 export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" | "database" | "stateRoot">, fetchEmbeddings: typeof fetch = fetch) {
@@ -48,9 +47,6 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
       await verify();
       return result;
     } catch (error) {
-      if (error instanceof ApiError) throw error;
-      if (error instanceof IssueSearchIndexRequired) throw new ApiError(409, error.message);
-      if (error instanceof WorkersAiError) throw new ApiError(error.message.endsWith("rate_limited") ? 429 : 502, error.message);
       if (controller.signal.aborted && error === controller.signal.reason) throw new ApiError(408, "issue_search_cancelled");
       throw error;
     } finally {

@@ -4,7 +4,7 @@ import { link, lstat, open, readdir, realpath, rename, stat, unlink, type FileHa
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { domainError } from "../domain/errors.ts";
+import { DomainError, domainError } from "../domain/errors.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { assertIssueRoot, issueRoot } from "./state.ts";
 
@@ -92,7 +92,19 @@ async function resolveWorkPath(stateRoot: string, issueKey: string, relative: st
   return target;
 }
 
-export async function listIssueWorkFiles(stateRoot: string, issueKey: string, relative = "", access: WorkFileAccess = {}): Promise<IssueWorkFile[]> {
+/** A path that vanished or crosses a symlink is the caller's file request, not a server fault; other failures keep their cause. */
+function workFileFailure(error: unknown): never {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  if ((error instanceof DomainError && code === "source_path_not_found") || code === "ENOENT" || code === "ENOTDIR") throw domainError("issue_file_not_found", { cause: error });
+  if (code === "ELOOP") throw domainError("invalid_issue_file_path", { cause: error });
+  throw error;
+}
+
+export function listIssueWorkFiles(stateRoot: string, issueKey: string, relative = "", access: WorkFileAccess = {}): Promise<IssueWorkFile[]> {
+  return listWorkFiles(stateRoot, issueKey, relative, access).catch(workFileFailure);
+}
+
+async function listWorkFiles(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess): Promise<IssueWorkFile[]> {
   const target = await resolveWorkPath(stateRoot, issueKey, relative, access);
   if (!(await lstat(target)).isDirectory()) throw domainError("issue_file_not_directory");
   const directory = await open(target, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -154,7 +166,11 @@ export async function listIssueWorkFiles(stateRoot: string, issueKey: string, re
   }
 }
 
-export async function openIssueWorkFile(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess = {}) {
+export function openIssueWorkFile(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess = {}) {
+  return openWorkFile(stateRoot, issueKey, relative, access).catch(workFileFailure);
+}
+
+async function openWorkFile(stateRoot: string, issueKey: string, relative: string, access: WorkFileAccess) {
   const target = await resolveWorkPath(stateRoot, issueKey, relative, access);
   const issueRoots = [
     issueRoot(stateRoot, issueKey),

@@ -1,4 +1,5 @@
 import { SerialQueue } from "../serial.ts";
+import { DomainError } from "../domain/errors.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { addAbortListener } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -30,14 +31,19 @@ type DmsConnectionConfiguration = Pick<CapabilityConfig<"dms">, "url" | "authori
 
 export type ConnectDmsMcp = (configured: DmsConnectionConfiguration, signal: AbortSignal) => Promise<DmsMcpSession>;
 
+/** Stable DMS MCP failures are upstream refusals; the message stays the code for tool results and diagnostics. */
+function dmsFailure(code: string, options?: ErrorOptions): DomainError {
+  return new DomainError(code, "upstream", options);
+}
+
 function operationSignal(signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(applicationParameters().dmsExecutionMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 function cancellationError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) return signal.reason.name === "TimeoutError" ? new Error("dms_mcp_timeout") : signal.reason;
-  return new Error("dms_mcp_aborted");
+  if (signal.reason instanceof Error) return signal.reason.name === "TimeoutError" ? dmsFailure("dms_mcp_timeout") : signal.reason;
+  return dmsFailure("dms_mcp_aborted");
 }
 
 async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, operation: (close: () => Promise<void>) => Promise<T>): Promise<T> {
@@ -52,7 +58,11 @@ async function withDmsSession<T>(session: Pick<DmsMcpSession, "close">, operatio
     } catch (cleanupError) {
       // An export may have already awaited this same close failure before replacing the working file.
       if (error === cleanupError) throw error;
-      throw new AggregateError([error, cleanupError], error instanceof Error ? error.message : "dms_mcp_operation_cleanup_failed");
+      const failure = new AggregateError([error, cleanupError], error instanceof Error ? error.message : "dms_mcp_operation_cleanup_failed");
+      // A stable owner failure keeps its code and category; the cleanup failure stays in the cause chain.
+      if (error instanceof DomainError) throw new DomainError(error.code, error.category, { cause: failure });
+      if (!(error instanceof Error)) throw dmsFailure(failure.message, { cause: failure });
+      throw failure;
     }
     throw error;
   }
@@ -72,10 +82,10 @@ function retryAfterMs(value: string | null): number | undefined {
 
 type DmsHttpFailure = { status: number; retryAfterMs: number | undefined };
 
-class DmsHttpError extends Error {
+class DmsHttpError extends DomainError {
   readonly retryAfterSeconds: number | undefined;
   constructor(failure: DmsHttpFailure) {
-    super(`dms_mcp_http_${failure.status}`);
+    super(`dms_mcp_http_${failure.status}`, "upstream");
     this.retryAfterSeconds = failure.retryAfterMs === undefined ? undefined : Math.ceil(failure.retryAfterMs / 1_000);
   }
 }
@@ -103,13 +113,13 @@ export class DmsOperationError extends Error {
   }
 }
 
-function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (failure: DmsHttpFailure) => void) {
+function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (failure: DmsHttpFailure) => void, request: typeof fetch) {
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const target = new URL(input instanceof Request ? input.url : input.toString());
     if (target.protocol !== "https:" || target.origin !== origin) throw new Error("invalid_dms_mcp_target");
     const callerSignal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
     const requestSignal = callerSignal ? AbortSignal.any([callerSignal, signal]) : signal;
-    const response = await fetch(input, { ...init, redirect: "error", signal: requestSignal });
+    const response = await request(input, { ...init, redirect: "error", signal: requestSignal });
     if (response.status >= 400 && response.status <= 599) {
       const failure = { status: response.status, retryAfterMs: response.status === 429 ? retryAfterMs(response.headers.get("retry-after")) : undefined };
       onHttpFailure(failure);
@@ -121,8 +131,14 @@ function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (fa
   };
 }
 
-export async function connectDmsMcp(configured: DmsConnectionConfiguration, signal: AbortSignal, firstHandshakeMs: number = limits.firstHandshakeMs): Promise<DmsMcpSession> {
+export async function connectDmsMcp(
+  configured: DmsConnectionConfiguration,
+  signal: AbortSignal,
+  firstHandshakeMs: number = limits.firstHandshakeMs,
+  request: typeof fetch = fetch,
+): Promise<DmsMcpSession> {
   const target = new URL(configured.url);
+  // A malformed stored target is local configuration drift, not an upstream refusal, so it stays unclassified.
   if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash) throw new Error("invalid_dms_mcp_target");
   const headers = { Authorization: configured.authorization };
   let connection: { client: Client; closeTransport: () => Promise<void> } | undefined;
@@ -133,9 +149,14 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
     const attemptSignal = AbortSignal.any([signal, handshakeController.signal]);
     let httpFailure: DmsHttpFailure | undefined, backoff: number | undefined;
     const transport = new SSEClientTransport(target, {
-      fetch: sameOriginFetch(target.origin, attemptSignal, (failure) => {
-        httpFailure = failure;
-      }),
+      fetch: sameOriginFetch(
+        target.origin,
+        attemptSignal,
+        (failure) => {
+          httpFailure = failure;
+        },
+        request,
+      ),
       requestInit: { headers },
     });
     const originalClose = transport.close.bind(transport);
@@ -161,7 +182,7 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       try {
         await closeTransport();
       } catch (cleanupError) {
-        throw new Error("dms_mcp_connection_cleanup_failed", { cause: new AggregateError([error, cleanupError]) });
+        throw dmsFailure("dms_mcp_connection_cleanup_failed", { cause: new AggregateError([error, cleanupError]) });
       }
       if (signal.aborted) throw cancellationError(signal);
       if (httpFailure) {
@@ -171,8 +192,8 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
         } else throw new DmsHttpError(httpFailure);
       } else {
         if (attempt === 0 && attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") continue;
-        if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw new Error("dms_mcp_timeout");
-        throw new Error("dms_mcp_connection_failed");
+        if (attemptSignal.aborted && attemptSignal.reason instanceof Error && attemptSignal.reason.name === "TimeoutError") throw dmsFailure("dms_mcp_timeout");
+        throw dmsFailure("dms_mcp_connection_failed");
       }
     } finally {
       cancellation?.[Symbol.dispose]();
@@ -186,7 +207,7 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
       }
     }
   }
-  if (!connection) throw new Error("dms_mcp_timeout");
+  if (!connection) throw dmsFailure("dms_mcp_timeout");
   const { client: connectedClient, closeTransport } = connection;
   return {
     async listTools(requestSignal) {
@@ -201,9 +222,9 @@ export async function connectDmsMcp(configured: DmsConnectionConfiguration, sign
         });
         tools.push(...(result.tools as DmsMcpTool[]));
         // A remote server may page forever; keep discovery within the same tool budget as other MCP clients.
-        if (tools.length > issuePilotConfig.limits.capability.mcp.tools) throw new Error("dms_mcp_too_many_tools");
+        if (tools.length > issuePilotConfig.limits.capability.mcp.tools) throw dmsFailure("dms_mcp_too_many_tools");
         cursor = result.nextCursor;
-        if (cursor && (cursor.length > 1024 || cursors.has(cursor))) throw new Error("dms_mcp_invalid_cursor");
+        if (cursor && (cursor.length > 1024 || cursors.has(cursor))) throw dmsFailure("dms_mcp_invalid_cursor");
         if (cursor) cursors.add(cursor);
       } while (cursor);
       return tools;
@@ -262,16 +283,16 @@ function executeScriptArguments(input: CapabilityInputs["dms"], databaseId: stri
 }
 
 function mcpTextRecords(result: unknown, failureCode: string, invalidCode: string): Array<Record<string, unknown>> {
-  if (!result || typeof result !== "object" || ("isError" in result && result.isError === true) || !("content" in result) || !Array.isArray(result.content)) throw new Error(failureCode);
+  if (!result || typeof result !== "object" || ("isError" in result && result.isError === true) || !("content" in result) || !Array.isArray(result.content)) throw dmsFailure(failureCode);
   return result.content.flatMap((item) => {
     if (!item || typeof item !== "object" || !("type" in item) || item.type !== "text" || !("text" in item) || typeof item.text !== "string") return [];
     let value: unknown;
     try {
       value = JSON.parse(item.text);
     } catch {
-      throw new Error(invalidCode);
+      throw dmsFailure(invalidCode);
     }
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(invalidCode);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw dmsFailure(invalidCode);
     return [value as Record<string, unknown>];
   });
 }
@@ -296,11 +317,11 @@ export async function resolveDmsScope(
     const tools = await session.listTools(boundedSignal);
     const instanceTool = uniqueTool(tools, "listInstances", isReadOnlyTool);
     const databaseTool = uniqueTool(tools, "getDatabase", isReadOnlyTool);
-    if (!instanceTool || !databaseTool) throw new Error("dms_mcp_scope_resolve_unavailable");
+    if (!instanceTool || !databaseTool) throw dmsFailure("dms_mcp_scope_resolve_unavailable");
     const normalizedAlias = instanceAlias.trim();
     const instanceResult = await session.callTool(instanceTool.name, { search_key: normalizedAlias, db_type: null, env_type: null }, boundedSignal);
     const matchingInstances = mcpTextRecords(instanceResult, "dms_mcp_scope_resolve_failed", "dms_mcp_scope_resolve_invalid_response").filter((instance) => instance.InstanceAlias === normalizedAlias);
-    if (matchingInstances.length !== 1) throw new Error("dms_mcp_scope_resolve_invalid_response");
+    if (matchingInstances.length !== 1) throw dmsFailure("dms_mcp_scope_resolve_invalid_response");
     const instance = matchingInstances[0]!;
     const instanceId =
       typeof instance.InstanceId === "number" && Number.isSafeInteger(instance.InstanceId) ? String(instance.InstanceId) : typeof instance.InstanceId === "string" ? instance.InstanceId.trim() : "";
@@ -308,18 +329,18 @@ export async function resolveDmsScope(
     const instancePort = typeof instance.Port === "number" && Number.isSafeInteger(instance.Port) ? String(instance.Port) : typeof instance.Port === "string" ? instance.Port.trim() : "";
     const instanceType = typeof instance.InstanceType === "string" ? instance.InstanceType.trim() : "";
     const environment = typeof instance.EnvType === "string" ? instance.EnvType.trim() : "";
-    if (!instanceId || !instanceHost || !instancePort || !instanceType || !environment) throw new Error("dms_mcp_scope_resolve_invalid_response");
+    if (!instanceId || !instanceHost || !instancePort || !instanceType || !environment) throw dmsFailure("dms_mcp_scope_resolve_invalid_response");
     const normalizedSchema = schemaName.trim();
     const databaseResult = await session.callTool(databaseTool.name, { host: instanceHost, port: instancePort, schema_name: normalizedSchema, sid: null }, boundedSignal);
     const databases = mcpTextRecords(databaseResult, "dms_mcp_scope_resolve_failed", "dms_mcp_scope_resolve_invalid_response");
-    if (databases.length !== 1) throw new Error("dms_mcp_scope_resolve_invalid_response");
+    if (databases.length !== 1) throw dmsFailure("dms_mcp_scope_resolve_invalid_response");
     const database = databases[0]!;
     const databaseId =
       typeof database.DatabaseId === "number" && Number.isSafeInteger(database.DatabaseId) ? String(database.DatabaseId) : typeof database.DatabaseId === "string" ? database.DatabaseId.trim() : "";
     const resolvedInstanceId =
       typeof database.InstanceId === "number" && Number.isSafeInteger(database.InstanceId) ? String(database.InstanceId) : typeof database.InstanceId === "string" ? database.InstanceId.trim() : "";
     const resolvedSchema = typeof database.SchemaName === "string" ? database.SchemaName.trim() : "";
-    if (!databaseId || resolvedInstanceId !== instanceId || resolvedSchema !== normalizedSchema) throw new Error("dms_mcp_scope_resolve_invalid_response");
+    if (!databaseId || resolvedInstanceId !== instanceId || resolvedSchema !== normalizedSchema) throw dmsFailure("dms_mcp_scope_resolve_invalid_response");
     return { instanceId, instanceHost, instancePort, databaseId };
   });
 }
@@ -392,13 +413,13 @@ export async function queryDms(
       const tool = uniqueTool(await phase("discovery", () => session.listTools(boundedSignal)), "executeScript", isReadOnlyScriptTool);
       if (!tool) {
         failedPhase = "discovery";
-        throw new Error("dms_mcp_execute_script_unavailable");
+        throw dmsFailure("dms_mcp_execute_script_unavailable");
       }
       const result = await phase("execute", async () => {
         // This records a dispatch attempt, not proof the server received or executed SQL.
         sqlDispatchAttempted = true;
         const response = await session.callTool(tool.name, args, boundedSignal);
-        if (response && typeof response === "object" && "isError" in response && response.isError === true) throw new Error("dms_mcp_tool_failed");
+        if (response && typeof response === "object" && "isError" in response && response.isError === true) throw dmsFailure("dms_mcp_tool_failed");
         boundedSignal.throwIfAborted();
         return response;
       });
@@ -421,7 +442,7 @@ export async function queryDms(
         );
       }
       // Inline results share the capability result budget; larger result sets must use export.
-      if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes) throw new Error("dms_mcp_result_too_large_use_export");
+      if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes) throw dmsFailure("dms_mcp_result_too_large_use_export");
       return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name, instanceAlias: database.instanceAlias, schema: input.schema });
     });
   } catch (error) {
@@ -434,7 +455,7 @@ export async function queryDms(
         sqlDispatchAttempted,
         ...(httpError?.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: httpError.retryAfterSeconds }),
       },
-      boundedSignal.aborted ? new Error("dms_mcp_timeout", { cause: error }) : error,
+      boundedSignal.aborted ? dmsFailure("dms_mcp_timeout", { cause: error }) : error,
     );
   }
 }
@@ -456,7 +477,7 @@ export class DmsQueryRound {
     const bounded = operationSignal(cancellation);
     return this.queue.run(async () => {
       cancellation.throwIfAborted();
-      if (bounded.aborted) throw new Error("dms_mcp_timeout");
+      if (bounded.aborted) throw dmsFailure("dms_mcp_timeout");
       const key = JSON.stringify([configured.url, configured.authorization]);
       const borrow: ConnectDmsMcp = async (_configuration, requestSignal) => {
         requestSignal.throwIfAborted();
@@ -497,7 +518,7 @@ export class DmsQueryRound {
             await entry.session.close();
             this.connections.delete(key);
           } catch (cleanup) {
-            throw new Error("dms_mcp_operation_cleanup_failed", { cause: new AggregateError([error, cleanup]) });
+            throw dmsFailure("dms_mcp_operation_cleanup_failed", { cause: new AggregateError([error, cleanup]) });
           }
         }
         throw error;
@@ -518,7 +539,7 @@ export class DmsQueryRound {
           failures.push(error);
         }
       }
-      if (failures.length) throw new Error("dms_mcp_connection_cleanup_failed", { cause: new AggregateError(failures) });
+      if (failures.length) throw dmsFailure("dms_mcp_connection_cleanup_failed", { cause: new AggregateError(failures) });
     })();
     return this.closing;
   }

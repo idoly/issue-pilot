@@ -6,6 +6,36 @@ export function canUseIssueWorkMode(role: UserRole, workMode: IssueWorkMode): bo
   return role === "developer" || issueScopeForWorkMode(workMode).repositoryAccess !== "write";
 }
 
+/** Role and isAdmin are independent; these predicates are the one definition the server enforces and the Web mirrors. */
+export interface AccessHolder {
+  role: UserRole;
+  isAdmin?: boolean;
+}
+
+/** Services, repositories, DMS scope resolution and the user directory follow the developer gate. */
+export function canManageDevelopmentConfiguration(user: AccessHolder | null | undefined): boolean {
+  return user?.role === "developer";
+}
+
+/** Shared credentials, application parameters, MCP services and administrator accounts require isAdmin. */
+export function hasAdministratorAccess(user: Pick<AccessHolder, "isAdmin"> | null | undefined): boolean {
+  return user?.isAdmin === true;
+}
+
+/** Changing an administrator account, or granting administration, additionally requires isAdmin. */
+export function managedUserChangeRequiresAdministrator(target: Pick<AccessHolder, "isAdmin"> | null | undefined, grantsAdministrator = false): boolean {
+  return target?.isAdmin === true || grantsAdministrator;
+}
+
+export function canEditManagedUser(actor: AccessHolder | null | undefined, target?: Pick<AccessHolder, "isAdmin">, grantsAdministrator = false): boolean {
+  return canManageDevelopmentConfiguration(actor) && (!managedUserChangeRequiresAdministrator(target, grantsAdministrator) || hasAdministratorAccess(actor));
+}
+
+/** Only developers own a personal Git SSH identity; other roles never push code. */
+export function hasPersonalGitIdentity(role: UserRole | undefined): boolean {
+  return role === "developer";
+}
+
 export const ISSUE_KEY_PATTERN = "^ISSUE-[0-9]{8}-[0-9]{3,}$";
 const ISSUE_KEY = new RegExp(ISSUE_KEY_PATTERN, "i");
 
@@ -22,6 +52,11 @@ export function normalizeIssueKey(value: string): string {
   const normalized = parseIssueKey(value.trim());
   if (!normalized) throw new Error("invalid_issue_key");
   return normalized;
+}
+
+/** Name of the read-only entry a related Issue occupies inside an Issue root's runtime view and work-file paths. */
+export function relatedIssueEntryName(issueKey: string): string {
+  return `.related-${issueKey.toLowerCase()}`;
 }
 
 export const MCP_TRANSPORTS = ["streamable_http", "sse", "stdio"] as const;
@@ -229,3 +264,88 @@ export function isWorkspaceBusy(status: WorkspaceStatus): boolean {
 
 export const ISSUE_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 export type IssuePriority = (typeof ISSUE_PRIORITIES)[number];
+
+/** Queued/executing Agent work or an in-flight preparation; reservations and restores refuse such Issues. */
+export function isIssueActive(issue: { agentRunning: boolean; workspaceStatus: WorkspaceStatus }): boolean {
+  return issue.agentRunning || isWorkspaceBusy(issue.workspaceStatus);
+}
+
+/**
+ * Repository access belongs to the environment kind: every work mode of one kind shares it, which is
+ * checked here when the module loads. ISSUE_SCOPE_BY_WORK_MODE therefore stays the single table for
+ * work-mode authorization, preparation mode, Agent code tools and the developer-owner rule.
+ */
+const REPOSITORY_ACCESS_BY_ENVIRONMENT = Object.fromEntries(
+  ENVIRONMENT_KINDS.map((kind) => {
+    const accesses = new Set(ISSUE_WORK_MODES.map((workMode) => ISSUE_SCOPE_BY_WORK_MODE[workMode]).flatMap((scope) => (scope.environmentKind === kind ? [scope.repositoryAccess] : [])));
+    if (accesses.size !== 1) throw new Error("issue_scope_mapping_invalid");
+    return [kind, [...accesses][0]!];
+  }),
+) as Record<EnvironmentKind, "read" | "write">;
+
+/** Issues in this environment kind use isolated writable worktrees; the others read shared snapshots. */
+export function canModifyIssueCode(environmentKind: EnvironmentKind): boolean {
+  return REPOSITORY_ACCESS_BY_ENVIRONMENT[environmentKind] === "write";
+}
+
+/** Code-writing Issues commit and push with the credential owner's personal Git identity, so that owner must be a developer. Callers still require an active owner. */
+export function requiresDeveloperOwner(environmentKind: EnvironmentKind): boolean {
+  return canModifyIssueCode(environmentKind);
+}
+
+/** The development environment derives baselines from production and has no capability targets of its own. Identify it by kind, never by its configurable key. */
+export function isDevelopmentEnvironment(environmentKind: EnvironmentKind | undefined): boolean {
+  return environmentKind === "dev";
+}
+
+export interface IssueScopeState {
+  environmentKind: EnvironmentKind;
+  issueType: IssueType;
+  status: IssueStatus;
+  workspaceStatus: WorkspaceStatus;
+}
+
+const CODE_TRANSITION_STATUSES: readonly IssueStatus[] = ["open", "pending"];
+
+/**
+ * Eligibility of a code-changing scope transition, shared by the planner and the lifecycle rechecks after waits.
+ * Returns the refusal code, or null when the Issue may be converted/migrated toward targetEnvironmentKind.
+ */
+export function scopeTransitionRefusal(
+  action: "convert_to_development" | "migrate_development",
+  current: IssueScopeState,
+  targetEnvironmentKind: EnvironmentKind | undefined,
+): "issue_not_convertible_to_development" | "issue_not_migratable_between_development_scopes" | null {
+  const settled = CODE_TRANSITION_STATUSES.includes(current.status) && current.workspaceStatus === "ready";
+  const targetWrites = targetEnvironmentKind !== undefined && canModifyIssueCode(targetEnvironmentKind);
+  if (action === "convert_to_development")
+    return settled && targetWrites && !canModifyIssueCode(current.environmentKind) && current.issueType === "smart_analysis" ? null : "issue_not_convertible_to_development";
+  return settled && targetWrites && canModifyIssueCode(current.environmentKind) && issueWorkMode(current.environmentKind, current.issueType) !== undefined
+    ? null
+    : "issue_not_migratable_between_development_scopes";
+}
+
+/**
+ * Whether any scope transition can be planned now. Read-only Issues can always be rebound to another
+ * read-only scope (including resolved ones); code-changing transitions need a settled ready workspace.
+ * Active work conflicts with the transition's reservation.
+ */
+export function canChangeIssueScope(issue: Omit<IssueScopeState, "issueType"> & { agentRunning: boolean }): boolean {
+  if (isIssueActive(issue)) return false;
+  return !canModifyIssueCode(issue.environmentKind) || (CODE_TRANSITION_STATUSES.includes(issue.status) && issue.workspaceStatus === "ready");
+}
+
+/** Related Issues change only on an unresolved Issue whose prepared runtime view can be rebuilt. Returns the refusal code or null. */
+export function relatedIssueUpdateRefusal(issue: {
+  status: IssueStatus;
+  workspace: { status: WorkspaceStatus; runtimeReady: boolean } | undefined;
+}): "related_issue_update_not_allowed" | "related_issue_context_unavailable" | null {
+  if (issue.status === "resolved") return "related_issue_update_not_allowed";
+  if (!issue.workspace || !["ready", "stopped"].includes(issue.workspace.status) || !issue.workspace.runtimeReady) return "related_issue_context_unavailable";
+  return null;
+}
+
+/** Session reset requires a developer actor and an unresolved Issue without active work (the reset reservation refuses it). */
+export function canResetIssueSession(input: { actorRole: UserRole; status: IssueStatus; agentRunning: boolean }): boolean {
+  return input.actorRole === "developer" && input.status !== "resolved" && !input.agentRunning;
+}

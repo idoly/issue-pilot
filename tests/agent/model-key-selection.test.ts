@@ -1,11 +1,10 @@
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createBareRemote } from "../helpers/git.ts";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
@@ -26,8 +25,6 @@ import {
   userCredentials,
 } from "../../src/db/schema.ts";
 
-const git = (args: string[]) => promisify(execFile)("git", args);
-
 test("owners with a personal model group use it entirely; everyone else uses the shared model and key", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-model-key-"));
   const stateRoot = path.join(root, "state");
@@ -36,13 +33,7 @@ test("owners with a personal model group use it entirely; everyone else uses the
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
     const [production] = await database.db.select().from(environments).where(eq(environments.kind, "prod")).limit(1);
     const [service] = await database.db.insert(services).values({ key: "keys", name: "Keys" }).returning();
-    const source = path.join(root, "source"),
-      remote = path.join(root, "remote.git");
-    await git(["init", "-b", "prod", source]);
-    await writeFile(path.join(source, "README.md"), "baseline\n");
-    await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
-    await git(["clone", "--bare", source, remote]);
+    const { remote } = await createBareRemote(root, { branch: "prod" });
     await registerTestRepositories(database.db, [remote]);
     const [repository] = await database.db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "keys", url: remote }).returning();
     const [deployment] = await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: production!.id, config: {} }).returning();

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { waitFor } from "../helpers/async.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,8 @@ import { after, before, test } from "node:test";
 import { claimIssueRoot } from "../../src/workspace/state.ts";
 
 import { applicationParameterBounds } from "../../src/configuration/parameters.ts";
-import { AgentEngine, type AgentReservation } from "../../src/agent/engine.ts";
+import type { AgentReservation } from "../../src/agent/contracts.ts";
+import { AgentEngine } from "../../src/agent/engine.ts";
 import { repositoryPreparationMode } from "../../src/workspace/project.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
@@ -20,16 +22,6 @@ before(async () => {
 after(async () => {
   await rm(unusedStateRoot, { recursive: true, force: true });
 });
-
-async function waitFor(check: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (check()) return;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  throw new Error("condition_not_met");
-}
 
 test("bounds concurrent Issue rounds while retaining reservations and draining queued work on close", async () => {
   const published: RunEvent[] = [];

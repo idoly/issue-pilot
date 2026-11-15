@@ -5,7 +5,13 @@ import { compile } from "@earendil-works/pi-schema";
 import { capabilityInputSchemas, capabilityToolInputSchema } from "../../src/capabilities/registry.ts";
 import type { AgentSessionContext } from "../../src/agent/context.ts";
 import { createCapabilityTools } from "../../src/agent/service-query-tool.ts";
+import { connectDmsMcp, queryDms, type DmsQueryRound } from "../../src/capabilities/dms.ts";
 import type { DeploymentConfig } from "../../src/domain/contracts.ts";
+
+/** Runs the default DMS query path against a test upstream instead of the network. */
+function dmsThrough(upstream: typeof fetch): Pick<DmsQueryRound, "query"> {
+  return { query: (input, configured, signal, workFiles) => queryDms(input, configured, signal, (target, connection) => connectDmsMcp(target, connection, undefined, upstream), workFiles) };
+}
 const context: AgentSessionContext = {
   issueKey: "ISSUE-20260808-001",
   serviceKey: "orders",
@@ -112,29 +118,24 @@ test("rejects retired adapters and undeclared targets before invoking external s
   assert.deepEqual(createCapabilityTools({ ...context, capabilities: [] }, {}), []);
 });
 test("Pi schema coercion accepts valid DMS input without changing the transcript or bypassing read-only checks", async () => {
-  const originalFetch = globalThis.fetch;
   let requests = 0;
-  globalThis.fetch = async () => {
+  const upstream: typeof fetch = async () => {
     requests++;
     return new Response("fixture rate limit", { status: 429, headers: { "retry-after": "120" } });
   };
-  try {
-    const [tool] = createCapabilityTools({ ...context, capabilities: ["dms"] }, config);
-    const raw = { environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", logic: "false" };
-    const normalized = validateToolArguments(tool!, { type: "toolCall", id: "coercion", name: "service_query", arguments: raw });
-    assert.equal(normalized.logic, false);
-    assert.equal(raw.logic, "false");
-    const optionalNull = validateToolArguments(tool!, { type: "toolCall", id: "null", name: "service_query", arguments: { ...raw, logic: null } });
-    assert.equal(Object.hasOwn(optionalNull, "logic"), false);
-    assert.throws(() => validateToolArguments(tool!, { type: "toolCall", id: "unknown", name: "service_query", arguments: { ...raw, export: null } }), /unknown field/);
-    await assert.rejects(call(tool!, normalized), /dms_mcp_http_429/);
-    assert.equal(requests, 1);
-    const write = validateToolArguments(tool!, { type: "toolCall", id: "write", name: "service_query", arguments: { ...raw, script: "DELETE FROM orders" } });
-    await assert.rejects(call(tool!, write), /database_query_must_be_read_only/);
-    assert.equal(requests, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const [tool] = createCapabilityTools({ ...context, capabilities: ["dms"] }, config, { dms: dmsThrough(upstream) });
+  const raw = { environment: "prod", service: "orders", capability: "dms", schema: "orders", script: "SELECT 1", logic: "false" };
+  const normalized = validateToolArguments(tool!, { type: "toolCall", id: "coercion", name: "service_query", arguments: raw });
+  assert.equal(normalized.logic, false);
+  assert.equal(raw.logic, "false");
+  const optionalNull = validateToolArguments(tool!, { type: "toolCall", id: "null", name: "service_query", arguments: { ...raw, logic: null } });
+  assert.equal(Object.hasOwn(optionalNull, "logic"), false);
+  assert.throws(() => validateToolArguments(tool!, { type: "toolCall", id: "unknown", name: "service_query", arguments: { ...raw, export: null } }), /unknown field/);
+  await assert.rejects(call(tool!, normalized), /dms_mcp_http_429/);
+  assert.equal(requests, 1);
+  const write = validateToolArguments(tool!, { type: "toolCall", id: "write", name: "service_query", arguments: { ...raw, script: "DELETE FROM orders" } });
+  await assert.rejects(call(tool!, write), /database_query_must_be_read_only/);
+  assert.equal(requests, 1);
 });
 
 test("SDK-coerced arguments still cannot widen service scope through a mutable tool schema", async () => {
@@ -166,29 +167,24 @@ test("execute validation keeps an independent schema snapshot after a Pi hook we
 });
 
 test("returns safe DMS diagnostics to the agent without SDK details or credentials", async () => {
-  const originalFetch = globalThis.fetch;
   let requests = 0;
-  globalThis.fetch = async () => {
+  const upstream: typeof fetch = async () => {
     requests++;
     return new Response("private upstream detail", { status: 429, headers: { "retry-after": "120" } });
   };
-  try {
-    const [tool] = createCapabilityTools(context, config);
-    await assert.rejects(call(tool!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), (error) => {
-      assert(error instanceof Error);
-      const result = JSON.parse(error.message);
-      assert.equal(result.error, "dms_mcp_http_429");
-      assert.equal(result.diagnostics.phase, "connect");
-      assert.equal(result.diagnostics.retryAfterSeconds, 120);
-      assert.equal(result.diagnostics.sqlDispatchAttempted, false);
-      assert.doesNotMatch(error.message, /private|example|Bearer|SELECT/);
-      assert.equal(error.cause, undefined);
-      return true;
-    });
-    assert.equal(requests, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const [tool] = createCapabilityTools(context, config, { dms: dmsThrough(upstream) });
+  await assert.rejects(call(tool!, { service: "orders", capability: "dms", schema: "orders", script: "SELECT 1" }), (error) => {
+    assert(error instanceof Error);
+    const result = JSON.parse(error.message);
+    assert.equal(result.error, "dms_mcp_http_429");
+    assert.equal(result.diagnostics.phase, "connect");
+    assert.equal(result.diagnostics.retryAfterSeconds, 120);
+    assert.equal(result.diagnostics.sqlDispatchAttempted, false);
+    assert.doesNotMatch(error.message, /private|example|Bearer|SELECT/);
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  assert.equal(requests, 1);
 });
 
 test("a missing credential for one capability does not block another capability on the same service", async () => {

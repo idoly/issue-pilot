@@ -53,6 +53,10 @@ test("negotiates precompressed assets without changing content, cache policy or 
     assert.equal(fallback.headers["content-encoding"], undefined);
     assert.match(String(fallback.headers.vary), /accept-encoding/i);
     assert.equal(fallback.headers["cache-control"], "public, max-age=3600");
+    // A stable public name that merely looks hashed (an all-lowercase 8-character segment) is not pinned for a year.
+    await writeFile(path.join(root, "assets", "interface-licenses.txt"), "licenses");
+    const licenses = await app.inject({ url: "/assets/interface-licenses.txt" });
+    assert.equal(licenses.headers["cache-control"], "public, max-age=3600");
     const index = await app.inject({ url: "/", headers: { "accept-encoding": "br" } });
     assert.equal(brotliDecompressSync(index.rawPayload).toString(), html);
     assert.match(String(index.headers["cache-control"]), /no-store/);

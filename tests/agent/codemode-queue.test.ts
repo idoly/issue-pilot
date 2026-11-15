@@ -3,18 +3,10 @@ import { setImmediate as turn } from "node:timers/promises";
 import { test } from "node:test";
 import { CodemodeQueue } from "../../src/agent/codemode-extension.ts";
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((yes) => {
-    resolve = yes;
-  });
-  return { promise, resolve };
-}
-
 test("Codemode admission runs scripts in FIFO order and recovers after a failure", async () => {
   const queue = new CodemodeQueue(1_000, 4),
-    first = deferred(),
-    second = deferred(),
+    first = Promise.withResolvers<void>(),
+    second = Promise.withResolvers<void>(),
     order: number[] = [];
   const a = queue.run(async () => {
     order.push(1);
@@ -50,7 +42,7 @@ test("Codemode admission runs scripts in FIFO order and recovers after a failure
 
 test("cancels a waiting Codemode script promptly and frees its queue entry", async () => {
   const queue = new CodemodeQueue(1_000, 1),
-    held = deferred(),
+    held = Promise.withResolvers<void>(),
     controller = new AbortController(),
     reason = new Error("cancelled_while_waiting");
   let ran = false;
@@ -75,7 +67,7 @@ test("cancels a waiting Codemode script promptly and frees its queue entry", asy
 
 test("times out queued Codemode work without running it later", async () => {
   const queue = new CodemodeQueue(20, 1),
-    held = deferred();
+    held = Promise.withResolvers<void>();
   let ran = false;
   const active = queue.run(() => held.promise);
   try {
@@ -98,7 +90,7 @@ test("times out queued Codemode work without running it later", async () => {
 
 test("bounds Codemode waiters and leaves accepted jobs intact", async () => {
   const queue = new CodemodeQueue(1_000, 1),
-    held = deferred();
+    held = Promise.withResolvers<void>();
   const active = queue.run(() => held.promise),
     accepted = queue.run(async () => "accepted");
   try {
@@ -117,7 +109,7 @@ test("bounds Codemode waiters and leaves accepted jobs intact", async () => {
 
 test("keeps the active slot until the tool finishes cancellation cleanup", async () => {
   const queue = new CodemodeQueue(1_000, 2),
-    held = deferred(),
+    held = Promise.withResolvers<void>(),
     controller = new AbortController();
   let nextStarted = false;
   const active = queue.run(() => held.promise, controller.signal);

@@ -1,7 +1,7 @@
 import { OperationError } from "../operation-error.ts";
 import path from "node:path";
-import { DrizzleQueryError } from "drizzle-orm";
 import { errorChain, errorDiagnostic, hasErrorCode } from "../diagnostics.ts";
+import { constraintFailure } from "../db/constraints.ts";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 
@@ -9,7 +9,8 @@ import { applicationConfig } from "../config.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureGlobalAgentConfiguration } from "../configuration/agent.ts";
 import { installApplicationParameters, loadApplicationParameterState } from "../configuration/parameters.ts";
-import { AgentEngine, type AgentController } from "../agent/engine.ts";
+import { AgentEngine } from "../agent/engine.ts";
+import type { AgentController } from "../agent/contracts.ts";
 import { AgentEventBus } from "../agent/events.ts";
 import { openApplicationDatabase } from "../db/bootstrap.ts";
 import type { DatabaseConnection } from "../db/client.ts";
@@ -17,12 +18,12 @@ import { createPiModelRuntime, PiAgentModelCatalog, type AgentModelCatalog } fro
 import { SerialQueue } from "../serial.ts";
 import { WorkspaceLifecycleManager, workspaceLifecyclePolicy, type WorkspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
-import { ApplicationStateLease } from "../workspace/state-lease.ts";
+import { ApplicationStateLease } from "../state-lease.ts";
 import { SourceBrowser } from "../workspace/source-browser.ts";
 import { registerAgentRoutes } from "./agent-routes.ts";
 import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
-import { DomainError } from "../domain/errors.ts";
+import { DomainError, OPERATIONAL_FAILURE_CODES } from "../domain/errors.ts";
 import { ApiError } from "./input.ts";
 import { registerDingtalkRoutes } from "./dingtalk-routes.ts";
 import type { McpConnector } from "../mcp/client.ts";
@@ -33,15 +34,19 @@ import { registerApplicationMcp } from "../mcp/server.ts";
 import { registerMcpRoutes } from "./mcp-routes.ts";
 import { registerCapabilityRoutes } from "./capability-routes.ts";
 import { registerRepositoryRoutes } from "./repository-routes.ts";
-import { registerUserRoutes } from "./user-routes.ts";
+import { registerUserRoutes, type IdentityMode } from "./user-routes.ts";
 import { assertWebBuild, registerWebRoutes } from "./web-routes.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
-export type { AgentController } from "../agent/engine.ts";
+export type { AgentController } from "../agent/contracts.ts";
 
 export interface ApiOptions {
   dingtalkConnector?: McpConnector;
   issueSearchFetch?: typeof fetch;
+  /** Test seam for the shared sandbox network sync that follows a committed parameter save. */
+  applyIssueSandboxNetwork?: () => Promise<void>;
+  /** Clock for Issue key dates only; defaults to the wall clock. */
+  now?: () => Date;
   databaseFile?: string;
   stateRoot?: string;
   engine?: AgentController;
@@ -52,11 +57,14 @@ export interface ApiOptions {
   workspacePolicy?: WorkspaceLifecyclePolicy;
   stateLease?: Pick<ApplicationStateLease, "start" | "close">;
   webRoot?: string;
+  /** Overrides the root http.identity mode; tests use it instead of mutating frozen configuration. */
+  identity?: IdentityMode;
 }
 
 interface ShutdownTarget {
-  once(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  on(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
   removeListener(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  exitCode?: number | string | null | undefined;
 }
 
 export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTarget = process): () => void {
@@ -71,6 +79,8 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
       .close()
       .finally(() => clearTimeout(force))
       .catch((error) => {
+        // The process stops either way; a failed cleanup must not look like a clean stop to the host runner.
+        target.exitCode = 1;
         try {
           app.log.error(errorDiagnostic(error));
         } catch {
@@ -78,8 +88,10 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
         }
       });
   };
-  target.once("SIGINT", shutdown);
-  target.once("SIGTERM", shutdown);
+  // Keep listening while closing: a repeated stop signal must not fall through to Node's default
+  // handler and kill the process before the engine, database and lease are released.
+  target.on("SIGINT", shutdown);
+  target.on("SIGTERM", shutdown);
   return () => {
     target.removeListener("SIGINT", shutdown);
     target.removeListener("SIGTERM", shutdown);
@@ -139,7 +151,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         stateRoot,
         (event) => events.publish(event),
         (error) => app.log.error(errorDiagnostic(error)),
-        sharedModelRuntime(),
+        undefined,
         parameters.maxConcurrentIssues,
       );
     const runScopeExclusive = <T>(operation: () => Promise<T>): Promise<T> => scopeQueue.run(operation);
@@ -170,37 +182,21 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         return reply.code(500).send({ error: operationError.message, outcome: operationError.outcome });
       }
       if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
-      if (error instanceof DomainError) return reply.code(error.statusCode).send({ error: error.code });
-      // Known failure codes keep their status; match exact codes across the chain instead of substrings.
       // A rollback or cleanup failure dominates the constraint error wrapped in its AggregateError: the state was not
       // cleanly settled, so reporting a retryable conflict (or keeping the failure out of the log) would mislead.
-      for (const operationalError of [
-        "attachment_staging_cleanup_failed",
-        "attachment_read_cleanup_failed",
-        "dingtalk_connection_close_failed",
-        "issue_root_missing",
-        "invalid_issue_root",
-        "issue_layout_migration_required",
-        "issue_workspace_missing",
-        "issue_service_not_found",
-        "issue_environment_not_found",
-        "agent_session_file_incomplete",
-        "agent_session_file_missing",
-      ]) {
-        if (hasErrorCode(error, operationalError)) {
-          app.log.error(errorDiagnostic(error));
-          return reply.code(500).send({ error: operationalError });
+      if (!(error instanceof DomainError))
+        for (const operationalError of OPERATIONAL_FAILURE_CODES) {
+          if (hasErrorCode(error, operationalError)) {
+            app.log.error(errorDiagnostic(error));
+            return reply.code(500).send({ error: operationalError });
+          }
         }
+      // Owners declare categories; SQLite constraint failures are translated once at the database boundary.
+      const failure = error instanceof DomainError ? error : constraintFailure(error);
+      if (failure) {
+        if (failure.statusCode >= 500) app.log.error(errorDiagnostic(error));
+        return reply.code(failure.statusCode).send({ error: failure.code });
       }
-      for (const conflict of ["issue_deployment_required", "deployment_is_used_by_issues", "issue_resolution_state_invalid", "unmanaged_issue_state"]) {
-        if (hasErrorCode(error, conflict)) return reply.code(409).send({ error: conflict });
-      }
-      const errorMessages = errorChain(error)
-        .filter((cause) => !(cause instanceof DrizzleQueryError))
-        .map((cause) => (cause instanceof Error ? cause.message : String(cause)))
-        .join("\n");
-      if (/UNIQUE constraint failed/i.test(errorMessages)) return reply.code(409).send({ error: "conflict" });
-      if (/FOREIGN KEY constraint failed/i.test(errorMessages)) return reply.code(409).send({ error: "resource_in_use" });
       app.log.error(errorDiagnostic(error));
       return reply.code(500).send({ error: "internal_error" });
     });
@@ -218,15 +214,24 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);
     const scopeTransitions = new IssueScopeTransitionManager(database.db, engine, workspaces);
     const routeContext = { app, database, engine, stateRoot, modelCatalog, events, workspaces, scopeTransitions, sourceBrowser, runScopeExclusive };
-    app.get("/health", async () => ({ ok: true }));
-    registerUserRoutes(routeContext);
+    // Liveness plus a lock-free probe of the open database connection; it does not check models or external services.
+    app.get("/health", async (_request, reply) => {
+      try {
+        await database.client.execute("SELECT 1");
+        return { ok: true };
+      } catch (error) {
+        app.log.error(errorDiagnostic(error));
+        return reply.code(503).send({ ok: false, error: "database_unavailable" });
+      }
+    });
+    registerUserRoutes(routeContext, options.identity ?? applicationConfig.http.identity);
     registerRepositoryRoutes(routeContext);
     registerCapabilityRoutes(routeContext);
     registerMcpRoutes(routeContext);
     registerApplicationMcp(routeContext);
     const cancelActiveSearches = registerIssueSearchRoutes(routeContext, options.issueSearchFetch);
-    registerConfigurationRoutes(routeContext, cancelActiveSearches);
-    const { createIssue, resolveCreationScope } = registerIssueRoutes(routeContext);
+    registerConfigurationRoutes(routeContext, cancelActiveSearches, options.applyIssueSandboxNetwork);
+    const { createIssue, resolveCreationScope } = registerIssueRoutes(routeContext, options.now);
     registerDingtalkRoutes(routeContext, createIssue, resolveCreationScope, options.dingtalkConnector);
     registerAttachmentRoutes(routeContext);
     registerAgentRoutes(routeContext);

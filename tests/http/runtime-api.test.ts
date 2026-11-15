@@ -249,7 +249,7 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     const faux = fauxProvider({ provider: "stream-fixture", models: [{ id: "model", contextWindow: 32_000 }], tokensPerSecond: 100_000 });
     models.registerNativeProvider(faux.provider);
     await models.refresh({ allowNetwork: false });
-    runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
+    runtime = new PiSessionRuntime(() => ({ load: async () => models, close: async () => {} }));
     let sequence = 0;
     const publish = (event: RunEvent["event"], id = `live-${++sequence}`) => events.publish({ id, issueId, createdAt: new Date().toISOString(), event });
     managed = await runtime.start({
@@ -266,6 +266,7 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
         canModifyCode: false,
       },
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       systemPrompt: "Use the native read tool.",
       onEvent: publish,
     });
@@ -353,7 +354,6 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
     context.mock.restoreAll();
     await reader?.cancel().catch(() => undefined);
     await managed?.stop();
-    await runtime?.close();
     connection.close();
     await fixture.cleanup();
   }
@@ -469,7 +469,7 @@ for (const stage of ["model discovery", "snapshot read"] as const)
   });
 
 for (const state of ["idle", "queued", "running"] as const)
-  test(`Agent stream snapshot distinguishes ${state} without changing the busy flag contract`, async () => {
+  test(`Agent stream snapshot distinguishes ${state}`, async () => {
     const fixture = await createApiFixture();
     try {
       await createService(fixture.app, "QueueSnapshot");
@@ -490,7 +490,7 @@ for (const state of ["idle", "queued", "running"] as const)
             .slice(6),
         );
         assert.equal(snapshot.runState, state);
-        assert.equal(snapshot.running, state !== "idle");
+        assert.equal("running" in snapshot, false);
       } finally {
         await reader.cancel();
       }

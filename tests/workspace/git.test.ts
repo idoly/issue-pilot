@@ -18,12 +18,9 @@ import {
 } from "../../src/workspace/git.ts";
 import { publishIssueBranch } from "../../src/workspace/issue-git.ts";
 import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
+import { git } from "../helpers/git.ts";
 
 const execFileAsync = promisify(execFile);
-
-async function git(args: string[]): Promise<string> {
-  return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
-}
 
 test("Git preparation rejects missing and redirected Issue roots before touching repositories", async () => {
   const state = await mkdtemp(join(tmpdir(), "issue-pilot-git-root-"));
@@ -59,7 +56,7 @@ test("creates an Issue branch only in its private store and publishes it on firs
     const remote = join(root, "source"),
       state = join(root, "state");
     await git(["init", "-b", "main", remote]);
-    await git(["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "baseline"]);
+    await git(["-C", remote, "commit", "--allow-empty", "-m", "baseline"]);
     const manager = new WorktreeManager(state);
     const issueKey = "ISSUE-20261024-899";
     await claimIssueRoot(state, issueKey);
@@ -70,7 +67,7 @@ test("creates an Issue branch only in its private store and publishes it on firs
     assert.doesNotMatch(await git(["-C", shared, "worktree", "list", "--porcelain"]), /refs\/heads\/hotfix-/);
     await assert.rejects(access(join(prepared.cachePath, "legacy-worktree-registration")), { code: "ENOENT" });
     await assert.rejects(git(["-C", shared, "show-ref", "--exists", `refs/heads/${branch}`]), { code: 2 });
-    await git(["-C", prepared.workspacePath, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "private change"]);
+    await git(["-C", prepared.workspacePath, "commit", "--allow-empty", "-m", "private change"]);
     await git(["-C", shared, "update-ref", `refs/heads/${branch}`, prepared.baseCommit]);
     await assert.rejects(publishIssueBranch(shared, prepared.cachePath, branch), /working_branch_changed_outside_issue/);
     await git(["-C", shared, "update-ref", "-d", `refs/heads/${branch}`, prepared.baseCommit]);
@@ -90,7 +87,7 @@ test("missing private Git never falls back to an older shared branch", async () 
     const source = join(root, "source"),
       state = join(root, "state");
     await git(["init", "-b", "main", source]);
-    const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m"];
+    const commit = ["commit", "--allow-empty", "-m"];
     await git(["-C", source, ...commit, "initial"]);
     const manager = new WorktreeManager(state);
     const input = { issueKey: "ISSUE-20261024-900", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
@@ -124,7 +121,7 @@ test("preparing an existing bound worktree leaves its valid Git metadata unchang
   try {
     const source = join(root, "source");
     await git(["init", "-b", "main", source]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "baseline"]);
+    await git(["-C", source, "commit", "--allow-empty", "-m", "baseline"]);
     const manager = new WorktreeManager(join(root, "state"));
     const input = { issueKey: "ISSUE-20261024-903", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
     await claimIssueRoot(join(root, "state"), input.issueKey);
@@ -156,7 +153,7 @@ test("worktree removal preserves ignored files until they are explicitly removed
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, ".gitignore"), "local-report.txt\nscratch/\n");
     await git(["-C", source, "add", ".gitignore"]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["-C", source, "commit", "-m", "baseline"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
     await claimIssueRoot(join(root, "state"), "ISSUE-20261024-901");
@@ -189,7 +186,7 @@ test("worktree removal preserves changes hidden by Git index flags", async () =>
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, fileName), original);
     await git(["-C", source, "add", "--", fileName]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["-C", source, "commit", "-m", "baseline"]);
     const manager = new WorktreeManager(join(root, "state"));
     await claimIssueRoot(join(root, "state"), "ISSUE-20261024-902");
     const { workspacePath, workingBranch } = await manager.prepare({ issueKey: "ISSUE-20261024-902", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" });
@@ -222,7 +219,7 @@ test("reports an invalid Git pointer as a stable reason while preserving the che
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, "evidence.txt"), "preserve checkout");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["-C", source, "commit", "-m", "baseline"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
     await claimIssueRoot(join(root, "state"), "ISSUE-20261024-971");
@@ -257,7 +254,7 @@ test("serializes repository operations across manager instances sharing one stat
   try {
     const url = join(root, "source");
     await git(["init", "-b", "main", url]);
-    await git(["-C", url, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
+    await git(["-C", url, "commit", "--allow-empty", "-m", "initial"]);
     const managers = [new WorktreeManager(root), new WorktreeManager(root)];
     await claimIssueRoot(root, "ISSUE-20260805-001");
     const own = await managers[0]!.prepare({ issueKey: "ISSUE-20260805-001", workspaceName: "orders", url, baseBranch: "main", mode: "hotfix" });
@@ -273,6 +270,7 @@ test("serializes repository operations across manager instances sharing one stat
         });
         active -= 1;
         if (args[0] === "check-ref-format") return `${args.at(-1)}\n`;
+        if (args.includes("status")) return `# branch.head ${own.workingBranch}\n`;
         return args.includes("rev-parse") ? "a".repeat(40) : "";
       };
     }
@@ -281,7 +279,7 @@ test("serializes repository operations across manager instances sharing one stat
 
     active = 0;
     maximumActive = 0;
-    await Promise.all([managers[0]!.prepareShared({ url, baseBranch: "main" }), managers[1]!.assertClean(url, own.workspacePath)]);
+    await Promise.all([managers[0]!.prepareShared({ url, baseBranch: "main" }), managers[1]!.assertClean(url, own.workspacePath, own.workingBranch!)]);
     assert.equal(maximumActive, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -295,7 +293,7 @@ for (const detached of [false, true])
       const source = join(root, "source"),
         remote = join(root, "remote.git");
       await git(["init", "-b", "main", source]);
-      await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
+      await git(["-C", source, "commit", "--allow-empty", "-m", "initial"]);
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
       const issueKey = "ISSUE-20261018-996";
@@ -342,7 +340,7 @@ for (const missingBranch of [false, true])
       await git(["init", "-b", "main", source]);
       await writeFile(join(source, "README.md"), "initial\n");
       await git(["-C", source, "add", "."]);
-      await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
+      await git(["-C", source, "commit", "-m", "initial"]);
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
       const input = { issueKey: "ISSUE-20261018-997", workspaceName: "local", url: remote, baseBranch: "main", mode: "hotfix" as const };
@@ -350,8 +348,8 @@ for (const missingBranch of [false, true])
       const prepared = await manager.prepare(input);
       await writeFile(join(prepared.workspacePath, "local.txt"), "local commit\n");
       await git(["-C", prepared.workspacePath, "add", "."]);
-      await git(["-C", prepared.workspacePath, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "local change"]);
-      const expected = await manager.remove(remote, prepared.workspacePath);
+      await git(["-C", prepared.workspacePath, "commit", "-m", "local change"]);
+      const expected = await manager.remove(remote, prepared.workspacePath, prepared.workingBranch!);
       const restore = { ...input, workingBranch: prepared.workingBranch!, existingBaseCommit: prepared.baseCommit };
       if (missingBranch) {
         await git(["-C", prepared.cachePath, "update-ref", "-d", `refs/heads/${prepared.workingBranch}`]);
@@ -380,7 +378,7 @@ for (const malformed of [true, false])
       const source = join(root, "source"),
         remote = join(root, "remote.git");
       await git(["init", "-b", "main", source]);
-      await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
+      await git(["-C", source, "commit", "--allow-empty", "-m", "initial"]);
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
       const input = { issueKey: "ISSUE-20261018-992", workspaceName: "application", url: remote, baseBranch: "main", mode: "hotfix" as const };
@@ -411,7 +409,7 @@ test("refuses to reuse a shared checkout containing ignored files and preserves 
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, ".gitignore"), "private-cache/\n");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline"]);
+    await git(["-C", source, "commit", "-m", "baseline"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
     const prepared = await manager.prepareShared({ url: remote, baseBranch: "main" });
@@ -437,7 +435,7 @@ test("evicts only idle shared checkouts and restores the exact commit without th
     await git(["init", "-b", "main", remote]);
     await writeFile(join(remote, "fixture.txt"), "original snapshot\n");
     await git(["-C", remote, "add", "."]);
-    await git(["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "snapshot"]);
+    await git(["-C", remote, "commit", "-m", "snapshot"]);
     const state = join(root, "state");
     const manager = new WorktreeManager(state);
     const lease = new SharedCheckoutLease();
@@ -493,7 +491,7 @@ test("refuses to create a shared checkout through a redirected parent", async ()
     const state = join(root, "state");
     const preserved = join(root, "preserved");
     await git(["init", "-b", "main", remote]);
-    await git(["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "baseline"]);
+    await git(["-C", remote, "commit", "--allow-empty", "-m", "baseline"]);
     await mkdir(preserved);
     await mkdir(sharedCheckoutsRoot(state), { recursive: true });
     await symlink(preserved, join(sharedCheckoutsRoot(state), basename(repositoryStorePath(state, remote))));
@@ -513,7 +511,7 @@ for (const development of [false, true])
       await git(["init", "-b", "main", source]);
       await writeFile(join(source, "value.txt"), "old baseline\n");
       await git(["-C", source, "add", "."]);
-      await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "old"]);
+      await git(["-C", source, "commit", "-m", "old"]);
       const old = await git(["-C", source, "rev-parse", "HEAD"]);
       await git(["clone", "--bare", source, remote]);
       const manager = new WorktreeManager(join(root, "state"));
@@ -522,7 +520,7 @@ for (const development of [false, true])
       await git(["-C", initial.cachePath, "tag", "origin/main", old]);
       await writeFile(join(source, "value.txt"), "current baseline\n");
       await git(["-C", source, "add", "."]);
-      await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "current"]);
+      await git(["-C", source, "commit", "-m", "current"]);
       await git(["-C", source, "push", remote, "main"]);
       const expected = await git(["-C", source, "rev-parse", "HEAD"]);
       if (development) await claimIssueRoot(join(root, "state"), "ISSUE-20261018-993");
@@ -546,7 +544,7 @@ test("shares immutable latest baselines for read-only environments and creates p
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, "README.md"), "first\n", "utf8");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "first"]);
+    await git(["-C", source, "commit", "-m", "first"]);
     await git(["clone", "--bare", source, remote]);
     await git(["-C", source, "remote", "add", "origin", remote]);
 
@@ -562,7 +560,7 @@ test("shares immutable latest baselines for read-only environments and creates p
 
     await writeFile(join(source, "README.md"), "second\n", "utf8");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "second"]);
+    await git(["-C", source, "commit", "-m", "second"]);
     await git(["-C", source, "push", "origin", "main"]);
     const refreshed = await worktreeManager.prepareShared({ url: remote, baseBranch: "main" });
     assert.notEqual(refreshed.baseCommit, firstCommit);
@@ -579,7 +577,7 @@ test("shares immutable latest baselines for read-only environments and creates p
     await assert.rejects(git(["--git-dir", remote, "rev-parse", `refs/heads/${hotfix.workingBranch}`]));
     await writeFile(join(hotfix.workspacePath, "branch.txt"), "branch snapshot\n", "utf8");
     await git(["-C", hotfix.workspacePath, "add", "."]);
-    await git(["-C", hotfix.workspacePath, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "branch snapshot"]);
+    await git(["-C", hotfix.workspacePath, "commit", "-m", "branch snapshot"]);
     const commit = await git(["-C", hotfix.workspacePath, "rev-parse", "HEAD"]);
     assert.doesNotMatch(await readFile(join(hotfix.workspacePath, ".git"), "utf8"), new RegExp(root));
     assert.doesNotMatch(await readFile(join(hotfix.cachePath, "worktrees", basename(hotfix.workspacePath), "gitdir"), "utf8"), new RegExp(root));
@@ -602,10 +600,10 @@ test("shares immutable latest baselines for read-only environments and creates p
     );
     assert.match(await git(["-C", unexpected.workspacePath, "status", "--porcelain"]), /uncommitted\.txt/);
     assert.equal(await git(["-C", unexpected.workspacePath, "branch", "--show-current"]), "hotfix-issue-20260805-013");
-    await assert.rejects(worktreeManager.remove(remote, unexpected.workspacePath), /workspace_has_changes/);
+    await assert.rejects(worktreeManager.remove(remote, unexpected.workspacePath, unexpected.workingBranch!), /workspace_has_changes/);
     await unlink(join(unexpected.workspacePath, "uncommitted.txt"));
     const unexpectedCommit = await git(["-C", unexpected.workspacePath, "rev-parse", "HEAD"]);
-    assert.equal(await worktreeManager.remove(remote, unexpected.workspacePath), unexpectedCommit);
+    assert.equal(await worktreeManager.remove(remote, unexpected.workspacePath, unexpected.workingBranch!), unexpectedCommit);
     await assert.rejects(access(unexpected.workspacePath));
     await assert.rejects(
       worktreeManager.restoreLocal({
@@ -641,7 +639,7 @@ test("shares immutable latest baselines for read-only environments and creates p
       }
       return runGit(args);
     };
-    assert.equal(await worktreeManager.remove(remote, unexpected.workspacePath), unexpectedCommit);
+    assert.equal(await worktreeManager.remove(remote, unexpected.workspacePath, unexpected.workingBranch!), unexpectedCommit);
     internal.git = runGit;
     await assert.rejects(access(unexpected.workspacePath));
     await worktreeManager.restoreLocal({
@@ -665,7 +663,10 @@ test("shares immutable latest baselines for read-only environments and creates p
       if (failPrune && args.includes("worktree") && args.includes("prune")) throw new Error("simulated_prune_failure");
       return runGit(args);
     };
-    await assert.rejects(worktreeManager.remove(remote, unexpected.workspacePath), (error: unknown) => error instanceof WorktreeRemovalFailure && error.commit === unexpectedCommit);
+    await assert.rejects(
+      worktreeManager.remove(remote, unexpected.workspacePath, unexpected.workingBranch!),
+      (error: unknown) => error instanceof WorktreeRemovalFailure && error.commit === unexpectedCommit,
+    );
     internal.git = runGit;
     await worktreeManager.restoreLocal({
       issueKey: "ISSUE-20260805-013",
@@ -690,7 +691,7 @@ test("clean inspection handles non-ASCII branch headers and still rejects detach
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, "README.md"), "fixture\n");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "seed"]);
+    await git(["-C", source, "commit", "-m", "seed"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(join(root, "state"));
     await claimIssueRoot(join(root, "state"), "ISSUE-20261025-992");
@@ -715,7 +716,7 @@ test("a failed first preparation discards the worktree, branch and private store
     await git(["init", "-b", "main", source]);
     await writeFile(join(source, "README.md"), "first\n");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "first"]);
+    await git(["-C", source, "commit", "-m", "first"]);
     await git(["clone", "--bare", source, remote]);
     const manager = new WorktreeManager(state);
     const worktree = { issueKey: "ISSUE-20261103-901", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" as const };
@@ -736,7 +737,7 @@ test("a failed first preparation discards the worktree, branch and private store
     await assert.rejects(git(["-C", repositoryStorePath(state, remote), "show-ref", "--verify", "refs/heads/hotfix-issue-20261103-901"]));
     // Production moves on before the retry; the fresh branch starts at the new base.
     await writeFile(join(source, "README.md"), "second\n");
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-am", "second"]);
+    await git(["-C", source, "commit", "-am", "second"]);
     await git(["-C", source, "push", remote, "main"]);
     const prepared = await manager.prepare(worktree);
     const head = await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]);

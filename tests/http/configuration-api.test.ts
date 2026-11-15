@@ -10,11 +10,11 @@ import { loadConfigurationCatalog } from "../../src/configuration/read.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { createApiFixture, createIssue, createService, json, modelCatalog, servicePayload, testAgent } from "./fixture.ts";
 
-test("DMS scope errors preserve upstream HTTP status without private response details", async () => {
-  const fixture = await createApiFixture(),
-    originalFetch = globalThis.fetch;
+test("DMS scope errors preserve upstream HTTP status without private response details", async (t) => {
+  const fixture = await createApiFixture();
   let upstreamStatus = 429;
-  globalThis.fetch = async () => new Response("private-dms-token private-upstream-detail", { status: upstreamStatus, headers: { "retry-after": "120" } });
+  // The DMS connection is built inside the API route, so the global is replaced with an auto-restored mock.
+  t.mock.method(globalThis, "fetch", async () => new Response("private-dms-token private-upstream-detail", { status: upstreamStatus, headers: { "retry-after": "120" } }));
   try {
     await fixture.app.inject({
       method: "PUT",
@@ -34,7 +34,55 @@ test("DMS scope errors preserve upstream HTTP status without private response de
       assert.doesNotMatch(response.body, /private-dms-token|private-upstream-detail/);
     }
   } finally {
-    globalThis.fetch = originalFetch;
+    await fixture.cleanup();
+  }
+});
+
+test("DMS scope publishes owner-classified codes and hides unknown SDK failures behind the route fallback", async (t) => {
+  const fixture = await createApiFixture();
+  const encoder = new TextEncoder();
+  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let listing: "empty" | "rpc-error" = "empty";
+  const send = (message: unknown) => stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? (input instanceof Request ? input.method : "GET")) === "GET") {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+          controller.enqueue(encoder.encode("event: endpoint\ndata: /messages?session=fixed\n\n"));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    const request = JSON.parse(String(init?.body)) as { id?: number; method: string };
+    if (request.method === "initialize")
+      send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } });
+    else if (request.method === "tools/list")
+      send(listing === "empty" ? { jsonrpc: "2.0", id: request.id, result: { tools: [] } } : { jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "private-upstream-detail" } });
+    return new Response(null, { status: 202 });
+  });
+  try {
+    await fixture.app.inject({
+      method: "PUT",
+      url: "/api/config/shared-dms-credentials",
+      payload: { mode: "replace", expectedRevision: 0, url: "https://dms.example.test/sse", authorization: "Bearer private-dms-token" },
+    });
+    for (const [mode, code] of [
+      ["empty", "dms_mcp_scope_resolve_unavailable"],
+      ["rpc-error", "dms_scope_resolve_failed"],
+    ] as const) {
+      listing = mode;
+      const response = await fixture.app.inject({
+        method: "POST",
+        url: "/api/dms/scope/resolve",
+        headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+        payload: { instanceAlias: "ORDERS-PROD", schemaName: "orders" },
+      });
+      assert.equal(response.statusCode, 502, response.body);
+      assert.deepEqual(await json(response), { error: code });
+      assert.doesNotMatch(response.body, /private-dms-token|private-upstream-detail/);
+    }
+  } finally {
     await fixture.cleanup();
   }
 });
@@ -44,13 +92,8 @@ test("configuration snapshots do not block Workspace writes", async () => {
   const connection = openDatabase(fixture.databaseFile);
   const writer = createClient({ url: `file:${fixture.databaseFile}`, timeout: 25 });
   const begin = connection.client.transaction.bind(connection.client);
-  let started!: () => void, release!: () => void;
-  const ready = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: ready, resolve: started } = Promise.withResolvers<void>();
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>();
   let transaction: Transaction | undefined;
   let snapshot: ReturnType<typeof loadConfigurationCatalog> | undefined;
   connection.client.transaction = async (mode?: TransactionMode) => {
@@ -85,13 +128,8 @@ test("configuration snapshots do not block Workspace writes", async () => {
 
 for (const method of ["GET", "PUT"] as const) {
   test(`${method} configuration catalog loading leaves service writes unblocked`, async () => {
-    let started!: () => void, release!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const released = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: entered, resolve: started } = Promise.withResolvers<void>();
+    const { promise: released, resolve: release } = Promise.withResolvers<void>();
     let hold = false;
     const fixture = await createApiFixture({
       modelCatalog: {
@@ -133,7 +171,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
     assert.equal((await fixture.app.inject({ method: "GET", url: "/health" })).statusCode, 200);
     const currentUser = await fixture.app.inject({ method: "GET", url: "/api/me" });
     assert.equal(currentUser.statusCode, 200);
-    assert.deepEqual(await json(currentUser), { ...issuePilotConfig.bootstrapUser });
+    assert.deepEqual(await json(currentUser), { ...issuePilotConfig.bootstrapUser, identityLocked: issuePilotConfig.http.identity === "gateway" });
     const users = JSON.parse((await fixture.app.inject({ method: "GET", url: "/api/users" })).body) as Array<{ subject: string }>;
     assert.deepEqual(
       users.map(({ subject }) => subject),
@@ -491,14 +529,8 @@ test("reserves affected Issues and commits Service changes only after sessions c
       repositories: config.services[0]!.repositories,
       deployments: [{ environmentKey: "test", repositoryBranches: config.services[0]!.deployments[0]!.repositoryBranches, capabilities: [] }],
     };
-    let closeStarted!: () => void;
-    let releaseClose!: () => void;
-    const started = new Promise<void>((resolve) => {
-      closeStarted = resolve;
-    });
-    const gate = new Promise<void>((resolve) => {
-      releaseClose = resolve;
-    });
+    const { promise: started, resolve: closeStarted } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: releaseClose } = Promise.withResolvers<void>();
     fixture.engine.closeSessionHook = async () => {
       closeStarted();
       await gate;

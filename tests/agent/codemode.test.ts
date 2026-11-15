@@ -19,7 +19,7 @@ async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessio
   const models = await ModelRuntime.create({ authPath: path.join(root, "auth.json"), modelsPath: null, modelsStorePath: path.join(root, "models.json"), refreshOnCreate: false });
   const faux = fauxProvider({ provider: "codemode-fixture", models: [{ id: "fixture", contextWindow: 64000 }], tokensPerSecond: 100000 });
   models.registerNativeProvider(faux.provider);
-  const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
+  const runtime = new PiSessionRuntime(() => ({ load: async () => models, close: async () => {} }));
   const events: JsonAgentSessionEvent[] = [];
   const manager = await createPrivateSessionManager(root, path.join(root, "sessions"));
   const options: StartPiSessionOptions = {
@@ -36,6 +36,7 @@ async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessio
       canModifyCode: false,
     },
     deploymentConfig: {},
+    modelApiKey: "fixture-key",
     systemPrompt: "Use configured tools to investigate the Issue.",
     onEvent: (event) => events.push(event),
     ...overrides,
@@ -48,7 +49,6 @@ async function fixture(mode: AgentCodemodeMode, overrides: Partial<StartPiSessio
     faux,
     events,
     close: async () => {
-      await runtime.close();
       await rm(root, { recursive: true, force: true });
     },
   };

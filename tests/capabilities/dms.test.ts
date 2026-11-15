@@ -8,7 +8,14 @@ import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import { test } from "node:test";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
+import { DomainError } from "../../src/domain/errors.ts";
 import { DmsQueryRound, DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
+
+/** Routes protocol requests to a test upstream instead of the network. */
+const connectWith =
+  (upstream: typeof fetch): ConnectDmsMcp =>
+  (configured, signal) =>
+    connectDmsMcp(configured, signal, undefined, upstream);
 
 const configured = {
   url: "https://dms.example.test/sse",
@@ -291,7 +298,7 @@ for (const outcome of ["initialize_failure", "rate_limited", "connected"] as con
     let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
     let gets = 0,
       closes = 0;
-    context.mock.method(globalThis, "fetch", async (_input: unknown, init?: RequestInit) => {
+    const upstream: typeof fetch = async (_input, init) => {
       if ((init?.method ?? "GET") === "GET") {
         gets++;
         if (outcome === "rate_limited") return new Response(null, { status: 429, headers: { "retry-after": "0" } });
@@ -315,7 +322,7 @@ for (const outcome of ["initialize_failure", "rate_limited", "connected"] as con
         );
       }
       return new Response(null, { status: 202 });
-    });
+    };
     const originalClose = SSEClientTransport.prototype.close;
     context.mock.method(SSEClientTransport.prototype, "close", async function (this: SSEClientTransport) {
       closes++;
@@ -323,11 +330,11 @@ for (const outcome of ["initialize_failure", "rate_limited", "connected"] as con
       throw cleanup;
     });
     if (outcome === "connected") {
-      const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000));
+      const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), undefined, upstream);
       await assert.rejects(session.close(), (error) => error === cleanup);
       await assert.rejects(session.close(), (error) => error === cleanup);
     } else {
-      await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(5_000)), (error) => {
+      await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(5_000), undefined, upstream), (error) => {
         assert.ok(error instanceof Error);
         assert.equal(error.message, "dms_mcp_connection_cleanup_failed");
         assert.ok(error.cause instanceof AggregateError);
@@ -344,15 +351,35 @@ for (const outcome of ["initialize_failure", "rate_limited", "connected"] as con
     assert.equal(closes, 1, "SDK and owner share the same transport cleanup result");
   });
 
-test("uses Authorization for both sides of the MCP SSE protocol", async () => {
-  const originalFetch = globalThis.fetch;
+test("DMS scope owner failures stay upstream DomainErrors when cleanup also fails", async () => {
+  const cleanup = new Error("private fixture cleanup detail");
+  const fixture = fixtureSession({
+    async listTools() {
+      return [];
+    },
+    async close() {
+      throw cleanup;
+    },
+  });
+  await assert.rejects(resolveDmsScope(configured, "ORDERS-PROD", "orders", undefined, fixture.connect), (error) => {
+    assert.ok(error instanceof DomainError);
+    assert.equal(error.category, "upstream");
+    assert.equal(error.message, "dms_mcp_scope_resolve_unavailable");
+    assert.ok(error.cause instanceof AggregateError);
+    assert.equal(error.cause.message, "dms_mcp_scope_resolve_unavailable");
+    assert.equal(error.cause.errors[1], cleanup);
+    return true;
+  });
+});
+
+test("uses Authorization for both sides of the MCP SSE protocol", async (context) => {
   const requests: Array<{ method: string; url: string; authorization: string | null; redirect?: RequestRedirect }> = [];
   const requestSignals: AbortSignal[] = [];
   const toolCalls: Array<{ name?: string; arguments?: Record<string, unknown> }> = [];
   const encoder = new TextEncoder();
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
   const send = (message: unknown) => stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
-  globalThis.fetch = async (input, init) => {
+  const upstream: typeof fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : input.toString();
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     if (init?.signal) requestSignals.push(init.signal);
@@ -385,53 +412,54 @@ test("uses Authorization for both sides of the MCP SSE protocol", async () => {
     }
     return new Response(null, { status: 202 });
   };
-  try {
-    const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), 20);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 40);
-    });
-    assert.equal(
-      requestSignals.every((signal) => !signal.aborted),
-      true,
-      "successful handshake must cancel its timeout without aborting the SSE session",
-    );
-    assert.deepEqual(
-      (await session.listTools(AbortSignal.timeout(5_000))).map(({ name }) => name),
-      ["query_database", "listInstances", "searchDatabase", "getDatabase"],
-    );
-    assert.deepEqual(await session.callTool("query_database", { sql: "SELECT 1" }, AbortSignal.timeout(5_000)), { content: [{ type: "text", text: "ok" }] });
-    await session.close();
-    assert.deepEqual(await resolveDmsScope(configured, "ORDERS-PROD", "orders"), { instanceId: "456", instanceHost: "db.example.test", instancePort: "3306", databaseId: "123" });
-    assert.deepEqual(toolCalls.at(-1), { name: "getDatabase", arguments: { host: "db.example.test", port: "3306", schema_name: "orders", sid: null } });
-    assert.equal(requests.filter(({ method }) => method === "GET").length, 2);
-    assert.equal(
-      requests.every(({ method }) => method === "GET" || method === "POST"),
-      true,
-    );
-    assert.equal(
-      requests.every(({ authorization }) => authorization === configured.authorization),
-      true,
-    );
-    assert.equal(
-      requests.every(({ redirect }) => redirect === "error"),
-      true,
-    );
-    assert.equal(
-      requests.every(({ url }) => new URL(url).origin === "https://dms.example.test"),
-      true,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  // Mocked timers let the test pass the 20 ms handshake deadline deterministically after the handshake succeeds.
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), 20, upstream);
+  context.mock.timers.tick(20);
+  context.mock.timers.reset();
+  assert.equal(
+    requestSignals.every((signal) => !signal.aborted),
+    true,
+    "successful handshake must cancel its timeout without aborting the SSE session",
+  );
+  assert.deepEqual(
+    (await session.listTools(AbortSignal.timeout(5_000))).map(({ name }) => name),
+    ["query_database", "listInstances", "searchDatabase", "getDatabase"],
+  );
+  assert.deepEqual(await session.callTool("query_database", { sql: "SELECT 1" }, AbortSignal.timeout(5_000)), { content: [{ type: "text", text: "ok" }] });
+  await session.close();
+  assert.deepEqual(await resolveDmsScope(configured, "ORDERS-PROD", "orders", undefined, connectWith(upstream)), {
+    instanceId: "456",
+    instanceHost: "db.example.test",
+    instancePort: "3306",
+    databaseId: "123",
+  });
+  assert.deepEqual(toolCalls.at(-1), { name: "getDatabase", arguments: { host: "db.example.test", port: "3306", schema_name: "orders", sid: null } });
+  assert.equal(requests.filter(({ method }) => method === "GET").length, 2);
+  assert.equal(
+    requests.every(({ method }) => method === "GET" || method === "POST"),
+    true,
+  );
+  assert.equal(
+    requests.every(({ authorization }) => authorization === configured.authorization),
+    true,
+  );
+  assert.equal(
+    requests.every(({ redirect }) => redirect === "error"),
+    true,
+  );
+  assert.equal(
+    requests.every(({ url }) => new URL(url).origin === "https://dms.example.test"),
+    true,
+  );
 });
 
 test("rejects DMS tool discovery that exceeds the shared tool budget", async () => {
-  const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
   const send = (message: unknown) => stream!.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
   const tools = Array.from({ length: issuePilotConfig.limits.capability.mcp.tools + 1 }, (_, index) => ({ name: `tool_${index}`, inputSchema: { type: "object" } }));
-  globalThis.fetch = async (input, init) => {
+  const upstream: typeof fetch = async (input, init) => {
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     if (method === "GET") {
       const body = new ReadableStream<Uint8Array>({
@@ -450,58 +478,40 @@ test("rejects DMS tool discovery that exceeds the shared tool budget", async () 
     }
     return new Response(null, { status: 202 });
   };
-  try {
-    const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), 1_000);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 40);
-    });
-    await assert.rejects(session.listTools(AbortSignal.timeout(5_000)), { message: "dms_mcp_too_many_tools" });
-    await session.close();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const session = await connectDmsMcp(configured, AbortSignal.timeout(5_000), 1_000, upstream);
+  await assert.rejects(session.listTools(AbortSignal.timeout(5_000)), { message: "dms_mcp_too_many_tools" });
+  await session.close();
 });
 
 test("does not start a DMS connection for an already cancelled operation", async () => {
-  const originalFetch = globalThis.fetch;
   let requests = 0;
-  globalThis.fetch = async () => {
+  const upstream: typeof fetch = async () => {
     requests++;
     return new Response(null, { status: 403 });
   };
-  try {
-    const reason = new Error("cancelled_before_connect");
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.abort(reason)), (error) => error === reason);
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.abort(new DOMException("expired", "TimeoutError"))), { message: "dms_mcp_timeout" });
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.abort("private-cancellation-detail")), { message: "dms_mcp_aborted" });
-    assert.equal(requests, 0);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const reason = new Error("cancelled_before_connect");
+  await assert.rejects(connectDmsMcp(configured, AbortSignal.abort(reason), undefined, upstream), (error) => error === reason);
+  await assert.rejects(connectDmsMcp(configured, AbortSignal.abort(new DOMException("expired", "TimeoutError")), undefined, upstream), { message: "dms_mcp_timeout" });
+  await assert.rejects(connectDmsMcp(configured, AbortSignal.abort("private-cancellation-detail"), undefined, upstream), { message: "dms_mcp_aborted" });
+  assert.equal(requests, 0);
 });
 
 test("reports an MCP SSE handshake timeout separately from connection failures", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_input, init) =>
+  const upstream: typeof fetch = async (_input, init) =>
     new Promise<Response>((_resolve, reject) => {
       const signal = init?.signal;
       if (signal?.aborted) reject(signal.reason);
       else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
     });
-  try {
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(25)), /dms_mcp_timeout/);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(25), undefined, upstream), /dms_mcp_timeout/);
 });
 
 test("retries a stalled SSE handshake once without repeating tool calls", async () => {
-  const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();
   let gets = 0;
   let posts = 0;
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
-  globalThis.fetch = async (input, init) => {
+  const upstream: typeof fetch = async (input, init) => {
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     if (method === "GET") {
       gets += 1;
@@ -529,22 +539,17 @@ test("retries a stalled SSE handshake once without repeating tool calls", async 
       );
     return new Response(null, { status: 202 });
   };
-  try {
-    const session = await connectDmsMcp(configured, AbortSignal.timeout(1_000), 20);
-    await session.close();
-    assert.equal(gets, 2);
-    assert.ok(posts >= 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const session = await connectDmsMcp(configured, AbortSignal.timeout(1_000), 20, upstream);
+  await session.close();
+  assert.equal(gets, 2);
+  assert.ok(posts >= 1);
 });
 
 for (const status of [401, 403, 404, 503])
   test(`preserves HTTP ${status} without retrying or exposing the error body`, async () => {
-    const originalFetch = globalThis.fetch;
     let requests = 0,
       cancellations = 0;
-    globalThis.fetch = async () => {
+    const upstream: typeof fetch = async () => {
       requests++;
       return new Response(
         new ReadableStream({
@@ -555,62 +560,48 @@ for (const status of [401, 403, 404, 503])
         { status },
       );
     };
-    try {
-      await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000), 20), { message: `dms_mcp_http_${status}` });
-      assert.equal(requests, 1);
-      assert.equal(cancellations, 1);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000), 20, upstream), { message: `dms_mcp_http_${status}` });
+    assert.equal(requests, 1);
+    assert.equal(cancellations, 1);
   });
 
 for (const retryAfter of ["120", new Date(Date.now() + 3_600_000).toUTCString()])
   test(`does not retry earlier than a long Retry-After (${retryAfter})`, async () => {
-    const originalFetch = globalThis.fetch;
     let requests = 0;
-    globalThis.fetch = async () => {
+    const upstream: typeof fetch = async () => {
       requests++;
       return new Response("private upstream detail", { status: 429, headers: { "retry-after": retryAfter } });
     };
-    try {
-      await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000)), { message: "dms_mcp_http_429" });
-      assert.equal(requests, 1);
-      await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured), (error) => {
-        assert(error instanceof DmsOperationError);
-        assert.equal(error.message, "dms_mcp_http_429");
-        assert.equal(error.diagnostics.phase, "connect");
-        assert.equal(error.diagnostics.sqlDispatchAttempted, false);
-        assert.ok(error.diagnostics.retryAfterSeconds! >= (retryAfter === "120" ? 120 : 3500));
-        assert.ok(error.diagnostics.phaseElapsedMs.connect! >= 0);
-        return true;
-      });
-      assert.equal(requests, 2);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(1_000), undefined, upstream), { message: "dms_mcp_http_429" });
+    assert.equal(requests, 1);
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, connectWith(upstream)), (error) => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_http_429");
+      assert.equal(error.diagnostics.phase, "connect");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, false);
+      assert.ok(error.diagnostics.retryAfterSeconds! >= (retryAfter === "120" ? 120 : 3500));
+      assert.ok(error.diagnostics.phaseElapsedMs.connect! >= 0);
+      return true;
+    });
+    assert.equal(requests, 2);
   });
 
 for (const retryAfter of ["not-a-date", "-1", "99999999999999999999999999"])
   test(`omits an invalid Retry-After without adding retries (${retryAfter})`, { timeout: 5_000 }, async () => {
-    const originalFetch = globalThis.fetch;
     let requests = 0;
-    globalThis.fetch = async () => {
+    const upstream: typeof fetch = async () => {
       requests++;
       return new Response("private upstream detail", { status: 429, headers: { "retry-after": retryAfter } });
     };
-    try {
-      await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured), (error) => {
-        assert(error instanceof DmsOperationError);
-        assert.equal(error.message, "dms_mcp_http_429");
-        assert.equal(error.diagnostics.phase, "connect");
-        assert.equal(error.diagnostics.retryAfterSeconds, undefined);
-        assert.equal(error.diagnostics.sqlDispatchAttempted, false);
-        return true;
-      });
-      assert.equal(requests, 2);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, connectWith(upstream)), (error) => {
+      assert(error instanceof DmsOperationError);
+      assert.equal(error.message, "dms_mcp_http_429");
+      assert.equal(error.diagnostics.phase, "connect");
+      assert.equal(error.diagnostics.retryAfterSeconds, undefined);
+      assert.equal(error.diagnostics.sqlDispatchAttempted, false);
+      return true;
+    });
+    assert.equal(requests, 2);
   });
 
 for (const failurePhase of ["SSE", "initialize", "discovery", "query"] as const)
@@ -622,8 +613,7 @@ for (const failurePhase of ["SSE", "initialize", "discovery", "query"] as const)
         : `retries a transient ${failurePhase} HTTP 429 before executing SQL exactly once`,
     { timeout: 5_000 },
     async () => {
-      const originalFetch = globalThis.fetch,
-        encoder = new TextEncoder();
+      const encoder = new TextEncoder();
       let gets = 0,
         initializes = 0,
         queries = 0,
@@ -634,7 +624,7 @@ for (const failurePhase of ["SSE", "initialize", "discovery", "query"] as const)
         failed = true;
         return new Response("private upstream detail", { status: 429, headers: { "retry-after": "0" } });
       };
-      globalThis.fetch = async (input, init) => {
+      const upstream: typeof fetch = async (input, init) => {
         const method = init?.method ?? (input instanceof Request ? input.method : "GET");
         if (method === "GET") {
           gets++;
@@ -665,74 +655,61 @@ for (const failurePhase of ["SSE", "initialize", "discovery", "query"] as const)
         }
         return new Response(null, { status: 202 });
       };
-      try {
-        const query = queryDms({ schema: "orders", script: "SELECT 1" }, configured, AbortSignal.timeout(4_000));
-        if (failurePhase === "query" || failurePhase === "discovery")
-          await assert.rejects(query, (error) => {
-            assert(error instanceof DmsOperationError);
-            assert.equal(error.message, "dms_mcp_http_429");
-            assert.equal(error.diagnostics.phase, failurePhase === "query" ? "execute" : "discovery");
-            assert.equal(error.diagnostics.sqlDispatchAttempted, failurePhase === "query");
-            assert.equal(error.diagnostics.retryAfterSeconds, 0);
-            assert.equal(queries, failurePhase === "query" ? 1 : 0);
-            return true;
-          });
-        else await query;
-        assert.equal(gets, failurePhase === "query" || failurePhase === "discovery" ? 1 : 2);
-        assert.equal(initializes, failurePhase === "initialize" ? 2 : 1);
-        assert.equal(queries, failurePhase === "discovery" ? 0 : 1);
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
+      const query = queryDms({ schema: "orders", script: "SELECT 1" }, configured, AbortSignal.timeout(4_000), connectWith(upstream));
+      if (failurePhase === "query" || failurePhase === "discovery")
+        await assert.rejects(query, (error) => {
+          assert(error instanceof DmsOperationError);
+          assert.equal(error.message, "dms_mcp_http_429");
+          assert.equal(error.diagnostics.phase, failurePhase === "query" ? "execute" : "discovery");
+          assert.equal(error.diagnostics.sqlDispatchAttempted, failurePhase === "query");
+          assert.equal(error.diagnostics.retryAfterSeconds, 0);
+          assert.equal(queries, failurePhase === "query" ? 1 : 0);
+          return true;
+        });
+      else await query;
+      assert.equal(gets, failurePhase === "query" || failurePhase === "discovery" ? 1 : 2);
+      assert.equal(initializes, failurePhase === "initialize" ? 2 : 1);
+      assert.equal(queries, failurePhase === "discovery" ? 0 : 1);
     },
   );
 
 test("stops repeated rate limits after two handshakes", { timeout: 5_000 }, async () => {
-  const originalFetch = globalThis.fetch;
   let requests = 0;
-  globalThis.fetch = async () => {
+  const upstream: typeof fetch = async () => {
     requests++;
     return new Response("private upstream detail", { status: 429, headers: { "retry-after": "0" } });
   };
-  try {
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(4_000)), (error) => error instanceof Error && error.message === "dms_mcp_http_429" && error.cause === undefined);
-    assert.equal(requests, 2);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await assert.rejects(
+    connectDmsMcp(configured, AbortSignal.timeout(4_000), undefined, upstream),
+    (error) => error instanceof DomainError && error.category === "upstream" && error.message === "dms_mcp_http_429" && error.cause === undefined,
+  );
+  assert.equal(requests, 2);
 });
 
 test("honors cancellation during rate-limit backoff", async () => {
-  const originalFetch = globalThis.fetch;
   let requests = 0;
-  globalThis.fetch = async () => {
+  const upstream: typeof fetch = async () => {
     requests++;
     return new Response(null, { status: 429, headers: { "retry-after": "1" } });
   };
-  try {
-    await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(30)), { message: "dms_mcp_timeout" });
-    assert.equal(requests, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await assert.rejects(connectDmsMcp(configured, AbortSignal.timeout(30), undefined, upstream), { message: "dms_mcp_timeout" });
+  assert.equal(requests, 1);
 });
 
 test("preserves a caller cancellation while waiting to retry without Retry-After", async () => {
-  const originalFetch = globalThis.fetch,
-    controller = new AbortController(),
+  const controller = new AbortController(),
     reason = new Error("caller_cancelled");
   let requests = 0;
-  globalThis.fetch = async () => {
+  const upstream: typeof fetch = async () => {
     requests++;
     return new Response(null, { status: 429 });
   };
   const timer = setTimeout(() => controller.abort(reason), 30);
   try {
-    await assert.rejects(connectDmsMcp(configured, controller.signal), (error) => error === reason);
+    await assert.rejects(connectDmsMcp(configured, controller.signal, undefined, upstream), (error) => error === reason);
     assert.equal(requests, 1);
   } finally {
     clearTimeout(timer);
-    globalThis.fetch = originalFetch;
   }
 });
 
@@ -1071,10 +1048,7 @@ test("DMS round returns completed evidence before separately reporting close fai
 
 for (const phase of ["connect", "execute"] as const)
   test(`DMS round close cancels ${phase} and never dispatches queued work`, async () => {
-    let enter!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      enter = resolve;
-    });
+    const { promise: entered, resolve: enter } = Promise.withResolvers<void>();
     let calls = 0,
       connects = 0,
       closes = 0;

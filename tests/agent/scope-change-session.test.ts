@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createBareRemote, git } from "../helpers/git.ts";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { AgentEngine } from "../../src/agent/engine.ts";
@@ -26,21 +25,14 @@ import {
 } from "../../src/db/schema.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 
-const execFileAsync = promisify(execFile);
-const git = async (args: string[]) => (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
-
 test("a workspace scope change retires the live session so removed service MCP tools are not reused", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-scope-session-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
   try {
-    const source = path.join(root, "source");
-    await git(["init", "-b", "develop", source]);
-    await writeFile(path.join(source, "README.md"), "baseline\n");
-    await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
-    const remotes = [path.join(root, "orders.git"), path.join(root, "billing.git")];
-    for (const remote of remotes) await git(["clone", "--bare", source, remote]);
+    const { source, remote: ordersRemote } = await createBareRemote(root, { branch: "develop", remote: "orders.git" });
+    const remotes = [ordersRemote, path.join(root, "billing.git")];
+    await git(["clone", "--bare", source, remotes[1]!]);
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium" });
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "developer" });
     await database.db

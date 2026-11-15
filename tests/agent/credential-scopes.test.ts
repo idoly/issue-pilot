@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createBareRemote } from "../helpers/git.ts";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { AgentEngine } from "../../src/agent/engine.ts";
 import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
@@ -25,21 +24,12 @@ import {
 import { claimIssueRoot } from "../../src/workspace/state.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 
-const execFileAsync = promisify(execFile);
-const git = async (args: string[]) => (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
-
 test("a missing DMS credential group does not discard the SLS credentials of the same deployment", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-credential-scopes-"));
   const stateRoot = path.join(root, "state");
   const database = await openApplicationDatabase(path.join(stateRoot, "issues.db"));
   try {
-    const source = path.join(root, "source"),
-      remote = path.join(root, "orders.git");
-    await git(["init", "-b", "main", source]);
-    await writeFile(path.join(source, "README.md"), "baseline\n");
-    await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
-    await git(["clone", "--bare", source, remote]);
+    const { remote } = await createBareRemote(root, { remote: "orders.git" });
     await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "test-provider", model: "test-model", thinkingLevel: "medium", apiKey: "shared-key" });
     // Shared SLS only; neither a shared nor a personal DMS group exists.
     await database.db

@@ -7,6 +7,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { applicationParameters } from "../configuration/parameters.ts";
 import type { McpStdioConfiguration, McpTransport } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 
 export interface McpConfiguration {
   id: string;
@@ -30,21 +31,26 @@ export interface McpSession {
 }
 export type McpConnector = (configuration: McpConfiguration, signal: AbortSignal) => Promise<McpSession>;
 const limits = issuePilotConfig.limits.capability.mcp;
-class McpFailure extends Error {}
+/** Stable MCP connection failures are upstream refusals; the message stays the code for Pi and diagnostics. */
+class McpFailure extends DomainError {
+  constructor(code: string, options?: ErrorOptions) {
+    super(code, "upstream", options);
+  }
+}
 
 /** Keep requests on the configured HTTPS origin, including legacy SSE message endpoints. */
-export function createMcpFetch(configuration: McpConfiguration, signal: AbortSignal): typeof fetch {
+export function createMcpFetch(configuration: McpConfiguration, signal: AbortSignal, request: typeof fetch = fetch): typeof fetch {
   const endpoint = new URL(configuration.url);
   return (input, init) => {
     const target = new URL(input instanceof Request ? input.url : String(input));
     if (target.protocol !== "https:" || target.origin !== endpoint.origin) throw new McpFailure("mcp_target_not_allowed");
     const requestSignal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
-    return fetch(input, { ...init, redirect: "error", signal: AbortSignal.any([signal, ...(requestSignal ? [requestSignal] : [])]) });
+    return request(input, { ...init, redirect: "error", signal: AbortSignal.any([signal, ...(requestSignal ? [requestSignal] : [])]) });
   };
 }
 
 /** All external MCP transports use the protocol SDK; Pi consumes them through its public adapter. */
-export function createMcpTransport(configuration: McpConfiguration, signal: AbortSignal): Transport {
+export function createMcpTransport(configuration: McpConfiguration, signal: AbortSignal, request: typeof fetch = fetch): Transport {
   if (configuration.transport === "stdio") {
     if (!configuration.stdio) throw new McpFailure("mcp_stdio_configuration_required");
     const transport = new StdioClientTransport({ ...configuration.stdio, stderr: "pipe" });
@@ -53,7 +59,7 @@ export function createMcpTransport(configuration: McpConfiguration, signal: Abor
   }
   const endpoint = new URL(configuration.url);
   const headers = configuration.authorization ? { Authorization: configuration.authorization } : {};
-  const guardedFetch = createMcpFetch(configuration, signal);
+  const guardedFetch = createMcpFetch(configuration, signal, request);
   return (
     configuration.transport === "sse"
       ? new SSEClientTransport(endpoint, { fetch: guardedFetch, requestInit: { headers } })
@@ -62,8 +68,8 @@ export function createMcpTransport(configuration: McpConfiguration, signal: Abor
 }
 
 /** The settings-page connection test uses the protocol client without starting an Agent. */
-export const connectMcp: McpConnector = async (configuration, startupSignal) => {
-  const transport = createMcpTransport(configuration, startupSignal);
+export async function connectMcp(configuration: McpConfiguration, startupSignal: AbortSignal, request: typeof fetch = fetch): Promise<McpSession> {
+  const transport = createMcpTransport(configuration, startupSignal, request);
   const originalClose = transport.close.bind(transport);
   let closing: Promise<void> | undefined;
   const closeTransport = () => (closing ??= Promise.resolve().then(originalClose));
@@ -112,7 +118,7 @@ export const connectMcp: McpConnector = async (configuration, startupSignal) => 
       await closeTransport();
     },
   };
-};
+}
 
 export async function inspectMcp(configuration: McpConfiguration, connect: McpConnector = connectMcp) {
   const signal = AbortSignal.timeout(applicationParameters().mcpExecutionMs);

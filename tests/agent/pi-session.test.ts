@@ -10,7 +10,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { AgentSession, type ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
-import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime } from "../../src/agent/pi-session.ts";
+import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironment, PiSessionRuntime, type KeyedModelRuntimeFactory } from "../../src/agent/pi-session.ts";
 import { hostMcpPid } from "../helpers/mcp-process.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import type { PiModelRuntime } from "../../src/agent/model-runtime.ts";
@@ -101,12 +101,8 @@ test("a keyed runtime honors the explicit Agent directory instead of the Operato
   const agentDirectory = join(root, "agent"),
     otherDirectory = join(root, "other-agent");
   const previous = process.env.PI_CODING_AGENT_DIR;
-  const runtime = new PiSessionRuntime({
-    load: async () => {
-      throw new Error("unexpected_injected_runtime");
-    },
-    close: async () => {},
-  });
+  // The default factory creates the keyed runtime from the explicit directory.
+  const runtime = new PiSessionRuntime();
   let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
     await mkdir(agentDirectory);
@@ -142,7 +138,6 @@ test("a keyed runtime honors the explicit Agent directory instead of the Operato
   } finally {
     try {
       await managed?.stop();
-      await runtime.close();
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
@@ -166,30 +161,33 @@ function modelRuntime(available = true, refreshes?: unknown[]): ModelRuntime {
   } as unknown as ModelRuntime;
 }
 
-function sharedModelRuntime(runtime: ModelRuntime): PiModelRuntime {
-  return {
-    async load() {
-      return runtime;
-    },
-    async close() {},
+/** A fake keyed-runtime factory: it records each requested key so tests can prove a key always selects the runtime. */
+function sharedModelRuntime(runtime: ModelRuntime, requests: Array<{ provider: string; apiKey: string; agentDirectory: string }> = []): KeyedModelRuntimeFactory {
+  return (provider, apiKey, agentDirectory): PiModelRuntime => {
+    requests.push({ provider, apiKey, agentDirectory });
+    return {
+      async load() {
+        return runtime;
+      },
+      async close() {},
+    };
   };
 }
 
-test("times out only while waiting for model output", async () => {
+test("times out only while waiting for model output", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   let timeouts = 0;
   const watchdog = new AgentResponseWatchdog(20, () => {
     timeouts += 1;
   });
   watchdog.start();
   watchdog.observe({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: {} });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 30);
-  });
+  t.mock.timers.tick(30);
   assert.equal(timeouts, 0);
   watchdog.observe({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: { content: [] }, isError: false });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 30);
-  });
+  t.mock.timers.tick(19);
+  assert.equal(timeouts, 0);
+  t.mock.timers.tick(1);
   assert.equal(timeouts, 1);
   watchdog.stop();
   assert.throws(() => new AgentResponseWatchdog(0, () => undefined), /invalid_model_response_idle_timeout/);
@@ -222,19 +220,28 @@ test("starts an SDK session with only context-selected tools and explicit resour
   await Promise.all([mkdir(workspaceRoot), mkdir(sessionDirectory)]);
   const manager = await createPrivateSessionManager(workspaceRoot, sessionDirectory);
   const refreshes: unknown[] = [];
-  const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime(true, refreshes)));
+  const requests: Array<{ provider: string; apiKey: string; agentDirectory: string }> = [];
+  const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime(true, refreshes), requests));
   let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
     managed = await runtime.start({
       manager,
       context: context({ writable: false }),
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       workspaceRoot,
       agentDirectory: root,
       systemPrompt: "Issue Pilot test context.",
       onEvent: () => undefined,
     });
     assert.deepEqual(refreshes, [{ providers: ["test-provider"], allowNetwork: false }]);
+    assert.deepEqual(requests, [{ provider: "test-provider", apiKey: "fixture-key", agentDirectory: root }]);
+    // Without a selected key there is no runtime to fall back to.
+    await assert.rejects(
+      runtime.start({ manager, context: context({ writable: false }), deploymentConfig: {}, modelApiKey: "", workspaceRoot, agentDirectory: root, systemPrompt: "", onEvent: () => undefined }),
+      { message: "model_api_key_not_configured" },
+    );
+    assert.equal(requests.length, 1);
     assert.deepEqual(managed.session.getActiveToolNames().sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
     assert.equal(managed.session.model?.id, "test-model");
     assert.equal(managed.session.thinkingLevel, "medium");
@@ -260,6 +267,7 @@ test("an export writer does not register a separate publication tool", async () 
       manager,
       context: context({ writable: false }),
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       workspaceRoot: root,
       agentDirectory: root,
       workFiles: new IssueWorkFileStore(root, "ISSUE-20260929-001"),
@@ -286,6 +294,7 @@ for (const cleanupFails of [false, true])
         manager,
         context: context({ writable: false }),
         deploymentConfig: {},
+        modelApiKey: "fixture-key",
         workspaceRoot: root,
         agentDirectory: root,
         mcpConfigurations: localMcp(root),
@@ -358,6 +367,7 @@ test("preserves startup and disposal failures while releasing the SDK session", 
         manager: await createPrivateSessionManager(root, root),
         context: context({ writable: false }),
         deploymentConfig: {},
+        modelApiKey: "fixture-key",
         workspaceRoot: root,
         agentDirectory: root,
         systemPrompt: "",
@@ -386,6 +396,7 @@ for (const environment of ["prod", "test", "dev"] as const)
         manager: await createPrivateSessionManager(root, root),
         context: { ...context({ writable: environment === "dev" }), environmentKey: environment },
         deploymentConfig: {},
+        modelApiKey: "fixture-key",
         workspaceRoot: root,
         agentDirectory: root,
         mcpConfigurations: localMcp(root),
@@ -410,6 +421,7 @@ test("does not start stdio processes when Agent identity validation fails", asyn
         manager: await createPrivateSessionManager(root, root),
         context: context({ writable: false }),
         deploymentConfig: {},
+        modelApiKey: "fixture-key",
         workspaceRoot: root,
         agentDirectory: root,
         mcpConfigurations: localMcp(root),
@@ -434,6 +446,7 @@ test("rejects configured models that are not currently available", async () => {
         manager,
         context: context({ writable: false }),
         deploymentConfig: {},
+        modelApiKey: "fixture-key",
         workspaceRoot: root,
         agentDirectory: root,
         systemPrompt: "",
@@ -463,6 +476,7 @@ test("Pi prompt owns DMS disposal across success, failure and reuse without hidi
       manager: await createPrivateSessionManager(root, root),
       context: context({ writable: false }),
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       workspaceRoot: root,
       agentDirectory: root,
       systemPrompt: "",

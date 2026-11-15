@@ -14,7 +14,8 @@ import { agentSessions } from "../db/schema.ts";
 import { sessionTranscript } from "../agent/events.ts";
 import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
 import { issueRoot } from "../workspace/state.ts";
-import { ensureCurrentSubject, requireIssue, type ApiRouteContext } from "../http/route-context.ts";
+import { ensureCurrentSubject, requireIssue } from "../configuration/access.ts";
+import type { ApiRouteContext } from "../http/route-context.ts";
 
 const limits = issuePilotConfig.limits.mcpServer;
 const key = str({ pattern: ISSUE_KEY_PATTERN, description: "工单编号" });

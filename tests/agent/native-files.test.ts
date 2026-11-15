@@ -36,7 +36,7 @@ book.save(sys.argv[1])`,
     const models = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null, modelsStorePath: join(root, "models.json"), refreshOnCreate: false });
     const faux = fauxProvider({ provider: "native-files-fixture", models: [{ id: "fixture", contextWindow: 64000 }], tokensPerSecond: 100000 });
     models.registerNativeProvider(faux.provider);
-    runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
+    runtime = new PiSessionRuntime(() => ({ load: async () => models, close: async () => {} }));
     const manager = await createPrivateSessionManager(work, root);
     const call = (name: string, input: Parameters<typeof fauxToolCall>[1]) => fauxAssistantMessage(fauxToolCall(name, input), { stopReason: "toolUse" });
     faux.setResponses([
@@ -77,6 +77,7 @@ print('files generated')`,
         canModifyCode: false,
       },
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       workspaceRoot: work,
       agentDirectory: root,
       systemPrompt: "Process files in this working directory.",
@@ -112,7 +113,6 @@ original.close()`,
     await managed.stop();
   } finally {
     await managed?.stop();
-    await runtime?.close();
     await rm(root, { recursive: true, force: true });
   }
 });

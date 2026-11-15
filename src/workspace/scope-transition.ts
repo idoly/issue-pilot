@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 
 import { and, desc, eq } from "drizzle-orm";
 
-import type { AgentController, AgentReservation } from "../agent/engine.ts";
+import type { AgentController, AgentReservation } from "../agent/contracts.ts";
 import type { Database, DatabaseReader } from "../db/client.ts";
 import { environments, issueRepositories, issueScopeTransitions, issues, issueWorkspaces, serviceRepositories, services, subjects } from "../db/schema.ts";
-import { issueScopeForWorkMode, issueWorkMode, type IssueWorkMode } from "../domain/contracts.ts";
+import { canModifyIssueCode, issueScopeForWorkMode, issueWorkMode, scopeTransitionRefusal, type IssueScopeState, type IssueWorkMode } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import { loadIssueDeployments } from "./issue-services.ts";
 import type { WorkspaceLifecycleManager } from "./lifecycle.ts";
 
@@ -61,12 +62,14 @@ export interface ScopeTransitionPlan {
   warnings: string[];
 }
 
-export class ScopeTransitionRefusal extends Error {
-  readonly reason: string;
+/** Operator-correctable scope refusal; HTTP maps the conflict category once. */
+export class ScopeTransitionRefusal extends DomainError {
+  constructor(reason: string, options?: ErrorOptions) {
+    super(reason, "conflict", options);
+  }
 
-  constructor(reason: string) {
-    super(reason);
-    this.reason = reason;
+  get reason(): string {
+    return this.code;
   }
 }
 
@@ -129,7 +132,7 @@ export class IssueScopeTransitionManager {
     try {
       targetDeployment = await loadIssueDeployments(this.database, { id: current.issue.id, serviceId: targetService.id, environmentId: targetEnvironment.id });
     } catch (error) {
-      if (error instanceof Error && deploymentRefusals.has(error.message)) throw new ScopeTransitionRefusal(error.message);
+      if (error instanceof Error && deploymentRefusals.has(error.message)) throw new ScopeTransitionRefusal(error.message, { cause: error });
       throw error;
     }
 
@@ -145,22 +148,22 @@ export class IssueScopeTransitionManager {
     }));
     const targetRepositories = targetDeployment.repositories.map(({ repository, baseBranch }) => ({ name: repository.alias, url: repository.url, baseBranch }));
 
-    const sameScope = current.service.id === targetService.id && currentWorkMode === target.workMode;
+    const sameService = current.service.id === targetService.id;
+    const currentState: IssueScopeState = {
+      environmentKind: current.environment.kind,
+      issueType: current.issue.type,
+      status: current.issue.status,
+      workspaceStatus: current.workspace.status,
+    };
+    const currentWrites = canModifyIssueCode(current.environment.kind);
     let action: ScopeTransitionAction;
-    if (sameScope) action = "none";
-    else if (current.environment.kind !== "dev" && targetScope.repositoryAccess === "read") action = "rebind_read_only";
-    else if (
-      current.environment.kind !== "dev" &&
-      current.issue.type === "smart_analysis" &&
-      target.workMode === "development_fix" &&
-      current.service.id === targetService.id &&
-      ["open", "pending"].includes(current.issue.status) &&
-      current.workspace.status === "ready"
-    )
+    if (sameService && currentWorkMode === target.workMode) action = "none";
+    else if (!currentWrites && targetScope.repositoryAccess === "read") action = "rebind_read_only";
+    else if (target.workMode === "development_fix" && sameService && scopeTransitionRefusal("convert_to_development", currentState, targetScope.environmentKind) === null)
       action = "convert_to_development";
-    else if (current.environment.kind === "dev" && targetScope.repositoryAccess === "write") {
+    else if (currentWrites && targetScope.repositoryAccess === "write") {
       if (current.issue.type !== targetScope.issueType) throw new ScopeTransitionRefusal("development_branch_mode_immutable");
-      if (current.service.id !== targetService.id && ["open", "pending"].includes(current.issue.status) && current.workspace.status === "ready") action = "migrate_development";
+      if (!sameService && scopeTransitionRefusal("migrate_development", currentState, targetScope.environmentKind) === null) action = "migrate_development";
       else throw new ScopeTransitionRefusal("scope_transition_not_supported");
     } else throw new ScopeTransitionRefusal("scope_transition_not_supported");
 
@@ -219,7 +222,7 @@ export class IssueScopeTransitionManager {
       try {
         return await this.workspaces.convertIssueToDevelopment(issueId, expectation.expectedIssueUpdatedAt, recordTransition, authorize, expectedRepositories);
       } catch (error) {
-        if (error instanceof Error && error.message === "scope_transition_plan_stale") throw new ScopeTransitionRefusal(error.message);
+        if (error instanceof Error && error.message === "scope_transition_plan_stale") throw new ScopeTransitionRefusal(error.message, { cause: error });
         throw error;
       }
     }

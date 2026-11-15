@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { globalAgentConfiguration } from "../db/schema.ts";
 import type { AgentConfiguration, AgentModelDefinition, AgentModelSelection, PersonalModelCredentials } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 
 export async function loadGlobalAgentConfiguration(database: Pick<Database, "select">): Promise<AgentConfiguration> {
@@ -47,8 +48,8 @@ export async function loadSharedAgentApiKey(database: Pick<Database, "select">):
 
 export function validateAgentModelSelection(configuration: AgentModelSelection, models: AgentModelDefinition[]): void {
   const model = models.find((candidate) => candidate.provider === configuration.provider && candidate.id === configuration.model);
-  if (!model) throw new Error("agent_model_not_available");
-  if (!model.thinkingLevels.includes(configuration.thinkingLevel)) throw new Error("agent_thinking_level_not_supported");
+  if (!model) throw new DomainError("agent_model_not_available", "bad_request");
+  if (!model.thinkingLevels.includes(configuration.thinkingLevel)) throw new DomainError("agent_thinking_level_not_supported", "bad_request");
 }
 
 export async function ensureGlobalAgentConfiguration(database: Database, modelCatalog: AgentModelCatalog): Promise<void> {

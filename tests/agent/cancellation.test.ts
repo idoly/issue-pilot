@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { waitFor } from "../helpers/async.ts";
 import { test } from "node:test";
 import { eq } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -7,16 +8,6 @@ import { pendingAgentMessages } from "../../src/agent/message-delivery.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService } from "../http/fixture.ts";
-
-async function waitFor(check: () => boolean) {
-  for (let n = 0; n < 200; n++) {
-    if (check()) return;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  throw new Error("condition_not_met");
-}
 
 test("cancels queued rounds without waiting for another Issue's slot, keeps input history and does not replay it", async () => {
   const f = await createApiFixture();

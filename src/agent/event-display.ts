@@ -1,6 +1,6 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { sharedConfig } from "../../issue-pilot.config.ts";
 import type { RunEvent } from "./events.ts";
 
 type ToolDisplayResult = { content: Array<TextContent | ImageContent>; displayTruncated?: boolean; structuredContent?: unknown };
@@ -22,13 +22,13 @@ export function displayToolResult<T extends ToolDisplayResult>(result: T): T {
     .map((part) => part.text)
     .join("\n");
   const images = result.content.filter((part): part is ImageContent => part.type === "image");
-  const displayedText = boundedText(text, issuePilotConfig.web.agentToolOutputCharacters);
+  const displayedText = boundedText(text, sharedConfig.web.agentToolOutputCharacters);
   const display = { ...result };
   // This SDK-only duplicate is for nested execution, not a second unbounded Web payload.
   delete display.structuredContent;
   return {
     ...display,
-    ...(text.length > issuePilotConfig.web.agentToolOutputCharacters ? { displayTruncated: true } : {}),
+    ...(text.length > sharedConfig.web.agentToolOutputCharacters ? { displayTruncated: true } : {}),
     content: [...(displayedText ? [{ type: "text" as const, text: displayedText }] : []), ...images],
   };
 }

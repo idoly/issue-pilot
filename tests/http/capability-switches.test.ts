@@ -97,17 +97,23 @@ test("server shutdown waits for an in-flight scope write before closing the data
     };
     const write = f.app.inject({ method: "PATCH", url: "/api/capabilities/sls", headers, payload: { enabled: false } });
     await closing;
-    let closed = false;
+    // Shutdown closes the engine immediately before draining the scope queue, then closes the database.
+    const engineClosed = Promise.withResolvers<void>();
+    Object.assign(f.engine, { close: async () => engineClosed.resolve() });
+    const settled: string[] = [];
     const stopped = f.stop().then(() => {
-      closed = true;
+      settled.push("closed");
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+    const written = write.then((response) => {
+      settled.push("write");
+      return response;
     });
-    assert.equal(closed, false);
+    await engineClosed.promise;
+    assert.deepEqual(settled, []);
     release();
-    assert.equal((await write).statusCode, 200);
+    assert.equal((await written).statusCode, 200);
     await stopped;
+    assert.deepEqual(settled, ["write", "closed"]);
     assert.equal((await loadEnabledCapabilities(db.db)).includes("sls"), false);
   } finally {
     await db.close();

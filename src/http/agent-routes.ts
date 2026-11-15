@@ -4,7 +4,6 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentBusyError } from "../agent/engine.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
@@ -74,16 +73,10 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   app.get<{ Params: { key: string; sessionId: string }; Querystring: { offset?: string } }>("/api/issues/:key/sessions/:sessionId", async (request, _reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
-    let manager: Awaited<ReturnType<typeof readIssueSessionHistory>>;
-    try {
-      manager = await runScopeExclusive(async () => {
-        await requireCurrentUser(database, request);
-        return readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === "agent_session_not_found") throw new ApiError(404, "agent_session_not_found");
-      throw error;
-    }
+    const manager = await runScopeExclusive(async () => {
+      await requireCurrentUser(database, request);
+      return readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
+    });
     // A readonly transcript uses the same private-entry projection as the live conversation.
     const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new ApiError(400, "invalid_offset");
@@ -97,13 +90,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const issue = await requireIssue(database, request.params.key);
     const text = await runScopeExclusive(async () => {
       await requireCurrentUser(database, request);
-      let manager: Awaited<ReturnType<typeof readIssueSessionHistory>>;
-      try {
-        manager = await readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
-      } catch (error) {
-        if (error instanceof Error && error.message === "agent_session_not_found") throw new ApiError(404, "agent_session_not_found");
-        throw error;
-      }
+      const manager = await readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
       await requireCurrentUser(database, request);
       return readQueryResult(manager, request.params.entryId);
     });
@@ -134,16 +121,10 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   app.post<{ Params: { key: string } }>("/api/issues/:key/abort", async (request, reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
-    if (!engine.abort) throw new ApiError(501, "agent_abort_unavailable");
-    try {
-      await engine.abort(issue.id, async () => {
-        await requireCurrentUser(database, request);
-        await requireIssue(database, issue.key);
-      });
-    } catch (error) {
-      if (error instanceof AgentBusyError) throw new ApiError(409, error.message);
-      throw error;
-    }
+    await engine.abort(issue.id, async () => {
+      await requireCurrentUser(database, request);
+      await requireIssue(database, issue.key);
+    });
     return reply.send({ ok: true });
   });
 
@@ -308,7 +289,6 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         `event: snapshot_ready\ndata: ${JSON.stringify({
           agent: { provider, model, thinkingLevel },
           footer,
-          running: engine.isRunning(issue.id),
           runState: engine.getRunState(issue.id),
           issueStatus: current.issue.status,
           issueRevision: issueRevision({
@@ -341,8 +321,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const person = await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(request.params.id)) throw new ApiError(400, "invalid_agent_message_id");
-    if (!engine.messageReceipt) throw new ApiError(501, "agent_message_receipt_unavailable");
-    return runScopeExclusive(() => engine.messageReceipt!(issue, { id: request.params.id, subject: person.subject }, () => requireCurrentUser(database, request)));
+    return runScopeExclusive(() => engine.messageReceipt(issue, { id: request.params.id, subject: person.subject }, () => requireCurrentUser(database, request)));
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
@@ -351,13 +330,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const person = await requireCurrentUser(database, request);
     const id = request.headers["x-issue-pilot-message-id"] ?? crypto.randomUUID();
     if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new ApiError(400, "invalid_agent_message_id");
-    try {
-      await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request), { id, subject: person.subject });
-    } catch (error) {
-      if (error instanceof AgentBusyError) throw new ApiError(409, error.message);
-      if (error instanceof Error && ["resolved_issue_cannot_run_agent", "agent_message_outcome_unknown", "agent_message_id_conflict"].includes(error.message)) throw new ApiError(409, error.message);
-      throw error;
-    }
+    await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request), { id, subject: person.subject });
     return reply.code(202).send();
   });
 }

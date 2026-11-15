@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiFixture, createService } from "./fixture.ts";
 
-test("resolves DMS scope with a saved server-side token without returning it to the browser", async () => {
+test("resolves DMS scope with a saved server-side token without returning it to the browser", async (t) => {
   const fixture = await createApiFixture();
-  const originalFetch = globalThis.fetch;
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
   const encoder = new TextEncoder();
   const token = "Bearer saved-dms-token";
@@ -37,7 +36,8 @@ test("resolves DMS scope with a saved server-side token without returning it to 
       },
     });
     assert.equal(saved.statusCode, 200, saved.body);
-    globalThis.fetch = async (_input, init) => {
+    // The DMS connection is built inside the API route, so the global is replaced with an auto-restored mock.
+    t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
       seenHeaders.push(new Headers(init?.headers).get("authorization"));
       if ((init?.method ?? "GET") === "GET")
         return new Response(
@@ -67,7 +67,7 @@ test("resolves DMS scope with a saved server-side token without returning it to 
           ],
         });
       return new Response(null, { status: 202 });
-    };
+    });
     const response = await fixture.app.inject({ method: "POST", url: "/api/dms/scope/resolve", payload: { instanceAlias: "ORDERS", schemaName: "orders" } });
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(JSON.parse(response.body).databaseId, "123");
@@ -78,7 +78,6 @@ test("resolves DMS scope with a saved server-side token without returning it to 
     assert.equal(config.body.includes("saved-dms-token"), false);
     assert.equal((await fixture.app.inject({ method: "GET", url: "/api/resource-connections" })).statusCode, 404);
   } finally {
-    globalThis.fetch = originalFetch;
     await fixture.cleanup();
   }
 });

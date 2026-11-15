@@ -25,9 +25,18 @@ import {
   services,
   subjects,
 } from "../db/schema.ts";
-import { credentialOwnerSubject, ISSUE_PRIORITIES, ISSUE_WORK_MODES, issueScopeForWorkMode, parseIssueKey, type EnvironmentKind, type IssueWorkMode } from "../domain/contracts.ts";
+import {
+  credentialOwnerSubject,
+  ISSUE_PRIORITIES,
+  ISSUE_WORK_MODES,
+  issueScopeForWorkMode,
+  parseIssueKey,
+  relatedIssueUpdateRefusal,
+  requiresDeveloperOwner,
+  type EnvironmentKind,
+  type IssueWorkMode,
+} from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
-import { IssueDeletionRefusal, WorkspaceRestoreRefusal } from "../workspace/lifecycle.ts";
 import { claimIssueRoot, classifyRepositoryState, hasRepositoryView, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
 import {
   finalizeRetiredAttachments,
@@ -40,11 +49,11 @@ import {
   serializeAttachment,
   publishPendingAttachments,
   insertPublishedAttachments,
-} from "./attachment-store.ts";
+} from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import { issueRevision } from "./issue-revision.ts";
-import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, throwRefusal, type ApiRouteContext } from "./route-context.ts";
+import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
@@ -80,7 +89,7 @@ const regionalDateFormat = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-function regionalDateStamp(now = new Date()): string {
+function regionalDateStamp(now: Date): string {
   const dateParts = new Map(regionalDateFormat.formatToParts(now).map((part) => [part.type, part.value]));
   return `${dateParts.get("year")}${dateParts.get("month")}${dateParts.get("day")}`;
 }
@@ -106,22 +115,17 @@ export type DingtalkImportClaim = Pick<typeof dingtalkIssueImports.$inferInsert,
 export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"];
 export type IssueCreationScopeResolver = ReturnType<typeof registerIssueRoutes>["resolveCreationScope"];
 
-export function registerIssueRoutes(context: ApiRouteContext) {
+export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = () => new Date()) {
   const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive, events } = context;
 
   app.delete<{ Params: { key: string } }>("/api/issues/:key", async (request, reply) => {
     await requireAdmin(database, request);
     const issue = await requireIssue(database, request.params.key);
     await runScopeExclusive(async () => {
-      try {
-        await workspaces.deleteIssue(issue.id, async () => {
-          await requireAdmin(database, request);
-          await requireIssue(database, issue.key);
-        });
-      } catch (error) {
-        if (error instanceof IssueDeletionRefusal) throwRefusal(error);
-        throw error;
-      }
+      await workspaces.deleteIssue(issue.id, async () => {
+        await requireAdmin(database, request);
+        await requireIssue(database, issue.key);
+      });
     });
     return reply.code(204).send();
   });
@@ -205,11 +209,14 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           type: issues.type,
           status: issues.status,
           assigneeSubject: issues.assigneeSubject,
+          reporterSubject: issues.reporterSubject,
           resolvedAt: issues.resolvedAt,
           createdAt: issues.createdAt,
           updatedAt: issues.updatedAt,
         },
         assignee: subjects.displayName,
+        // Correlated per row inside the same statement: no N+1 reads and no parameter-bounded IN list.
+        ccSubjects: sql<string>`(select json_group_array(${issueCcRecipients.subject}) from ${issueCcRecipients} where ${issueCcRecipients.issueId} = ${issues.id})`,
         service: serviceSummary,
         environmentKey: environments.key,
         workspaceStatus: issueWorkspaces.status,
@@ -220,13 +227,15 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       })
       .from(issues)
       .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
-      .leftJoin(services, eq(services.id, issues.serviceId))
-      .leftJoin(environments, eq(environments.id, issues.environmentId))
+      // Service and environment are required foreign keys; only assignee and Workspace may be absent.
+      .innerJoin(services, eq(services.id, issues.serviceId))
+      .innerJoin(environments, eq(environments.id, issues.environmentId))
       .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id));
   type IssueSummaryRow = Awaited<ReturnType<typeof issueSummaryQuery>>[number];
   const serializeIssueSummaryRow = ({
     issue,
     assignee,
+    ccSubjects,
     service,
     environmentKey,
     workspaceStatus,
@@ -235,8 +244,6 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     workspaceReleasedAt,
     workspaceLastError,
   }: IssueSummaryRow) => {
-    if (!service) throw new Error("issue_service_not_found");
-    if (environmentKey === null) throw new Error("issue_environment_not_found");
     const runState = engine.getRunState(issue.id);
     return {
       id: issue.key,
@@ -246,6 +253,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       status: issue.status,
       assignee,
       assigneeSubject: issue.assigneeSubject,
+      reporterSubject: issue.reporterSubject,
+      ccSubjects: (JSON.parse(ccSubjects) as string[]).sort(),
       service,
       environmentKey,
       // The detail projection already treats an absent Workspace row as not created; summaries agree.
@@ -266,7 +275,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
         runState,
       }),
       resolvedAt: isoDate(issue.resolvedAt) ?? null,
-      createdAt: isoDate(issue.createdAt),
+      createdAt: issue.createdAt.toISOString(),
       updatedAt: issue.updatedAt.toISOString(),
     };
   };
@@ -338,12 +347,12 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           }
         }
         const issueValues = await parseCreateIssueInput(input);
-        if (issueValues.environment.kind === "dev") await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject }));
+        if (requiresDeveloperOwner(issueValues.environment.kind)) await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject }));
         const relatedIssues = await parseRelatedIssues(input);
         const issueId = randomUUID();
         return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
           options.signal?.throwIfAborted();
-          const day = regionalDateStamp();
+          const day = regionalDateStamp(now());
           // Reserve the number before touching the filesystem. A failed create may leave a gap, never a reusable key.
           const [next] = await database.db
             .insert(issueKeySequences)
@@ -449,7 +458,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           const removedAttachmentIdSet = new Set(removedAttachmentIds);
           const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
           if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
-          if (issueEnvironment.kind === "dev") await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
+          if (requiresDeveloperOwner(issueEnvironment.kind))
+            await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
           const attachmentRoot = issueRoot(stateRoot, issue.key);
           await Promise.all(removedAttachments.map(({ objectKey, size }) => resolveSecureAttachmentFile(attachmentRoot, objectKey, size)));
           await reservation.closeSession(issue.id);
@@ -523,8 +533,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
           database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, currentIssue.id)).limit(1),
           database.db.select().from(issueRelations).where(eq(issueRelations.issueId, currentIssue.id)),
         ]);
-        if (currentIssue.status === "resolved") throw new ApiError(409, "related_issue_update_not_allowed");
-        if (!workspace || !["ready", "stopped"].includes(workspace.status) || !workspace.runtimeReady) throw new ApiError(409, "related_issue_context_unavailable");
+        const refusal = relatedIssueUpdateRefusal({ status: currentIssue.status, workspace });
+        if (refusal) throw new ApiError(409, refusal);
         if (requestedKeys.includes(currentIssue.key)) throw new ApiError(400, "invalid_related_issues");
         const relatedIssues = await validateRelatedIssues(requestedKeys);
         const currentIds = currentRelations.map(({ relatedIssueId }) => relatedIssueId).sort();
@@ -553,13 +563,8 @@ export function registerIssueRoutes(context: ApiRouteContext) {
     const issue = await requireIssue(database, request.params.key);
     const targetStatus = choice(record(request.body).status, "status", MANUAL_ISSUE_STATUSES);
     if (targetStatus === "open") {
-      try {
-        const reopened = await workspaces.reopenIssue(issue.id, () => ensureCurrentSubject(database, request));
-        return readIssueSummary(reopened.id);
-      } catch (error) {
-        if (error instanceof WorkspaceRestoreRefusal) throwRefusal(error);
-        throw error;
-      }
+      const reopened = await workspaces.reopenIssue(issue.id, () => ensureCurrentSubject(database, request));
+      return readIssueSummary(reopened.id);
     }
     return runIssueExclusive(engine, [issue.id], async (reservation) => {
       await ensureCurrentSubject(database, request);
@@ -636,6 +641,7 @@ export function registerIssueRoutes(context: ApiRouteContext) {
       workspace: {
         status: workspaceStatus,
         sourceAvailable,
+        runtimeReady: workspace?.runtimeReady === true,
         lastError: workspace?.lastError ?? null,
         retryable:
           issue.status !== "resolved" && !summary.agentRunning && (workspaceStatus !== "ready" || !workspace?.runtimeReady || (!sessionReady && ["open", "in_progress"].includes(issue.status))),

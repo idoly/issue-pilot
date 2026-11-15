@@ -22,6 +22,9 @@ export interface IssueRevisionInput {
 /**
  * One opaque change token for list rows, detail, related-Issue summaries and SSE snapshots.
  * It covers every joined display fact plus Workspace and Agent state, so views need no field list.
+ * Reporter and CC subjects are deliberately not separate facts: the reporter is immutable, and the only
+ * CC writer (the complete-form edit) bumps issues.updated_at in the same transaction. A new CC writer
+ * must do the same, so the SSE snapshot need not load recipients to produce an identical token.
  */
 export function issueRevision({ issue, service, environmentKey, assignee, workspace, runState }: IssueRevisionInput): string {
   const facts = [

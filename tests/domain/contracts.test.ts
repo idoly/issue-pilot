@@ -1,7 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { CAPABILITY_KEYS, ISSUE_WORK_MODES, configuredCapabilities, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode, normalizeIssueKey, parseIssueKey } from "../../src/domain/contracts.ts";
+import {
+  CAPABILITY_KEYS,
+  ISSUE_WORK_MODES,
+  USER_ROLES,
+  canEditManagedUser,
+  canManageDevelopmentConfiguration,
+  configuredCapabilities,
+  hasAdministratorAccess,
+  hasPersonalGitIdentity,
+  managedUserChangeRequiresAdministrator,
+  isWorkspaceBusy,
+  issueScopeForWorkMode,
+  issueWorkMode,
+  normalizeIssueKey,
+  parseIssueKey,
+} from "../../src/domain/contracts.ts";
 
 test("accepts only current date-sequence issue keys", () => {
   assert.equal(normalizeIssueKey("issue-20260810-001"), "ISSUE-20260810-001");
@@ -34,4 +49,28 @@ test("keeps the busy workspace predicate in the shared domain contract", () => {
   assert.equal(isWorkspaceBusy("preparing"), true);
   assert.equal(isWorkspaceBusy("running"), true);
   assert.equal(isWorkspaceBusy("ready"), false);
+});
+
+test("role and isAdmin gate configuration, administration and user edits independently", () => {
+  for (const role of USER_ROLES)
+    for (const isAdmin of [false, true]) {
+      const actor = { role, isAdmin };
+      assert.equal(canManageDevelopmentConfiguration(actor), role === "developer");
+      assert.equal(hasAdministratorAccess(actor), isAdmin);
+      assert.equal(hasPersonalGitIdentity(role), role === "developer");
+      // Ordinary accounts follow the developer gate; administrator targets or grants also require isAdmin.
+      assert.equal(canEditManagedUser(actor, { isAdmin: false }), role === "developer");
+      assert.equal(canEditManagedUser(actor, undefined), role === "developer");
+      assert.equal(canEditManagedUser(actor, { isAdmin: true }), role === "developer" && isAdmin);
+      assert.equal(canEditManagedUser(actor, { isAdmin: false }, true), role === "developer" && isAdmin);
+    }
+  for (const missing of [null, undefined]) {
+    assert.equal(canManageDevelopmentConfiguration(missing), false);
+    assert.equal(hasAdministratorAccess(missing), false);
+    assert.equal(canEditManagedUser(missing), false);
+  }
+  assert.equal(hasPersonalGitIdentity(undefined), false);
+  assert.equal(managedUserChangeRequiresAdministrator(undefined), false);
+  assert.equal(managedUserChangeRequiresAdministrator(undefined, true), true);
+  assert.equal(managedUserChangeRequiresAdministrator({ isAdmin: true }), true);
 });

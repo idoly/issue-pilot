@@ -1,11 +1,13 @@
 import { loadMcpConnections } from "../configuration/service-mcp.ts";
 import { eq } from "drizzle-orm";
-import { mcpServices, issues } from "../db/schema.ts";
+import { issuesAffectedByGlobalChange } from "../configuration/impact.ts";
+import { mcpServices } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configuration/mcp.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { AgentBusyError } from "../agent/engine.ts";
-import { ApiError, record } from "./input.ts";
+import { constraintFailure } from "../db/constraints.ts";
+import { DomainError } from "../domain/errors.ts";
+import { ApiError, isClassifiedFailure, record } from "./input.ts";
 import { requireAdmin, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({
@@ -24,7 +26,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     return row;
   };
   const mutate = async <T>(operation: () => Promise<T>) => {
-    const affected = await database.db.select({ id: issues.id }).from(issues);
+    const affected = await issuesAffectedByGlobalChange(database.db);
     try {
       return await runIssueExclusive(
         engine,
@@ -33,12 +35,12 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
           for (const row of affected) await reservation.closeSession(row.id);
           return operation();
         },
+        "mcp_has_running_issues",
       );
     } catch (error) {
-      if (error instanceof AgentBusyError) throw new ApiError(409, "mcp_has_running_issues");
-      if (error instanceof ApiError) throw error;
-      const chain = error instanceof Error ? error.cause : undefined;
-      if (chain instanceof Error && /UNIQUE constraint/.test(chain.message)) throw new ApiError(409, "mcp_name_conflict");
+      if (isClassifiedFailure(error)) throw error;
+      // Connection names are unique; the database boundary reports which constraint failed.
+      if (constraintFailure(error)?.code === "conflict") throw new DomainError("mcp_name_conflict", "conflict", { cause: error });
       app.log.error(errorDiagnostic(error));
       throw new ApiError(500, "mcp_configuration_save_failed");
     }
@@ -132,9 +134,10 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     try {
       return { tools: await inspectMcp(configuration) };
     } catch (error) {
-      const code = error instanceof Error && /^mcp_[a-z_]+$/.test(error.message) ? error.message : "mcp_connection_failed";
-      app.log.error({ code }, "mcp_connection_test_failed");
-      throw new ApiError(502, code);
+      // The MCP owner classifies its stable mcp_* failures as upstream; those are logged once by the global handler.
+      if (error instanceof DomainError && error.category === "upstream") throw error;
+      app.log.error({ code: "mcp_connection_failed" }, "mcp_connection_test_failed");
+      throw new ApiError(502, "mcp_connection_failed");
     }
   });
 }

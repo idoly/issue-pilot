@@ -42,7 +42,7 @@ test("personal model runtimes isolate API keys from other users and operator aut
   }
 });
 
-test("personal model requests omit provider and model Operator headers", async () => {
+test("personal model requests omit provider and model Operator headers", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-personal-headers-"));
   const agent = join(root, "operator"),
     work = join(root, "work"),
@@ -73,19 +73,21 @@ test("personal model requests omit provider and model Operator headers", async (
       },
     }),
   );
-  const personal = createPiModelRuntime(agent, { provider: "test-provider", apiKey: "personal-key" });
-  const runtime = new PiSessionRuntime(personal),
-    originalFetch = globalThis.fetch;
+  // The default factory keys a private runtime with the selected key; no Operator runtime is involved.
+  const runtime = new PiSessionRuntime();
   let headers: Headers | undefined;
   let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
   try {
-    globalThis.fetch = async (input, init) => {
+    // The model SDK issues this request internally, so the global is replaced with an auto-restored mock.
+    t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       throw new Error("fixture_transport_stopped");
-    };
+    });
     managed = await runtime.start({
       manager: await createPrivateSessionManager(work, sessions),
       workspaceRoot: work,
+      agentDirectory: agent,
+      modelApiKey: "personal-key",
       context: {
         issueKey: "ISSUE-20261020-991",
         serviceKey: "test",
@@ -108,9 +110,6 @@ test("personal model requests omit provider and model Operator headers", async (
     assert.equal(headers.has("X-Model-Token"), false);
   } finally {
     await managed?.stop();
-    await runtime.close();
-    await personal.close();
-    globalThis.fetch = originalFetch;
     await rm(root, { recursive: true, force: true });
   }
 });

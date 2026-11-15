@@ -9,12 +9,28 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { mcpServices, subjects } from "../../src/db/schema.ts";
 import { registerMcpRoutes } from "../../src/http/mcp-routes.ts";
+import { DomainError } from "../../src/domain/errors.ts";
 import { ApiError } from "../../src/http/input.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const server = fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url));
 const launch = { command: process.execPath, args: [server], env: { MCP_FIXTURE_SECRET: "private-env-token" } };
 const input = { name: "Local", url: "", transport: "stdio", enabled: true, credentialUpdate: { mode: "replace", values: { stdio: launch } } };
+
+test("the connection test publishes the owner's stable upstream code without private startup output", async () => {
+  const f = await createApiFixture();
+  try {
+    const failing = { ...launch, env: { ...launch.env, MCP_FIXTURE_FAILURE: "1" } };
+    const added = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: { ...input, credentialUpdate: { mode: "replace", values: { stdio: failing } } } });
+    assert.equal(added.statusCode, 201, added.body);
+    const tested = await f.app.inject({ method: "POST", url: `/api/mcp-services/${added.json().id}/test`, headers });
+    assert.equal(tested.statusCode, 502, tested.body);
+    assert.deepEqual(tested.json(), { error: "mcp_connection_failed" });
+    assert.doesNotMatch(tested.body, /private-env-token/);
+  } finally {
+    await f.cleanup();
+  }
+});
 
 test("stores private stdio configuration, preserves it and treats repeated replacements as a no-op", async () => {
   const f = await createApiFixture(),
@@ -122,7 +138,9 @@ test("reauthorizes a queued connection test before starting a local process", { 
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
+  app.setErrorHandler((error, _request, reply) =>
+    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
+  );
   try {
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });
     const created = await f.app.inject({

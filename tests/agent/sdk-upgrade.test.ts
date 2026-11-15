@@ -26,7 +26,7 @@ test("SDK replays persistent sessions with current tools and canonical prompts w
   const models = await ModelRuntime.create({ authPath: path.join(root, "auth.json"), modelsPath: null, modelsStorePath: path.join(root, "models-store.json"), refreshOnCreate: false });
   const faux = fauxProvider({ provider: "sdk-fixture", models: [{ id: "sdk-model", reasoning: true, contextWindow: 64000 }], tokensPerSecond: 100000 });
   models.registerNativeProvider(faux.provider);
-  const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
+  const runtime = new PiSessionRuntime(() => ({ load: async () => models, close: async () => {} }));
   const manager = await createPrivateSessionManager(root, path.join(root, "sessions"));
   const events: JsonAgentSessionEvent[] = [];
   let prompts = 0;
@@ -52,6 +52,7 @@ test("SDK replays persistent sessions with current tools and canonical prompts w
       manager,
       context,
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       workspaceRoot: root,
       agentDirectory: root,
       systemPrompt: "Issue Pilot SDK policy",
@@ -72,6 +73,7 @@ test("SDK replays persistent sessions with current tools and canonical prompts w
       manager: reopened,
       context,
       deploymentConfig: {},
+      modelApiKey: "fixture-key",
       workspaceRoot: root,
       agentDirectory: root,
       systemPrompt: "Issue Pilot SDK policy",
@@ -91,7 +93,6 @@ test("SDK replays persistent sessions with current tools and canonical prompts w
     try {
       await managed?.stop();
     } finally {
-      await runtime.close();
       await rm(root, { recursive: true, force: true });
     }
   }

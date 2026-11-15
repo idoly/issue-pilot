@@ -13,7 +13,7 @@ async function fixture() {
   const models = await ModelRuntime.create({ authPath: path.join(root, "auth.json"), modelsPath: null, modelsStorePath: path.join(root, "models.json"), refreshOnCreate: false });
   const faux = fauxProvider({ provider: "base-fixture", models: [{ id: "fixture", contextWindow: 64000 }], tokensPerSecond: 100000 });
   models.registerNativeProvider(faux.provider);
-  const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
+  const runtime = new PiSessionRuntime(() => ({ load: async () => models, close: async () => {} }));
   const manager = await createPrivateSessionManager(root, path.join(root, "sessions"));
   const options = {
     agentDirectory: root,
@@ -29,6 +29,7 @@ async function fixture() {
       canModifyCode: false,
     },
     deploymentConfig: {},
+    modelApiKey: "fixture-key",
     systemPrompt: "Issue policy stays present.",
     onEvent: () => {},
   };
@@ -38,7 +39,6 @@ async function fixture() {
     faux,
     runtime,
     close: async () => {
-      await runtime.close();
       await rm(root, { recursive: true, force: true });
     },
   };

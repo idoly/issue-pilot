@@ -1,23 +1,27 @@
-export type DomainErrorCategory = "bad_request" | "not_found" | "conflict" | "payload_too_large" | "internal";
+export type DomainErrorCategory = "bad_request" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "rate_limited" | "internal" | "upstream";
 
 const statusByCategory: Record<DomainErrorCategory, number> = {
   bad_request: 400,
+  forbidden: 403,
   not_found: 404,
   conflict: 409,
   payload_too_large: 413,
+  rate_limited: 429,
   internal: 500,
+  upstream: 502,
 };
 
 /**
  * Owner-level failure with a stable code and one transport-neutral category.
  * HTTP maps the category once; route catalogs do not re-derive status from message text.
+ * The message is the code, or `code:detail` when the owner adds a diagnostic detail that is never published.
  */
 export class DomainError extends Error {
   readonly code: string;
   readonly category: DomainErrorCategory;
 
-  constructor(code: string, category: DomainErrorCategory, options?: ErrorOptions) {
-    super(code, options);
+  constructor(code: string, category: DomainErrorCategory, options?: ErrorOptions & { detail?: string }) {
+    super(options?.detail ? `${code}:${options.detail}` : code, options);
     this.name = "DomainError";
     this.code = code;
     this.category = category;
@@ -62,11 +66,30 @@ const categories = new Map<string, DomainErrorCategory>([
   ["source_file_too_large", "payload_too_large"],
   ["source_commit_too_large", "payload_too_large"],
   ["source_diff_too_large", "payload_too_large"],
+  ["invalid_attachment_name", "bad_request"],
+  ["issue_file_not_found", "not_found"],
   ["invalid_issue_file_path", "bad_request"],
   ["issue_file_not_directory", "bad_request"],
   ["issue_file_not_regular", "bad_request"],
   ["managed_issue_file_private", "bad_request"],
   ["issue_file_directory_too_large", "payload_too_large"],
+]);
+
+/**
+ * Durable-state and cleanup failures that need operator inspection. They stay internal with diagnostics
+ * wherever they surface; an owner must never republish them as a retryable refusal.
+ */
+export const OPERATIONAL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "attachment_staging_cleanup_failed",
+  "attachment_read_cleanup_failed",
+  "dingtalk_connection_close_failed",
+  "issue_root_missing",
+  "invalid_issue_root",
+  "issue_layout_migration_required",
+  "issue_workspace_missing",
+  "issue_service_not_found",
+  "agent_session_file_incomplete",
+  "agent_session_file_missing",
 ]);
 
 export function domainError(code: string, options?: ErrorOptions): DomainError {

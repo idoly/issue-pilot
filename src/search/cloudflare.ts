@@ -1,10 +1,17 @@
+import { DomainError } from "../domain/errors.ts";
+
 export const ISSUE_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
 export const EMBEDDING_DIMENSIONS = 1024;
 export const EMBEDDING_BATCH_SIZE = 16;
 const RESPONSE_BYTES = 2 * 1024 * 1024;
 const QUERY_INSTRUCTION = "Given a search query, retrieve historical issue reports that describe the same problem.";
 
-export class WorkersAiError extends Error {}
+/** Provider failures are upstream errors; a provider rate limit keeps its own category so clients can back off. */
+export class WorkersAiError extends DomainError {
+  constructor(code: string) {
+    super(code, code === "issue_search_cloudflare_rate_limited" ? "rate_limited" : "upstream");
+  }
+}
 
 export async function issueEmbeddings(
   credentials: { accountId: string; apiToken: string },

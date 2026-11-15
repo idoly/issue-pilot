@@ -9,8 +9,8 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { MultipartFile } from "@fastify/multipart";
 import type { Database } from "../db/client.ts";
 import { issueAttachments, retiredIssueAttachments } from "../db/schema.ts";
-import { issueRoot } from "../workspace/state.ts";
-import { ApiError } from "./input.ts";
+import { domainError } from "../domain/errors.ts";
+import { issueRoot } from "./state.ts";
 
 export interface PendingAttachment {
   fileName: string;
@@ -32,7 +32,7 @@ export async function readMultipartAttachment(stateRoot: string, part: Multipart
 
 export async function stageAttachment(stateRoot: string, fileName: string, mediaType: string, chunks: AsyncIterable<Uint8Array>): Promise<PendingAttachment> {
   // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
-  if (!fileName || /[/\\\u0000-\u001f\u007f]/.test(fileName) || [".", ".."].includes(fileName)) throw new ApiError(400, "invalid_attachment_name");
+  if (!fileName || /[/\\\u0000-\u001f\u007f]/.test(fileName) || [".", ".."].includes(fileName)) throw domainError("invalid_attachment_name");
   const control = path.resolve(stateRoot, "control");
   await mkdir(control, { recursive: true, mode: 0o700 });
   await assertAttachmentRoot(control);

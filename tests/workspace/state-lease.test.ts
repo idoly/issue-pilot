@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
+import { ApplicationStateLease } from "../../src/state-lease.ts";
 
 test("one application owns the state before startup, and concurrent close/start preserves ownership", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-state-lease-")),

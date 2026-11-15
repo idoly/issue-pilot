@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { DomainError } from "../../src/domain/errors.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 
 import { eq } from "drizzle-orm";
 
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueKeySequences, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { workspaceStatistics, issueEditVersion, createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
@@ -105,18 +107,20 @@ test("concurrent editors cannot overwrite metadata, CC or attachment changes wit
 });
 
 test("allocates numeric Issue sequences beyond three digits within the current date", async () => {
-  const fixture = await createApiFixture();
+  // A fixed clock keeps every creation on one regional day even when the suite runs across midnight.
+  const fixture = await createApiFixture({ now: () => new Date("2026-11-15T04:00:00.000Z") });
   const database = openDatabase(fixture.databaseFile);
   try {
     await createService(fixture.app, "Sequence", ["test"]);
-    const first = await createIssue(fixture.app, "sequence", "test");
-    const prefix = String(first.id).slice(0, -3);
-    const day = prefix.slice(6, 14);
-    await database.db.update(issueKeySequences).set({ lastValue: 998 }).where(eq(issueKeySequences.day, day));
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, "ISSUE-20261115-001");
+    await database.db.update(issueKeySequences).set({ lastValue: 998 }).where(eq(issueKeySequences.day, "20261115"));
     await database.db.insert(issueKeySequences).values({ day: "19000101", lastValue: 999999 });
-    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}999`);
-    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1000`);
-    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, `${prefix}1001`);
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, "ISSUE-20261115-999");
+    const thousandth = await createIssue(fixture.app, "sequence", "test");
+    assert.equal(thousandth.id, "ISSUE-20261115-1000");
+    assert.equal((await createIssue(fixture.app, "sequence", "test")).id, "ISSUE-20261115-1001");
+    const detail = await fixture.app.inject({ url: `/api/issues/${thousandth.id}` });
+    assert.equal(detail.statusCode, 200, detail.body);
   } finally {
     database.close();
     await fixture.cleanup();
@@ -373,12 +377,13 @@ test("serializes retries, status transitions, messages, and comments with one Is
   }
 });
 
-for (const [code, status] of [
-  ["agent_message_outcome_unknown", 409],
-  ["agent_session_file_incomplete", 500],
-  ["agent_session_file_missing", 500],
-  ["issue_root_missing", 500],
-  ["invalid_issue_root", 500],
+// The engine owns the refusal category; operational state damage stays an internal failure.
+for (const [code, status, failure] of [
+  ["agent_message_outcome_unknown", 409, () => new DomainError("agent_message_outcome_unknown", "conflict")],
+  ["agent_session_file_incomplete", 500, () => new Error("agent_session_file_incomplete")],
+  ["agent_session_file_missing", 500, () => new Error("agent_session_file_missing")],
+  ["issue_root_missing", 500, () => new Error("issue_root_missing")],
+  ["invalid_issue_root", 500, () => new Error("invalid_issue_root")],
 ] as const)
   test(`classifies ${code} without resubmitting the message`, async () => {
     const fixture = await createApiFixture();
@@ -387,7 +392,7 @@ for (const [code, status] of [
       const issue = await createIssue(fixture.app, "uncertain", "test", "Uncertain message");
       const queued = fixture.engine.enqueued.length;
       fixture.engine.send = async () => {
-        throw new Error(code);
+        throw failure();
       };
       const response = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "check the outcome" } });
       assert.equal(response.statusCode, status);
@@ -434,19 +439,22 @@ test("serializes Issue assignee changes with user deactivation", async () => {
       },
     });
     await started;
+    const settled: string[] = [];
     const disable = fixture.app
       .inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { expectedRevision: 0, name: "Next Owner", email: "next@example.test", role: "developer", active: false } })
-      .then((response) => response);
-    const disabledBeforeEdit = await Promise.race([
-      disable.then(() => true),
-      new Promise<false>((resolve) => {
-        setTimeout(() => resolve(false), 100);
-      }),
-    ]);
+      .then((response) => {
+        settled.push("disable");
+        return response;
+      });
+    const edited = edit.then((response) => {
+      settled.push("edit");
+      return response;
+    });
     release();
-    assert.equal((await edit).statusCode, 200);
+    // Deactivation queues behind the held edit: it observes the committed assignee and refuses instead of racing it.
+    assert.equal((await edited).statusCode, 200);
     assert.equal((await disable).statusCode, 409);
-    assert.equal(disabledBeforeEdit, false);
+    assert.deepEqual(settled, ["edit", "disable"]);
     const detail = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then(json);
     assert.equal(detail.assigneeSubject, "next-owner");
     const users = await fixture.app.inject({ method: "GET", url: "/api/users" }).then((response) => JSON.parse(response.body) as Array<{ subject: string }>);
@@ -558,6 +566,58 @@ test("lists newer Issues first without letting later updates reorder them", asyn
         { workspaceStatus: "not_created", agentRunning: false, resolvedAt: null },
       ],
     );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("lists reporter and CC subjects and refreshes the revision when CC changes", async () => {
+  const fixture = await createApiFixture();
+  try {
+    for (const subject of ["cc-one@example.test", "cc-two@example.test"]) {
+      const user = await fixture.app.inject({
+        method: "POST",
+        url: "/api/users",
+        headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+        payload: { subject, name: subject, email: subject },
+      });
+      assert.equal(user.statusCode, 201, user.body);
+    }
+    await createService(fixture.app, "Alpha");
+    const plain = await createIssue(fixture.app, "alpha", "test", "Without CC");
+    const response = await fixture.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      payload: { ...issuePayload("alpha", "test", "With CC"), assigneeSubject: null, ccSubjects: ["cc-two@example.test", "cc-one@example.test"] },
+    });
+    assert.equal(response.statusCode, 201, response.body);
+    const created = await json(response);
+    const reporterSubject = String(created.reporterSubject);
+    assert.deepEqual(created.ccSubjects, ["cc-one@example.test", "cc-two@example.test"]);
+    fixture.engine.running.clear();
+    type Summary = { id: string; reporterSubject: string; assigneeSubject: string | null; ccSubjects: string[]; revision: string };
+    const list = async () => (await fixture.app.inject({ url: "/api/issues" })).json() as Summary[];
+    const before = await list();
+    assert.deepEqual(
+      before.map(({ id, reporterSubject, assigneeSubject, ccSubjects }) => ({ id, reporterSubject, assigneeSubject, ccSubjects })),
+      [
+        { id: created.id, reporterSubject, assigneeSubject: null, ccSubjects: ["cc-one@example.test", "cc-two@example.test"] },
+        { id: plain.id, reporterSubject, assigneeSubject: null, ccSubjects: [] },
+      ],
+    );
+
+    const updated = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/issues/${created.id}`,
+      payload: { expectedEditVersion: await issueEditVersion(fixture.app, created.id), title: "With CC", priority: "p2", assigneeSubject: null, ccSubjects: ["cc-two@example.test"] },
+    });
+    assert.equal(updated.statusCode, 200, updated.body);
+    const after = (await list()).find(({ id }) => id === created.id)!;
+    assert.deepEqual(after.ccSubjects, ["cc-two@example.test"]);
+    // A CC-only edit must invalidate open details through the shared revision token.
+    assert.notEqual(after.revision, before[0]!.revision);
+    const detail = (await fixture.app.inject({ url: `/api/issues/${created.id}` })).json() as Summary;
+    assert.deepEqual([detail.ccSubjects, detail.reporterSubject, detail.revision], [after.ccSubjects, reporterSubject, after.revision]);
   } finally {
     await fixture.cleanup();
   }
@@ -744,7 +804,7 @@ test("keeps Issue detail shallow and workspace statistics explicit", async () =>
     assert.equal(response.statusCode, 200);
     const detail = await json(response);
     assert.equal(detail.environmentKey, "test");
-    assert.deepEqual(Object.keys(detail.workspace as Record<string, unknown>).sort(), ["lastError", "retryable", "sourceAvailable", "status"]);
+    assert.deepEqual(Object.keys(detail.workspace as Record<string, unknown>).sort(), ["lastError", "retryable", "runtimeReady", "sourceAvailable", "status"]);
     assert.equal("agentSession" in detail, false);
     assert.equal("scopeCandidates" in detail, false);
     const unavailableSource = await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}/source/repositories` });
@@ -825,5 +885,28 @@ test("an unknown or foreign session id is a not-found history entry", async () =
     }
   } finally {
     await fixture.cleanup();
+  }
+});
+
+test("Issue key dates roll over at the configured regional midnight, not UTC midnight", async () => {
+  // Asia/Shanghai is UTC+8: its midnight is 16:00 UTC, while UTC midnight falls mid-morning on the same regional day.
+  assert.equal(issuePilotConfig.regional.timeZone, "Asia/Shanghai");
+  let current = new Date(0);
+  const f = await createApiFixture({ now: () => current });
+  try {
+    await createService(f.app, "Key dates");
+    const createdAt = async (at: string) => {
+      current = new Date(at);
+      const issue = await createIssue(f.app, "key-dates");
+      f.engine.running.clear();
+      return issue.id;
+    };
+    assert.equal(await createdAt("2026-11-14T15:59:59.999Z"), "ISSUE-20261114-001");
+    assert.equal(await createdAt("2026-11-14T16:00:00.000Z"), "ISSUE-20261115-001");
+    assert.equal(await createdAt("2026-11-14T23:59:59.999Z"), "ISSUE-20261115-002");
+    assert.equal(await createdAt("2026-11-15T00:00:00.000Z"), "ISSUE-20261115-003");
+    assert.equal(await createdAt("2026-11-15T16:00:00.000Z"), "ISSUE-20261116-001");
+  } finally {
+    await f.cleanup();
   }
 });

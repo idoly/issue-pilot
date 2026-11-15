@@ -6,10 +6,9 @@ import { openDatabase } from "../../src/db/client.ts";
 import { userCredentials } from "../../src/db/schema.ts";
 import { createApiFixture } from "./fixture.ts";
 
-test("DMS scope resolution selects the caller's personal credentials and never falls back after failure", async () => {
+test("DMS scope resolution selects the caller's personal credentials and never falls back after failure", async (t) => {
   const f = await createApiFixture(),
-    db = openDatabase(f.databaseFile),
-    original = globalThis.fetch;
+    db = openDatabase(f.databaseFile);
   const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
   const requests: Array<{ url: string; authorization: string | null }> = [];
   try {
@@ -27,10 +26,11 @@ test("DMS scope resolution selects the caller's personal credentials and never f
       payload: { expectedRevision: 0, production: { dms: { mode: "replace", url: "https://personal.example.test/sse", authorization: "Bearer personal-secret" } } },
     });
     assert.equal(personal.statusCode, 200, personal.body);
-    globalThis.fetch = async (input, init) => {
+    // The DMS connection is built inside the API route, so the global is replaced with an auto-restored mock.
+    t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push({ url: String(input), authorization: new Headers(init?.headers).get("Authorization") });
       return new Response("private details", { status: 401 });
-    };
+    });
     const resolve = () => f.app.inject({ method: "POST", url: "/api/dms/scope/resolve", headers, payload: { instanceAlias: "ORDERS", schemaName: "orders" } });
     const failed = await resolve();
     assert.equal(failed.statusCode, 502, failed.body);
@@ -51,7 +51,6 @@ test("DMS scope resolution selects the caller's personal credentials and never f
     assert.equal(status.statusCode, 200, status.body);
     assert.equal(status.json().productionDmsConfigured, undefined);
   } finally {
-    globalThis.fetch = original;
     await db.close();
     await f.cleanup();
   }

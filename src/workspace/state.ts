@@ -2,6 +2,7 @@ import { OperationError } from "../operation-error.ts";
 import { access, lstat, mkdir, opendir, readdir, realpath, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { normalizeIssueKey } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 
 export interface RepositoryStateRecord {
   localPath: string | null;
@@ -64,6 +65,11 @@ export async function assertIssueLayoutCurrent(stateRoot: string, issueKey: stri
   }
 }
 
+/** Unknown durable paths are preserved evidence: a conflict for the caller, with the paths kept as diagnostic detail. */
+function unmanagedIssueState(detail: string): DomainError {
+  return new DomainError("unmanaged_issue_state", "conflict", { detail });
+}
+
 /** Only Issue creation claims the durable root; generated views must not hide its loss. */
 export async function assertIssueRoot(stateRoot: string, issueKey: string): Promise<string> {
   const root = issueRoot(stateRoot, issueKey);
@@ -83,13 +89,13 @@ export async function claimIssueRoot(stateRoot: string, issueKey: string): Promi
     if (isMissing(error)) return undefined;
     throw error;
   });
-  if (oldRoot) throw new Error(`unmanaged_issue_state:issues/${path.basename(legacy)}`);
+  if (oldRoot) throw unmanagedIssueState(`issues/${path.basename(legacy)}`);
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
   if ((await realpath(path.dirname(root))) !== path.dirname(root)) throw new Error("invalid_issue_root");
   try {
     await mkdir(root, { mode: 0o700 });
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw new Error(`unmanaged_issue_state:workspaces/${path.basename(root)}`);
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") throw unmanagedIssueState(`workspaces/${path.basename(root)}`);
     throw error;
   }
 }
@@ -174,7 +180,7 @@ export async function assertIssueStateLayout(stateRoot: string, issueKeys: strin
       if (entry.isDirectory() && !active.has(entry.name.toLowerCase())) unmanaged.push(`${category}/${entry.name}`);
     }
   }
-  if (unmanaged.length) throw new Error(`unmanaged_issue_state:${unmanaged.sort().join(",")}`);
+  if (unmanaged.length) throw unmanagedIssueState(unmanaged.sort().join(","));
   // The ordinary layout has no legacy parent. Still probe recorded names if it exists,
   // including non-directory entries so ENOTDIR and permission errors remain visible.
   if (legacy) {

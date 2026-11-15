@@ -6,7 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { issueAttachments } from "../db/schema.ts";
 import { errorCode, stableErrorReason } from "../diagnostics.ts";
 import { issueRoot } from "../workspace/state.ts";
-import { openVerifiedAttachmentStream } from "./attachment-store.ts";
+import { openVerifiedAttachmentStream } from "../workspace/attachments.ts";
 import { ApiError } from "./input.ts";
 import { requireIssue, type ApiRouteContext } from "./route-context.ts";
 

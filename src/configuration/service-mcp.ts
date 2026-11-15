@@ -1,20 +1,11 @@
 import { dbHubConnections } from "./dbhub.ts";
-import { mcpServices, serviceDeployments, userPreferences } from "../db/schema.ts";
+import { mcpServices, serviceDeployments } from "../db/schema.ts";
 import type { Database } from "../db/client.ts";
 
-/** DingTalk connections are application import resources, never service tools. */
-export async function dingtalkMcpNames(database: Pick<Database, "select">): Promise<Set<string>> {
-  const preferences = await database.select({ dingtalk: userPreferences.dingtalk }).from(userPreferences);
-  return new Set(["dingtalk", ...preferences.flatMap((row) => (row.dingtalk.source?.mcp ? [row.dingtalk.source.mcp] : []))]);
-}
-
-export function serviceMcpConnections<Row extends { name: string; enabled: boolean; deploymentId?: string | null }>(
-  rows: readonly Row[],
-  deploymentIds: readonly string[],
-  importNames: ReadonlySet<string>,
-): Row[] {
+/** Service tools are enabled deployment-owned rows in scope; global rows (no deployment) serve application imports only. */
+export function serviceMcpConnections<Row extends { enabled: boolean; deploymentId?: string | null }>(rows: readonly Row[], deploymentIds: readonly string[]): Row[] {
   const scope = new Set(deploymentIds);
-  return rows.filter((row) => row.enabled && row.deploymentId != null && scope.has(row.deploymentId) && !importNames.has(row.name));
+  return rows.filter((row) => row.enabled && row.deploymentId != null && scope.has(row.deploymentId));
 }
 
 /** Read within the caller's configuration scope/snapshot. Generated connections are never persisted. */

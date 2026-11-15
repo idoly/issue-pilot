@@ -1,13 +1,13 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { DomainError, type DomainErrorCategory } from "../domain/errors.ts";
 import type { McpSession } from "./client.ts";
 import { DINGTALK_COLUMNS, type DingtalkTable, type DingtalkField, type DingtalkColumns, type DingtalkRecord, type DingtalkIssueRecord } from "./dingtalk-contracts.ts";
 
 const limits = issuePilotConfig.limits.capability.dingtalk;
-export class DingtalkError extends Error {
-  readonly statusCode: number;
-  constructor(message: string, statusCode = 502) {
-    super(message);
-    this.statusCode = statusCode;
+/** DingTalk gateway failures default to upstream errors; input, missing-record and snapshot refusals declare their own category. */
+export class DingtalkError extends DomainError {
+  constructor(code: string, category: DomainErrorCategory = "upstream", options?: ErrorOptions) {
+    super(code, category, options);
   }
 }
 function object(value: unknown): Record<string, unknown> {
@@ -15,7 +15,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 function dingtalkId(value: unknown): string {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,255}$/.test(value)) throw new DingtalkError("invalid_dingtalk_id", 400);
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,255}$/.test(value)) throw new DingtalkError("invalid_dingtalk_id", "bad_request");
   return value;
 }
 export function parseDingtalkTable(value: string): DingtalkTable {
@@ -32,7 +32,7 @@ export function parseDingtalkTable(value: string): DingtalkTable {
     canonical.searchParams.set("sheetId", tableId);
     return { baseId, tableId, recordId, url: canonical.toString() };
   } catch {
-    throw new DingtalkError("invalid_dingtalk_record_url", 400);
+    throw new DingtalkError("invalid_dingtalk_record_url", "bad_request");
   }
 }
 async function read(session: McpSession, name: "get_tables" | "query_records", input: Record<string, unknown>) {
@@ -63,7 +63,7 @@ async function read(session: McpSession, name: "get_tables" | "query_records", i
   if (result.isError || payload.status !== "success") {
     const error = payload.error && typeof payload.error === "object" ? object(payload.error) : {};
     if (["INVALID_CURSOR", "CURSOR_SNAPSHOT_CHANGED", "CURSOR_SNAPSHOT_UNAVAILABLE", "NON_RESUMABLE_ERROR_CURSOR", "CURSOR_OFFSET_LIMIT"].includes(String(error.code)))
-      throw new DingtalkError("dingtalk_snapshot_changed", 409);
+      throw new DingtalkError("dingtalk_snapshot_changed", "conflict");
     throw new DingtalkError("dingtalk_read_failed");
   }
   return object(payload.data);
@@ -98,7 +98,7 @@ export function resolveDingtalkColumns(fields: DingtalkField[], requested: Parti
       let id = preference;
       if (id !== undefined) {
         const matches = fields.filter((field) => field.id === id || field.name === id);
-        if (matches.length !== 1) throw new DingtalkError("dingtalk_fields_changed", 409);
+        if (matches.length !== 1) throw new DingtalkError("dingtalk_fields_changed", "conflict");
         id = matches[0]!.id;
       } else {
         for (const name of suggested[key]) {
@@ -116,7 +116,7 @@ export function resolveDingtalkColumns(fields: DingtalkField[], requested: Parti
 export async function readDingtalkRecord(session: McpSession, table: DingtalkTable, columns: DingtalkColumns): Promise<DingtalkRecord> {
   const data = await read(session, "query_records", { baseId: table.baseId, tableId: table.tableId, fieldIds: [...new Set(Object.values(columns).filter(Boolean))], recordIds: [table.recordId] });
   if (!Array.isArray(data.records) || data.records.length > 1 || data.nextCursor) throw new DingtalkError("invalid_dingtalk_response");
-  if (!data.records.length) throw new DingtalkError("dingtalk_record_not_found", 404);
+  if (!data.records.length) throw new DingtalkError("dingtalk_record_not_found", "not_found");
   const row = object(data.records[0]);
   if (row.recordId !== table.recordId) throw new DingtalkError("invalid_dingtalk_response");
   return { recordId: table.recordId, cells: object(row.cells) };

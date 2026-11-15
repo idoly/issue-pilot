@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { git } from "../helpers/git.ts";
 import { execFile } from "node:child_process";
 import fs, { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -60,7 +61,7 @@ async function createSharedCheckout(root: string, repositoryKey = "a".repeat(20)
   await exec("git", ["init", "-b", "main", source]);
   await Promise.all([writeFile(path.join(source, "README.md"), "shared checkout\n", "utf8"), writeFile(path.join(source, ".gitignore"), "ignored-evidence.txt\n", "utf8")]);
   await exec("git", ["-C", source, "add", "."]);
-  await exec("git", ["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
+  await git(["-C", source, "commit", "-m", "initial"]);
   const commit = (await exec("git", ["-C", source, "rev-parse", "HEAD"])).stdout.trim();
   const repository = path.join(repositoriesRoot(root), repositoryKey);
   const checkout = path.join(sharedCheckoutsRoot(root), repositoryKey, commit);

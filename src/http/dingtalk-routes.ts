@@ -31,7 +31,6 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
         // A cancellation must not hide incomplete cleanup of the response or staged files.
         if (error instanceof Error && ["dingtalk_attachment_cleanup_failed", "dingtalk_connection_close_failed"].includes(error.message)) throw error;
         if (signal.aborted) throw new ApiError(408, "dingtalk_request_cancelled_or_timed_out");
-        if (error instanceof DingtalkError) throw new ApiError(error.statusCode, error.message);
         throw error;
       } finally {
         request.raw.removeListener("aborted", abort);
@@ -43,10 +42,11 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       const user = await requireCurrentUser(database, request),
         preferences = await loadDingtalkUserSettings(database.db, user.subject);
       const name = preferences.source?.mcp ?? "dingtalk";
+      // Imports use only global connections; a deployment-owned row with the same name is a service tool.
       const [server] = await database.db
         .select()
         .from(mcpServices)
-        .where(and(eq(mcpServices.name, name), eq(mcpServices.enabled, true)))
+        .where(and(eq(mcpServices.name, name), eq(mcpServices.enabled, true), isNull(mcpServices.deploymentId)))
         .limit(1);
       return { user, preferences, name, server };
     });

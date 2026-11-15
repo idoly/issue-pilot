@@ -6,11 +6,13 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { issueRoot } from "../../src/workspace/state.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentEngine, type AgentReservation } from "../../src/agent/engine.ts";
+import type { AgentReservation } from "../../src/agent/contracts.ts";
+import { AgentEngine } from "../../src/agent/engine.ts";
 import { sessionTranscript } from "../../src/agent/events.ts";
 import { createPrivateSessionManager, type GitCommitIdentity, type ManagedPiSession } from "../../src/agent/pi-session.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces, subjects } from "../../src/db/schema.ts";
+import { DomainError } from "../../src/domain/errors.ts";
 import { ApiError } from "../../src/http/input.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import type { KeyedSerialQueue } from "../../src/serial.ts";
@@ -229,7 +231,9 @@ test("source mutations reauthorize after reservation and commit with the current
       },
     } as never,
   });
-  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
+  app.setErrorHandler((error, _request, reply) =>
+    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
+  );
   try {
     await createService(f.app, "SourceIdentity");
     const issue = await createIssue(f.app, "sourceidentity");
@@ -265,7 +269,7 @@ test("source mutations reauthorize after reservation and commit with the current
 
 for (const operation of ["reopen", "release"] as const)
   for (const explicit of [false, true])
-    test(`${operation} rechecks ${explicit ? "explicit" : "default"} identity after the lifecycle queue`, async (context) => {
+    test(`${operation} rechecks ${explicit ? "explicit" : "default"} identity when the lifecycle operation runs`, async (context) => {
       const f = await createApiFixture();
       const database = openDatabase(f.databaseFile);
       let release!: () => void, entered!: () => void;
@@ -283,14 +287,13 @@ for (const operation of ["reopen", "release"] as const)
         f.engine.running.clear();
         await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, issueId));
         await database.db.insert(subjects).values({ subject: "fallback@example.test", active: true, role: "developer", createdAt: new Date(Date.now() + 60_000) });
-        const prototype = WorkspaceLifecycleManager.prototype as unknown as { exclusive(operation: () => Promise<unknown>): Promise<unknown> };
-        const original = prototype.exclusive;
-        context.mock.method(prototype, "exclusive", function (this: WorkspaceLifecycleManager, operation: () => Promise<unknown>) {
-          return original.call(this, async () => {
-            entered();
-            await gate;
-            return operation();
-          });
+        // Hold the call at the route-to-lifecycle boundary; the lifecycle tests prove the owner authorizes after its own waits.
+        const method = operation === "reopen" ? "reopenIssue" : "releaseIssue";
+        const original: (this: WorkspaceLifecycleManager, issueId: string, authorize?: () => Promise<unknown>) => Promise<unknown> = WorkspaceLifecycleManager.prototype[method];
+        context.mock.method(WorkspaceLifecycleManager.prototype, method, async function (this: WorkspaceLifecycleManager, issueId: string, authorize?: () => Promise<unknown>) {
+          entered();
+          await gate;
+          return original.call(this, issueId, authorize);
         });
         const response = f.app
           .inject({
@@ -344,7 +347,7 @@ test("lifecycle operations preserve authorization errors before loading or chang
   }
 });
 
-test("scope conversion rechecks the developer role after its lifecycle wait", async (context) => {
+test("scope conversion rechecks the developer role when the lifecycle conversion runs", async (context) => {
   const f = await createApiFixture();
   const database = openDatabase(f.databaseFile);
   let release!: () => void, entered!: () => void;
@@ -366,14 +369,12 @@ test("scope conversion rechecks the developer role after its lifecycle wait", as
     assert.equal(planResponse.statusCode, 200, planResponse.body);
     const plan = planResponse.json();
     assert.equal(plan.action, "convert_to_development");
-    const prototype = WorkspaceLifecycleManager.prototype as unknown as { exclusive(operation: () => Promise<unknown>): Promise<unknown> };
-    const original = prototype.exclusive;
-    context.mock.method(prototype, "exclusive", function (this: WorkspaceLifecycleManager, operation: () => Promise<unknown>) {
-      return original.call(this, async () => {
-        entered();
-        await gate;
-        return operation();
-      });
+    // Hold the conversion at the scope-transition-to-lifecycle boundary; the lifecycle tests prove the owner authorizes after its own waits.
+    const original = WorkspaceLifecycleManager.prototype.convertIssueToDevelopment;
+    context.mock.method(WorkspaceLifecycleManager.prototype, "convertIssueToDevelopment", async function (this: WorkspaceLifecycleManager, ...args: Parameters<typeof original>) {
+      entered();
+      await gate;
+      return original.apply(this, args);
     });
     const response = f.app
       .inject({ method: "POST", url: `/api/issues/${issue.id}/scope-transition/apply`, payload: { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash } })

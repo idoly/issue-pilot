@@ -1,6 +1,6 @@
 import type { JsonAgentSessionEvent, SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { TextContent } from "@earendil-works/pi-ai";
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { sharedConfig } from "../../issue-pilot.config.ts";
 import { DomainError } from "../domain/errors.ts";
 
 export interface QueryResultReference {
@@ -28,7 +28,7 @@ function nativeResult(value: unknown): value is { content: TextContent[]; detail
 
 function resultText(result: { content: TextContent[] }): string {
   const text = result.content.map((part) => part.text).join("\n");
-  if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes) throw new DomainError("agent_query_result_too_large", "payload_too_large");
+  if (Buffer.byteLength(text) > sharedConfig.limits.capability.resultBytes) throw new DomainError("agent_query_result_too_large", "payload_too_large");
   return text;
 }
 

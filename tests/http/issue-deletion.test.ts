@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { git } from "../helpers/git.ts";
 import { chmod, mkdir, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -84,14 +83,12 @@ for (const mode of ["success", "rollback", "referenced", "symlink"] as const) {
 test("deletion refuses dirty development worktrees and removes clean registered worktrees without touching the remote", async () => {
   const f = await createApiFixture();
   const db = openDatabase(f.databaseFile);
-  const exec = promisify(execFile);
-  const git = async (...args: string[]) => (await exec("git", args)).stdout.trim();
   try {
     const source = path.join(f.root, "remote");
-    await git("init", "-b", "main", source);
+    await git(["init", "-b", "main", source]);
     await writeFile(path.join(source, "README.md"), "original\n");
-    await git("-C", source, "add", ".");
-    await git("-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "commit", "-m", "initial"]);
     await createService(f.app, "Devdelete", ["dev"]);
     // API deliberately permits only HTTPS/SSH; this isolated fixture uses a local Git source.
     await db.client.execute("PRAGMA foreign_keys = ON");
@@ -113,7 +110,7 @@ test("deletion refuses dirty development worktrees and removes clean registered 
     const failed = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}` });
     assert.equal(failed.statusCode, 500, failed.body);
     assert.equal(await readFile(file, "utf8"), "original\n");
-    assert.equal(await git("-C", project.repositories[0]!.workspacePath, "branch", "--show-current"), project.repositories[0]!.workingBranch);
+    assert.equal(await git(["-C", project.repositories[0]!.workspacePath, "branch", "--show-current"]), project.repositories[0]!.workingBranch);
     await db.client.execute("DROP TRIGGER refuse_development_delete");
     const deleted = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}` });
     assert.equal(deleted.statusCode, 204, deleted.body);

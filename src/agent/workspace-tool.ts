@@ -2,12 +2,12 @@ import { and, eq } from "drizzle-orm";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { arr, compile, lit, obj, oneOf, str, union, unknown as unknownSchema, type Static } from "@earendil-works/pi-schema";
 import type { Database } from "../db/client.ts";
-import { dingtalkMcpNames, loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
+import { loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { publicMcpUrl } from "../configuration/mcp.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
 import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
-import { configuredCapabilities, type EnvironmentKind } from "../domain/contracts.ts";
+import { canModifyIssueCode, configuredCapabilities, isDevelopmentEnvironment, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueCommandEnvironment, issueLocalCommands } from "./native-tools.ts";
 import { objectToolParameters } from "./tool-schema.ts";
 import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
@@ -114,7 +114,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
   const { runtimeRoot, personalGit, onScopeChanged } = options;
   const available = await listEnvironmentServices(database, issue.environmentId);
   // Development environments carry no investigation capability configuration of their own.
-  const investigationCapabilities = (row: (typeof available)[number]) => configuredCapabilities(row.environment.kind === "dev" ? {} : row.deployment.config);
+  const investigationCapabilities = (row: (typeof available)[number]) => configuredCapabilities(isDevelopmentEnvironment(row.environment.kind) ? {} : row.deployment.config);
   const keys = available.filter((row) => row.environment.id === issue.environmentId).map((row) => row.service.key);
   const schema = objectToolParameters(
     structuredClone(
@@ -122,7 +122,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         inputShapes.list,
         ...available.map((row) => obj({ operation: lit("describe"), service: lit(row.service.key), environment: lit(row.environment.key) })),
         obj({ operation: oneOf(["include", "remove"]), service: oneOf(keys) }),
-        ...(environmentKind === "dev" ? [inputShapes.index, inputShapes.commit, inputShapes.push] : []),
+        ...(canModifyIssueCode(environmentKind) ? [inputShapes.index, inputShapes.commit, inputShapes.push] : []),
       ]),
     ),
   );
@@ -162,7 +162,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         const target = available.find((row) => row.service.key === input.service && row.environment.key === input.environment);
         if (!target) throw new Error("service_not_available_in_environment");
         const mcpRows = (await loadMcpConnections(database)).map(({ id, name, url, transport, enabled, deploymentId }) => ({ id, name, url, transport, enabled, deploymentId }));
-        const mcp = serviceMcpConnections(mcpRows, [target.deployment.id], await dingtalkMcpNames(database));
+        const mcp = serviceMcpConnections(mcpRows, [target.deployment.id]);
         const definition = await loadDeploymentRepositories(database, { serviceId: target.service.id, environmentId: target.environment.id });
         const names = new Map((await database.select().from(repositoryCatalog)).map((row) => [row.url, row.name]));
         const repositories = definition.repositories.map((row) => ({ name: names.get(row.repository.url) ?? row.repository.alias, url: row.repository.url, branch: row.baseBranch }));
@@ -226,7 +226,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
                 branch: row.workingBranch ?? row.baseBranch,
                 baseCommit: row.commitBefore,
                 path: row.localPath ?? path.join(runtimeRoot, names.get(row.url)!),
-                writable: environmentKind === "dev",
+                writable: canModifyIssueCode(environmentKind),
               })),
             }),
             { operation: input.operation },

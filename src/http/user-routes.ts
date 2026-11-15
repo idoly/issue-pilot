@@ -1,14 +1,17 @@
-import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration, CapabilityConfigurationError } from "../capabilities/registry.ts";
-import { and, asc, desc, eq, or } from "drizzle-orm";
+import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration } from "../capabilities/registry.ts";
+import { and, asc, desc, eq } from "drizzle-orm";
 
-import { subjects, issues, userCredentials, applicationSettings } from "../db/schema.ts";
-import { AgentBusyError } from "../agent/engine.ts";
+import { issuesAffectedByGlobalChange, issuesAffectedByUserChange } from "../configuration/impact.ts";
+import { subjects, userCredentials, applicationSettings } from "../db/schema.ts";
 import { CAPABILITY_CREDENTIAL_FIELDS } from "../configuration/contracts.ts";
 import { credentialStatus } from "../configuration/user-credentials.ts";
-import { CAPABILITY_KEYS, USER_ROLES, type AgentModelSelection } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, USER_ROLES, hasPersonalGitIdentity, managedUserChangeRequiresAdministrator, type AgentModelSelection, type UserRole } from "../domain/contracts.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, ApiError, checkRevision, choice, closedRecord, record, text } from "./input.ts";
+import { agentModelSelection, ApiError, checkRevision, choice, closedRecord, isClassifiedFailure, record, text } from "./input.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+
+export type IdentityMode = typeof issuePilotConfig.http.identity;
 
 function userSubject(value: unknown): string {
   const subject = text(value, "user_subject", 255).toLowerCase();
@@ -46,20 +49,20 @@ function serializeManagedUser(user: typeof subjects.$inferSelect) {
   };
 }
 
-export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "modelCatalog" | "runScopeExclusive">): void {
+export function registerUserRoutes(
+  context: Pick<ApiRouteContext, "app" | "database" | "engine" | "modelCatalog" | "runScopeExclusive">,
+  identity: IdentityMode = issuePilotConfig.http.identity,
+): void {
   const { app, database, engine, modelCatalog, runScopeExclusive } = context;
-  const personalStatus = (role: string | undefined, credentials?: typeof userCredentials.$inferSelect) => {
+  const personalStatus = (role: UserRole | undefined, credentials?: typeof userCredentials.$inferSelect) => {
     const status = { ...credentialStatus(credentials), revision: credentials?.revision ?? 0 };
-    return role === "developer" ? status : { ...status, gitSshConfigured: false };
+    return hasPersonalGitIdentity(role) ? status : { ...status, gitSshConfigured: false };
   };
 
   const changeUser = async <T>(subject: string, authorize: () => Promise<string>, change: (closeSessions: () => Promise<void>) => Promise<T>) =>
     runScopeExclusive(async () => {
       await authorize();
-      const affected = await database.db
-        .select({ id: issues.id })
-        .from(issues)
-        .where(or(eq(issues.reporterSubject, subject), eq(issues.assigneeSubject, subject)));
+      const affected = await issuesAffectedByUserChange(database.db, subject);
       return runIssueExclusive(
         engine,
         affected.map(({ id }) => id),
@@ -93,19 +96,13 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       const input = closedRecord(request.body, ["mode", "expectedRevision", ...fields], `invalid_shared_${kind}_credentials`);
       if (input.mode === "clear" && fields.some((field) => input[field] !== undefined)) throw new ApiError(400, `invalid_shared_${kind}_credentials`);
       if (input.mode !== "clear" && input.mode !== "replace") throw new ApiError(400, "invalid_credential_update");
-      let update: Pick<typeof applicationSettings.$inferInsert, "sharedDmsCredentials" | "sharedSlsCredentials">;
-      try {
-        update =
-          kind === "dms"
-            ? { sharedDmsCredentials: input.mode === "clear" ? null : parseDmsConnectionConfiguration(input) }
-            : { sharedSlsCredentials: input.mode === "clear" ? null : parseSlsConnectionConfiguration(input) };
-      } catch (error) {
-        if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
-        throw error;
-      }
+      const update: Pick<typeof applicationSettings.$inferInsert, "sharedDmsCredentials" | "sharedSlsCredentials"> =
+        kind === "dms"
+          ? { sharedDmsCredentials: input.mode === "clear" ? null : parseDmsConnectionConfiguration(input) }
+          : { sharedSlsCredentials: input.mode === "clear" ? null : parseSlsConnectionConfiguration(input) };
       return runScopeExclusive(async () => {
         await requireAdmin(database, request);
-        const affected = await database.db.select({ id: issues.id }).from(issues);
+        const affected = await issuesAffectedByGlobalChange(database.db);
         return runIssueExclusive(
           engine,
           affected.map((row) => row.id),
@@ -186,32 +183,27 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
         if (input.production) {
           const production = record(input.production);
           if (Object.keys(production).some((key) => !["dms", "sls"].includes(key)) || (!production.dms && !production.sls)) throw new ApiError(400, "invalid_production_credentials");
-          try {
-            if (production.dms) {
-              const dms = record(production.dms);
-              if (dms.mode === "clear") {
-                values.productionDmsUrl = "";
-                values.productionDmsAuthorization = "";
-              } else if (dms.mode === "replace") {
-                const value = parseDmsConnectionConfiguration(dms);
-                values.productionDmsUrl = value.url;
-                values.productionDmsAuthorization = value.authorization;
-              } else throw new ApiError(400, "invalid_credential_update");
-            }
-            if (production.sls) {
-              const sls = record(production.sls);
-              if (sls.mode === "clear") {
-                values.productionSlsAccessKeyId = "";
-                values.productionSlsAccessKeySecret = "";
-              } else if (sls.mode === "replace") {
-                const value = parseSlsConnectionConfiguration(sls);
-                values.productionSlsAccessKeyId = value.accessKeyId;
-                values.productionSlsAccessKeySecret = value.accessKeySecret;
-              } else throw new ApiError(400, "invalid_credential_update");
-            }
-          } catch (error) {
-            if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
-            throw error;
+          if (production.dms) {
+            const dms = record(production.dms);
+            if (dms.mode === "clear") {
+              values.productionDmsUrl = "";
+              values.productionDmsAuthorization = "";
+            } else if (dms.mode === "replace") {
+              const value = parseDmsConnectionConfiguration(dms);
+              values.productionDmsUrl = value.url;
+              values.productionDmsAuthorization = value.authorization;
+            } else throw new ApiError(400, "invalid_credential_update");
+          }
+          if (production.sls) {
+            const sls = record(production.sls);
+            if (sls.mode === "clear") {
+              values.productionSlsAccessKeyId = "";
+              values.productionSlsAccessKeySecret = "";
+            } else if (sls.mode === "replace") {
+              const value = parseSlsConnectionConfiguration(sls);
+              values.productionSlsAccessKeyId = value.accessKeyId;
+              values.productionSlsAccessKeySecret = value.accessKeySecret;
+            } else throw new ApiError(400, "invalid_credential_update");
           }
         }
         await closeSessions();
@@ -224,7 +216,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
         return personalStatus(user?.role, saved);
       },
     ).catch((error) => {
-      if (error instanceof ApiError || error instanceof AgentBusyError) throw error;
+      if (isClassifiedFailure(error)) throw error;
       app.log.error(errorDiagnostic(error));
       throw new ApiError(500, "user_credentials_save_failed");
     });
@@ -238,7 +230,8 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
 
   app.get("/api/me", async (request, _reply) => {
     const person = await requireCurrentUser(database, request);
-    return serializePerson(person);
+    // Only tells the Web whether to offer the switcher; server identity resolution is the same in both modes.
+    return { ...serializePerson(person), identityLocked: identity === "gateway" };
   });
 
   app.get("/api/users/manage", async (request, _reply) => {
@@ -255,7 +248,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       await requireDeveloper(database, request);
       const role = choice(input.role ?? "product", "user_role", USER_ROLES);
       const isAdmin = input.isAdmin === undefined ? false : userAdmin(input.isAdmin);
-      if (isAdmin) await requireAdmin(database, request);
+      if (managedUserChangeRequiresAdministrator(undefined, isAdmin)) await requireAdmin(database, request);
       const [saved] = await database.db
         .insert(subjects)
         .values({ subject: userSubject(input.subject), displayName: userName(input.name), email: userEmail(input.email), role, isAdmin, active: true })
@@ -283,7 +276,7 @@ export function registerUserRoutes(context: Pick<ApiRouteContext, "app" | "datab
       async () => {
         const actor = await requireDeveloper(database, request);
         const [existing] = await database.db.select({ isAdmin: subjects.isAdmin }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
-        if (existing?.isAdmin || update.isAdmin === true) await requireAdmin(database, request);
+        if (managedUserChangeRequiresAdministrator(existing, update.isAdmin === true)) await requireAdmin(database, request);
         return actor;
       },
       async (closeSessions) => {

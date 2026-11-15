@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { git } from "../helpers/git.ts";
 import { execFile, spawn } from "node:child_process";
 import fs, { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -78,7 +79,7 @@ test("bound Git push uses personal SSH and preserves target refs, rejecting othe
     await exec("git", ["init", "-b", "main", local]);
     await writeFile(path.join(local, "file.txt"), "SSH transport fixture");
     await exec("git", ["-C", local, "add", "."]);
-    await exec("git", ["-C", local, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "fixture"]);
+    await git(["-C", local, "commit", "-m", "fixture"]);
     await exec("git", ["-C", source, "fetch", local, "refs/heads/main:refs/heads/main", "refs/heads/main:refs/heads/test"]);
     const originalRead = fs.readFile;
     let knownHost = `[127.0.0.2]:${port} ${(await readFile(path.join(root, "host.pub"), "utf8")).trim()}\n`;
@@ -99,7 +100,7 @@ test("bound Git push uses personal SSH and preserves target refs, rejecting othe
     const runtimeRoot = path.dirname(own.workspacePath);
     const branch = `refs/heads/${own.workingBranch}`;
     const tip = async (ref: string) => (await exec("git", ["-C", source, "rev-parse", "--verify", ref])).stdout.trim();
-    await exec("git", ["-C", own.workspacePath, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "issue change"]);
+    await git(["-C", own.workspacePath, "commit", "--allow-empty", "-m", "issue change"]);
     const first = (await exec("git", ["-C", own.workspacePath, "rev-parse", "HEAD"])).stdout.trim();
     database = await openApplicationDatabase(path.join(state, "issues.db"));
     const [environment] = await database.db.select().from(environments).where(eq(environments.key, "dev"));
@@ -145,7 +146,7 @@ test("bound Git push uses personal SSH and preserves target refs, rejecting othe
       const push = () => workspace.execute("ssh", { operation: "push", repository: "repo" }, undefined, undefined, {} as never);
       if (scenario === "personal") {
         await push();
-        await exec("git", ["-C", own.workspacePath, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "another change"]);
+        await git(["-C", own.workspacePath, "commit", "--allow-empty", "-m", "another change"]);
       } else {
         await assert.rejects(push(), scenario === "other" ? /Permission denied/ : /Host key verification failed/);
       }

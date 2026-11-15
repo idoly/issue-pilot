@@ -5,8 +5,8 @@ import type { StoredDeploymentConfig } from "../../src/domain/contracts.ts";
 
 test("SLS target headings are always SLS while environment and exact query parameters remain visible", () => {
   for (const environment of [
-    { key: "prod", name: "正式" },
-    { key: "test", name: "测试" },
+    { kind: "prod" as const, name: "正式" },
+    { kind: "test" as const, name: "测试" },
   ]) {
     const configuration: StoredDeploymentConfig = {
       sls: {
@@ -44,7 +44,7 @@ test("generated descriptions include exact capability parameters without secrets
     mcpServices: ["docs"],
     archivedDevelopment: { password: "private-archive" },
   };
-  const context = deploymentContext({ key: "prod", name: "正式" }, configuration, [
+  const context = deploymentContext({ kind: "prod" as const, name: "正式" }, configuration, [
     { id: "docs", name: "Docs", url: "https://docs.example.test/mcp?key=private-query-token", transport: "streamable_http", enabled: true },
   ]);
   for (const value of ["prod-instance", "orders", "alias", "schema", "orders-api", "gateway", "Docs"]) assert.ok(context.includes(value), value);
@@ -56,10 +56,10 @@ test("generated descriptions include exact capability parameters without secrets
   assert.doesNotMatch(context, /DMS ·|数据库 [12]/);
   assert.match(context, /<code>orders-api<\/code><br><code>gateway<\/code>/);
   assert.doesNotMatch(context, /用户.*&quot;&quot;/);
-  const displayed = deploymentContext({ key: "prod", name: "正式" }, configuration, []);
+  const displayed = deploymentContext({ kind: "prod" as const, name: "正式" }, configuration, []);
   assert.doesNotMatch(displayed, /private-dms-token|private-sls-id|private-sls-secret|Authorization|AccessKey/);
   assert.doesNotMatch(displayed, /private-redis-password|private-nacos-password/);
-  const development = deploymentContext({ key: "dev", name: "开发" }, configuration, []);
+  const development = deploymentContext({ kind: "dev", name: "开发" }, configuration, []);
   assert.match(development, /继承正式和测试/);
   assert.doesNotMatch(development, /prod-namespace|prod-instance|prod-project|redis.prod.internal/);
 });

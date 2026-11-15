@@ -44,8 +44,8 @@ export interface StartPiSessionOptions {
   deploymentConfig: DeploymentConfig;
   workspaceRoot: string;
   readRoots?: string[];
-  /** SQLite-selected personal or shared key; AgentEngine always supplies it, only injected runtimes omit it. */
-  modelApiKey?: string;
+  /** SQLite-selected personal or shared key. Every session runtime is keyed by it; Operator auth.json/models.json keys never apply. */
+  modelApiKey: string;
   gitIdentity?: GitCommitIdentity;
   serviceScopes?: ServiceToolScope[];
   workspaceTool?: ToolDefinition<any, any, any>;
@@ -378,22 +378,21 @@ async function abortAndDispose(session: AgentSession): Promise<void> {
   if (failures.length > 1) throw new AggregateError(failures, "pi_session_stop_failed");
 }
 
+/** Creates a private model runtime bound to one provider key; the session owns and closes it. */
+export type KeyedModelRuntimeFactory = (provider: string, apiKey: string, agentDirectory: string) => PiModelRuntime;
+
 export class PiSessionRuntime {
-  readonly #modelRuntime: PiModelRuntime;
-  readonly #ownsModelRuntime: boolean;
+  readonly #createKeyedRuntime: KeyedModelRuntimeFactory;
 
-  constructor(modelRuntime?: PiModelRuntime) {
-    this.#modelRuntime = modelRuntime ?? createPiModelRuntime();
-    this.#ownsModelRuntime = modelRuntime === undefined;
-  }
-
-  async close(): Promise<void> {
-    if (this.#ownsModelRuntime) await this.#modelRuntime.close();
+  /** Tests inject a fake factory; the key still selects every runtime, so there is no unkeyed path. */
+  constructor(createKeyedRuntime: KeyedModelRuntimeFactory = (provider, apiKey, agentDirectory) => createPiModelRuntime(agentDirectory, { provider, apiKey })) {
+    this.#createKeyedRuntime = createKeyedRuntime;
   }
 
   async start(options: StartPiSessionOptions): Promise<ManagedPiSession> {
+    if (!options.modelApiKey) throw new Error("model_api_key_not_configured");
     const commands: PreparedIssueCommand[] = [];
-    const keyed = options.modelApiKey ? createPiModelRuntime(options.agentDirectory ?? getAgentDir(), { provider: options.context.model.provider, apiKey: options.modelApiKey }) : undefined;
+    const keyed = this.#createKeyedRuntime(options.context.model.provider, options.modelApiKey, options.agentDirectory ?? getAgentDir());
     const cleanup = async () => {
       const failures: unknown[] = [];
       for (const command of commands)
@@ -403,14 +402,14 @@ export class PiSessionRuntime {
           failures.push(error);
         }
       try {
-        await keyed?.close();
+        await keyed.close();
       } catch (error) {
         failures.push(error);
       }
       if (failures.length) throw new AggregateError(failures, "pi_runtime_cleanup_failed");
     };
     try {
-      const managed = await this.startWithRuntime(options, keyed ?? this.#modelRuntime, commands);
+      const managed = await this.startWithRuntime(options, keyed, commands);
       let stopping: Promise<void> | undefined,
         stopped = false;
       return {

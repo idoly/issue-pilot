@@ -7,6 +7,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { userCredentials, subjects } from "../../src/db/schema.ts";
+import { DomainError } from "../../src/domain/errors.ts";
 import { ApiError } from "../../src/http/input.ts";
 import { registerUserRoutes } from "../../src/http/user-routes.ts";
 import { requireCurrentUser, requireDeveloper } from "../../src/http/route-context.ts";
@@ -244,7 +245,7 @@ test("parallel identity checks share the initial default selection and recheck d
     release();
     const results = await Promise.allSettled([first, second]);
     assert.ok(
-      results.every((result) => result.status === "rejected" && result.reason instanceof ApiError && result.reason.message === "invalid_current_subject"),
+      results.every((result) => result.status === "rejected" && result.reason instanceof DomainError && result.reason.message === "invalid_current_subject"),
       "parallel checks must not select different users or accept a stale active state",
     );
     assert.equal((await requireCurrentUser(database, { headers: {} })).subject, "zz-parallel-default");
@@ -277,7 +278,9 @@ test("does not save another user's credentials when the default identity changes
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
+  app.setErrorHandler((error, _request, reply) =>
+    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
+  );
   try {
     const created = await f.app.inject({
       method: "POST",

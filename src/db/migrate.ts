@@ -1,5 +1,5 @@
 import { applicationConfig } from "../config.ts";
-import { ApplicationStateLease } from "../workspace/state-lease.ts";
+import { ApplicationStateLease } from "../state-lease.ts";
 import { migrateDatabase } from "./bootstrap.ts";
 import { openDatabase } from "./client.ts";
 
@@ -7,16 +7,26 @@ import { openDatabase } from "./client.ts";
 export async function migrateStateDatabase(stateRoot: string, databaseFile: string): Promise<void> {
   const lease = new ApplicationStateLease(stateRoot);
   await lease.start();
+  const failures: unknown[] = [];
   try {
     const database = openDatabase(databaseFile);
     try {
       await migrateDatabase(database);
-    } finally {
-      await database.close();
+    } catch (error) {
+      failures.push(error);
     }
-  } finally {
-    await lease.close();
+    // Cleanup failures join the migration failure instead of replacing it.
+    try {
+      database.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  } catch (error) {
+    failures.push(error);
   }
+  await lease.close().catch((error: unknown) => failures.push(error));
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "database_migration_failed");
 }
 
 if (import.meta.main) await migrateStateDatabase(applicationConfig.stateRoot, applicationConfig.databaseFile);

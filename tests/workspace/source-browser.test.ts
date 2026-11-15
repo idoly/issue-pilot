@@ -1,12 +1,11 @@
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { git } from "../helpers/git.ts";
 import { access, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
@@ -316,12 +315,11 @@ test("browses only registered Issue repository content", async () => {
       })
       .returning();
     const remote = path.join(root, "read-only-remote");
-    const git = promisify(execFile);
-    await git("git", ["init", "-b", "main", remote]);
+    await git(["init", "-b", "main", remote]);
     await writeFile(path.join(remote, "README.md"), "# Snapshot\n", "utf8");
     await symlink(".", path.join(remote, "same-directory"));
-    await git("git", ["-C", remote, "add", "README.md", "same-directory"]);
-    await git("git", ["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=test@example.test", "commit", "-m", "snapshot"]);
+    await git(["-C", remote, "add", "README.md", "same-directory"]);
+    await git(["-C", remote, "commit", "-m", "snapshot"]);
     const worktrees = new WorktreeManager(root);
     const { workspacePath: readOnlyRepository, cachePath, baseCommit } = await worktrees.prepareShared({ url: remote, baseBranch: "main" });
     await database.db.insert(issueRepositories).values({

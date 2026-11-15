@@ -5,13 +5,13 @@ import { loadGlobalAgentConfiguration, loadSharedAgentApiKey } from "./agent.ts"
 import { readSnapshot, type Database, type DatabaseReader } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services } from "../db/schema.ts";
-import { configuredCapabilities, ENVIRONMENT_KINDS, type AgentModelDefinition } from "../domain/contracts.ts";
+import { configuredCapabilities, ENVIRONMENT_KINDS, isDevelopmentEnvironment, type AgentModelDefinition, type EnvironmentKind } from "../domain/contracts.ts";
 import type { Configuration, ConfigurationCatalog } from "./contracts.ts";
 import { deploymentContext } from "./service-context.ts";
-import { dingtalkMcpNames, serviceMcpConnections } from "./service-mcp.ts";
+import { serviceMcpConnections } from "./service-mcp.ts";
 import { projectCapabilityConfiguration } from "./credentials.ts";
 
-const descriptionEnvironmentOrder = ["dev", "test", "prod"];
+const descriptionEnvironmentOrder: readonly EnvironmentKind[] = ["dev", "test", "prod"];
 
 type ServiceContextEntry = {
   environment: Parameters<typeof deploymentContext>[0];
@@ -25,7 +25,7 @@ function serviceContext(description: string, entries: readonly ServiceContextEnt
   return [
     description,
     ...entries
-      .toSorted((left, right) => descriptionEnvironmentOrder.indexOf(left.environment.key) - descriptionEnvironmentOrder.indexOf(right.environment.key))
+      .toSorted((left, right) => descriptionEnvironmentOrder.indexOf(left.environment.kind) - descriptionEnvironmentOrder.indexOf(right.environment.kind))
       .map(({ environment, configuration, connections, credentials }) => deploymentContext(environment, configuration, connections, credentials ?? [], privateConfiguration)),
   ]
     .filter(Boolean)
@@ -98,7 +98,6 @@ async function projectConfiguration(database: DatabaseReader, agentModels: Agent
       .from(schema.mcpServices),
   ]);
   mcp.push(...dbHubConnections(deploymentRows, mcp));
-  const importNames = await dingtalkMcpNames(database);
   const environmentKeyById = new Map(environmentRows.map((environment) => [environment.id, environment.key]));
   const environmentById = new Map(environmentRows.map((environment) => [environment.id, environment]));
   const deploymentsByServiceId = new Map<string, typeof deploymentRows>();
@@ -130,7 +129,7 @@ async function projectConfiguration(database: DatabaseReader, agentModels: Agent
       const contextEntries = deployments.map((deployment) => {
         const environment = environmentById.get(deployment.environmentId);
         if (!environment) throw new Error("deployment_environment_not_found");
-        return { environment, configuration: deployment.config, connections: serviceMcpConnections(mcp, [deployment.id], importNames) };
+        return { environment, configuration: deployment.config, connections: serviceMcpConnections(mcp, [deployment.id]) };
       });
       return {
         revision: service.revision,
@@ -142,7 +141,9 @@ async function projectConfiguration(database: DatabaseReader, agentModels: Agent
           const deploymentConfig = deployment.config;
           const environmentKey = environmentKeyById.get(deployment.environmentId);
           if (!environmentKey) throw new Error("deployment_environment_not_found");
-          const branchDeployment = environmentKey === "dev" ? deployments.find((row) => environmentKeyById.get(row.environmentId) === "prod") : deployment;
+          const branchDeployment = isDevelopmentEnvironment(environmentById.get(deployment.environmentId)?.kind)
+            ? deployments.find((row) => environmentById.get(row.environmentId)?.kind === "prod")
+            : deployment;
           if (!branchDeployment) throw new Error("development_production_deployment_required");
           const branchByRepositoryId = branchesByDeploymentId.get(branchDeployment.id) ?? new Map<string, string>();
           if (repositories.some((repository) => !branchByRepositoryId.has(repository.id)) || branchByRepositoryId.size !== repositories.length)
@@ -171,11 +172,10 @@ export function loadServiceConfigurationDescription(database: Database, key: str
       reader.select().from(schema.mcpServices),
     ]);
     mcp.push(...dbHubConnections(deployments, mcp));
-    const importNames = await dingtalkMcpNames(reader);
     const entries = deployments.map((deployment) => {
       const environment = environmentRows.find((row) => row.id === deployment.environmentId);
       if (!environment) throw new Error("deployment_environment_not_found");
-      const connections = serviceMcpConnections(mcp, [deployment.id], importNames);
+      const connections = serviceMcpConnections(mcp, [deployment.id]);
       return { environment, configuration: deployment.config, connections, credentials: connections };
     });
     return { context: serviceContext(service.description, entries, true) };

@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { eq } from "drizzle-orm";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
-import { applicationSettings, userPreferences, dingtalkIssueImports, issues, mcpServices, subjects } from "../../src/db/schema.ts";
+import { applicationSettings, userPreferences, dingtalkIssueImports, issues, mcpServices, serviceDeployments, subjects } from "../../src/db/schema.ts";
 import type { McpConfiguration, McpConnector } from "../../src/mcp/client.ts";
 import type { DingtalkRecord } from "../../src/mcp/dingtalk-contracts.ts";
 import { createApiFixture, createService } from "./fixture.ts";
@@ -554,6 +554,27 @@ test("cancelling a record import closes the MCP session", { timeout: 10000 }, as
     await assert.rejects(response, (error) => error instanceof Error && error.name === "AbortError");
     await f.stop();
     assert.equal(f.state.closed, 1);
+    assert.deepEqual(await f.database.db.select().from(issues), []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a deployment-owned connection is a service tool and never serves imports, even when a preference names it", async () => {
+  const f = await fixture();
+  try {
+    const [deployment] = await f.database.db.select({ id: serviceDeployments.id }).from(serviceDeployments).limit(1);
+    await f.database.db.delete(mcpServices).where(eq(mcpServices.name, "dingtalk"));
+    await f.database.db.insert(mcpServices).values([
+      { name: "dingtalk", transport: "streamable_http", url: "https://service.example.test/mcp?key=service-fixture", enabled: true, deploymentId: deployment!.id },
+      { name: "service-import", transport: "streamable_http", url: "https://service.example.test/mcp?key=preferred-fixture", enabled: true, deploymentId: deployment!.id },
+    ]);
+    assert.deepEqual((await f.app.inject({ method: "GET", url: "/api/dingtalk/source" })).json().connection, { available: false, name: "dingtalk" });
+    assert.equal((await f.submit()).json().error, "dingtalk_mcp_not_configured");
+    await f.database.db.insert(userPreferences).values({ subject: f.user.subject, dingtalk: { source: { mcp: "service-import", url: recordUrl } } });
+    assert.deepEqual((await f.app.inject({ method: "GET", url: "/api/dingtalk/source" })).json().connection, { available: false, name: "service-import" });
+    assert.equal((await f.submit()).json().error, "dingtalk_mcp_not_configured");
+    assert.deepEqual(f.state.configurations, []);
     assert.deepEqual(await f.database.db.select().from(issues), []);
   } finally {
     await f.cleanup();

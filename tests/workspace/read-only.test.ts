@@ -1,11 +1,10 @@
+import { createBareRemote, git } from "../helpers/git.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
@@ -26,8 +25,6 @@ import {
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
-
-const execFileAsync = promisify(execFile);
 
 test("read-only preparation validates related context before preparing repositories", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-readonly-context-"));
@@ -88,19 +85,8 @@ test("read-only preparation validates related context before preparing repositor
   }
 });
 
-async function git(args: string[]): Promise<string> {
-  return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
-}
-
 async function createRemote(root: string): Promise<string> {
-  const source = path.join(root, "source");
-  const remote = path.join(root, "remote.git");
-  await git(["init", "-b", "main", source]);
-  await writeFile(path.join(source, "README.md"), "baseline\n", "utf8");
-  await git(["-C", source, "add", "."]);
-  await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
-  await git(["clone", "--bare", source, remote]);
-  return remote;
+  return (await createBareRemote(root)).remote;
 }
 
 test("prepares current read-only issue runtimes from deployment branches", async () => {
@@ -163,7 +149,7 @@ test("prepares current read-only issue runtimes from deployment branches", async
     }
 
     await writeFile(path.join(source, "README.md"), "updated branch\n");
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-am", "advance main"]);
+    await git(["-C", source, "commit", "-am", "advance main"]);
     await git(["-C", source, "push", remote, "main"]);
     assert.equal(await prepare(), rootDirectory);
     assert.equal(await readFile(path.join(issueRoot(root, issue!.key), "remote", "README.md"), "utf8"), "updated branch\n");

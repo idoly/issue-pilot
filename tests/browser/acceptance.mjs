@@ -10,10 +10,11 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus } from "../../src/agent/events.ts";
 import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
+import { readIssueSessionHistory } from "../../src/agent/session-reset.ts";
 import { persistNestedQuery, savedQueryCompletion } from "../../src/agent/query-results.ts";
 import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { agentSessions, issueRelations, issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
+import { agentSessions, issueCcRecipients, issueRelations, issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
 import { issueRepositoryStorePath, repositoryStorePath } from "../../src/workspace/git.ts";
 import { isolateIssueWorktree } from "../../src/workspace/issue-git.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
@@ -24,12 +25,13 @@ import { createService, createIssue, modelCatalog, servicePayload, TestAgentCont
 const { chromium } = await import(process.env.ISSUE_PILOT_PLAYWRIGHT_MODULE ? pathToFileURL(process.env.ISSUE_PILOT_PLAYWRIGHT_MODULE).href : "playwright");
 const exec = promisify(execFile);
 const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-browser-"));
-let app, browser, page;
+let app, gatewayApp, gatewayRoot, browser, page;
 try {
   const engine = new TestAgentController();
   const events = new AgentEventBus();
   const databaseFile = path.join(root, "issues.db");
-  app = await buildApi({ stateRoot: root, databaseFile, engine, events, modelCatalog, logger: false, webRoot: path.resolve(process.env.ISSUE_PILOT_BROWSER_WEB_ROOT ?? "src/web/dist") });
+  const webRoot = path.resolve(process.env.ISSUE_PILOT_BROWSER_WEB_ROOT ?? "src/web/dist");
+  app = await buildApi({ stateRoot: root, databaseFile, engine, events, modelCatalog, logger: false, webRoot });
   await createService(app, "browser", ["dev"]);
   const mdmRepositories = Array.from({ length: 24 }, (_, index) => `git@example.test:digital-biz-projects/mdm/servers/repository-${index}.git`);
   const mallRepository = "https://example.test/digital-biz-projects/xhgj-mall/fronts/mall.git";
@@ -82,7 +84,11 @@ try {
   await prepareIssueRuntime(root, issue.key, [{ name: "application", repositoryPath: checkout }], "write");
   const origin = await app.listen({ host: "127.0.0.1", port: 0 });
   assert.equal((await fetch(`${origin}/health`)).status, 200);
-  browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--host-resolver-rules=MAP issue-pilot.test 127.0.0.1", "--no-proxy-server"] });
+  const launchOptions = { headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--host-resolver-rules=MAP issue-pilot.test 127.0.0.1", "--no-proxy-server"] };
+  // A containerized run-server needs --unsafe to accept these launch arguments.
+  browser = process.env.ISSUE_PILOT_BROWSER_WS
+    ? await chromium.connect(process.env.ISSUE_PILOT_BROWSER_WS, { headers: { "x-playwright-launch-options": JSON.stringify(launchOptions) } })
+    : await chromium.launch(launchOptions);
   page = await browser.newPage({ viewport: { width: 1680, height: 1050 }, permissions: ["clipboard-read", "clipboard-write"] });
   page.setDefaultTimeout(15000);
   const failures = [];
@@ -1136,10 +1142,9 @@ try {
     engine.running.add(issue.id);
     publish({ type: "issue_run_state", state: "running" });
     await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "编辑工单", exact: true }).click();
+    // An active Issue cannot be edited; the header shows the execution state instead.
+    await page.waitForFunction((button) => button.disabled, await page.getByRole("button", { name: "编辑工单", exact: true }).elementHandle());
     const edit = page.getByRole("dialog", { name: "编辑工单", exact: true });
-    await page.waitForFunction((button) => button.disabled, await edit.getByRole("button", { name: "重置", exact: true }).elementHandle());
-    await edit.getByRole("button", { name: "取消", exact: true }).click();
     publish({ type: "issue_status", status: "complete" });
     // Business completion still leaves cleanup activity in the authoritative execution state.
     await page.getByTitle("中断当前处理并取消后续排队，保留未发送草稿", { exact: true }).waitFor();
@@ -1192,6 +1197,179 @@ try {
   } finally {
     synchronization.close();
   }
+  // Queue scopes filter by the current identity; opening another person's Issue widens the scope, never the identity.
+  const foreignIssue = await createIssue(app, "browser", "dev", "Foreign cc browser Issue");
+  const failedIssue = await createIssue(app, "browser", "dev", "Failed round browser Issue");
+  const scopeDatabase = openDatabase(databaseFile);
+  try {
+    const [foreign] = await scopeDatabase.db.select().from(issues).where(eq(issues.key, foreignIssue.id));
+    await scopeDatabase.db.update(issues).set({ reporterSubject: "member-00@example.test", assigneeSubject: "member-01@example.test" }).where(eq(issues.id, foreign.id));
+    await scopeDatabase.db.insert(issueCcRecipients).values({ issueId: foreign.id, subject: issuePilotConfig.bootstrapUser.subject });
+    const [failed] = await scopeDatabase.db.select().from(issues).where(eq(issues.key, failedIssue.id));
+    await scopeDatabase.db.update(issues).set({ assigneeSubject: issuePilotConfig.bootstrapUser.subject }).where(eq(issues.id, failed.id));
+    await scopeDatabase.db.update(issueWorkspaces).set({ status: "failed", lastError: "model_api_key_not_configured" }).where(eq(issueWorkspaces.issueId, failed.id));
+  } finally {
+    scopeDatabase.close();
+  }
+  engine.running.clear();
+  const identity = page.getByRole("combobox", { name: "当前用户", exact: true });
+  const scopeSelect = page.getByRole("combobox", { name: "按范围筛选", exact: true });
+  const scopeQueue = page.getByLabel("工单队列", { exact: true });
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  await page.goto(`${origin}/?issue=${failedIssue.id}`);
+  await page.getByRole("heading", { name: "Failed round browser Issue", exact: true }).waitFor();
+  const identityText = await identity.innerText();
+  assert.match(identityText, new RegExp(issuePilotConfig.bootstrapUser.email.replace(/[.]/g, "\\.")));
+  assert.equal(await scopeSelect.innerText(), "分配给我");
+  const failedRow = scopeQueue.locator(".queue-item", { hasText: "Failed round browser Issue" });
+  await failedRow.getByText("执行失败", { exact: true }).waitFor();
+  await page.locator(".issue-header").getByText("执行失败", { exact: true }).waitFor();
+  await page.getByRole("alert").getByText("尚未配置模型 API Key，请在用户配置中设置个人或共享 API Key 后重试。", { exact: true }).waitFor();
+  assert.equal(await scopeQueue.getByText("Foreign cc browser Issue", { exact: true }).count(), 0);
+  for (const width of [1680, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const failedHeader = await page.locator(".issue-header").boundingBox();
+    assert.ok(failedHeader.x >= 0 && failedHeader.x + failedHeader.width <= width + 0.5, `Failed Issue header exceeds ${width}px`);
+    if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) await page.locator(".issue-header").screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `failed-header-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  for (const [label, visible] of [
+    ["我报告的", false],
+    ["抄送我的", true],
+    ["全部", true],
+    ["分配给我", false],
+  ]) {
+    await scopeSelect.click();
+    await page.getByRole("option", { name: label, exact: true }).click();
+    assert.equal(await scopeSelect.innerText(), label);
+    if (visible) await scopeQueue.getByText("Foreign cc browser Issue", { exact: true }).waitFor();
+    else await scopeQueue.getByText("Foreign cc browser Issue", { exact: true }).waitFor({ state: "hidden" });
+  }
+  await page.getByRole("radio", { name: "首页", exact: true }).click();
+  await page.getByRole("list", { name: "待处理工单", exact: true }).getByText("Foreign cc browser Issue", { exact: true }).click();
+  await page.getByRole("heading", { name: "Foreign cc browser Issue", exact: true }).waitFor();
+  await scopeQueue.getByText("Foreign cc browser Issue", { exact: true }).waitFor();
+  assert.equal(await scopeSelect.innerText(), "抄送我的");
+  assert.equal(await identity.innerText(), identityText);
+  // At 390px the identity collapses to an avatar whose combobox and tooltip still name the current user.
+  const { name: bootstrapName, email: bootstrapEmail } = issuePilotConfig.bootstrapUser;
+  const identityHolder = page.locator(".app-header .identity");
+  const assertCompactIdentity = async () => {
+    const avatar = identityHolder.locator(":scope > span");
+    assert.equal(await avatar.isVisible(), true);
+    assert.equal(await avatar.textContent(), bootstrapName.slice(0, 1));
+    assert.equal(await identityHolder.getAttribute("title"), `${bootstrapName} · ${bootstrapEmail}`);
+    assert.equal(await identity.innerText(), identityText);
+    const [avatarBox, comboBox] = await Promise.all([avatar.boundingBox(), identity.boundingBox()]);
+    assert.ok(avatarBox.x + avatarBox.width <= 390 + 0.5, `Identity avatar clipped: ${JSON.stringify(avatarBox)}`);
+    assert.ok(comboBox.x <= avatarBox.x + 1 && comboBox.x + comboBox.width >= avatarBox.x + avatarBox.width - 1, "the focusable combobox covers the avatar");
+  };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertCompactIdentity();
+  await page.getByRole("radio", { name: "首页", exact: true }).click();
+  await page.getByRole("list", { name: "待处理工单", exact: true }).getByText("Foreign cc browser Issue", { exact: true }).click();
+  await page.getByRole("heading", { name: "Foreign cc browser Issue", exact: true }).waitFor();
+  await assertCompactIdentity();
+  await identity.focus();
+  await page.keyboard.press("Enter");
+  const identityOptions = page.getByRole("listbox", { name: "当前用户", exact: true });
+  await identityOptions.waitFor();
+  assert.equal(await identityOptions.getByRole("option", { selected: true }).count(), 1);
+  assert.match(await identityOptions.getByRole("option", { selected: true }).innerText(), new RegExp(bootstrapName));
+  const optionsBox = await identityOptions.boundingBox();
+  assert.ok(optionsBox.x >= 0 && optionsBox.x + optionsBox.width <= 390 + 0.5, `Identity options exceed 390px: ${JSON.stringify(optionsBox)}`);
+  if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, "identity-390.png") });
+  await page.keyboard.press("Escape");
+  await identityOptions.waitFor({ state: "hidden" });
+  await assertCompactIdentity();
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  // Workspace preparation and an active Agent round take precedence over the business status in the queue and header.
+  const preparingIssue = await createIssue(app, "browser", "dev", "Preparing browser Issue");
+  const preparingDatabase = openDatabase(databaseFile);
+  let preparing;
+  try {
+    [preparing] = await preparingDatabase.db.select().from(issues).where(eq(issues.key, preparingIssue.id));
+    await preparingDatabase.db.update(issues).set({ assigneeSubject: issuePilotConfig.bootstrapUser.subject }).where(eq(issues.id, preparing.id));
+    await preparingDatabase.db.update(issueWorkspaces).set({ status: "preparing", lastError: null }).where(eq(issueWorkspaces.issueId, preparing.id));
+  } finally {
+    preparingDatabase.close();
+  }
+  engine.running.clear();
+  await page.goto(`${origin}/?issue=${preparingIssue.id}`);
+  await page.getByRole("heading", { name: "Preparing browser Issue", exact: true }).waitFor();
+  const preparingRow = scopeQueue.locator(".queue-item", { hasText: "Preparing browser Issue" });
+  const preparingHeader = page.locator(".issue-header");
+  const assertExecutionLabel = async (label, others) => {
+    await preparingRow.getByText(label, { exact: true }).waitFor();
+    await preparingHeader.getByText(label, { exact: true }).waitFor();
+    for (const other of others) {
+      assert.equal(await preparingRow.getByText(other, { exact: true }).count(), 0, `queue row still shows ${other}`);
+      assert.equal(await preparingHeader.getByText(other, { exact: true }).count(), 0, `header still shows ${other}`);
+    }
+  };
+  await assertExecutionLabel("环境准备中", ["执行中", "待处理"]);
+  const captureExecution = async (name) => {
+    if (!process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) return;
+    for (const width of [1680, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const box = await preparingHeader.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= width + 0.5, `${name} header exceeds ${width}px`);
+      await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `${name}-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1680, height: 1050 });
+  };
+  await captureExecution("preparing");
+  const readyDatabase = openDatabase(databaseFile);
+  try {
+    await readyDatabase.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, preparing.id));
+  } finally {
+    readyDatabase.close();
+  }
+  await page.getByText("正在加载对话…", { exact: true }).waitFor({ state: "hidden" });
+  const publishPreparing = (event) => events.publish({ id: randomUUID(), issueId: preparing.id, createdAt: new Date().toISOString(), event });
+  engine.running.add(preparing.id);
+  publishPreparing({ type: "issue_run_state", state: "running" });
+  await assertExecutionLabel("执行中", ["环境准备中", "待处理"]);
+  await captureExecution("running");
+  engine.running.delete(preparing.id);
+  publishPreparing({ type: "issue_run_state", state: "idle" });
+  await assertExecutionLabel("待处理", ["环境准备中", "执行中"]);
+  // Resolved Issues keep read-only session history in the header; editing is unavailable.
+  await page.goto(`${origin}/?issue=${issue.key}`);
+  const resolvedHeader = page.locator(".issue-header");
+  await resolvedHeader.getByText("已解决", { exact: true }).waitFor();
+  assert.equal(await resolvedHeader.getByRole("button", { name: "编辑工单", exact: true }).count(), 0);
+  await resolvedHeader.getByRole("button", { name: "查看历史", exact: true }).click();
+  const historyDialog = page.getByRole("dialog", { name: "历史会话", exact: true });
+  await historyDialog.waitFor();
+  await historyDialog.getByRole("button", { name: "关闭", exact: true }).first().click();
+  await historyDialog.waitFor({ state: "hidden" });
+  for (const width of [1680, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const headerBox = await resolvedHeader.boundingBox();
+    assert.ok(headerBox.x >= 0 && headerBox.x + headerBox.width <= width + 0.5, `Issue header ${headerBox.x}+${headerBox.width} exceeds ${width}px`);
+    const history = await resolvedHeader.getByRole("button", { name: "查看历史", exact: true }).boundingBox();
+    assert.ok(history && history.x >= 0 && history.x + history.width <= width + 0.5, `查看历史 clipped at ${width}px`);
+    if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) {
+      await mkdir(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, { recursive: true });
+      await resolvedHeader.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `issue-header-${width}.png`) });
+      await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `issue-page-${width}.png`) });
+    }
+  }
+  await page.setViewportSize({ width: 1680, height: 1050 });
+  for (const width of [1680, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const filters = scopeQueue.locator(".queue-filter");
+    if (await filters.isVisible()) {
+      const box = await filters.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= width + 0.5, `Queue filters ${box.x}+${box.width} exceed ${width}px`);
+    }
+    if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) {
+      await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `queue-page-${width}.png`) });
+      if (await filters.isVisible()) await filters.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `queue-filters-${width}.png`) });
+    }
+  }
+  await page.setViewportSize({ width: 1680, height: 1050 });
   // Real JSONL + HTTP reads + live SSE, then a fresh replay. No cloud query or result-file fixture.
   const evidenceIssue = await createIssue(app, "browser", "dev", "Stored query evidence");
   const evidenceId = engine.enqueued.at(-1);
@@ -1258,6 +1436,173 @@ try {
   assert.equal(fullReads.length, 2);
   await dmsCard.locator("summary").click();
   await dmsCard.getByRole("cell", { name: "ready", exact: true }).waitFor();
+
+  // Two resets through HTTP leave two read-only historical sessions with real JSONL transcripts.
+  const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const appendRound = (manager, round) => {
+    // The transcript shows application-admitted input, not raw Pi user messages.
+    manager.appendCustomEntry("issue-pilot-user", { message: `History ${round} question` });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: `History ${round} answer` }],
+      api: "openai-completions",
+      provider: "fixture",
+      model: "fixture",
+      timestamp: Date.now(),
+      stopReason: "stop",
+      usage: zeroUsage,
+    });
+  };
+  const resetEvidence = async (expectedSessionId) => {
+    engine.running.clear();
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/issues/${evidenceIssue.id}/reset-session`,
+      headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+      payload: { expectedSessionId },
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    return response.json().sessionId;
+  };
+  appendRound(evidenceSession, "round one");
+  const secondSessionId = await resetEvidence(evidenceSession.getSessionId());
+  const historyDatabase = openDatabase(databaseFile);
+  try {
+    appendRound(await readIssueSessionHistory(historyDatabase.db, root, { id: evidenceId, key: evidenceIssue.id }, secondSessionId), "round two");
+  } finally {
+    historyDatabase.close();
+  }
+  await resetEvidence(secondSessionId);
+  const verifyHistory = async (label) => {
+    const header = page.locator(".issue-header");
+    await header.getByRole("button", { name: "查看历史", exact: true }).click();
+    await historyDialog.waitFor();
+    const transcriptRegion = historyDialog.getByRole("region", { name: "历史对话", exact: true });
+    await transcriptRegion.getByText("History round two answer", { exact: true }).waitFor();
+    await transcriptRegion.getByText("History round two question", { exact: true }).waitFor();
+    // Read-only: no composer, send, abort or reset controls inside the history dialog.
+    assert.equal(await historyDialog.getByRole("textbox").count(), 0);
+    for (const name of ["发送消息", "重置会话", "中断"]) assert.equal(await historyDialog.getByRole("button", { name }).count(), 0, `${label} history offers ${name}`);
+    const sessionSelect = historyDialog.getByRole("combobox", { name: "选择历史会话", exact: true });
+    await sessionSelect.click();
+    const sessionOptions = page.getByRole("listbox", { name: "选择历史会话", exact: true }).getByRole("option");
+    assert.equal(await sessionOptions.count(), 2, `${label} lists both historical sessions`);
+    // Newest first; the empty current session is not history. Labels may coincide (same minute and UUIDv7 prefix).
+    await sessionOptions.nth(1).click();
+    await transcriptRegion.getByText("History round one answer", { exact: true }).waitFor();
+    assert.equal(await transcriptRegion.getByText("History round two answer", { exact: true }).count(), 0);
+    for (const width of [1680, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const box = await historyDialog.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= width + 0.5, `${label} history dialog exceeds ${width}px: ${JSON.stringify(box)}`);
+      assert.ok(await transcriptRegion.evaluate((node) => node.scrollWidth <= node.clientWidth + 1), `${label} history transcript overflows at ${width}px`);
+      if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) await page.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `history-${label}-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1680, height: 1050 });
+    await historyDialog.getByRole("button", { name: "关闭", exact: true }).last().click();
+    await historyDialog.waitFor({ state: "hidden" });
+  };
+  await page.goto(`${origin}/?issue=${evidenceIssue.id}`);
+  await page.getByText("还没有对话", { exact: true }).waitFor();
+  await verifyHistory("open");
+  const resolveEvidence = openDatabase(databaseFile);
+  try {
+    await resolveEvidence.db.update(issues).set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() }).where(eq(issues.id, evidenceId));
+  } finally {
+    resolveEvidence.close();
+  }
+  await page.reload();
+  await page.locator(".issue-header").getByText("已解决", { exact: true }).waitFor();
+  await verifyHistory("resolved");
+
+  // Gateway identity: the gateway supplies identity, so the page offers no switcher, forgets a remembered
+  // choice and never sends its own subject header. The fixture has its own temporary root and database.
+  gatewayRoot = await mkdtemp(path.join(tmpdir(), "issue-pilot-browser-gateway-"));
+  gatewayApp = await buildApi({
+    stateRoot: gatewayRoot,
+    databaseFile: path.join(gatewayRoot, "issues.db"),
+    engine: new TestAgentController(),
+    events: new AgentEventBus(),
+    modelCatalog,
+    logger: false,
+    webRoot,
+    identity: "gateway",
+  });
+  await createService(gatewayApp, "browser", ["dev"]);
+  const gatewayIssue = await createIssue(gatewayApp, "browser", "dev", "Gateway browser Issue");
+  const gatewayMember = "gateway-member@example.test";
+  const gatewayUser = await gatewayApp.inject({
+    method: "POST",
+    url: "/api/users",
+    headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+    payload: { subject: gatewayMember, name: "Gateway member", email: gatewayMember, role: "product" },
+  });
+  assert.equal(gatewayUser.statusCode, 201, gatewayUser.body);
+  const gatewayOrigin = await gatewayApp.listen({ host: "127.0.0.1", port: 0 });
+  const gatewayPage = await browser.newPage({ viewport: { width: 1680, height: 1050 } });
+  try {
+    // The page's own headers, in order, with a marker when each /api/me response reveals the identity mode.
+    const gatewayTraffic = [];
+    const gatewayFailures = [];
+    gatewayPage.on("pageerror", (error) => gatewayFailures.push(error.message));
+    gatewayPage.on("request", (request) => {
+      const subject = request.headers()["x-issue-pilot-subject"];
+      if (subject !== undefined) gatewayTraffic.push(`${new URL(request.url()).pathname}: ${subject}`);
+    });
+    gatewayPage.on("response", (response) => {
+      if (new URL(response.url()).pathname === "/api/me") gatewayTraffic.push("/api/me resolved");
+    });
+    // Stand in for the trusted gateway, which authenticates the browser and sets the subject itself.
+    await gatewayPage.route(`${gatewayOrigin}/api/**`, (route) => route.continue({ headers: { ...route.request().headers(), "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject } }));
+    const gatewayIdentity = gatewayPage.locator(".app-header .identity");
+    const gatewayEmail = gatewayIdentity.getByLabel("当前用户", { exact: true }).filter({ hasText: issuePilotConfig.bootstrapUser.email });
+    await gatewayPage.goto(`${gatewayOrigin}/`);
+    await gatewayEmail.waitFor();
+    assert.deepEqual(gatewayTraffic, ["/api/me resolved"], "a clean gateway page sends no subject header");
+    // A subject remembered from an earlier selectable deployment on the same origin.
+    await gatewayPage.evaluate((subject) => localStorage.setItem("issue-pilot.current-user", subject), gatewayMember);
+    gatewayTraffic.length = 0;
+    await gatewayPage.goto(`${gatewayOrigin}/?issue=${gatewayIssue.id}`);
+    await gatewayPage.getByRole("heading", { name: "Gateway browser Issue", exact: true }).waitFor();
+    await gatewayEmail.waitFor();
+    assert.equal(await gatewayPage.getByRole("combobox", { name: "当前用户", exact: true }).count(), 0, "gateway mode offers no account switcher");
+    assert.equal(await gatewayPage.evaluate(() => localStorage.getItem("issue-pilot.current-user")), null, "gateway mode forgets the remembered subject");
+    // Known gap: until the first /api/me response the page cannot know the mode, so its startup reads still carry
+    // the stale remembered subject (the gateway overwrites it). Nothing after that response may carry one.
+    const firstIdentity = gatewayTraffic.indexOf("/api/me resolved");
+    assert.ok(firstIdentity >= 0);
+    assert.deepEqual(
+      gatewayTraffic.slice(firstIdentity + 1).filter((entry) => entry !== "/api/me resolved"),
+      [],
+      "no subject header after the gateway mode is known",
+    );
+    gatewayTraffic.length = 0;
+    await gatewayPage.getByRole("radio", { name: "首页", exact: true }).click();
+    await gatewayPage.getByRole("radio", { name: "工单", exact: true }).click();
+    await gatewayPage.getByRole("heading", { name: "Gateway browser Issue", exact: true }).waitFor();
+    await gatewayPage.reload();
+    await gatewayPage.getByRole("heading", { name: "Gateway browser Issue", exact: true }).waitFor();
+    await gatewayEmail.waitFor();
+    assert.deepEqual(
+      gatewayTraffic.filter((entry) => entry !== "/api/me resolved"),
+      [],
+      "after the remembered subject is cleared, gateway pages never send X-Issue-Pilot-Subject",
+    );
+    for (const width of [1680, 390]) {
+      await gatewayPage.setViewportSize({ width, height: 844 });
+      const box = await gatewayIdentity.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= width + 0.5, `Gateway identity exceeds ${width}px: ${JSON.stringify(box)}`);
+      const navigation = await gatewayPage.locator(".app-header .header-context").boundingBox();
+      assert.ok(navigation.x + navigation.width <= box.x + 0.5, `Gateway identity overlaps navigation at ${width}px: ${JSON.stringify({ navigation, box })}`);
+      const radios = await gatewayPage.locator(".app-header .header-context [role=radio]").evaluateAll((items) => items.map((item) => item.scrollWidth <= item.clientWidth + 1));
+      assert.ok(radios.every(Boolean), `Navigation labels clipped at ${width}px`);
+      assert.equal(await gatewayIdentity.getAttribute("title"), `${issuePilotConfig.bootstrapUser.name} · ${issuePilotConfig.bootstrapUser.email}`);
+      if (process.env.ISSUE_PILOT_BROWSER_ARTIFACTS) await gatewayPage.screenshot({ path: path.join(process.env.ISSUE_PILOT_BROWSER_ARTIFACTS, `gateway-${width}.png`) });
+    }
+    assert.deepEqual(gatewayFailures, []);
+  } finally {
+    await gatewayPage.close();
+  }
 
   const unexpected = failures.filter((failure) => !failure.startsWith("Failed to load resource: the server responded with a status of 409"));
   assert.deepEqual(unexpected, []);
@@ -1338,6 +1683,13 @@ try {
           "returning from the homepage reloads the same selected Issue details",
           "related Issue changes update embedded cards while retaining an open editor",
           "background filter exclusion preserves the selected Issue, editor and Agent draft without navigation prompts",
+          "queue scopes filter by the current identity; opening another person's Issue from the homepage widens the scope without changing identity",
+          "failed rounds show the 执行失败 badge in the queue and header with the unified error text",
+          "resolved Issues show 查看历史 in the header without an edit action, desktop and 390px",
+          "at 390px the identity avatar and its combobox/tooltip name the current user, unchanged after opening another person's Issue",
+          "Workspace preparation and an active round show 环境准备中/执行中 in the queue and header, then return to the business status",
+          "two HTTP session resets list two read-only historical transcripts on open and resolved Issues, desktop and 390px",
+          "gateway identity hides the switcher, shows the gateway user's email, clears the remembered subject and sends no subject header",
         ],
         resources,
       },
@@ -1360,8 +1712,10 @@ try {
   } finally {
     try {
       await app?.close();
+      await gatewayApp?.close();
     } finally {
       await rm(root, { recursive: true, force: true });
+      if (gatewayRoot) await rm(gatewayRoot, { recursive: true, force: true });
     }
   }
 }

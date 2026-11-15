@@ -1,11 +1,10 @@
+import { createBareRemote, git } from "../helpers/git.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 
 import { eq } from "drizzle-orm";
 
@@ -26,18 +25,8 @@ import { WorkspaceLifecycleManager } from "../../src/workspace/lifecycle.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 
-const execFileAsync = promisify(execFile);
-const git = async (args: string[]) => (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
-
 async function createRemote(root: string): Promise<string> {
-  const source = path.join(root, "source");
-  const remote = path.join(root, "remote.git");
-  await git(["init", "-b", "main", source]);
-  await writeFile(path.join(source, "README.md"), "production baseline\n", "utf8");
-  await git(["-C", source, "add", "."]);
-  await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
-  await git(["clone", "--bare", source, remote]);
-  return remote;
+  return (await createBareRemote(root, { files: { "README.md": "production baseline\n" } })).remote;
 }
 
 test("related Issues expose their complete current working directory and conversation without copying code", async () => {
@@ -91,7 +80,7 @@ test("related Issues expose their complete current working directory and convers
     const developmentRepository = preparedDevelopment.repositories[0]!.workspacePath;
     await writeFile(path.join(developmentRepository, "README.md"), "committed development fix\n", "utf8");
     await git(["-C", developmentRepository, "add", "README.md"]);
-    await git(["-C", developmentRepository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "fix regression"]);
+    await git(["-C", developmentRepository, "commit", "-m", "fix regression"]);
     await writeFile(path.join(developmentRepository, "README.md"), "uncommitted local experiment\n", "utf8");
 
     const sessionRoot = issueRoot(root, development!.key);
@@ -142,13 +131,13 @@ test("related Issues expose their complete current working directory and convers
     await git(["-C", developmentRepository, "switch", branch]);
     assert.deepEqual((await projects.prepare(production!, "prod")).relatedIssueKeys, preparedProduction.relatedIssueKeys);
     await git(["-C", developmentRepository, "add", "README.md"]);
-    await git(["-C", developmentRepository, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "Issue evidence"]);
+    await git(["-C", developmentRepository, "commit", "-m", "Issue evidence"]);
     const tip = await git(["-C", developmentRepository, "rev-parse", "HEAD"]);
     await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, development!.id));
     const lifecycle = new WorkspaceLifecycleManager(database.db, root, {
       isRunning: () => false,
       runExclusive: async (_ids, operation) => operation({ closeSession: async () => undefined } as never),
-    } as Pick<import("../../src/agent/engine.ts").AgentController, "isRunning" | "runExclusive"> as never);
+    } as Pick<import("../../src/agent/contracts.ts").AgentController, "isRunning" | "runExclusive"> as never);
     await lifecycle.releaseIssue(development!.id);
     await assert.rejects(lstat(developmentRepository), { code: "ENOENT" });
     const withReleased = await projects.prepare(production!, "prod");

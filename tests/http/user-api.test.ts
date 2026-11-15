@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
 import { subjects } from "../../src/db/schema.ts";
+import { DomainError } from "../../src/domain/errors.ts";
 import { ApiError } from "../../src/http/input.ts";
 import { registerUserRoutes } from "../../src/http/user-routes.ts";
 
@@ -109,6 +110,27 @@ test("manages active users in SQLite without rewriting historical identities", a
   }
 });
 
+for (const identity of [undefined, "selectable", "gateway"] as const)
+  test(`reports whether Web identity selection is locked (${identity ?? "root default"})`, async () => {
+    const fixture = await createApiFixture(identity ? { identity } : {});
+    try {
+      const response = await fixture.app.inject({ method: "GET", url: "/api/me", headers: bootstrapHeaders });
+      assert.equal(response.statusCode, 200, response.body);
+      const locked = (identity ?? issuePilotConfig.http.identity) === "gateway";
+      // Identity resolution itself is unchanged; the flag only controls the Web switcher.
+      assert.deepEqual(await json(response), {
+        subject: issuePilotConfig.bootstrapUser.subject,
+        name: issuePilotConfig.bootstrapUser.name,
+        email: issuePilotConfig.bootstrapUser.email,
+        role: issuePilotConfig.bootstrapUser.role,
+        isAdmin: true,
+        identityLocked: locked,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
 test("patches only provided user fields without restoring stale profile values", async () => {
   const fixture = await createApiFixture();
   try {
@@ -198,7 +220,9 @@ test("rejects a user change when the actor loses the developer role while queued
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
+  app.setErrorHandler((error, _request, reply) =>
+    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
+  );
   try {
     await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });
     await createService(fixture.app, "Queued auth");

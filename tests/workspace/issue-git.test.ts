@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -17,15 +15,13 @@ import { issueNativeTools } from "../../src/agent/native-tools.ts";
 import { shellQuote } from "../../src/agent/issue-sandbox.ts";
 import { createWorkspaceTool } from "../../src/agent/workspace-tool.ts";
 import { gitIdentityEnvironment } from "../../src/agent/pi-session.ts";
+import { git } from "../helpers/git.ts";
 
 function exitCode(result: { structuredContent?: unknown }): unknown {
   const data = result.structuredContent;
   assert.ok(data && typeof data === "object" && "exit_code" in data);
   return data.exit_code;
 }
-
-const exec = promisify(execFile);
-const git = async (args: string[]) => (await exec("git", args)).stdout.trim();
 
 test("conversation Git cannot create or switch branches and stages and commits only through the bound repository", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-private-git-"));
@@ -36,7 +32,7 @@ test("conversation Git cannot create or switch branches and stages and commits o
     await git(["init", "-b", "main", source]);
     await writeFile(path.join(source, "file.txt"), "before");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "initial"]);
+    await git(["-C", source, "commit", "-m", "initial"]);
     const manager = new WorktreeManager(state);
     const input = { issueKey: "ISSUE-20261023-001", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
     await claimIssueRoot(state, input.issueKey);
@@ -73,22 +69,34 @@ test("conversation Git cannot create or switch branches and stages and commits o
     });
     const update = (input: Record<string, unknown>, signal?: AbortSignal) => tool.execute("fixture", { repository: "repo", ...input } as never, signal, undefined, {} as never);
     const bash = issueNativeTools({ writeRoot: runtimeRoot, stateRoot: state, readRoots: [path.join(shared, "objects")] }, () => ({ GIT_OPTIONAL_LOCKS: "0" })).find((tool) => tool.name === "bash")!;
-    const run = (command: string) => bash.execute("fixture", { command }, undefined, undefined, {} as never);
-    const baseline = await run(`test "$(git -C repo show HEAD:file.txt)" = before && test ! -r ${shellQuote(path.join(shared, "config"))}`);
-    assert.equal(exitCode(baseline), 0, JSON.stringify(baseline));
-    const otherBranch = await run('test "$(git -C repo show fixture-existing:file.txt)" = before && git -C repo diff --exit-code HEAD fixture-existing');
-    assert.equal(exitCode(otherBranch), 0, JSON.stringify(otherBranch));
+    // One sandboxed shell runs every probe in order; each probe gets its own subshell and reports its own exit code.
+    const expectSandboxExits = async (probes: ReadonlyArray<readonly [command: string, expected: "success" | "failure" | "any"]>) => {
+      const script = probes.map(([command], index) => `( ${command} ) </dev/null; printf '\\n@@exit ${index} %s\\n' "$?"`).join("\n");
+      const result = await bash.execute("fixture", { command: `${script}\nexit 0` }, undefined, undefined, {} as never);
+      assert.equal(exitCode(result), 0, JSON.stringify(result));
+      const output = String((result.structuredContent as { output?: unknown }).output);
+      const codes = new Map(Array.from(output.matchAll(/^@@exit (\d+) (\d+)$/gm), (match) => [Number(match[1]), Number(match[2])]));
+      probes.forEach(([command, expected], index) => {
+        const code = codes.get(index);
+        assert.notEqual(code, undefined, `${command}\n${output}`);
+        if (expected === "success") assert.equal(code, 0, `${command}\n${output}`);
+        if (expected === "failure") assert.notEqual(code, 0, `${command}\n${output}`);
+      });
+    };
     const originalRefs = await git(["-C", own.cachePath, "show-ref", "--heads"]);
-    for (const command of ["branch fixture-new", "switch -c fixture-new", "switch fixture-existing", "checkout --detach HEAD", "update-ref refs/heads/fixture-new HEAD", "add file.txt"]) {
-      const result = await run(`git -C repo ${command}`);
-      assert.notEqual(exitCode(result), 0, command);
-    }
-    assert.notEqual(exitCode(await run("mv repo moved-repo")), 0);
     const metadata = path.resolve(own.workspacePath, (await readFile(path.join(own.workspacePath, ".git"), "utf8")).slice(8).trim());
-    assert.notEqual(exitCode(await run(`printf 'ref: refs/heads/fixture-existing\n' > ${shellQuote(path.join(metadata, "HEAD"))}`)), 0);
+    await expectSandboxExits([
+      [`test "$(git -C repo show HEAD:file.txt)" = before && test ! -r ${shellQuote(path.join(shared, "config"))}`, "success"],
+      ['test "$(git -C repo show fixture-existing:file.txt)" = before && git -C repo diff --exit-code HEAD fixture-existing', "success"],
+      ...["branch fixture-new", "switch -c fixture-new", "switch fixture-existing", "checkout --detach HEAD", "update-ref refs/heads/fixture-new HEAD", "add file.txt"].map(
+        (command) => [`git -C repo ${command}`, "failure"] as const,
+      ),
+      ["mv repo moved-repo", "failure"],
+      [`printf 'ref: refs/heads/fixture-existing\n' > ${shellQuote(path.join(metadata, "HEAD"))}`, "failure"],
+      ["printf after > repo/file.txt", "success"],
+    ]);
     assert.equal(await git(["-C", own.cachePath, "show-ref", "--heads"]), originalRefs);
     assert.equal(await git(["-C", own.workspacePath, "branch", "--show-current"]), own.workingBranch);
-    assert.equal(exitCode(await run("printf after > repo/file.txt")), 0);
     await assert.rejects(update({ operation: "switch", branch: "fixture-existing" }), /invalid_workspace_input/);
     await assert.rejects(update({ operation: "push", ref: "refs/heads/main" }), /invalid_workspace_input/);
     await assert.rejects(update({ operation: "push" }), /personal_git_ssh_credentials_required/);
@@ -109,12 +117,13 @@ test("conversation Git cannot create or switch branches and stages and commits o
     const sharedConfig = path.join(shared, "config");
     const configBefore = await readFile(sharedConfig, "utf8");
     // The sandbox may create an ephemeral file at a hidden path; it cannot modify the host file.
-    await run(`printf compromised >> ${shellQuote(sharedConfig)}`);
+    await expectSandboxExits([
+      [`printf compromised >> ${shellQuote(sharedConfig)}`, "any"],
+      ...[path.join(shared, "objects", "unexpected"), path.join(other.cachePath, "config"), path.join(own.cachePath, "config"), path.join(own.cachePath, "hooks", "pre-commit")].map(
+        (file) => [`printf compromised >> ${shellQuote(file)}`, "failure"] as const,
+      ),
+    ]);
     assert.equal(await readFile(sharedConfig, "utf8"), configBefore);
-    for (const file of [path.join(shared, "objects", "unexpected"), path.join(other.cachePath, "config"), path.join(own.cachePath, "config"), path.join(own.cachePath, "hooks", "pre-commit")]) {
-      const denied = await run(`printf compromised >> ${shellQuote(file)}`);
-      assert.notEqual(exitCode(denied), 0, file);
-    }
     assert.equal(await git(["-C", own.workspacePath, "log", "-1", "--format=%an <%ae> %s"]), "Fixture <fixture@example.test> 更新文件");
     const finalCommit = after;
     await manager.remove(source, own.workspacePath, own.workingBranch!);

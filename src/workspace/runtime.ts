@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { domainError } from "../domain/errors.ts";
+import { relatedIssueEntryName } from "../domain/contracts.ts";
 import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { issueRepositories } from "../db/schema.ts";
@@ -176,15 +177,16 @@ export async function prepareIssueRuntime(
   for (const related of relatedIssues) {
     const key = related.key.toLowerCase();
     if (!/^issue-[0-9]{8}-[0-9]{3,}$/.test(key)) throw new Error("invalid_related_issue_key");
-    add(`.related-${key}.json`, "file", JSON.stringify(related.metadata, null, 2) + "\n");
+    const entry = relatedIssueEntryName(related.key);
+    add(`${entry}.json`, "file", JSON.stringify(related.metadata, null, 2) + "\n");
     if (related.conversationPath) {
       const conversation = path.resolve(related.conversationPath);
       if (path.dirname(conversation) !== issueRoot(stateRoot, related.key)) throw new Error("invalid_related_issue_session");
-      add(`.related-${key}.jsonl`, "link", conversation);
+      add(`${entry}.jsonl`, "link", conversation);
     }
     const target = issueRoot(stateRoot, related.key);
     if (path.resolve(related.workDirectory) !== target) throw new Error("invalid_related_issue_directory");
-    add(`.related-${key}`, "link", target);
+    add(entry, "link", target);
     for (const repository of related.repositoryLinks ?? []) {
       add(repository.name, "link", managedRepository(stateRoot, issueKey, repository.repositoryPath, "read"));
     }

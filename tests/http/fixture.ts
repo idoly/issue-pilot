@@ -8,7 +8,8 @@ import type { FastifyInstance } from "fastify";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { AgentBusyError } from "../../src/agent/engine.ts";
+import { AgentBusyError } from "../../src/agent/contracts.ts";
+import { DomainError } from "../../src/domain/errors.ts";
 import type { AgentEventBus } from "../../src/agent/events.ts";
 import type { GitCommitIdentity } from "../../src/agent/pi-session.ts";
 import { AGENT_THINKING_LEVELS, type AgentRunState, type EnvironmentKind, type IssueWorkMode } from "../../src/domain/contracts.ts";
@@ -79,7 +80,7 @@ export class TestAgentController {
       const database = openDatabase(this.databaseFile);
       try {
         const row = await database.client.execute({ sql: "SELECT status FROM issues WHERE id = ?", args: [issueId] });
-        if (row.rows[0]?.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+        if (row.rows[0]?.status === "resolved") throw new DomainError("resolved_issue_cannot_run_agent", "conflict");
       } finally {
         await database.close();
       }
@@ -88,6 +89,10 @@ export class TestAgentController {
     this.gitIdentities.push(gitIdentity);
     this.images.push(images);
     this.enqueued.push(issueId);
+  }
+
+  async messageReceipt(): Promise<{ state: string }> {
+    throw new Error("test_agent_message_receipt_unsupported");
   }
 
   async abort(issueId: string, authorize?: () => Promise<unknown>): Promise<void> {
@@ -113,7 +118,7 @@ export interface ApiFixture {
 }
 
 export async function createApiFixture(
-  options: { events?: AgentEventBus; dingtalkConnector?: McpConnector; modelCatalog?: AgentModelCatalog; issueSearchFetch?: typeof fetch } = {},
+  options: { events?: AgentEventBus; dingtalkConnector?: McpConnector; modelCatalog?: AgentModelCatalog; issueSearchFetch?: typeof fetch; identity?: "selectable" | "gateway"; now?: () => Date } = {},
 ): Promise<ApiFixture> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-api-"));
   const databaseFile = path.join(root, "issues.db");
@@ -125,6 +130,8 @@ export async function createApiFixture(
     ...(options.dingtalkConnector ? { dingtalkConnector: options.dingtalkConnector } : {}),
     ...(options.events ? { events: options.events } : {}),
     ...(options.issueSearchFetch ? { issueSearchFetch: options.issueSearchFetch } : {}),
+    ...(options.identity ? { identity: options.identity } : {}),
+    ...(options.now ? { now: options.now } : {}),
     modelCatalog: options.modelCatalog ?? modelCatalog,
     logger: false,
   });

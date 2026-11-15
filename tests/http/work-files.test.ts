@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { git } from "../helpers/git.ts";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -208,11 +208,10 @@ test("released source and work file routes work without per-Issue checkout links
   const fixture = await createApiFixture();
   try {
     const remote = path.join(fixture.root, "fixture-repo");
-    const git = (...args: string[]) => execFileSync("git", args);
-    git("init", "-b", "main", remote);
+    await git(["init", "-b", "main", remote]);
     await writeFile(path.join(remote, "source.txt"), "original code");
-    git("-C", remote, "add", ".");
-    git("-C", remote, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "baseline");
+    await git(["-C", remote, "add", "."]);
+    await git(["-C", remote, "commit", "-m", "baseline"]);
     await createService(fixture.app, "Released files", ["prod", "dev"]);
     const issue = await createIssue(fixture.app, "released-files", "dev");
     fixture.engine.running.clear();
@@ -246,7 +245,7 @@ test("released source and work file routes work without per-Issue checkout links
     assert.equal((await fixture.app.inject({ url: base })).json().workspace.sourceAvailable, true);
     // A previous release may have committed its marker before retaining the checkout ref.
     const shared = repositoryStorePath(fixture.root, remote);
-    git("-C", shared, "update-ref", "-d", retainedSnapshotRef(prepared.baseCommit));
+    await git(["-C", shared, "update-ref", "-d", retainedSnapshotRef(prepared.baseCommit)]);
 
     const source = await fixture.app.inject({ url: `${base}/source/file`, headers: { "x-issue-pilot-repository": "repo", "x-issue-pilot-path": "source.txt" } });
     assert.equal(source.statusCode, 200, source.body);
@@ -270,11 +269,11 @@ test("released source and work file routes work without per-Issue checkout links
     assert.equal(relatedRead.body, "original code");
 
     const branchRef = `refs/heads/${prepared.workingBranch}`;
-    git("-C", prepared.cachePath, "update-ref", "-d", branchRef);
+    await git(["-C", prepared.cachePath, "update-ref", "-d", branchRef]);
     const missingBranch = await fixture.app.inject({ url: `${base}/source/file`, headers: { "x-issue-pilot-repository": "repo", "x-issue-pilot-path": "source.txt" } });
     assert.equal(missingBranch.statusCode, 409, missingBranch.body);
     assert.equal(missingBranch.json().error, "source_git_binding_invalid");
-    git("-C", prepared.cachePath, "update-ref", branchRef, prepared.baseCommit);
+    await git(["-C", prepared.cachePath, "update-ref", branchRef, prepared.baseCommit]);
 
     await writeFile(prepared.workspacePath, "unknown evidence");
     const blocked = await fixture.app.inject({ url: `${base}/files/download?path=repo/source.txt` });

@@ -15,7 +15,7 @@ import {
   validateIssueWorktreeBinding,
   type LegacyIssueBranch,
 } from "../src/workspace/issue-git.ts";
-import { ApplicationStateLease } from "../src/workspace/state-lease.ts";
+import { ApplicationStateLease } from "../src/state-lease.ts";
 import { assertIssueRoot, classifyRepositoryState } from "../src/workspace/state.ts";
 
 type Entry = { issue: string; repository: string; branch: string; sharedCommit: string; releasedEvidence?: string };

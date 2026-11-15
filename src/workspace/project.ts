@@ -4,7 +4,7 @@ import path from "node:path";
 
 import type { Database } from "../db/client.ts";
 import { agentSessions, environments, issueRelations, issueRepositories, issues, issueWorkspaces, services } from "../db/schema.ts";
-import type { EnvironmentKind, IssueType } from "../domain/contracts.ts";
+import { canModifyIssueCode, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment } from "./git-credentials.ts";
 import { loadIssueDeployments } from "./issue-services.ts";
@@ -92,7 +92,7 @@ export function developmentWorktreeMode(issueType: IssueType): "hotfix" | "featu
 }
 
 export function repositoryPreparationMode(environmentKind: EnvironmentKind, issueType: IssueType): "shared" | "hotfix" | "feature" {
-  return environmentKind === "dev" ? developmentWorktreeMode(issueType) : "shared";
+  return canModifyIssueCode(environmentKind) ? developmentWorktreeMode(issueType) : "shared";
 }
 
 export class IssueProjectManager {

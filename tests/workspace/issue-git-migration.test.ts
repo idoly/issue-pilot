@@ -12,11 +12,11 @@ import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services } from "../../src/db/schema.ts";
 import { issueRepositoryStorePath, repositoryStorePath, retainedSnapshotRef, WorktreeManager } from "../../src/workspace/git.ts";
 import { isolateIssueWorktree, publishIssueBranch, publishedIssueBranchFile } from "../../src/workspace/issue-git.ts";
-import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
+import { ApplicationStateLease } from "../../src/state-lease.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
+import { git } from "../helpers/git.ts";
 
 const exec = promisify(execFile);
-const git = async (args: string[]) => (await exec("git", args)).stdout.trim();
 
 test("development Git audit distinguishes a verified legacy worktree from a released mirror with no private store", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-git-audit-"));
@@ -24,7 +24,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     const source = path.join(root, "source");
     const state = path.join(root, "state");
     await git(["init", "-b", "main", source]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "initial"]);
+    await git(["-C", source, "commit", "--allow-empty", "-m", "initial"]);
     const manager = new WorktreeManager(state);
     const input = { issueKey: "ISSUE-20261023-001", workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" as const };
     await claimIssueRoot(state, input.issueKey);
@@ -34,7 +34,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     const released = await manager.prepare({ ...input, issueKey: releasedKey });
     await writeFile(path.join(released.workspacePath, "release-only.txt"), "reviewed released change");
     await git(["-C", released.workspacePath, "add", "release-only.txt"]);
-    await git(["-C", released.workspacePath, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "released change"]);
+    await git(["-C", released.workspacePath, "commit", "-m", "released change"]);
     const mirrorTip = await manager.remove(source, released.workspacePath, released.workingBranch!);
     const shared = repositoryStorePath(state, source);
     const legacyKey = "ISSUE-20261023-003";
@@ -48,7 +48,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     await git(["-C", shared, "config", "core.logallrefupdates", "true"]);
     await git(["-C", shared, "config", "core.hooksPath", "legacy-hooks"]);
     await git(["-C", shared, "config", "user.name", "Legacy operator"]);
-    await git(["-C", own.workspacePath, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "private-only"]);
+    await git(["-C", own.workspacePath, "commit", "--allow-empty", "-m", "private-only"]);
     const privateTip = await git(["-C", own.cachePath, "rev-parse", `refs/heads/${own.workingBranch}`]);
     assert.notEqual(privateTip, own.baseCommit);
     const database = await openApplicationDatabase(path.join(state, "issues.db"));
@@ -186,7 +186,7 @@ test("legacy worktree isolation rolls back a failed switch and preserves staged,
     await git(["clone", shared, source]);
     await writeFile(path.join(source, "file.txt"), "initial");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "initial"]);
+    await git(["-C", source, "commit", "-m", "initial"]);
     await git(["-C", source, "push", "origin", "HEAD:main"]);
     await git(["-C", shared, "remote", "add", "origin", source]);
     await git(["-C", shared, "fetch", "origin", "HEAD:refs/remotes/origin/main"]);
@@ -223,7 +223,7 @@ test("legacy worktree isolation rolls back a failed switch and preserves staged,
     assert.equal(await git(["-C", workspace, "show", ":file.txt"]), "staged");
     assert.equal(await readFile(path.join(workspace, "file.txt"), "utf8"), "unstaged");
     assert.equal(await readFile(path.join(workspace, "new.txt"), "utf8"), "untracked");
-    await git(["-C", workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "staged change"]);
+    await git(["-C", workspace, "commit", "-m", "staged change"]);
     const markerFile = path.join(privateStore, publishedIssueBranchFile),
       marker = await readFile(markerFile, "utf8");
     const publicationFailure = new Error("checkpoint rename failed");
@@ -238,7 +238,7 @@ test("legacy worktree isolation rolls back a failed switch and preserves staged,
     const original = await git(["-C", shared, "rev-parse", `refs/heads/${branch}`]);
     assert.equal(JSON.parse(await readFile(markerFile, "utf8")).commit, original);
     // A different valid commit in the shared branch must survive a publication attempt.
-    const changed = await git(["-C", shared, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", `${original}^{tree}`, "-p", original, "-m", "external change"]);
+    const changed = await git(["-C", shared, "commit-tree", `${original}^{tree}`, "-p", original, "-m", "external change"]);
     await git(["-C", shared, "update-ref", `refs/heads/${branch}`, changed]);
     await assert.rejects(publishIssueBranch(shared, privateStore, branch), /working_branch_changed_outside_issue/);
     assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${branch}`]), changed);

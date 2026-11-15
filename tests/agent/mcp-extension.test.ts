@@ -16,7 +16,7 @@ async function fixture(env: Record<string, string> = {}) {
   const models = await ModelRuntime.create({ authPath: path.join(root, "auth.json"), modelsPath: null, modelsStorePath: path.join(root, "models.json"), refreshOnCreate: false });
   const faux = fauxProvider({ provider: "mcp-fixture", models: [{ id: "fixture", contextWindow: 64000 }], tokensPerSecond: 100000 });
   models.registerNativeProvider(faux.provider);
-  const runtime = new PiSessionRuntime({ load: async () => models, close: async () => {} });
+  const runtime = new PiSessionRuntime(() => ({ load: async () => models, close: async () => {} }));
   const options: StartPiSessionOptions = {
     agentDirectory: root,
     manager: await createPrivateSessionManager(root, root),
@@ -31,6 +31,7 @@ async function fixture(env: Record<string, string> = {}) {
       canModifyCode: false,
     },
     deploymentConfig: {},
+    modelApiKey: "fixture-key",
     systemPrompt: "Use configured MCP tools.",
     onEvent() {},
     mcpConfigurations: [
@@ -256,12 +257,17 @@ test("SDK call cancellation leaves the shared connection usable and errors omit 
 
 for (const mode of ["off", "on"] as const)
   test(`existing MCP tools and resources use updated request budgets with codemode ${mode}`, async () => {
-    const f = await fixture({ MCP_FIXTURE_RESOURCES: "1", MCP_FIXTURE_DELAY_MS: "1200" });
+    // Budgets below the configurable 1000 ms minimum keep this fast. Timeouts keep a 300 ms margin before the
+    // fixture delay and successful calls keep a 2400 ms margin after it.
+    const shortBudgetMs = 300,
+      longBudgetMs = 3000;
+    const f = await fixture({ MCP_FIXTURE_RESOURCES: "1", MCP_FIXTURE_DELAY_MS: "600" });
     const originalParameters = applicationParameters();
     const setBudget = (mcpExecutionMs: number) => installApplicationParameters({ ...originalParameters, mcpExecutionMs });
     f.options.context.codemode = mode;
     let managed: ManagedPiSession | undefined;
     try {
+      // Startup keeps the configurable minimum so a loaded host can still launch the sandboxed server.
       setBudget(1000);
       f.faux.setResponses([fauxAssistantMessage("MCP connection ready.")]);
       managed = await f.runtime.start(f.options);
@@ -291,33 +297,33 @@ for (const mode of ["off", "on"] as const)
       const originalHostPid = await hostMcpPid(path.join(f.root, "pid"));
 
       // Raising the budget must override the shorter timeout captured when these tools were registered.
-      setBudget(3000);
+      setBudget(longBudgetMs);
       for (const result of [await call("mcp__local__slow"), await call("read_mcp_resource", { server: "local", uri: "fixture://slow" })]) assert.equal(result.isError, false, JSON.stringify(result));
 
-      setBudget(1000);
+      setBudget(shortBudgetMs);
       for (const [name, input] of [
         ["mcp__local__slow", {}],
         ["read_mcp_resource", { server: "local", uri: "fixture://slow" }],
       ] as const) {
         const result = await call(name, input);
         assert.equal(result.isError, true, JSON.stringify(result));
-        assert.match(JSON.stringify(result), /timed out after 1000ms/);
+        assert.match(JSON.stringify(result), new RegExp(`timed out after ${shortBudgetMs}ms`));
       }
       assert.equal(await file(f.root, "slow"), "2", "a timed-out tool is not replayed");
 
       // A parameter change after dispatch does not replace the request's original budget.
-      setBudget(3000);
+      setBudget(longBudgetMs);
       await rm(path.join(f.root, "slow"));
       const inFlight = call("mcp__local__slow");
       assert.equal(await file(f.root, "slow"), "3");
-      setBudget(1000);
+      setBudget(shortBudgetMs);
       assert.equal((await inFlight).isError, false);
       assert.equal(await file(f.root, "slow"), "3");
       assert.equal(data(await context.executeTool("mcp__local__counter", {})).pid, originalPid, "budget updates and timeout cancellation keep the connection usable");
 
       // A fresh connection in the same session also reads the current value, without replaying the failed call.
       assert.equal((await call("mcp__local__die")).isError, true);
-      setBudget(3000);
+      setBudget(longBudgetMs);
       assert.equal((await call("mcp__local__slow")).isError, false);
       assert.notEqual(await hostMcpPid(path.join(f.root, "pid")), originalHostPid);
       assert.equal(await file(f.root, "slow"), "1");
@@ -532,15 +538,15 @@ test("uses only enabled database configurations and ignores MCP files in the Iss
 });
 
 for (const transport of ["streamable_http", "sse"] as const)
-  test(`native ${transport} calls preserve literal authorization and image/structured results`, async () => {
+  test(`native ${transport} calls preserve literal authorization and image/structured results`, async (t) => {
     const f = await fixture();
     let managed: ManagedPiSession | undefined;
-    const original = globalThis.fetch;
     let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
     const encoder = new TextEncoder(),
       authorization = "Bearer ${MCP_SHOULD_STAY_LITERAL}";
     f.options.mcpConfigurations = [{ id: "local", name: "Remote", url: "https://mcp.example.test/mcp", authorization, transport, enabled: true }];
-    globalThis.fetch = async (_input, init) => {
+    // The transport is built inside the Pi runtime, so the global is replaced with an auto-restored mock.
+    t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
       assert.equal(new Headers(init?.headers).get("authorization"), authorization);
       assert.equal(init?.redirect, "error");
       if ((init?.method ?? "GET") === "GET")
@@ -572,7 +578,7 @@ for (const transport of ["streamable_http", "sse"] as const)
         return new Response(null, { status: 202 });
       }
       return new Response(JSON.stringify(message), { headers: { "content-type": "application/json" } });
-    };
+    });
     try {
       f.faux.setResponses([fauxAssistantMessage("Connected.")]);
       managed = await f.runtime.start(f.options);
@@ -584,19 +590,17 @@ for (const transport of ["streamable_http", "sse"] as const)
       assert.doesNotMatch(JSON.stringify(managed.session.getAllTools()), /MCP_SHOULD_STAY_LITERAL/);
     } finally {
       await managed?.stop();
-      globalThis.fetch = original;
       await f.close();
     }
   });
 
-test("reports an expired HTTP call without replaying it and reconnects for a later explicit call", async () => {
+test("reports an expired HTTP call without replaying it and reconnects for a later explicit call", async (t) => {
   const f = await fixture();
-  const original = globalThis.fetch;
   let managed: ManagedPiSession | undefined,
     initializations = 0,
     calls = 0;
   f.options.mcpConfigurations = [{ id: "local", name: "Remote", url: "https://mcp.example.test/mcp", authorization: "", transport: "streamable_http", enabled: true }];
-  globalThis.fetch = async (_input, init) => {
+  t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (method === "GET") return new Response(null, { status: 405 });
     if (method === "DELETE") return new Response(null, { status: 200 });
@@ -616,7 +620,7 @@ test("reports an expired HTTP call without replaying it and reconnects for a lat
     return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
       headers: { "content-type": "application/json", ...(request.method === "initialize" ? { "mcp-session-id": `session-${initializations}` } : {}) },
     });
-  };
+  });
   try {
     f.faux.setResponses([fauxAssistantMessage("Connected.")]);
     managed = await f.runtime.start(f.options);
@@ -631,7 +635,6 @@ test("reports an expired HTTP call without replaying it and reconnects for a lat
     assert.equal(calls, 1);
   } finally {
     await managed?.stop();
-    globalThis.fetch = original;
     await f.close();
   }
 });
@@ -651,25 +654,20 @@ test("keeps discovery responses separate from server requests with the same JSON
   }
 });
 
-test("shutdown interrupts legacy SSE startup before an endpoint is announced", async () => {
+test("shutdown interrupts legacy SSE startup before an endpoint is announced", async (t) => {
   const f = await fixture();
-  const original = globalThis.fetch;
-  let started!: () => void;
-  const opening = new Promise<void>((resolve) => {
-    started = resolve;
-  });
+  const opening = Promise.withResolvers<void>();
   f.options.mcpConfigurations = [{ id: "local", name: "Pending SSE", url: "https://mcp.example.test/sse", authorization: "", transport: "sse", enabled: true }];
-  globalThis.fetch = async () => {
-    started();
+  t.mock.method(globalThis, "fetch", async () => {
+    opening.resolve();
     return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "text/event-stream" } });
-  };
+  });
   try {
     const managed = await f.runtime.start(f.options);
-    await opening;
+    await opening.promise;
     const closed = await Promise.race([managed.stop().then(() => true), pause(400).then(() => false)]);
     assert.equal(closed, true);
   } finally {
-    globalThis.fetch = original;
     await f.close();
   }
 });

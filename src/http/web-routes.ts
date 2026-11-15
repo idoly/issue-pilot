@@ -3,6 +3,7 @@ import path from "node:path";
 
 import fastifyStatic from "@fastify/static";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { isHashedWebAsset } from "./web-assets.ts";
 
 export async function assertWebBuild(root: string): Promise<void> {
   const name = "index.html";
@@ -37,11 +38,10 @@ function securityHeaders(reply: FastifyReply): void {
   reply.header("Referrer-Policy", "no-referrer");
   reply.header("X-Content-Type-Options", "nosniff");
 }
-// Vite emits content-hashed bundles; public files keep stable names and must not be cached for a year.
-const hashedAsset = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/;
+// Content-hashed bundles are immutable; public files keep stable names and must not be cached for a year.
 function cacheControl(file: string): string {
   if (file.endsWith(".html")) return "private, no-cache, no-store, must-revalidate";
-  return hashedAsset.test(path.basename(file)) ? "public, max-age=31536000, immutable" : "public, max-age=3600";
+  return isHashedWebAsset(path.basename(file)) ? "public, max-age=31536000, immutable" : "public, max-age=3600";
 }
 
 export async function registerWebRoutes(app: FastifyInstance, configuredRoot: string): Promise<void> {

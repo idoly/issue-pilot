@@ -1,70 +1,69 @@
-import { loadMcpConnections } from "../configuration/service-mcp.ts";
-import { parseDbHubTargets } from "../configuration/dbhub.ts";
+import { loadMcpConnections } from "./service-mcp.ts";
+import { parseDbHubTargets } from "./dbhub.ts";
 import { or, eq, inArray, sql } from "drizzle-orm";
-import { CapabilityConfigurationError } from "../capabilities/registry.ts";
-import { resolveConfiguredCapabilitySections } from "../configuration/credentials.ts";
+import { resolveConfiguredCapabilitySections } from "./credentials.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, issueServiceScopes, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, repositories as repositoryCatalog, services } from "../db/schema.ts";
-import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, type CapabilityName, type StoredDeploymentConfig } from "../domain/contracts.ts";
-import { ApiError, optionalText, record, strings, text } from "./input.ts";
+import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, isDevelopmentEnvironment, type CapabilityName, type EnvironmentKind, type StoredDeploymentConfig } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
+import { optionalText, record, strings, text } from "../domain/input.ts";
 
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
 
-function parseServiceDeployment(deployment: Record<string, unknown>, repositoryAliases: Set<string>, existing: StoredDeploymentConfig | undefined) {
-  if (deployment.agent !== undefined) throw new ApiError(400, "deployment_agent_not_allowed");
-  if (Object.hasOwn(deployment, "mysql")) throw new ApiError(400, "mysql_configuration_retired");
+function parseServiceDeployment(
+  deployment: Record<string, unknown>,
+  repositoryAliases: Set<string>,
+  existing: StoredDeploymentConfig | undefined,
+  environmentKinds: ReadonlyMap<string, EnvironmentKind>,
+) {
+  if (deployment.agent !== undefined) throw new DomainError("deployment_agent_not_allowed", "bad_request");
+  if (Object.hasOwn(deployment, "mysql")) throw new DomainError("mysql_configuration_retired", "bad_request");
   const selected = strings(deployment.capabilities ?? [], "capabilities");
-  if (new Set(selected).size !== selected.length || selected.some((key) => !CAPABILITY_KEYS.includes(key as CapabilityName))) throw new ApiError(400, "invalid_capabilities");
+  if (new Set(selected).size !== selected.length || selected.some((key) => !CAPABILITY_KEYS.includes(key as CapabilityName))) throw new DomainError("invalid_capabilities", "bad_request");
   const environmentKey = text(deployment.environmentKey, "environment_key", 100);
+  // Unknown keys are refused with invalid_environment after parsing; until then they follow the non-development rules.
+  const environmentKind = environmentKinds.get(environmentKey);
+  const development = isDevelopmentEnvironment(environmentKind);
   const capabilities = CAPABILITY_KEYS.filter((key) => selected.includes(key));
-  if (strings(deployment.mcpServices ?? [], "mcp_services").length) throw new ApiError(400, "mcp_services_are_global");
-  if (environmentKey === "dev" && capabilities.length) throw new ApiError(400, "development_capabilities_inherited");
-  if (environmentKey === "dev" && existing && Object.keys(existing).some((key) => key !== "archivedDevelopment")) throw new ApiError(409, "development_configuration_layout_invalid");
-  if (environmentKey === "dev" && Array.isArray(deployment.repositoryBranches) && deployment.repositoryBranches.length) throw new ApiError(400, "development_branches_inherited");
-  const repositoryBranches =
-    environmentKey === "dev"
-      ? []
-      : Array.isArray(deployment.repositoryBranches)
-        ? deployment.repositoryBranches
-            .map(record)
-            .map((branch) => ({ repositoryAlias: text(branch.repositoryAlias, "repository_alias", 100), baseBranch: text(branch.baseBranch, "base_branch", 255) }))
-        : [];
+  if (strings(deployment.mcpServices ?? [], "mcp_services").length) throw new DomainError("mcp_services_are_global", "bad_request");
+  if (development && capabilities.length) throw new DomainError("development_capabilities_inherited", "bad_request");
+  if (development && existing && Object.keys(existing).some((key) => key !== "archivedDevelopment")) throw new DomainError("development_configuration_layout_invalid", "conflict");
+  if (development && Array.isArray(deployment.repositoryBranches) && deployment.repositoryBranches.length) throw new DomainError("development_branches_inherited", "bad_request");
+  const repositoryBranches = development
+    ? []
+    : Array.isArray(deployment.repositoryBranches)
+      ? deployment.repositoryBranches.map(record).map((branch) => ({ repositoryAlias: text(branch.repositoryAlias, "repository_alias", 100), baseBranch: text(branch.baseBranch, "base_branch", 255) }))
+      : [];
   if (
-    environmentKey !== "dev" &&
+    !development &&
     (repositoryBranches.length !== repositoryAliases.size ||
       new Set(repositoryBranches.map((branch) => branch.repositoryAlias)).size !== repositoryBranches.length ||
       repositoryBranches.some((branch) => !repositoryAliases.has(branch.repositoryAlias)))
   )
-    throw new ApiError(400, "invalid_deployment_repository_branches");
-  let config: StoredDeploymentConfig;
-  try {
-    config = resolveConfiguredCapabilitySections(deployment, capabilities);
-    const dbhub = parseDbHubTargets(deployment.dbhub);
-    if (environmentKey === "dev" && dbhub.length) throw new ApiError(400, "development_capabilities_inherited");
-    if (dbhub.length) config.dbhub = dbhub;
-  } catch (error) {
-    if (error instanceof CapabilityConfigurationError) throw new ApiError(400, error.message);
-    throw error;
-  }
-  return { environmentKey, repositoryBranches, config };
+    throw new DomainError("invalid_deployment_repository_branches", "bad_request");
+  const config: StoredDeploymentConfig = resolveConfiguredCapabilitySections(deployment, capabilities);
+  const dbhub = parseDbHubTargets(deployment.dbhub);
+  if (development && dbhub.length) throw new DomainError("development_capabilities_inherited", "bad_request");
+  if (dbhub.length) config.dbhub = dbhub;
+  return { environmentKey, environmentKind, repositoryBranches, config };
 }
 
-function parseServiceConfigurationInput(input: Record<string, unknown>, existing: Map<string, StoredDeploymentConfig>) {
+function parseServiceConfigurationInput(input: Record<string, unknown>, existing: Map<string, StoredDeploymentConfig>, environmentKinds: ReadonlyMap<string, EnvironmentKind>) {
   const repositories = Array.isArray(input.repositories)
     ? input.repositories
         .map(record)
         .map((repository) => ({ id: optionalText(repository.id, 255), alias: text(repository.alias, "repository_alias", 100), url: text(repository.url, "repository_url") }))
     : [];
-  if (!repositories.length) throw new ApiError(400, "repository_required");
-  if (new Set(repositories.map((repository) => repository.alias)).size !== repositories.length) throw new ApiError(400, "duplicate_repository_alias");
-  if (new Set(repositories.map((repository) => repository.url)).size !== repositories.length) throw new ApiError(400, "duplicate_repository");
+  if (!repositories.length) throw new DomainError("repository_required", "bad_request");
+  if (new Set(repositories.map((repository) => repository.alias)).size !== repositories.length) throw new DomainError("duplicate_repository_alias", "bad_request");
+  if (new Set(repositories.map((repository) => repository.url)).size !== repositories.length) throw new DomainError("duplicate_repository", "bad_request");
   const aliases = new Set(repositories.map((repository) => repository.alias));
   // An omitted deployment list used to be read as "remove every deployment"; require the intent explicitly.
-  if (!Array.isArray(input.deployments)) throw new ApiError(400, "invalid_deployments");
-  const deployments = input.deployments.map(record).map((deployment) => parseServiceDeployment(deployment, aliases, existing.get(String(deployment.environmentKey))));
-  if (new Set(deployments.map((deployment) => deployment.environmentKey)).size !== deployments.length) throw new ApiError(400, "duplicate_deployment_environment");
-  if (deployments.some((deployment) => deployment.environmentKey === "dev") && !deployments.some((deployment) => deployment.environmentKey === "prod"))
-    throw new ApiError(400, "development_production_deployment_required");
+  if (!Array.isArray(input.deployments)) throw new DomainError("invalid_deployments", "bad_request");
+  const deployments = input.deployments.map(record).map((deployment) => parseServiceDeployment(deployment, aliases, existing.get(String(deployment.environmentKey)), environmentKinds));
+  if (new Set(deployments.map((deployment) => deployment.environmentKey)).size !== deployments.length) throw new DomainError("duplicate_deployment_environment", "bad_request");
+  if (deployments.some((deployment) => isDevelopmentEnvironment(deployment.environmentKind)) && !deployments.some((deployment) => deployment.environmentKind === "prod"))
+    throw new DomainError("development_production_deployment_required", "bad_request");
   return { repositories, deployments };
 }
 
@@ -96,7 +95,7 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
       return [key, deployment.config] as const;
     }),
   );
-  const parsed = parseServiceConfigurationInput(options.input, existing);
+  const parsed = parseServiceConfigurationInput(options.input, existing, new Map(environmentRows.map((environment) => [environment.key, environment.kind])));
   const catalog = await executor
     .select({ url: repositoryCatalog.url })
     .from(repositoryCatalog)
@@ -106,13 +105,13 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
         parsed.repositories.map((repository) => repository.url),
       ),
     );
-  if (catalog.length !== parsed.repositories.length) throw new ApiError(400, "repository_not_registered");
-  if (parsed.deployments.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new ApiError(400, "invalid_environment");
+  if (catalog.length !== parsed.repositories.length) throw new DomainError("repository_not_registered", "bad_request");
+  if (parsed.deployments.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new DomainError("invalid_environment", "bad_request");
   const ids = parsed.repositories.flatMap((repository) => (repository.id ? [repository.id] : []));
-  if (new Set(ids).size !== ids.length || ids.some((id) => !existingRepositories.some((repository) => repository.id === id))) throw new ApiError(400, "invalid_repository");
+  if (new Set(ids).size !== ids.length || ids.some((id) => !existingRepositories.some((repository) => repository.id === id))) throw new DomainError("invalid_repository", "bad_request");
   const retained = new Set(parsed.deployments.map((deployment) => environmentsByKey.get(deployment.environmentKey)!.id));
   const referenced = new Set(referencedIssues.map((issue) => issue.environmentId));
-  if (existingDeployments.some((deployment) => !retained.has(deployment.environmentId) && referenced.has(deployment.environmentId))) throw new ApiError(409, "deployment_is_used_by_issues");
+  if (existingDeployments.some((deployment) => !retained.has(deployment.environmentId) && referenced.has(deployment.environmentId))) throw new DomainError("deployment_is_used_by_issues", "conflict");
   return { parsed, existingRepositories, existingDeployments, environmentsByKey };
 }
 

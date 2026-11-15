@@ -4,6 +4,7 @@ import { NetworkConfigSchema } from "@anthropic-ai/sandbox-runtime";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { Database } from "../db/client.ts";
 import { applicationSettings } from "../db/schema.ts";
+import { DomainError } from "../domain/errors.ts";
 import type {
   ApplicationParameterBounds,
   ApplicationParameterKey,
@@ -40,7 +41,12 @@ const numericKeys = Object.keys(applicationParameterBounds.numbers) as NumericAp
 const listKeys = ["dingtalkAttachmentHosts", "networkAllowedDomains"] as const satisfies readonly ApplicationParameterKey[];
 const hostname = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
-export class ApplicationParameterError extends Error {}
+/** Overrides are administrator input, so a parse failure is a bad request carrying the offending key. */
+export class ApplicationParameterError extends DomainError {
+  constructor(code: string) {
+    super(code, "bad_request");
+  }
+}
 const invalid = (key: string) => new ApplicationParameterError(`invalid_application_parameter:${key}`);
 
 /** Domain lists share one rule set wherever they are configured: admin parameters and per-agent runtime additions. */
@@ -98,8 +104,15 @@ export async function loadApplicationParameterState(database: Pick<Database, "se
     .from(applicationSettings)
     .where(eq(applicationSettings.id, 1))
     .limit(1);
-  // Stored values passed the same validation; a failure here means the row was edited outside the application.
-  const overrides = parseApplicationParameterOverrides(row?.overrides ?? {});
+  // Stored values passed the same validation; a failure here means the row was edited outside the application,
+  // which is state damage rather than a client error.
+  let overrides: ApplicationParameterOverrides;
+  try {
+    overrides = parseApplicationParameterOverrides(row?.overrides ?? {});
+  } catch (error) {
+    if (error instanceof ApplicationParameterError) throw new Error(error.message, { cause: error });
+    throw error;
+  }
   return { revision: row?.revision ?? 0, overrides, values: resolveApplicationParameters(overrides), defaults: applicationParameterDefaults, bounds: applicationParameterBounds };
 }
 

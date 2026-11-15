@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type Client, type InStatement } from "@libsql/client";
 import { asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { readInBatches, type Database } from "../db/client.ts";
+import { DomainError } from "../domain/errors.ts";
 import { issues, subjects } from "../db/schema.ts";
 import { EMBEDDING_BATCH_SIZE, EMBEDDING_DIMENSIONS, issueEmbeddings } from "./cloudflare.ts";
 import type { IssueSearchHit, IssueSearchSettings } from "./contracts.ts";
@@ -46,9 +47,9 @@ function digest(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-export class IssueSearchIndexRequired extends Error {
+export class IssueSearchIndexRequired extends DomainError {
   constructor() {
-    super("issue_search_index_required");
+    super("issue_search_index_required", "conflict");
   }
 }
 

@@ -7,6 +7,7 @@ import type { Database } from "../db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../db/schema.ts";
 import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
 import { assertSessionFileComplete, createPrivateSessionManager, isIssueSessionPath, openRegularSessionFile } from "./pi-session.ts";
+import { DomainError } from "../domain/errors.ts";
 
 const resetEntry = "issue-pilot-session-reset";
 
@@ -131,7 +132,7 @@ export async function issueSessionHistory(database: Database, stateRoot: string,
 export async function readIssueSessionHistory(database: Database, stateRoot: string, issue: { id: string; key: string }, sessionId: string) {
   const history = await issueSessionHistory(database, stateRoot, issue);
   const entry = history.find((item) => item.sessionId === sessionId);
-  if (!entry) throw new Error("agent_session_not_found");
+  if (!entry) throw new DomainError("agent_session_not_found", "not_found");
   return readSession(entry.file, issueRoot(stateRoot, issue.key));
 }
 

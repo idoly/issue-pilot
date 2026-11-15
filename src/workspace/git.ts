@@ -293,7 +293,7 @@ export class WorktreeManager {
     this.workspacesRoot = workspacesRoot(this.stateRoot);
   }
 
-  async assertClean(url: string, workspacePath: string, expectedBranch?: string): Promise<void> {
+  async assertClean(url: string, workspacePath: string, expectedBranch: string): Promise<void> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
     await this.serialized(repositoryKey, async () => {
@@ -302,7 +302,8 @@ export class WorktreeManager {
     });
   }
 
-  async remove(url: string, workspacePath: string, expectedBranch?: string): Promise<string> {
+  /** Release publishes the recorded branch only; the current checkout branch is never trusted as a substitute. */
+  async remove(url: string, workspacePath: string, expectedBranch: string): Promise<string> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
     return this.serialized(repositoryKey, async () => {
@@ -310,10 +311,8 @@ export class WorktreeManager {
       const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, url);
       await this.assertCleanLocked(resolvedWorkspace, cachePath, expectedBranch);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
-      const branch = expectedBranch ?? (await this.git(["-C", resolvedWorkspace, "branch", "--show-current"])).trim();
-      if (!branch) throw new Error("workspace_branch_required");
       const shared = resolve(this.repositoriesRoot, repositoryKey);
-      const published = await publishIssueBranch(shared, cachePath, branch, true);
+      const published = await publishIssueBranch(shared, cachePath, expectedBranch, true);
       if (published !== commit) throw new Error("working_branch_changed_during_release");
       await this.retainSnapshotCommit(shared, commit);
       try {
@@ -330,7 +329,7 @@ export class WorktreeManager {
     });
   }
 
-  private async assertCleanLocked(resolvedWorkspace: string, store: string, expectedBranch?: string): Promise<void> {
+  private async assertCleanLocked(resolvedWorkspace: string, store: string, expectedBranch: string): Promise<void> {
     if (!(await pathExists(resolvedWorkspace))) throw new Error("workspace_repository_missing");
     await readLinkedWorktreeHead(store, resolvedWorkspace).catch((error: unknown) => {
       throw new Error("workspace_git_binding_invalid", { cause: error });
@@ -352,12 +351,10 @@ export class WorktreeManager {
     // Read branch and dirtiness in one Git snapshot rather than spawning twice.
     const status = await inspect(["--no-optional-locks", "-C", resolvedWorkspace, "status", "--porcelain=v2", "--branch", "--ignored=matching"]);
     const lines = status.split("\n").filter(Boolean);
-    if (expectedBranch !== undefined) {
-      const head = lines.find((line) => line.startsWith("# branch.head "))?.slice("# branch.head ".length);
-      // A historical branch can literally be named like porcelain's detached marker.
-      const branch = head === "(detached)" && expectedBranch === head ? (await inspect(["-C", resolvedWorkspace, "branch", "--show-current"])).trim() : head;
-      if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
-    }
+    const head = lines.find((line) => line.startsWith("# branch.head "))?.slice("# branch.head ".length);
+    // A historical branch can literally be named like porcelain's detached marker.
+    const branch = head === "(detached)" && expectedBranch === head ? (await inspect(["-C", resolvedWorkspace, "branch", "--show-current"])).trim() : head;
+    if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
     if (lines.some((line) => !line.startsWith("# "))) throw new Error("workspace_has_changes");
 
     // Git status and worktree remove both honor flags that can hide local file changes.

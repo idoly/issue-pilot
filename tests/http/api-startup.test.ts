@@ -1,6 +1,6 @@
 import { OperationError } from "../../src/operation-error.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { git } from "../helpers/git.ts";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,14 +8,14 @@ import path from "node:path";
 import { Server } from "node:net";
 import { test } from "node:test";
 
-import { inspect, promisify } from "node:util";
+import { inspect } from "node:util";
 import { eq } from "drizzle-orm";
 import { DrizzleQueryError } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 
 import { buildApi, installShutdownHandlers, startApi, type AgentController } from "../../src/http/api.ts";
 import { errorChain } from "../../src/diagnostics.ts";
-import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
+import { ApplicationStateLease } from "../../src/state-lease.ts";
 import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
 import { openDatabase } from "../../src/db/client.ts";
 
@@ -24,8 +24,6 @@ import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
 import { issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
-
-const git = promisify(execFile);
 
 class StartupEngine implements AgentController {
   closed = 0;
@@ -41,6 +39,11 @@ class StartupEngine implements AgentController {
   async runExclusive<T>(_issueIds: string[], operation: (reservation: { enqueue(): void; closeSession(): Promise<void> }) => Promise<T>): Promise<T> {
     return operation({ enqueue() {}, async closeSession() {} });
   }
+  async messageReceipt(): Promise<{ state: string }> {
+    return { state: "unknown" };
+  }
+  async abort(): Promise<void> {}
+  setMaxConcurrentIssues(): void {}
   async close(): Promise<void> {
     this.closed += 1;
     if (this.closeError) throw this.closeError;
@@ -101,10 +104,10 @@ test("serves recorded Issue code after restart without fetching or rebuilding hi
   let app: FastifyInstance | undefined;
   try {
     const remote = path.join(fixture.root, "remote");
-    await git("git", ["init", "-b", "main", remote]);
+    await git(["init", "-b", "main", remote]);
     await writeFile(path.join(remote, "README.md"), "recorded version");
-    await git("git", ["-C", remote, "add", "README.md"]);
-    const commit = (message: string) => git("git", ["-C", remote, "-c", "user.name=Fixture", "-c", "user.email=test@example.test", "commit", "-am", message]);
+    await git(["-C", remote, "add", "README.md"]);
+    const commit = (message: string) => git(["-C", remote, "commit", "-am", message]);
     await commit("initial");
     await createService(fixture.app, "Restart", ["test"]);
     await registerTestRepositories(database.db, [remote]);
@@ -218,10 +221,15 @@ test("closes Fastify exactly once when the process receives a shutdown signal", 
   const removeHandlers = installShutdownHandlers(app, target as never);
   target.emit("SIGTERM");
   target.emit("SIGINT");
+  target.emit("SIGTERM");
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
   assert.equal(closes, 1);
+  // A repeated stop signal during close must still be handled here, not by Node's default handler.
+  assert.equal(target.listenerCount("SIGTERM"), 1);
+  assert.equal(target.listenerCount("SIGINT"), 1);
+  assert.equal((target as EventEmitter & { exitCode?: number }).exitCode, undefined);
   removeHandlers();
   assert.equal(target.listenerCount("SIGTERM"), 0);
   assert.equal(target.listenerCount("SIGINT"), 0);
@@ -274,6 +282,7 @@ test("isolates shutdown reporting failures", async () => {
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
+  assert.equal((target as EventEmitter & { exitCode?: number }).exitCode, 1);
   removeHandlers();
   assert.equal(target.listenerCount("SIGTERM"), 0);
   assert.equal(target.listenerCount("SIGINT"), 0);

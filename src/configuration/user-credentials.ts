@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { credentialOwnerSubject, type CapabilityName, type DeploymentConfig, type StoredDeploymentConfig, type DmsCredentials, type SlsCredentials } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import { issues, subjects, userCredentials } from "../db/schema.ts";
 
 export async function loadIssueCredentialOwner(database: Database, issueId: string) {
@@ -42,7 +43,8 @@ function slsCredentialGroup(credentials?: PersonalCredentials, shared?: SlsCrede
 
 export function selectDmsCredentials(credentials?: PersonalCredentials, shared?: DmsCredentials | null): DmsCredentials {
   const group = dmsCredentialGroup(credentials, shared);
-  if (!group.ok) throw new Error(group.error);
+  // Missing or incomplete credentials are the caller's configuration to correct, never a reason to switch identity.
+  if (!group.ok) throw new DomainError(group.error, "bad_request");
   return group.value;
 }
 

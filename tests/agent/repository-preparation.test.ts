@@ -1,11 +1,10 @@
+import { createBareRemote, git } from "../helpers/git.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
 
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
@@ -35,24 +34,12 @@ import type { StartPiSessionOptions } from "../../src/agent/pi-session.ts";
 import { repositoryWorkspaceNames, WorktreeManager } from "../../src/workspace/git.ts";
 import { claimIssueRoot, issueRoot, sharedCheckoutsRoot } from "../../src/workspace/state.ts";
 
-const execFileAsync = promisify(execFile);
-
-async function git(args: string[]): Promise<string> {
-  return (await execFileAsync("git", args, { encoding: "utf8" })).stdout.trim();
-}
-
 async function createRemote(root: string): Promise<{ source: string; remotes: [string, string] }> {
-  const source = path.join(root, "source");
-  const remotes = [path.join(root, "remote.git"), path.join(root, "secondary.git")] as [string, string];
-  await git(["init", "-b", "prod", source]);
-  await writeFile(path.join(source, "README.md"), "production baseline\n", "utf8");
-  await git(["-C", source, "add", "."]);
-  await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "initial"]);
-  await git(["-C", source, "branch", "develop"]);
-  await git(["clone", "--bare", source, remotes[0]]);
-  await git(["clone", "--bare", source, remotes[1]]);
-  await git(["-C", source, "remote", "add", "origin", remotes[0]]);
-  return { source, remotes };
+  const { source, remote } = await createBareRemote(root, { branch: "prod", files: { "README.md": "production baseline\n" }, extraBranches: ["develop"] });
+  const secondary = path.join(root, "secondary.git");
+  await git(["clone", "--bare", source, secondary]);
+  await git(["-C", source, "remote", "add", "origin", remote]);
+  return { source, remotes: [remote, secondary] };
 }
 
 test("atomically switches development repository sets across preparation and finalization failures", async () => {
@@ -248,7 +235,8 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
       .insert(mcpServices)
       .values({ name: "Orders tools", url: "https://orders-tools.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id })
       .returning();
-    await database.db.insert(mcpServices).values({ name: "dingtalk", url: "https://imports.example.test/mcp", transport: "streamable_http", enabled: true, deploymentId: deployments[0]!.id });
+    // The DingTalk import connection is global; only deployment ownership makes a row a service tool.
+    await database.db.insert(mcpServices).values({ name: "dingtalk", url: "https://imports.example.test/mcp", transport: "streamable_http", enabled: true });
     await database.db.insert(serviceDeploymentRepositories).values([
       { deploymentId: deployments[0]!.id, repositoryId: repositories[0]!.id, baseBranch: "prod" },
       { deploymentId: deployments[0]!.id, repositoryId: repositories[1]!.id, baseBranch: "develop" },
@@ -383,7 +371,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const firstSecondaryCommit = prodRepositoryByUrl.get(remotes[1])!.commitBefore;
     await writeFile(path.join(source, "README.md"), "new production snapshot\n", "utf8");
     await git(["-C", source, "add", "."]);
-    await git(["-C", source, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "new snapshot"]);
+    await git(["-C", source, "commit", "-m", "new snapshot"]);
     await git(["-C", source, "push", "origin", "prod"]);
     await internal.run(prodIssue!.id);
     await checkOriginalsAndWorkingFiles();

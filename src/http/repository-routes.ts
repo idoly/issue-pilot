@@ -1,5 +1,6 @@
-import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
-import { repositories, serviceRepositories, services, issues, issueServiceScopes } from "../db/schema.ts";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { issuesAffectedByRepositoryChange } from "../configuration/impact.ts";
+import { repositories, serviceRepositories, services } from "../db/schema.ts";
 import { ApiError, checkRevision, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
@@ -69,17 +70,7 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
       }
       const bindings = await database.db.select({ serviceId: serviceRepositories.serviceId }).from(serviceRepositories).where(eq(serviceRepositories.url, existing.url));
       const serviceIds = [...new Set(bindings.map((row) => row.serviceId))];
-      const affected = serviceIds.length
-        ? await database.db
-            .select({ id: issues.id })
-            .from(issues)
-            .where(
-              or(
-                inArray(issues.serviceId, serviceIds),
-                inArray(issues.id, database.db.select({ issueId: issueServiceScopes.issueId }).from(issueServiceScopes).where(inArray(issueServiceScopes.serviceId, serviceIds))),
-              ),
-            )
-        : [];
+      const affected = await issuesAffectedByRepositoryChange(database.db, existing.url);
       return runIssueExclusive(
         engine,
         affected.map(({ id }) => id),

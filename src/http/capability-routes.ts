@@ -1,8 +1,8 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { loadCapabilitySwitches } from "../configuration/capability-switches.ts";
-import { capabilitySwitches, environments, issues, serviceDeployments } from "../db/schema.ts";
+import { issuesAffectedByCapabilityChange } from "../configuration/impact.ts";
+import { capabilitySwitches } from "../db/schema.ts";
 import { CAPABILITY_KEYS } from "../domain/contracts.ts";
-import { AgentBusyError } from "../agent/engine.ts";
 import { ApiError, choice, closedRecord } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
@@ -22,28 +22,17 @@ export function registerCapabilityRoutes(context: ApiRouteContext) {
       await requireDeveloper(database, request);
       const current = (await loadCapabilitySwitches(database.db)).find((row) => row.key === key)!;
       if (current.enabled === enabled) return { key, enabled };
-      const deployments = (await database.db.select().from(serviceDeployments)).filter((row) => Boolean(row.config[key]));
-      const environmentIds = [
-        ...new Set([
-          ...deployments.map((row) => row.environmentId),
-          ...(deployments.length ? (await database.db.select({ id: environments.id }).from(environments).where(eq(environments.kind, "dev"))).map((row) => row.id) : []),
-        ]),
-      ];
-      const affected = environmentIds.length ? await database.db.select({ id: issues.id }).from(issues).where(inArray(issues.environmentId, environmentIds)) : [];
-      try {
-        return await runIssueExclusive(
-          engine,
-          affected.map((row) => row.id),
-          async (reservation) => {
-            for (const row of affected) await reservation.closeSession(row.id);
-            await database.db.update(capabilitySwitches).set({ enabled, updatedAt: new Date() }).where(eq(capabilitySwitches.key, key));
-            return { key, enabled };
-          },
-        );
-      } catch (error) {
-        if (error instanceof AgentBusyError) throw new ApiError(409, "capability_has_running_issues");
-        throw error;
-      }
+      const affected = await issuesAffectedByCapabilityChange(database.db, key);
+      return runIssueExclusive(
+        engine,
+        affected.map((row) => row.id),
+        async (reservation) => {
+          for (const row of affected) await reservation.closeSession(row.id);
+          await database.db.update(capabilitySwitches).set({ enabled, updatedAt: new Date() }).where(eq(capabilitySwitches.key, key));
+          return { key, enabled };
+        },
+        "capability_has_running_issues",
+      );
     });
   });
 }

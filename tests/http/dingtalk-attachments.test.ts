@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { downloadDingtalkAttachments } from "../../src/http/dingtalk-attachments.ts";
-import { removePendingAttachments } from "../../src/http/attachment-store.ts";
+import { removePendingAttachments } from "../../src/workspace/attachments.ts";
 import { errorChain, errorDiagnostic } from "../../src/diagnostics.ts";
 
 let stateRoot: string;
@@ -31,7 +31,7 @@ for (const operation of ["mkdtemp", "open"] as const) {
     try {
       await assert.rejects(
         downloadDingtalkAttachments(stateRoot, [file], new AbortController().signal, async () => new Response(stream)),
-        /dingtalk_attachment_download_failed/,
+        { code: "ENOSPC" },
       );
       assert.equal(cancellations, 1);
       assert.equal(stream.locked, false);

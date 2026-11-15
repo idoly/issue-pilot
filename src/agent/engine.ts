@@ -13,12 +13,12 @@ import { loadIssueCredentialOwner, resolveIssueCapabilities } from "../configura
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { SharedCheckoutLease } from "../workspace/git.ts";
 import { resolveAgentModel } from "../configuration/agent.ts";
-import { dingtalkMcpNames, loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
+import { loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
 import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
 import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
 import { createWorkspaceTool } from "./workspace-tool.ts";
-import { openVerifiedAttachmentFile } from "../http/attachment-store.ts";
+import { openVerifiedAttachmentFile } from "../workspace/attachments.ts";
 import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import {
@@ -32,41 +32,25 @@ import {
   type AgentMessageScope,
 } from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
-import { createPrivateSessionManager, assertSessionFileComplete, gitIdentityEnvironment, isIssueSessionPath, PiSessionRuntime, type GitCommitIdentity, type ManagedPiSession } from "./pi-session.ts";
+import {
+  createPrivateSessionManager,
+  assertSessionFileComplete,
+  gitIdentityEnvironment,
+  isIssueSessionPath,
+  PiSessionRuntime,
+  type GitCommitIdentity,
+  type KeyedModelRuntimeFactory,
+  type ManagedPiSession,
+} from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, applicationSettings, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, personGitIdentity, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, isDevelopmentEnvironment, personGitIdentity, requiresDeveloperOwner, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
-import type { PiModelRuntime } from "./model-runtime.ts";
+import { AgentBusyError, type AgentController, type AgentReservation } from "./contracts.ts";
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
-
-export interface AgentReservation {
-  enqueue(issueId: string, message?: string): void;
-  closeSession(issueId: string): Promise<void>;
-}
-
-/** The Issue already has a reservation, queued round or abort in progress. */
-export class AgentBusyError extends DomainError {
-  constructor() {
-    super("issue_already_running", "conflict");
-    this.name = "AgentBusyError";
-  }
-}
-
-export interface AgentController {
-  messageReceipt?(issue: { id: string; key: string }, request: AgentMessageRequest, authorize: () => Promise<unknown>): Promise<{ state: string }>;
-  enqueue(issueId: string, message?: string): void;
-  send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images?: ImageContent[], authorize?: () => Promise<unknown>, request?: AgentMessageRequest): Promise<void>;
-  isRunning(issueId: string): boolean;
-  getRunState(issueId: string): AgentRunState;
-  runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
-  abort?(issueId: string, authorize?: () => Promise<unknown>): Promise<void>;
-  setMaxConcurrentIssues?(maxConcurrentIssues: number): void;
-  close?(): Promise<void>;
-}
 
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
@@ -102,7 +86,7 @@ export class AgentEngine implements AgentController {
     stateRoot: string,
     publish?: (event: RunEvent) => void,
     onError: (error: unknown) => void = () => undefined,
-    modelRuntime?: PiModelRuntime,
+    createKeyedRuntime?: KeyedModelRuntimeFactory,
     maxConcurrentIssues: number = applicationParameters().maxConcurrentIssues,
   ) {
     assertAgentConcurrency(maxConcurrentIssues);
@@ -112,7 +96,7 @@ export class AgentEngine implements AgentController {
     this.projectManager = new IssueProjectManager(this.database, this.stateRoot);
     this.publish = publish;
     this.onError = onError;
-    this.piRuntime = new PiSessionRuntime(modelRuntime);
+    this.piRuntime = new PiSessionRuntime(createKeyedRuntime);
   }
 
   enqueue(issueId: string, latestMessage?: string): void {
@@ -181,11 +165,11 @@ export class AgentEngine implements AgentController {
           const receipt = await this.findMessageReceipt({ id: issueId, key: issue.key }, request);
           if (receipt) {
             await authorize?.();
-            if (receipt.message !== message || JSON.stringify(receipt.images) !== JSON.stringify(images)) throw new Error("agent_message_id_conflict");
+            if (receipt.message !== message || JSON.stringify(receipt.images) !== JSON.stringify(images)) throw new DomainError("agent_message_id_conflict", "conflict");
             return;
           }
         }
-        if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+        if (issue.status === "resolved") throw new DomainError("resolved_issue_cannot_run_agent", "conflict");
         const userMessage = message;
         const messageIssue = { id: issueId, key: issue.key, serviceId: issue.serviceId, environmentId: issue.environmentId };
         // The sender may own no Issues, so their deactivation need not reserve this Issue.
@@ -234,10 +218,10 @@ export class AgentEngine implements AgentController {
             }
             throw error;
           }
-          if (!this.isCurrentSession(issueId, managed)) throw new Error("agent_message_outcome_unknown");
+          if (!this.isCurrentSession(issueId, managed)) throw new DomainError("agent_message_outcome_unknown", "conflict");
           await managed.session.steer(steered, images);
           // Pi may have accepted work before the old session was disposed; do not replay it.
-          if (!this.isCurrentSession(issueId, managed)) throw new Error("agent_message_outcome_unknown");
+          if (!this.isCurrentSession(issueId, managed)) throw new DomainError("agent_message_outcome_unknown", "conflict");
           // The round can finish while Pi is still admitting the steer, leaving it undelivered in Pi's queue.
           // Take it back and queue it for the next round instead of reporting it as delivered. Pi may rewrite the
           // text (skills, templates, input handlers), so match by count; clearQueue() empties the whole queue,
@@ -347,11 +331,6 @@ export class AgentEngine implements AgentController {
       } catch (error) {
         failures.push(error);
       }
-    }
-    try {
-      await this.piRuntime.close();
-    } catch (error) {
-      failures.push(error);
     }
     if (failures.length) throw new AggregateError(failures, "agent_close_failed");
   }
@@ -527,7 +506,7 @@ export class AgentEngine implements AgentController {
   private async run(issueId: string, latestMessage?: string, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
     const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
-    if (issue.status === "resolved") throw new Error("resolved_issue_cannot_run_agent");
+    if (issue.status === "resolved") throw new DomainError("resolved_issue_cannot_run_agent", "conflict");
     let currentMessage = latestMessage?.trim() || undefined;
     // A file-backed manager opened for selection is reused when the round starts, so a long transcript is parsed once.
     let reusableManager: SessionManager | undefined;
@@ -572,7 +551,7 @@ export class AgentEngine implements AgentController {
     const environmentKind = service.environmentKind as EnvironmentKind;
     await this.stopSession(issue.id);
     const owner = await loadIssueCredentialOwner(this.database, issue.id);
-    if (environmentKind === "dev" && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
+    if (requiresDeveloperOwner(environmentKind) && owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
     // The owner's complete personal model group replaces the shared model and key; only its absence selects the shared group.
     const model = await resolveAgentModel(this.database, owner.credentials?.modelCredentials);
     if (!model.apiKey) throw new Error("model_api_key_not_configured");
@@ -604,7 +583,7 @@ export class AgentEngine implements AgentController {
       await handle.close();
     }
     const environmentServices = await listEnvironmentServices(this.database, issue.environmentId);
-    const queryServices = environmentServices.filter((row) => row.environment.kind !== "dev");
+    const queryServices = environmentServices.filter((row) => !isDevelopmentEnvironment(row.environment.kind));
     const [shared] = await this.database
       .select({ sls: applicationSettings.sharedSlsCredentials, dms: applicationSettings.sharedDmsCredentials })
       .from(applicationSettings)
@@ -624,7 +603,6 @@ export class AgentEngine implements AgentController {
     const mcpConfigurations = serviceMcpConnections(
       mcpRows,
       environmentServices.filter((row) => includedServiceIds.has(row.service.id)).map((row) => row.deployment.id),
-      await dingtalkMcpNames(this.database),
     );
     const context = createAgentSessionContext({
       issueKey: issue.key,
@@ -755,13 +733,8 @@ export class AgentEngine implements AgentController {
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");
     try {
-      await this.database
-        .insert(agentSessions)
-        .values({ issueId: issue.id, sessionFile, workspacePath: workDirectory })
-        .onConflictDoUpdate({
-          target: agentSessions.issueId,
-          set: { sessionFile, workspacePath: workDirectory, updatedAt: new Date() },
-        });
+      // No binding existed above; a concurrent binding must fail here rather than be silently replaced.
+      await this.database.insert(agentSessions).values({ issueId: issue.id, sessionFile, workspacePath: workDirectory });
     } catch (error) {
       try {
         await unlink(sessionFile);

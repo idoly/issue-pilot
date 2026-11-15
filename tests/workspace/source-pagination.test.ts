@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { git } from "../helpers/git.ts";
 import { OperationError } from "../../src/operation-error.ts";
 import crypto from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
@@ -30,14 +31,9 @@ async function fixture() {
     .insert(issues)
     .values({ key: "ISSUE-20261017-991", title: "Synthetic source", type: "defect_fix", serviceId: service!.id, environmentId: environment!.id, reporterSubject: "browser-test" })
     .returning();
-  const runGit = async (args: string[]) => {
-    const result = await executeLocalCommand("git", args);
-    assert.equal(result.code, 0, result.stderr);
-    return result.stdout.trim();
-  };
   const seed = path.join(root, "seed");
-  await runGit(["init", "-b", "main", seed]);
-  await runGit(["-C", seed, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Fixture baseline"]);
+  await git(["init", "-b", "main", seed]);
+  await git(["-C", seed, "commit", "--allow-empty", "-m", "Fixture baseline"]);
   await claimIssueRoot(root, issue!.key);
   const prepared = await new WorktreeManager(root).prepare({ issueKey: issue!.key, workspaceName: "application", url: seed, baseBranch: "main", mode: "hotfix" });
   const repository = prepared.workspacePath;
@@ -58,7 +54,7 @@ async function fixture() {
     issue: issue!,
     repository,
     store: prepared.cachePath,
-    git: (args: string[]) => runGit(["-C", repository, ...args]),
+    git: (args: string[]) => git(["-C", repository, ...args]),
     browser: new SourceBrowser(database.db, root),
     close: async () => {
       database.close();
@@ -685,7 +681,7 @@ test("treats bracket characters in source paths literally when staging and disca
   try {
     for (const name of ["value[1].txt", "value1.txt"]) await writeFile(path.join(f.repository, name), "original\n");
     await f.git(["add", "."]);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "initial"]);
+    await f.git(["commit", "-m", "initial"]);
     for (const name of ["value[1].txt", "value1.txt"]) await writeFile(path.join(f.repository, name), "changed\n");
     await f.browser.stage(f.issue, "application", ["value[1].txt"]);
     assert.equal(await f.git(["diff", "--cached", "--name-only"]), "value[1].txt");
@@ -741,10 +737,10 @@ test("reads history and commit changes for files deleted from the working tree",
   try {
     await writeFile(path.join(f.repository, "deleted.txt"), "historical contents\n");
     await f.git(["add", "deleted.txt"]);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Add historical file"]);
+    await f.git(["commit", "-m", "Add historical file"]);
     await rm(path.join(f.repository, "deleted.txt"));
     await f.git(["add", "-A"]);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Delete historical file"]);
+    await f.git(["commit", "-m", "Delete historical file"]);
     const head = await f.git(["rev-parse", "HEAD"]);
     const history = await f.browser.history(f.issue, "application", "deleted.txt");
     assert.deepEqual(
@@ -766,7 +762,7 @@ test("labels staged and unstaged comparisons with their actual Git versions", as
   try {
     await writeFile(path.join(f.repository, "versions.txt"), "head contents\n");
     await f.git(["add", "versions.txt"]);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Initial version"]);
+    await f.git(["commit", "-m", "Initial version"]);
     await writeFile(path.join(f.repository, "versions.txt"), "index contents\n");
     await f.git(["add", "versions.txt"]);
     await writeFile(path.join(f.repository, "versions.txt"), "working contents\n");
@@ -787,7 +783,7 @@ test("reads literal Unicode replacement characters from Git and rejects malforme
     const file = path.join(f.repository, "unicode.txt");
     await writeFile(file, "before � text\n");
     await f.git(["add", "unicode.txt"]);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Unicode text"]);
+    await f.git(["commit", "-m", "Unicode text"]);
     await writeFile(file, "after � text\n");
     await f.git(["add", "unicode.txt"]);
     assert.equal((await f.browser.file(f.issue, "application", "unicode.txt")).content, "after � text\n");
@@ -808,11 +804,11 @@ test("paginates a pinned history without losing or repeating commits when HEAD a
   const f = await fixture();
   try {
     const count = issuePilotConfig.limits.sourceBrowser.historyCommits + 25;
-    for (let index = 1; index < count; index++) await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", `Commit ${index}`]);
+    for (let index = 1; index < count; index++) await f.git(["commit", "--allow-empty", "-m", `Commit ${index}`]);
     const first = await f.browser.history(f.issue, "application");
     assert.equal(first.commits.length, issuePilotConfig.limits.sourceBrowser.historyCommits);
     assert.ok(first.nextCursor);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-m", "Arrived during pagination"]);
+    await f.git(["commit", "--allow-empty", "-m", "Arrived during pagination"]);
     const second = await f.browser.history(f.issue, "application", "", first.nextCursor);
     assert.equal(second.commits.length, 25);
     assert.equal(second.nextCursor, null);
@@ -888,7 +884,7 @@ test("a UTF-8 byte order mark survives reading, saving and diffing a working fil
     const bom = Buffer.from([0xef, 0xbb, 0xbf]);
     await writeFile(path.join(f.repository, "bom.cs"), Buffer.concat([bom, Buffer.from("class A {}\n")]));
     await f.git(["add", "bom.cs"]);
-    await f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "bom file"]);
+    await f.git(["commit", "-m", "bom file"]);
     const original = await f.browser.file(f.issue, "application", "bom.cs");
     assert.equal(original.content, "﻿class A {}\n");
     await f.browser.writeFile(f.issue, "application", "bom.cs", "﻿class A {}\n// edited\n", original.sha256);

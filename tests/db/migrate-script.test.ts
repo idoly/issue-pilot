@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { migrateStateDatabase } from "../../src/db/migrate.ts";
-import { ApplicationStateLease } from "../../src/workspace/state-lease.ts";
+import { ApplicationStateLease } from "../../src/state-lease.ts";
 
 test("the migration command refuses to run while another process holds the application state lease", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-migrate-lease-"));
