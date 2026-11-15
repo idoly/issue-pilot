@@ -202,9 +202,8 @@ function AppWorkspace(props: { initialView?: AppView }) {
   function refreshSampledDetail() {
     const current = untrack(issue);
     if (untrack(view) !== "issues" || untrack(loading) || !current || detailTask.active) return;
-    const summaries = new Map(untrack(issueList.items).map((item) => [item.id, item]));
-    // The server revision covers Issue, Workspace and Agent state in one token.
-    const changed = [current, ...current.relatedIssues].some((detail) => summaries.get(detail.id)?.revision !== detail.revision);
+    // The server revision includes committed detail changes as well as summary and Agent state.
+    const changed = untrack(() => [current, ...current.relatedIssues].some((detail) => issueList.summary(detail.id)?.revision !== detail.revision));
     if (untrack(issueError) || changed) void readDetail(current.id, "sample").catch(() => undefined);
   }
   createEffect(issueList.listVersion, refreshSampledDetail);

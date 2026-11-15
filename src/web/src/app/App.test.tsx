@@ -278,6 +278,8 @@ vi.mock("../data/client", async (importOriginal) => {
     updateIssueStatus: vi.fn<typeof import("../data/client").updateIssueStatus>(async (id: string, status: "open" | "resolved") => {
       const selected = issues.find((item) => item.id === id)!;
       selected.status = status;
+      selected.resolvedAt = status === "resolved" ? now : null;
+      selected.revision = `${id}:${status}`;
       return structuredClone(selected);
     }),
     planIssueScopeTransition: vi.fn<typeof import("../data/client").planIssueScopeTransition>(async (id: string, target: { serviceKey: string; workMode: import("../data/client").IssueWorkMode }) => {
@@ -1885,6 +1887,7 @@ describe("issue pilot workspace", () => {
     const current = await getIssue.mock.results[0]!.value;
     const pending = {
       ...current,
+      revision: `${current.id}:pending`,
       agentRunning: false,
       workspaceStatus: "ready" as const,
       type: "smart_analysis" as const,
@@ -1940,7 +1943,7 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(updateIssueStatus).toHaveBeenCalledWith("ISSUE-20260810-038", "open"));
     await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
-    resolveDetail({ ...resolvedIssue, status: "open" });
+    resolveDetail({ ...resolvedIssue, status: "open", resolvedAt: null, revision: `${resolvedIssue.id}:open` });
     await waitFor(() => expect(screen.getByRole("button", { name: "编辑工单" })).toBeTruthy());
     await waitFor(() => expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false));
     expect(updateIssueStatus).toHaveBeenCalledTimes(1);

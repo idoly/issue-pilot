@@ -26,7 +26,7 @@ Native browser EventSource does not send the page-selected subject header. Witho
 | --- | --- |
 | GET /health | {"ok":true} after a lock-free `SELECT 1` on the open database connection; 503 {"ok":false,"error":"database_unavailable"} when it fails. Fastify also answers 503 while closing. No model/external-service health guarantee |
 | GET /api/me, /api/catalog | Current user and service/environment catalog |
-| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging. Summaries (and the detail, which extends them) include reporterSubject and sorted ccSubjects, loaded by a correlated subquery in the same statement. The revision does not hash them separately: the reporter is immutable and every CC write must bump issues.updated_at in its transaction. |
+| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging. Summaries (and the detail, which extends them) include reporterSubject and sorted ccSubjects, loaded by a correlated subquery in the same statement. The shared [summary projection](../../src/http/issue-summary.ts) includes the actual sorted CC list and the [internal detail counter](STORAGE.md#relations-and-identifiers) in the revision digest. Same-second edits and comments invalidate open details without reading descriptions, comment bodies or other detail rows in the poll. |
 | GET /api/issues/:key | Details, workspace (status, sourceAvailable, runtimeReady, lastError, retryable), attachments, repositories, relations and scope history from one SQLite read snapshot. Live Agent state and filesystem availability are sampled separately. |
 | POST /api/issues | 201, persisted and scheduled, not model completion |
 | PATCH /api/issues/:key | 200, complete metadata form, not arbitrary partial merge |
@@ -144,7 +144,7 @@ Each import shares its start-time timeout signal, with client disconnect cancell
 
 ## Async execution, SSE and paging
 
-GET .../agent-stream sends durable/current replay, then snapshot_ready, then live events/heartbeat. Ordinary frames have id/data; named frames have event. Snapshot always includes agent model, footer, runState, issueStatus and issueRevision.
+GET .../agent-stream sends durable/current replay, then snapshot_ready, then live events/heartbeat. Ordinary frames have id/data; named frames have event. Snapshot always includes agent model, footer, runState, issueStatus and issueRevision. Start buffering live events at the same synchronous boundary as transcript, current replay and runState capture. A reset observed while preparing the initial response invalidates that replay before headers.
 
 Shutdown ends admitted streams. A request still preparing when shutdown starts cannot start a stream and receives 503 agent_stream_closing if still connected and otherwise valid.
 

@@ -250,6 +250,8 @@ export const issues = sqliteTable(
     assigneeSubject: text("assignee_subject").references(() => subjects.subject),
     resolvedAt: date("resolved_at"),
     ...timestamps,
+    /** Advances with committed details that are not already in the Issue summary. */
+    detailRevision: integer("detail_revision").notNull().default(0),
   },
   (table) => [
     uniqueIndex("issues_key_unique").on(table.key),

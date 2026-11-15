@@ -52,7 +52,7 @@ import {
 } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
-import { issueRevision } from "./issue-revision.ts";
+import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
 import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
@@ -76,10 +76,6 @@ function issueEditVersion(issue: typeof issues.$inferSelect, attachments: readon
       ]),
     )
     .digest("hex");
-}
-
-function isoDate(value: Date | null | undefined): string | undefined {
-  return value?.toISOString();
 }
 
 const regionalDateFormat = new Intl.DateTimeFormat("en-CA", {
@@ -197,96 +193,15 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     return keys.map((key) => byKey.get(key)!);
   };
   const parseRelatedIssues = (input: Record<string, unknown>) => validateRelatedIssues(parseRelatedIssueKeys(input));
-  const serviceSummary = { key: services.key, name: services.name };
-  const issueSummaryQuery = (reader: DatabaseReader = database.db) =>
-    reader
-      .select({
-        issue: {
-          id: issues.id,
-          key: issues.key,
-          title: issues.title,
-          priority: issues.priority,
-          type: issues.type,
-          status: issues.status,
-          assigneeSubject: issues.assigneeSubject,
-          reporterSubject: issues.reporterSubject,
-          resolvedAt: issues.resolvedAt,
-          createdAt: issues.createdAt,
-          updatedAt: issues.updatedAt,
-        },
-        assignee: subjects.displayName,
-        // Correlated per row inside the same statement: no N+1 reads and no parameter-bounded IN list.
-        ccSubjects: sql<string>`(select json_group_array(${issueCcRecipients.subject}) from ${issueCcRecipients} where ${issueCcRecipients.issueId} = ${issues.id})`,
-        service: serviceSummary,
-        environmentKey: environments.key,
-        workspaceStatus: issueWorkspaces.status,
-        workspaceUpdatedAt: issueWorkspaces.updatedAt,
-        workspaceRuntimeReady: issueWorkspaces.runtimeReady,
-        workspaceReleasedAt: issueWorkspaces.releasedAt,
-        workspaceLastError: issueWorkspaces.lastError,
-      })
-      .from(issues)
-      .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
-      // Service and environment are required foreign keys; only assignee and Workspace may be absent.
-      .innerJoin(services, eq(services.id, issues.serviceId))
-      .innerJoin(environments, eq(environments.id, issues.environmentId))
-      .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id));
-  type IssueSummaryRow = Awaited<ReturnType<typeof issueSummaryQuery>>[number];
-  const serializeIssueSummaryRow = ({
-    issue,
-    assignee,
-    ccSubjects,
-    service,
-    environmentKey,
-    workspaceStatus,
-    workspaceUpdatedAt,
-    workspaceRuntimeReady,
-    workspaceReleasedAt,
-    workspaceLastError,
-  }: IssueSummaryRow) => {
-    const runState = engine.getRunState(issue.id);
-    return {
-      id: issue.key,
-      title: issue.title,
-      priority: issue.priority,
-      type: issue.type,
-      status: issue.status,
-      assignee,
-      assigneeSubject: issue.assigneeSubject,
-      reporterSubject: issue.reporterSubject,
-      ccSubjects: (JSON.parse(ccSubjects) as string[]).sort(),
-      service,
-      environmentKey,
-      // The detail projection already treats an absent Workspace row as not created; summaries agree.
-      workspaceStatus: workspaceStatus ?? "not_created",
-      agentRunning: runState !== "idle",
-      revision: issueRevision({
-        issue,
-        service,
-        environmentKey,
-        assignee,
-        workspace: {
-          status: workspaceStatus,
-          updatedAt: workspaceUpdatedAt,
-          runtimeReady: workspaceRuntimeReady,
-          releasedAt: workspaceReleasedAt,
-          lastError: workspaceLastError,
-        },
-        runState,
-      }),
-      resolvedAt: isoDate(issue.resolvedAt) ?? null,
-      createdAt: issue.createdAt.toISOString(),
-      updatedAt: issue.updatedAt.toISOString(),
-    };
-  };
+  const serializeIssueSummaryRow = (row: IssueSummaryRow) => serializeIssueSummary(row, engine.getRunState(row.issue.id));
   const readIssueSummary = async (issueId: string, reader?: DatabaseReader) => {
-    const row = (await issueSummaryQuery(reader).where(eq(issues.id, issueId)))[0];
+    const row = (await issueSummaryQuery(reader ?? database.db).where(eq(issues.id, issueId)))[0];
     if (!row) throw new ApiError(404, "issue_not_found");
     return serializeIssueSummaryRow(row);
   };
   app.get("/api/issues", async () => {
     // A single SQLite snapshot for the polled list, without large description columns.
-    const rows = await issueSummaryQuery().orderBy(desc(issues.createdAt), desc(issues.key));
+    const rows = await issueSummaryQuery(database.db).orderBy(desc(issues.createdAt), desc(issues.key));
     return rows.map(serializeIssueSummaryRow);
   });
 

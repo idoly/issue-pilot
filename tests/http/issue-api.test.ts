@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueKeySequences, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
-import { workspaceStatistics, issueEditVersion, createApiFixture, createIssue, createService, issuePayload, json } from "./fixture.ts";
+import { workspaceStatistics, issueEditVersion, createApiFixture, createIssue, createService, issueMetadataPayload, issuePayload, json } from "./fixture.ts";
 
 test("every edit requires a valid version before metadata, attachments or session state can change", async () => {
   const f = await createApiFixture();
@@ -571,7 +571,8 @@ test("lists newer Issues first without letting later updates reorder them", asyn
   }
 });
 
-test("lists reporter and CC subjects and refreshes the revision when CC changes", async () => {
+test("lists reporter and CC subjects and refreshes the revision for CC changes within the same second", async (context) => {
+  context.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-15T15:00:00Z") });
   const fixture = await createApiFixture();
   try {
     for (const subject of ["cc-one@example.test", "cc-two@example.test"]) {
@@ -595,7 +596,7 @@ test("lists reporter and CC subjects and refreshes the revision when CC changes"
     const reporterSubject = String(created.reporterSubject);
     assert.deepEqual(created.ccSubjects, ["cc-one@example.test", "cc-two@example.test"]);
     fixture.engine.running.clear();
-    type Summary = { id: string; reporterSubject: string; assigneeSubject: string | null; ccSubjects: string[]; revision: string };
+    type Summary = { id: string; reporterSubject: string; assigneeSubject: string | null; ccSubjects: string[]; revision: string; updatedAt: string };
     const list = async () => (await fixture.app.inject({ url: "/api/issues" })).json() as Summary[];
     const before = await list();
     assert.deepEqual(
@@ -606,20 +607,77 @@ test("lists reporter and CC subjects and refreshes the revision when CC changes"
       ],
     );
 
+    const { title, description, priority, assigneeSubject } = issuePayload("alpha", "test", "With CC");
     const updated = await fixture.app.inject({
       method: "PATCH",
       url: `/api/issues/${created.id}`,
-      payload: { expectedEditVersion: await issueEditVersion(fixture.app, created.id), title: "With CC", priority: "p2", assigneeSubject: null, ccSubjects: ["cc-two@example.test"] },
+      payload: { expectedEditVersion: await issueEditVersion(fixture.app, created.id), title, description, priority, assigneeSubject, ccSubjects: ["cc-two@example.test"] },
     });
     assert.equal(updated.statusCode, 200, updated.body);
+    // A PATCH schedules a round; hold execution state constant to isolate the CC change.
+    fixture.engine.running.clear();
     const after = (await list()).find(({ id }) => id === created.id)!;
     assert.deepEqual(after.ccSubjects, ["cc-two@example.test"]);
+    assert.equal(after.updatedAt, before[0]!.updatedAt);
     // A CC-only edit must invalidate open details through the shared revision token.
     assert.notEqual(after.revision, before[0]!.revision);
     const detail = (await fixture.app.inject({ url: `/api/issues/${created.id}` })).json() as Summary;
     assert.deepEqual([detail.ccSubjects, detail.reporterSubject, detail.revision], [after.ccSubjects, reporterSubject, after.revision]);
   } finally {
     await fixture.cleanup();
+  }
+});
+
+test("refreshes same-second description and comment changes without conflating detail freshness with the edit version", async (context) => {
+  context.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-15T15:00:00Z") });
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Freshness");
+    const title = "Detail only";
+    const issue = await createIssue(f.app, "freshness", "test", title);
+    const url = `/api/issues/${issue.id}`;
+    type Summary = { revision: string; updatedAt: string };
+    type Detail = Summary & { editVersion: string; description: string; comments: Array<{ body: string }> };
+    const readDetail = async () => {
+      const response = await f.app.inject(url);
+      const list = await f.app.inject("/api/issues");
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(list.statusCode, 200, list.body);
+      const detail = response.json<Detail>();
+      const [summary] = list.json<Summary[]>();
+      assert.equal(summary?.revision, detail.revision);
+      assert.equal(Object.hasOwn(summary!, "detailRevision"), false);
+      return detail;
+    };
+    f.engine.running.clear();
+    const initial = await readDetail();
+    const description = "Edited during the same second";
+    const saved = await f.app.inject({
+      method: "PATCH",
+      url,
+      payload: { ...issueMetadataPayload(title), description, expectedEditVersion: initial.editVersion },
+    });
+    assert.equal(saved.statusCode, 200, saved.body);
+    f.engine.running.clear();
+    const edited = await readDetail();
+    assert.equal(edited.updatedAt, initial.updatedAt);
+    assert.equal(edited.description, description);
+    assert.notEqual(edited.revision, initial.revision);
+    assert.notEqual(edited.editVersion, initial.editVersion);
+
+    let previous = edited;
+    for (const body of ["First comment", "Second comment"]) {
+      const added = await f.app.inject({ method: "POST", url: url + "/comments", payload: { body } });
+      assert.equal(added.statusCode, 201, added.body);
+      const current = await readDetail();
+      assert.equal(current.updatedAt, initial.updatedAt);
+      assert.equal(current.editVersion, edited.editVersion);
+      assert.notEqual(current.revision, previous.revision);
+      assert.ok(current.comments.some((comment) => comment.body === body));
+      previous = current;
+    }
+  } finally {
+    await f.cleanup();
   }
 });
 

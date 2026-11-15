@@ -12,11 +12,11 @@ import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-sessi
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
 import { readQueryResult } from "../agent/query-results.ts";
-import { agentSessions, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
+import { agentSessions, issues } from "../db/schema.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
 import { ApiError, record, text } from "./input.ts";
-import { issueRevision } from "./issue-revision.ts";
+import { issueSummaryQuery, serializeIssueSummary } from "./issue-summary.ts";
 import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
@@ -164,24 +164,16 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const configured = selectAgentConfiguration(sharedConfiguration, owner?.credentials?.modelCredentials);
     const autoCompact = SettingsManager.inMemory(configured.runtime.settings).getCompactionEnabled();
     const models = await modelCatalog.list();
-    const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    if (binding && !isIssueSessionPath(binding.sessionFile, issueRoot(stateRoot, issue.key))) throw new Error("agent_session_file_incomplete");
-    const sessionReady = Boolean(binding && (await pathExists(binding.sessionFile)));
     if (reply.raw.destroyed) {
       reply.hijack();
       return;
     }
-    const liveEvents = subscribeBufferedAgentDisplayEvents(events, issue.id, {
-      maxPendingBytes: issuePilotConfig.http.sseQueuedBytes,
-      onFailure(error) {
-        try {
-          app.log.error(error);
-        } finally {
-          cleanup();
-          reply.raw.destroy();
-        }
-      },
+    // A reset during asynchronous file preparation can make the selected binding obsolete.
+    let sessionReset = false;
+    let stopWatchingReset: (() => void) | undefined = events.subscribe(issue.id, ({ event }) => {
+      if (event.type === "session_reset") sessionReset = true;
     });
+    let liveEvents: ReturnType<typeof subscribeBufferedAgentDisplayEvents> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let hijacked = false;
     let cleaned = false;
@@ -192,12 +184,23 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       if (stopStream) activeStreams.delete(stopStream);
       reply.raw.off("close", cleanup);
       if (heartbeat) clearInterval(heartbeat);
-      liveEvents.unsubscribe();
+      stopWatchingReset?.();
+      stopWatchingReset = undefined;
+      liveEvents?.unsubscribe();
     };
     reply.raw.once("close", cleanup);
     try {
+      const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
+      if (binding && !isIssueSessionPath(binding.sessionFile, issueRoot(stateRoot, issue.key))) throw new Error("agent_session_file_incomplete");
+      const sessionReady = Boolean(binding && (await pathExists(binding.sessionFile)));
       if (binding && sessionReady) await assertSessionFileComplete(binding.sessionFile);
-      // Read durable and in-flight events together before awaiting newer Issue state.
+      if (cleaned || reply.raw.destroyed) {
+        cleanup();
+        reply.hijack();
+        return;
+      }
+      // Capture the transcript, coalesced deltas and execution state with no await before
+      // starting the live buffer. Buffering earlier would append already coalesced deltas again.
       const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];
       const sessionContext = manager?.buildSessionContext();
@@ -208,15 +211,19 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       const contextWindow = models.find((candidate) => candidate.provider === provider && candidate.id === model)?.contextWindow ?? 0;
       const footer = sessionFooterStats(manager, contextWindow, autoCompact, sessionContext);
       const currentEvents = events.replayCurrent(issue.id);
-      const [current] = await database.db
-        .select({ issue: issues, workspace: issueWorkspaces, service: { key: services.key, name: services.name }, environmentKey: environments.key, assignee: subjects.displayName })
-        .from(issues)
-        .leftJoin(issueWorkspaces, eq(issueWorkspaces.issueId, issues.id))
-        .innerJoin(services, eq(services.id, issues.serviceId))
-        .innerJoin(environments, eq(environments.id, issues.environmentId))
-        .leftJoin(subjects, eq(subjects.subject, issues.assigneeSubject))
-        .where(eq(issues.id, issue.id))
-        .limit(1);
+      const runState = engine.getRunState(issue.id);
+      liveEvents = subscribeBufferedAgentDisplayEvents(events, issue.id, {
+        maxPendingBytes: issuePilotConfig.http.sseQueuedBytes,
+        onFailure(error) {
+          try {
+            app.log.error(error);
+          } finally {
+            cleanup();
+            reply.raw.destroy();
+          }
+        },
+      });
+      const [current] = await issueSummaryQuery(database.db).where(eq(issues.id, issue.id)).limit(1);
       if (!current) throw new ApiError(404, "issue_not_found");
       // Catalog loading and transcript validation can outlive the reader's authorization.
       // Refuse before sending SSE headers; the request keeps its initially selected identity.
@@ -227,6 +234,9 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       }
       // Preparation can overlap preClose; only a stream registered before that hook may start.
       if (closing) throw new ApiError(503, "agent_stream_closing");
+      if (sessionReset) throw new ApiError(409, "agent_session_changed");
+      stopWatchingReset?.();
+      stopWatchingReset = undefined;
       reply.hijack();
       hijacked = true;
       reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
@@ -289,16 +299,9 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         `event: snapshot_ready\ndata: ${JSON.stringify({
           agent: { provider, model, thinkingLevel },
           footer,
-          runState: engine.getRunState(issue.id),
+          runState,
           issueStatus: current.issue.status,
-          issueRevision: issueRevision({
-            issue: current.issue,
-            service: current.service,
-            environmentKey: current.environmentKey,
-            assignee: current.assignee,
-            workspace: current.workspace ?? undefined,
-            runState: engine.getRunState(issue.id),
-          }),
+          issueRevision: serializeIssueSummary(current, runState).revision,
         })}\n\n`,
       );
       if (cleaned) return;

@@ -106,6 +106,30 @@ it("skips hidden-tab polling and refreshes on return without interrupting a requ
   expect(api.list).toHaveBeenCalledTimes(2);
 });
 
+it("preserves unchanged summary objects across successful samples while publishing their freshness", async () => {
+  const first = row("first");
+  const second = { ...row("second"), id: "ISSUE-20261109-002" };
+  const changed = { ...second, ccSubjects: ["reader"], revision: "second:2" };
+  api.list
+    .mockResolvedValueOnce([first, second])
+    .mockResolvedValueOnce([structuredClone(first), structuredClone(second)])
+    .mockResolvedValueOnce([structuredClone(first), changed]);
+  let list!: IssueListResource;
+  render(() => {
+    list = createIssueList();
+    return <output>{list.items().length}</output>;
+  });
+  await waitFor(() => expect(list.items()).toHaveLength(2));
+  const items = list.items();
+  const detail = list.beginDetailRead();
+  await list.refresh();
+  expect(list.items()).toBe(items);
+  expect(detail.hasNewerList()).toBe(true);
+  await list.refresh();
+  expect(list.items()[0]).toBe(items[0]);
+  expect(list.items()[1]).toEqual(changed);
+});
+
 it("rejects old snapshots after explicit refresh, navigation and disposal", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const old = deferred<IssueExecutionItem[]>(),

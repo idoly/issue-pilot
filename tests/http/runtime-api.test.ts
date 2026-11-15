@@ -174,12 +174,13 @@ test("counts snapshot usage once and deduplicates Pi entries appended during ses
       });
     };
     const subscribe = events.subscribe.bind(events);
+    let prepared = false;
     events.subscribe = (id, listener) => {
       const unsubscribe = subscribe(id, listener);
-      queueMicrotask(() => {
-        publish("already-in-snapshot", { type: "entry_appended", entry: appendUsage("cache_warm") });
-        publish("snapshot-barrier", { type: "queue_update", steering: [], followUp: [] });
-      });
+      if (!prepared) {
+        prepared = true;
+        queueMicrotask(() => publish("already-in-snapshot", { type: "entry_appended", entry: appendUsage("cache_warm") }));
+      }
       return unsubscribe;
     };
     const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
@@ -195,7 +196,16 @@ test("counts snapshot usage once and deduplicates Pi entries appended during ses
         payload += decoder.decode(value, { stream: true });
       }
     };
-    await readThrough("snapshot-barrier");
+    while (
+      !payload
+        .split("\n\n")
+        .slice(0, -1)
+        .some((block) => block.startsWith("event: snapshot_ready\n"))
+    ) {
+      const { done, value } = await reader.read();
+      assert.equal(done, false);
+      payload += decoder.decode(value, { stream: true });
+    }
     const block = payload.split("\n\n").find((block) => block.startsWith("event: snapshot_ready\n"));
     assert.ok(block);
     const data = block.split("\n").find((line) => line.startsWith("data: "));
@@ -284,8 +294,11 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
       return execute.apply(this, args);
     });
     const subscribe = events.subscribe.bind(events);
+    let prepared = false;
     events.subscribe = (id, listener) => {
       const unsubscribe = subscribe(id, listener);
+      if (prepared) return unsubscribe;
+      prepared = true;
       duringRead = async () => {
         await session.prompt("Read the evidence.");
         await session.prompt("Repeat the reply.");
@@ -348,7 +361,8 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
         snapshotInput: snapshot.footer.input,
         snapshotCost: snapshot.footer.cost,
       },
-      { assistants: 3, identicalReplies: 2, toolEnds: 1, toolMessages: 1, partial: "alphabeta", snapshotInput: 0, snapshotCost: 0 },
+      // The saved tool result is replayed as one completion; its usage is in the snapshot footer.
+      { assistants: 3, identicalReplies: 2, toolEnds: 1, toolMessages: 0, partial: "alphabeta", snapshotInput: 0, snapshotCost: 0 },
     );
   } finally {
     context.mock.restoreAll();
@@ -454,7 +468,7 @@ for (const stage of ["model discovery", "snapshot read"] as const)
       }
       assert.match(payload, /event: snapshot_ready\n/);
       await closed;
-      assert.equal(subscriptions, before + 1);
+      assert.equal(subscriptions, before + 2);
       assert.equal(unsubscriptions, subscriptions);
     } finally {
       release();
@@ -566,6 +580,47 @@ test("replays current non-durable Agent output before the stream snapshot", { ti
     assert.equal(payload.match(/id: partial-output\n/g)?.length, 1);
     assert.match(payload, /Still working/);
   } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("does not repeat deltas coalesced while the stream prepares its replay", { timeout: 10_000 }, async (context) => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    await createService(fixture.app, "Replay boundary");
+    const issue = await createIssue(fixture.app, "replay-boundary");
+    const issueId = fixture.engine.enqueued[0]!;
+    const publish = (id: string, event: RunEvent["event"]) => events.publish({ id, issueId, createdAt: "2026-11-15T15:00:00Z", event });
+    const sendDelta = (id: string, delta: string) =>
+      publish(id, {
+        type: "message_update",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
+      });
+    publish("run-start", { type: "agent_start" });
+    const replay = events.replayCurrent.bind(events);
+    context.mock.method(events, "replayCurrent", (id: string) => {
+      sendDelta("first-fragment", "one");
+      sendDelta("second-fragment", " two");
+      return replay(id);
+    });
+
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
+    assert.equal(response.status, 200);
+    reader = response.body!.getReader();
+    let payload = await readStreamUntil(reader, "event: snapshot_ready\n");
+    sendDelta("live-fragment", " three");
+    payload += await readStreamUntil(reader, "id: live-fragment\n");
+    assert.match(payload, /"delta":"one two"/);
+    assert.doesNotMatch(payload, /id: first-fragment\n/);
+    assert.ok(payload.indexOf("id: second-fragment\n") < payload.indexOf("event: snapshot_ready\n"));
+    assert.ok(payload.indexOf("id: live-fragment\n") > payload.indexOf("event: snapshot_ready\n"));
+  } finally {
+    await reader?.cancel();
+    reader?.releaseLock();
     await fixture.cleanup();
   }
 });

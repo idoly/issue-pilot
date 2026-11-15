@@ -83,6 +83,46 @@ test("reset preserves the old transcript and files, binds an empty session, and 
   }
 });
 
+test("an SSE handshake refuses a transcript whose session resets during file preparation", { timeout: 10_000 }, async (context) => {
+  const f = await fixture();
+  const file = f.manager.getSessionFile()!;
+  const actualOpen = fsPromises.open;
+  const endpoint = `/api/issues/${f.issue.key}`;
+  let reset = false;
+  let response: Response | undefined;
+  try {
+    context.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
+      if (!reset && args[0] === file) {
+        reset = true;
+        const result = await f.app.inject({ method: "POST", url: endpoint + "/reset-session", headers, payload: { expectedSessionId: f.manager.getSessionId() } });
+        assert.equal(result.statusCode, 200, result.body);
+      }
+      return actualOpen(...args);
+    });
+    syncBuiltinESMExports();
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    response = await fetch(address + endpoint + "/agent-stream", { headers, signal: context.signal });
+    assert.equal(reset, true);
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: "agent_session_changed" });
+
+    response = await fetch(address + endpoint + "/agent-stream", { headers, signal: context.signal });
+    assert.equal(response.status, 200);
+    let replay = "";
+    for await (const chunk of response.body!) {
+      replay += new TextDecoder().decode(chunk);
+      if (replay.includes("event: snapshot_ready\n")) break;
+    }
+    assert.match(replay, /event: snapshot_ready/);
+    assert.doesNotMatch(replay, /Saved old question/);
+  } finally {
+    await response?.body?.cancel().catch(() => undefined);
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await f.cleanup();
+  }
+});
+
 for (const target of ["existing", "missing"] as const)
   test(`session summaries refuse a symlink (${target} target) and recover after restoration`, async () => {
     const f = await fixture();

@@ -78,7 +78,7 @@ for (const change of ["status", "assignee", "title"] as const)
     fireEvent.click(await screen.findByRole("option", { name: "未解决" }));
     fireEvent.input(screen.getByLabelText("搜索工单"), { target: { value: "task" } });
     const updates = { status: { status: "resolved" as const }, assignee: { assigneeSubject: "bob" }, title: { title: "renamed" } };
-    items = [{ ...items[0]!, ...updates[change] }, items[1]!];
+    items = [{ ...items[0]!, ...updates[change], revision: "alice:2" }, items[1]!];
     select.mockClear();
     await vi.advanceTimersByTimeAsync(10_000);
     await waitFor(() => expect(screen.queryByText("alice task")).toBeNull());

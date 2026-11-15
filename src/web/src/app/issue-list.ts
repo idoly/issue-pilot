@@ -26,6 +26,10 @@ interface IssueEntity {
   detail?: IssueDetail;
 }
 
+function reuseSummary(previous: IssueExecutionItem | undefined, summary: IssueExecutionItem): IssueExecutionItem {
+  return previous?.revision === summary.revision ? previous : summary;
+}
+
 function summaryFromDetail(detail: IssueDetail): IssueExecutionItem {
   return {
     id: detail.id,
@@ -86,7 +90,7 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
         const next = new Map<string, IssueEntity>();
         for (const summary of values) {
           const entity = previous.get(summary.id);
-          next.set(summary.id, entity && entity.summaryRead > read ? entity : { summary, summaryRead: read, detail: entity?.detail });
+          next.set(summary.id, entity && entity.summaryRead > read ? entity : { summary: reuseSummary(entity?.summary, summary), summaryRead: read, detail: entity?.detail });
         }
         return next;
       });
@@ -130,6 +134,7 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
   return {
     items,
     listVersion,
+    summary: (id: string) => entities().get(id)?.summary,
     detail: (id: string) => entities().get(id)?.detail,
     beginDetailRead() {
       const read = ++nextRead;
@@ -144,7 +149,7 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
             const next = new Map(previous);
             // Both projections contain these fields. An earlier request may not roll back a later read.
             if (entity && entity.summaryRead > read) next.set(detail.id, { ...entity, detail });
-            else next.set(detail.id, { summary: summaryFromDetail(detail), summaryRead: read, detail });
+            else next.set(detail.id, { summary: reuseSummary(entity?.summary, summaryFromDetail(detail)), summaryRead: read, detail });
             return next;
           });
         },

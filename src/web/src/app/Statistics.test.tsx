@@ -278,8 +278,9 @@ test("resource polling preserves snapshots through updates and failures, and pau
 });
 
 test("retention starts at resolution and old Issue keys do not imply eligibility", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-15T18:30:00Z"));
   const resolvedAt = new Date().toISOString();
-  const due = new Date(Date.now() + 168 * 3_600_000).toLocaleDateString();
   vi.mocked(loadWorkspaceStats).mockResolvedValue({
     sampling: false,
     error: null,
@@ -293,5 +294,6 @@ test("retention starts at resolution and old Issue keys do not imply eligibility
   });
   render(() => <Statistics issues={[]} />);
   fireEvent.click(screen.getByRole("tab", { name: "资源" }));
-  expect(await screen.findByText(`保留至 ${due}`)).toBeTruthy();
+  // Resolution is already November 16 in the configured Asia/Shanghai time zone.
+  expect(await screen.findByText("保留至 2026/11/23")).toBeTruthy();
 });

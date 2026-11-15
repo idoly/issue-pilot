@@ -1158,6 +1158,9 @@ try {
     await page.getByRole("button", { name: "编辑工单", exact: true }).click();
     await page.waitForFunction((button) => !button.disabled, await edit.getByRole("button", { name: "重置", exact: true }).elementHandle());
     await edit.getByRole("button", { name: "取消", exact: true }).click();
+    const externallyEditedDescription = "Description changed without an updated timestamp";
+    await synchronization.db.update(issues).set({ description: externallyEditedDescription }).where(eq(issues.id, issue.id));
+    await page.getByText(externallyEditedDescription, { exact: true }).waitFor();
     await page.getByRole("radio", { name: "首页", exact: true }).click();
     await page.getByRole("list", { name: "待处理工单", exact: true }).getByText(synchronizedTitle, { exact: true }).waitFor();
     await synchronization.db.update(issues).set({ description: "Description changed while viewing the homepage", updatedAt: new Date() }).where(eq(issues.id, issue.id));
@@ -1680,6 +1683,7 @@ try {
           "health and database integrity",
           "SSE running/cleanup/idle synchronizes conversation controls and detail actions",
           "metadata refresh updates the queue and homepage without changing business status",
+          "an open Issue receives description changes even when its update timestamp stays the same",
           "returning from the homepage reloads the same selected Issue details",
           "related Issue changes update embedded cards while retaining an open editor",
           "background filter exclusion preserves the selected Issue, editor and Agent draft without navigation prompts",

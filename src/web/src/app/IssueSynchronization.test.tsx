@@ -6,10 +6,11 @@ import { EventSourceMock } from "../test-setup";
 const api = vi.hoisted(() => {
   type Summary = import("../data/client").IssueExecutionItem;
   type Detail = import("../data/client").IssueDetail;
-  // Like the server, the opaque revision changes with every displayed summary fact.
+  // Stamp displayed summary facts as well as explicitly supplied detail changes.
   const stamp = <T extends Summary>(item: T): T => ({
     ...item,
     revision: JSON.stringify([
+      item.revision,
       item.title,
       item.priority,
       item.type,
@@ -179,13 +180,13 @@ it("reloads the same selected Issue when returning from another page", async () 
   expect(await screen.findByText(current.description)).toBeTruthy();
 });
 
-it("polls other Issues and updates the selected details while retaining unsent conversation text", async () => {
+it("polls other Issues and refreshes a same-second detail edit while retaining unsent conversation text", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   await open();
   fireEvent.input(screen.getByLabelText("发送给 Agent"), { target: { value: "keep this draft" } });
   const other = { ...summary(), id: "ISSUE-20261109-002", title: "Another updated Issue", status: "open" as const };
   current.description = "External detail change";
-  current.updatedAt = "2026-11-09T01:00:00.000Z";
+  current.revision = "detail-edited";
   api.list.mockImplementation(async () => [summary(), other]);
   await vi.advanceTimersByTimeAsync(10_000);
   await within(screen.getByLabelText("工单队列")).findByText(other.title);

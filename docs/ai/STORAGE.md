@@ -22,6 +22,8 @@ Keys use ISSUE-YYYYMMDD-NNN... in the configured time zone; internal issueId is 
 
 Each Issue matches a valid Service/Environment Deployment and owns exactly one Workspace. resolved iff resolved_at is non-null. Repository records, session binding, attachments, comments, relations, CC, pins and scope transitions have separate persisted relations.
 
+[Migration 0078](../../drizzle/0078_issue_detail_revision.sql) adds an internal `issues.detail_revision` counter. SQLite advances it in the same transaction as a description change, comment or scope-history append, attachment/related-Issue/included-service membership change, or repository/session binding change. These triggers follow the current write contracts and add no route-level invalidation work. Existing rows start at zero without backfilling details. The counter tracks Issue-owned database writes; filesystem availability and changes to separately managed display names can still be sampled independently.
+
 Owners: [contracts.ts](../../src/domain/contracts.ts), [schema.ts](../../src/db/schema.ts), [bootstrap.ts](../../src/db/bootstrap.ts), [drizzle](../../drizzle). Published migration SQL/journal entries are immutable. Normal startup does not infer, adopt or repair legacy directories.
 
 ## Layout and modes

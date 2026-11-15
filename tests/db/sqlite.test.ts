@@ -68,6 +68,7 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0075_derive_dbhub_connections",
       "0076_issue_data_publication",
       "0077_workspace_release_state",
+      "0078_issue_detail_revision",
     ],
   );
   const previousJournal = {
@@ -474,7 +475,23 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const issueColumns = await client.execute("pragma table_info('issues')");
     assert.deepEqual(
       issueColumns.rows.map((column) => column.name),
-      ["id", "key", "title", "description", "status", "priority", "type", "service_id", "environment_id", "reporter_subject", "assignee_subject", "resolved_at", "created_at", "updated_at"],
+      [
+        "id",
+        "key",
+        "title",
+        "description",
+        "status",
+        "priority",
+        "type",
+        "service_id",
+        "environment_id",
+        "reporter_subject",
+        "assignee_subject",
+        "resolved_at",
+        "created_at",
+        "updated_at",
+        "detail_revision",
+      ],
     );
     const subjectColumns = await client.execute("pragma table_info('subjects')");
     assert.deepEqual(
