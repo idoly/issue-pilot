@@ -13,8 +13,25 @@ class ClosingErrorEventSource extends EventTarget {
   }
 }
 
+const footer = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costSource: null, latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true };
+const snapshot = (fields: Record<string, unknown> = {}) =>
+  JSON.stringify({ agent: { provider: "test", model: "model", thinkingLevel: "medium" }, footer, runState: "idle", issueStatus: "open", issueRevision: "revision-1", ...fields });
+
 describe("AgentStreamController", () => {
-  it.each([undefined, null, "unknown", 1])("rejects missing or invalid runState (%s) and validates the fresh stream", async (runState) => {
+  it.each<[string, Record<string, unknown>]>([
+    ["missing runState", { runState: undefined }],
+    ["null runState", { runState: null }],
+    ["unknown runState", { runState: "unknown" }],
+    ["numeric runState", { runState: 1 }],
+    ["missing agent", { agent: undefined }],
+    ["incomplete agent", { agent: { provider: "test", model: "model" } }],
+    ["missing footer", { footer: undefined }],
+    ["invalid footer", { footer: { ...footer, input: "0" } }],
+    ["unknown cost source", { footer: { ...footer, costSource: "guessed" } }],
+    ["missing issueStatus", { issueStatus: undefined }],
+    ["unknown issueStatus", { issueStatus: "closed" }],
+    ["missing issueRevision", { issueRevision: undefined }],
+  ])("rejects a snapshot with %s and validates the fresh stream", async (_label, invalid) => {
     vi.useFakeTimers();
     try {
       const sources: ClosingErrorEventSource[] = [],
@@ -35,7 +52,7 @@ describe("AgentStreamController", () => {
       try {
         controller.connect("ISSUE-20261030-001");
         const first = sources[0]!;
-        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState }) }));
+        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot(invalid) }));
         expect(onSnapshot).not.toHaveBeenCalled();
         expect(onError).toHaveBeenCalledTimes(1);
         expect(onError).toHaveBeenLastCalledWith("agent_event_protocol_error");
@@ -43,7 +60,7 @@ describe("AgentStreamController", () => {
         await vi.advanceTimersByTimeAsync(1000);
         expect(sources).toHaveLength(2);
         const second = sources[1]!;
-        second.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState: "queued" }) }));
+        second.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot({ runState: "queued" }) }));
         expect(onSnapshot).toHaveBeenCalledTimes(1);
         second.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "bad", event: { type: "issue_run_state", state: "unknown" } }) }));
         expect(onEvent).not.toHaveBeenCalled();
@@ -54,7 +71,7 @@ describe("AgentStreamController", () => {
         expect(onEvent).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1000);
         const third = sources[2]!;
-        third.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ running: true, runState: "running" }) }));
+        third.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot({ runState: "running" }) }));
         third.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "good", event: { type: "issue_run_state", state: "running" } }) }));
         expect(onEvent).toHaveBeenCalledTimes(1);
       } finally {
@@ -88,11 +105,11 @@ describe("AgentStreamController", () => {
         controller.connect("ISSUE-20261105-001");
         const first = sources[0]!;
         first.dispatchEvent(new MessageEvent("message", { data: userMessage }));
-        if (phase === "live") first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ runState: "idle" }) }));
+        if (phase === "live") first.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot() }));
         const accepted = onSnapshot.mock.calls.length;
         first.dispatchEvent(new MessageEvent("message", { data: "{incomplete" }));
         expect(first.closeCalls).toBe(1);
-        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ runState: "idle" }) }));
+        first.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot() }));
         first.dispatchEvent(new MessageEvent("message", { data: userMessage }));
         expect(onSnapshot).toHaveBeenCalledTimes(accepted);
         expect(onEvent).not.toHaveBeenCalled();
@@ -100,7 +117,7 @@ describe("AgentStreamController", () => {
         await vi.advanceTimersByTimeAsync(1000);
         expect(sources).toHaveLength(2);
         sources[1]!.dispatchEvent(new MessageEvent("message", { data: userMessage }));
-        sources[1]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: JSON.stringify({ runState: "idle" }) }));
+        sources[1]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot() }));
         const replay = onSnapshot.mock.lastCall![1];
         expect(replay.entries).toHaveLength(1);
         expect(JSON.stringify(replay.entries)).toContain("persisted message");
@@ -128,8 +145,7 @@ describe("AgentStreamController", () => {
     try {
       controller.connect("ISSUE-20261030-001");
       sources[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "reset", event: { type: "session_reset" } }) }));
-      await Promise.resolve();
-      expect(sources).toHaveLength(2);
+      await vi.waitFor(() => expect(sources).toHaveLength(2));
       expect(sources[0]!.closeCalls).toBe(1);
       sources[0]!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id: "old", event: { type: "issue_user", message: "old context" } }) }));
       expect(onEvent).not.toHaveBeenCalled();

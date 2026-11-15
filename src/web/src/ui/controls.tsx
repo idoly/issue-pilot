@@ -87,7 +87,7 @@ export function Tag(props: { color?: string; children?: JSX.Element }) {
   );
 }
 
-export function Badge(props: { status?: "default" | "processing" | "warning" | "success"; text?: string }) {
+export function Badge(props: { status?: "default" | "processing" | "warning" | "success" | "error"; text?: string }) {
   return (
     <span class="ui-badge" data-status={props.status ?? "default"}>
       <i aria-hidden="true" />

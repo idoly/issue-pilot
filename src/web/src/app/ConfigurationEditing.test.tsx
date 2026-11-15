@@ -33,6 +33,7 @@ vi.mock("../data/client", async (original) => ({
   createService: state.create,
 }));
 import { ConfigurationView } from "./ConfigurationView";
+import { settle } from "../test-settle";
 
 const mysql = { host: "db.example.test", port: 3306, username: "reader", password: "fixture-old-secret", database: "orders" };
 function configuration(): Config {
@@ -129,9 +130,7 @@ for (const outcome of ["success", "failure"] as const)
     dialog = await screen.findByRole("dialog", { name: "添加服务" });
     fireEvent.input(within(dialog).getByLabelText("服务名称"), { target: { value: "New draft" } });
     finish();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(within(dialog).queryByRole("alert")).toBeNull();
     const repositories = within(dialog).getByRole("combobox", { name: "关联仓库" });
     fireEvent.click(repositories);

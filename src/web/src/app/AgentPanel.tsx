@@ -2,9 +2,8 @@ import { Button } from "../ui";
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import {
-  ISSUE_STATUSES,
   agentStreamUrl,
   abortAgent,
   createAgentMessageId,
@@ -27,7 +26,6 @@ import {
   assistantNotice,
   diffLineClass,
   duration,
-  panelError,
   resultText,
   toolNestedCalls,
   toolLabel,
@@ -36,8 +34,11 @@ import {
   type ConversationEntry,
 } from "./conversation";
 import { AgentStreamController } from "./agent-stream";
+import { errorText, type ErrorTexts } from "./error-text";
 import { PasteEditorModel, type PasteEditResult } from "./paste-editor";
 import type { AgentDraftImage, SubmittedAgentMessage, AgentDraftStore } from "./agent-drafts";
+
+const sendErrors: ErrorTexts = { issue_already_running: "工单正在被其他操作处理，请稍后重试。" };
 
 function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "tool" }>; userSubject?: string }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
@@ -318,7 +319,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [runState, setRunState] = createSignal<AgentRunState | undefined>(undefined, { ownedWrite: true });
-  const processing = () => (runState() === undefined ? props.issue.agentRunning === true : runState() !== "idle");
+  const processing = () => (runState() === undefined ? props.issue.agentRunning : runState() !== "idle");
   const [issueStatus, setIssueStatus] = createSignal<IssueStatus>(
     untrack(() => props.issue.status),
     { ownedWrite: true },
@@ -547,7 +548,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId) setError("issue_refresh_failed");
       });
   };
-  const streamController = new AgentStreamController(agentStreamUrl, issuePilotConfig.web.agentStreamReconnectMs, issuePilotConfig.web.agentStreamStaleMs, {
+  const streamController = new AgentStreamController(agentStreamUrl, sharedConfig.web.agentStreamReconnectMs, sharedConfig.web.agentStreamStaleMs, {
     onConnection: setSnapshotReady,
     onError: (streamError) => {
       if (!streamError && ["agent_event_connection_failed", "agent_event_protocol_error"].includes(error())) setError("");
@@ -558,17 +559,17 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       discardMessageUpdates();
       projection = new ConversationProjection(replay.entries);
       setEntries(replay.entries);
-      setFooter(payload.footer ?? emptyFooter());
+      setFooter(payload.footer);
       // A reconnect must not yank a reader who scrolled back through history.
       if (followLatest) clearUnread();
       setActivity(payload.runState === "queued" || payload.runState === "idle" ? (activityForEvent({ type: "issue_run_state", state: payload.runState }) ?? null) : replay.activity);
       setQueue(replay.queue);
-      setAgent(payload.agent ?? { provider: "", model: "", thinkingLevel: "" });
-      const statusChanged = Boolean(payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus) && payload.issueStatus !== props.issue.status);
-      if (payload.issueStatus && ISSUE_STATUSES.includes(payload.issueStatus)) setIssueStatus(payload.issueStatus);
+      setAgent(payload.agent);
+      const statusChanged = payload.issueStatus !== props.issue.status;
+      setIssueStatus(payload.issueStatus);
       setRunState(payload.runState);
-      const executionChanged = (payload.runState !== "idle") !== Boolean(props.issue.agentRunning);
-      const revisionChanged = Boolean(payload.issueRevision && payload.issueRevision !== props.issue.revision);
+      const executionChanged = (payload.runState !== "idle") !== props.issue.agentRunning;
+      const revisionChanged = payload.issueRevision !== props.issue.revision;
       if (statusChanged || executionChanged || revisionChanged || (replay.agentStarted && developmentRepositoriesPending())) refreshIssue(props.issue.id, generation);
       queueMicrotask(keepLatest);
     },
@@ -611,8 +612,8 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const pendingImages = record.images;
     const message = record.pasteEditor.expand(editorText).trim() || (pendingImages.length ? "请分析这些图片。" : "");
     if (!message) return;
-    if (message.length > issuePilotConfig.limits.agentMessageChars) {
-      const failureMessage = `消息共 ${message.length.toLocaleString()} 字符，超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
+    if (message.length > sharedConfig.limits.agentMessageChars) {
+      const failureMessage = `消息共 ${message.length.toLocaleString()} 字符，超过 ${sharedConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
       record.error = failureMessage;
       setError(failureMessage);
       return;
@@ -646,20 +647,10 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
       }
     } catch (cause) {
       if (!draftStore.isCurrent(issueId, record)) return;
-      let failureMessage = cause instanceof Error ? cause.message : "agent_message_failed";
-      if (failureMessage === "agent_message_too_long") failureMessage = `消息超过 ${issuePilotConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`;
-      else if (failureMessage === "invalid_agent_message") failureMessage = "消息内容无效，请输入文字后重新发送。";
-      else if (failureMessage === "agent_message_outcome_unknown") failureMessage = "会话已切换，无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。";
-      else if (failureMessage === "agent_session_file_incomplete") failureMessage = "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。";
-      else if (failureMessage === "agent_session_file_missing") failureMessage = "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。";
-      else if (failureMessage === "issue_root_missing") failureMessage = "工单目录缺失，消息未接收。请保留草稿并联系管理员恢复原目录。";
-      else if (failureMessage === "invalid_issue_root") failureMessage = "工单目录异常，消息未接收。请保留草稿并联系管理员检查目录。";
-      else if (failureMessage === "issue_already_running") failureMessage = "工单正在被其他操作处理，请稍后重试。";
-      else if (failureMessage === "resolved_issue_cannot_run_agent") {
-        failureMessage = "工单已解决，请先重开后再发送。";
-        // The panel may already show another Issue; never mark that one resolved.
-        if (props.issue.id === issueId) setIssueStatus("resolved");
-      }
+      const code = cause instanceof Error ? cause.message : "agent_message_failed";
+      // The panel may already show another Issue; never mark that one resolved.
+      if (code === "resolved_issue_cannot_run_agent" && props.issue.id === issueId) setIssueStatus("resolved");
+      const failureMessage = errorText(code, sendErrors);
       record.error = failureMessage;
       if (submitCurrent()) {
         setDraftValue(record.text);
@@ -725,7 +716,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     const pastedImages = [...(clipboard?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (pastedImages.length) {
       event.preventDefault();
-      const limits = issuePilotConfig.limits.agentImage;
+      const limits = sharedConfig.limits.agentImage;
       const current = images();
       const accepted = pastedImages.filter((file) => ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type));
       if (
@@ -937,7 +928,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
         </div>
         <Show when={error()}>
           <div class="agent-panel-error" role="alert">
-            {panelError(error())}
+            {errorText(error())}
           </div>
         </Show>
         <footer class="agent-meta">

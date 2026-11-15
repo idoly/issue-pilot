@@ -15,8 +15,11 @@ function issue(id: string, overrides: Partial<IssueExecutionItem> = {}): IssueEx
     status: "open",
     assignee: null,
     assigneeSubject: null,
+    reporterSubject: "reporter",
+    ccSubjects: [],
     service: { key: "orders", name: "Orders" },
     environmentKey: "test",
+    revision: `${id}:1`,
     createdAt: "2026-11-01T00:00:00.000Z",
     updatedAt: "2026-11-02T00:00:00.000Z",
     workspaceStatus: "ready",
@@ -51,6 +54,18 @@ describe("Dashboard focus ranking", () => {
     expect(metric("执行失败")).toBe("2");
     expect(metric("未分配")).toBe("5");
     expect(issues).toEqual(before);
+  });
+
+  it("labels execution state with the shared queue/detail wording", () => {
+    const issues = [
+      issue("ISSUE-20261101-001", { workspaceStatus: "failed" }),
+      issue("ISSUE-20261101-002", { agentRunning: true, status: "in_progress" }),
+      issue("ISSUE-20261101-003", { workspaceStatus: "preparing" }),
+      issue("ISSUE-20261101-004", { status: "pending", updatedAt: "2026-11-04T00:00:00.000Z" }),
+      issue("ISSUE-20261101-005", { updatedAt: "2026-11-03T00:00:00.000Z" }),
+    ];
+    render(() => <Dashboard issues={issues} loading={false} loadError="" refreshing={false} onRefresh={() => {}} onSelectIssue={() => {}} />);
+    expect(screen.getAllByRole("listitem").map((row) => row.querySelector(".execution-state")!.textContent)).toEqual(["执行失败", "执行中", "环境准备中", "待确认", "待处理"]);
   });
 
   it("opens the selected Issue after recomputing the ranking", async () => {

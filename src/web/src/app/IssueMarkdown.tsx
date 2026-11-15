@@ -1,4 +1,4 @@
-import { attachmentUrl, issueWorkFileUrl, type IssueDetail } from "../data/client";
+import { attachmentUrl, issueWorkFileUrl, relatedIssueEntryName, type IssueDetail } from "../data/client";
 import { Markdown } from "../ui/Markdown";
 
 type IssueFileContext = Pick<IssueDetail, "id" | "workingDirectory"> & {
@@ -47,7 +47,7 @@ export function resolveIssueFileLink(href: string, issue: IssueFileContext): str
     kind = "work";
   } else selected = selected.replace(/^\.\//, "");
   if (!selected) return null;
-  if (relatedKey) return kind === "work" ? issueWorkFileUrl(issue.id, `.related-${relatedKey.toLowerCase()}/${selected}`) : null;
+  if (relatedKey) return kind === "work" ? issueWorkFileUrl(issue.id, `${relatedIssueEntryName(relatedKey)}/${selected}`) : null;
   const originals = issue.attachments.filter((file) => file.storedFileName === selected || (kind !== "work" && file.fileName === selected));
   if (originals.length === 1) return attachmentUrl(issue.id, originals[0]!.id);
   return issueWorkFileUrl(issue.id, selected);

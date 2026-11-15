@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ApplicationParameterEditorState, ApplicationParameters, Person } from "../data/client";
+import { RequestError, type ApplicationParameterEditorState, type ApplicationParameters, type Person } from "../data/client";
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown,
@@ -16,6 +16,7 @@ vi.mock("../data/client", async (original) => ({
   updateApplicationParameters: state.save,
 }));
 import { ApplicationParametersView } from "./ApplicationParameters";
+import { settle } from "../test-settle";
 
 const admin: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer", isAdmin: true };
 const defaults: ApplicationParameters = {
@@ -200,6 +201,23 @@ test("reloads the current network mode and allowlist after a revision conflict",
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+test("a committed save whose follow-up sync failed shows the stored values and revision", async () => {
+  state.user = () => admin;
+  const stored = parameterState({ workspaceTargetBytes: 1024 ** 3 * 2 }, 2);
+  state.load.mockResolvedValueOnce(parameterState({}, 1)).mockResolvedValueOnce(stored);
+  state.save.mockRejectedValueOnce(new RequestError("issue_sandbox_network_sync_failed", "committed")).mockResolvedValueOnce(stored);
+  render(() => <ApplicationParametersView />);
+  const target = (await screen.findByLabelText("回收目标")) as HTMLInputElement;
+  await fireEvent.input(target, { target: { value: "2048" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await screen.findByRole("alert");
+  await waitFor(() => expect(state.load).toHaveBeenCalledTimes(2));
+  expect(target.value).toBe("2048");
+  fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+  await waitFor(() => expect(state.save).toHaveBeenCalledTimes(2));
+  expect(state.save.mock.calls[1]![0].expectedRevision).toBe(2);
+});
+
 test("rejects an invalid field before saving and reloads after a revision conflict", async () => {
   const [user] = createSignal<Person | null>(admin);
   state.user = user;
@@ -263,9 +281,7 @@ for (const outcome of ["success", "failure"] as const)
     expect(state.save).toHaveBeenLastCalledWith({ expectedRevision: 2, overrides: { maxConcurrentIssues: 7 } });
 
     finishPrevious();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("同时运行的工单")).toHaveProperty("value", "7");
     expect(screen.queryByRole("alert")).toBeNull();
@@ -310,9 +326,7 @@ test("revoking management access removes the form and ignores an in-flight save 
   expect(screen.queryByRole("region", { name: "参数表单" })).toBeNull();
   expect(screen.queryByRole("button", { name: "保存参数" })).toBeNull();
   failSave();
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(state.save).toHaveBeenCalledTimes(1);
 

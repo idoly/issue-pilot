@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { Button, Modal, PasswordInput, Select } from "../ui";
 import { AGENT_CODEMODE_MODES, type AgentModelOption, type AgentModelSelection } from "../data/client";
 import { createLatestTask } from "../data/latest";
-import { settingsError } from "./settings-error";
+import { errorText } from "./error-text";
 
 const codemodeLabels = { off: "关闭", on: "开启", only: "仅 Codemode" } as const;
 
@@ -79,7 +79,7 @@ export function ModelCredentialDialog(props: {
     try {
       await operation();
     } catch (cause) {
-      if (request.isCurrent()) setError(settingsError(cause));
+      if (request.isCurrent()) setError(errorText(cause));
     } finally {
       if (request.isCurrent()) {
         setSaving(false);

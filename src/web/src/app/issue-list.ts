@@ -1,6 +1,24 @@
 import { type Accessor, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { errorMessage, listIssues, type IssueDetail, type IssueExecutionItem } from "../data/client";
+import { errorMessage, listIssues, type IssueDetail, type IssueExecutionItem, type IssueListItem } from "../data/client";
 import { createLatestTask } from "../data/latest";
+
+/** Queue scopes relative to the current user. Pins remain assignee-only regardless of scope. */
+export const QUEUE_SCOPES = ["assigned", "reported", "cc", "all"] as const;
+export type QueueScope = (typeof QUEUE_SCOPES)[number];
+export type QueueMembership = Pick<IssueListItem, "assigneeSubject" | "reporterSubject" | "ccSubjects">;
+
+export function inQueueScope(issue: QueueMembership, scope: QueueScope, subject: string): boolean {
+  if (scope === "all") return true;
+  if (scope === "assigned") return issue.assigneeSubject === subject;
+  if (scope === "reported") return issue.reporterSubject === subject;
+  return issue.ccSubjects.includes(subject);
+}
+
+/** Opening an Issue from outside the queue keeps the current scope if it contains the Issue, never the identity. */
+export function queueScopeContaining(issue: QueueMembership, subject: string, current: QueueScope): QueueScope {
+  if (inQueueScope(issue, current, subject)) return current;
+  return QUEUE_SCOPES.find((scope) => inQueueScope(issue, scope, subject)) ?? "all";
+}
 
 interface IssueEntity {
   summary: IssueExecutionItem;
@@ -17,14 +35,16 @@ function summaryFromDetail(detail: IssueDetail): IssueExecutionItem {
     status: detail.status,
     assignee: detail.assignee,
     assigneeSubject: detail.assigneeSubject,
+    reporterSubject: detail.reporterSubject,
+    ccSubjects: detail.ccSubjects,
     service: detail.service,
     environmentKey: detail.environmentKey,
     revision: detail.revision,
-    ...(detail.createdAt ? { createdAt: detail.createdAt } : {}),
+    createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,
     workspaceStatus: detail.workspace.status,
-    agentRunning: detail.agentRunning === true,
-    resolvedAt: detail.resolvedAt ?? null,
+    agentRunning: detail.agentRunning,
+    resolvedAt: detail.resolvedAt,
   };
 }
 
@@ -124,11 +144,7 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
             const next = new Map(previous);
             // Both projections contain these fields. An earlier request may not roll back a later read.
             if (entity && entity.summaryRead > read) next.set(detail.id, { ...entity, detail });
-            else {
-              const summary = summaryFromDetail(detail);
-              if (!summary.createdAt && entity?.summary.createdAt) summary.createdAt = entity.summary.createdAt;
-              next.set(detail.id, { summary, summaryRead: read, detail });
-            }
+            else next.set(detail.id, { summary: summaryFromDetail(detail), summaryRead: read, detail });
             return next;
           });
         },

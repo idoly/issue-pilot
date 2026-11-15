@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import { Portal } from "@solidjs/web";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { Button } from "../ui";
 import { createSourceModel, monaco, sourceEditorOptions } from "./monaco";
 
@@ -22,7 +22,7 @@ export function SourceDiff(props: { value: { path: string; before: string; after
           renderSideBySide: state.split,
           useInlineViewWhenSpaceIsLimited: false,
           hideUnchangedRegions: { enabled: false },
-          maxComputationTime: issuePilotConfig.web.sourceDiffMs,
+          maxComputationTime: sharedConfig.web.sourceDiffMs,
           renderOverviewRuler: true,
           renderMarginRevertIcon: false,
           ariaLabel: "代码差异",

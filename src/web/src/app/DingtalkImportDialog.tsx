@@ -1,7 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import { Button, Input, Modal, Select } from "../ui";
 import {
-  canUseIssueWorkMode,
   importDingtalkRecords,
   issueScopeForWorkMode,
   loadDingtalkSource,
@@ -13,11 +12,11 @@ import {
 } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
-import { priorityOptions, workModeOptions } from "./model";
+import { availableWorkModes, priorityOptions, servicesForWorkMode } from "./model";
+import { errorText, type ErrorTexts } from "./error-text";
 
-const errors: Record<string, string> = {
+const errors: ErrorTexts = {
   invalid_dingtalk_record_url: "请输入包含 dentryUuid、sheetId 和 rowId 的钉钉单条记录链接。",
-  dingtalk_mcp_not_configured: "尚未启用钉钉 MCP 连接，请检查配置文件。",
   dingtalk_configuration_invalid: "钉钉配置无效，请检查钉钉偏好配置。",
   dingtalk_connection_failed: "钉钉连接失败，请检查连接和凭证。",
   dingtalk_read_failed: "钉钉读取失败，请重试或检查记录访问权限。",
@@ -33,9 +32,8 @@ const errors: Record<string, string> = {
   dingtalk_request_cancelled_or_timed_out: "导入已取消或超时；请先核对是否已有工单，再重试。",
   invalid_current_subject: "当前用户已停用或不存在。",
   developer_role_required: "当前用户无权使用所选处理方式。",
-  invalid_service_for_work_mode: "所选服务不支持此处理方式。",
 };
-const message = (error: unknown) => (error instanceof Error ? (errors[error.message] ?? "导入失败，请检查配置后重试。") : "导入失败，请重试。");
+const message = (error: unknown) => (error instanceof Error ? errorText(error, errors, "导入失败，请检查配置后重试。") : "导入失败，请重试。");
 
 export function DingtalkImportButton(props: { onCreated: () => void; onOpenIssue: (key: string) => boolean }) {
   const { currentUser } = useApplicationResources();
@@ -75,14 +73,8 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
     disposed = true;
     latest.cancel();
   });
-  const modes = createMemo(() =>
-    workModeOptions.filter(
-      (option) =>
-        canUseIssueWorkMode(props.user.role, option.value) &&
-        catalog().services.some((service) => service.deployments.some((deployment) => deployment.environmentKey === issueScopeForWorkMode(option.value).environmentKind)),
-    ),
-  );
-  const services = createMemo(() => catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === issueScopeForWorkMode(workMode()).environmentKind)));
+  const modes = createMemo(() => availableWorkModes(props.user.role, catalog().services));
+  const services = createMemo(() => servicesForWorkMode(catalog().services, workMode()));
   createEffect(
     () => ({ modes: modes(), mode: workMode(), services: services(), selected: service() }),
     (value) => {

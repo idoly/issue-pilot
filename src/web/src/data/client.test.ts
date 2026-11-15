@@ -25,6 +25,7 @@ import {
   searchSource,
   sendAgentMessage,
   setCurrentUserSubject,
+  setIdentityLocked,
   setIssuePinned,
   updateIssue,
   updateIssueRelatedIssues,
@@ -125,6 +126,24 @@ describe("API client", () => {
     setCurrentUserSubject("bob");
     await loadCurrentUser();
     expect(new Headers(fetch.mock.calls[1]![1]?.headers).get("X-Issue-Pilot-Subject")).toBe("bob");
+  });
+
+  it("sends no page-selected subject while the gateway locks identity", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    setCurrentUserSubject("alice");
+    try {
+      setIdentityLocked(true);
+      expect(localStorage.getItem("issue-pilot.current-user")).toBeNull();
+      await setIssuePinned("ISSUE-20260810-001", true);
+      expect(new Headers(fetch.mock.calls[0]![1]?.headers).has("X-Issue-Pilot-Subject")).toBe(false);
+      // The in-memory subject remains a late-response guard, not a request identity.
+      expect(currentUserSubject()).toBe("alice");
+    } finally {
+      setIdentityLocked(false);
+    }
+    await setIssuePinned("ISSUE-20260810-001", true);
+    expect(new Headers(fetch.mock.calls[1]![1]?.headers).get("X-Issue-Pilot-Subject")).toBe("alice");
   });
 
   it("creates an issue and its initial attachments in one request", async () => {

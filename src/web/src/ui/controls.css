@@ -249,6 +249,9 @@
 .ui-badge[data-status="warning"] > i {
   background: #cc9430;
 }
+.ui-badge[data-status="error"] > i {
+  background: #cf443c;
+}
 .ui-badge-status-text {
   font: 12px / 16px var(--ui-font);
 }

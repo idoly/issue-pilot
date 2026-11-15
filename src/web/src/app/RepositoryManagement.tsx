@@ -1,8 +1,9 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, Modal, Select, Skeleton } from "../ui";
-import { deleteRepository, loadRepositories, registerRepository, updateRepository, type ManagedRepository } from "../data/client";
+import { canManageDevelopmentConfiguration, deleteRepository, loadRepositories, registerRepository, updateRepository, type ManagedRepository } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
-import { settingsError } from "./settings-error";
+import { errorText } from "./error-text";
 
 const addressPrefix = (url: string) => url.slice(0, Math.max(url.lastIndexOf("/"), url.includes("://") ? -1 : url.indexOf(":")) + 1);
 const repositoryName = (url: string) =>
@@ -43,9 +44,9 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
   const formGroupOptions = () => [...groupOptions(), ...(groupOptions().some(({ value }) => value === "other") ? [] : [{ value: "other", label: "其他" }]), { value: "", label: "新建分组…" }];
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [remove, setRemove] = createSignal<ManagedRepository | null>(null, { ownedWrite: true });
-  let generation = 0,
-    loadGeneration = 0;
-  const canEdit = () => currentUser()?.role === "developer";
+  let generation = 0;
+  const loadTask = createLatestTask();
+  const canEdit = () => canManageDevelopmentConfiguration(currentUser());
   const close = () => {
     setOpen(false);
     setEditing(null);
@@ -57,20 +58,20 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     setConflict(false);
   };
   const load = async () => {
-    const owner = generation,
-      request = ++loadGeneration;
+    const request = loadTask.begin();
     setLoading(true);
     setLoadError("");
     try {
-      const value = await loadRepositories();
-      if (owner === generation && request === loadGeneration) {
+      const value = await loadRepositories(request.signal);
+      if (request.isCurrent()) {
         setRows(value);
         if (group() && !value.some((row) => row.group === group())) setGroup("");
       }
     } catch (cause) {
-      if (owner === generation && request === loadGeneration) setLoadError(settingsError(cause));
+      if (request.isCurrent()) setLoadError(errorText(cause));
     } finally {
-      if (owner === generation && request === loadGeneration) setLoading(false);
+      if (request.isCurrent()) setLoading(false);
+      request.finish();
     }
   };
   createEffect(
@@ -78,6 +79,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     (identity, previous) => {
       if (identity === previous) return;
       generation++;
+      loadTask.cancel();
       close();
       setRemove(null);
       setSaving(false);
@@ -90,6 +92,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
   );
   onCleanup(() => {
     generation++;
+    loadTask.cancel();
   });
   const edit = (repository?: ManagedRepository) => {
     if (!canEdit()) return;
@@ -106,7 +109,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     const results = await Promise.allSettled([owner === generation ? load() : undefined, refreshConfiguration(), refreshCatalog()]);
     if (owner !== generation) return;
     const failure = results.find((result) => result.status === "rejected");
-    if (failure?.status === "rejected") setActionError(settingsError(failure.reason));
+    if (failure?.status === "rejected") setActionError(errorText(failure.reason));
   };
   const save = async () => {
     if (saving() || !canEdit()) return;
@@ -132,9 +135,9 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     } catch (cause) {
       if (owner === generation) {
         if (open()) {
-          setSaveError(settingsError(cause));
+          setSaveError(errorText(cause));
           setConflict(cause instanceof Error && cause.message === "configuration_changed");
-        } else setActionError(settingsError(cause));
+        } else setActionError(errorText(cause));
       }
     } finally {
       if (owner === generation) setSaving(false);
@@ -151,7 +154,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
       if (owner === generation) setRemove(null);
       await refresh(owner);
     } catch (cause) {
-      if (owner === generation) setActionError(settingsError(cause));
+      if (owner === generation) setActionError(errorText(cause));
     } finally {
       if (owner === generation) setSaving(false);
     }

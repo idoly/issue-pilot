@@ -1,9 +1,18 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Select, Skeleton } from "../ui";
-import { errorMessage, loadApplicationParameters, updateApplicationParameters, type ApplicationParameterEditorState, type ApplicationParameterKey, type ApplicationParameters } from "../data/client";
+import {
+  errorMessage,
+  hasAdministratorAccess,
+  loadApplicationParameters,
+  RequestError,
+  updateApplicationParameters,
+  type ApplicationParameterEditorState,
+  type ApplicationParameterKey,
+  type ApplicationParameters,
+} from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
-import { settingsError } from "./settings-error";
+import { errorText } from "./error-text";
 
 type NumberKey = { [Key in ApplicationParameterKey]: ApplicationParameters[Key] extends number ? Key : never }[ApplicationParameterKey];
 type ListKey = { [Key in ApplicationParameterKey]: ApplicationParameters[Key] extends readonly string[] ? Key : never }[ApplicationParameterKey];
@@ -60,7 +69,7 @@ export function ApplicationParametersView() {
   const [conflict, setConflict] = createSignal(false, { ownedWrite: true });
   const [saved, setSaved] = createSignal(false, { ownedWrite: true });
   const latest = createLatestTask();
-  const isAdmin = () => currentUser()?.isAdmin === true;
+  const isAdmin = () => hasAdministratorAccess(currentUser());
   const busy = () => loading() || saving();
   const apply = (value: ApplicationParameterEditorState) => {
     setState(value);
@@ -143,8 +152,11 @@ export function ApplicationParametersView() {
         setSaved(true);
       }
     } catch (cause) {
+      // The save committed and only a follow-up step failed: show the stored values so the next save is not stale.
+      const stored = cause instanceof RequestError && cause.outcome === "committed" ? await loadApplicationParameters(request.signal).catch(() => undefined) : undefined;
       if (request.isCurrent()) {
-        setError(settingsError(cause));
+        if (stored) apply(stored);
+        setError(errorText(cause));
         if (errorMessage(cause) === "configuration_changed") setConflict(true);
       }
     } finally {

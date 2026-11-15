@@ -1,19 +1,10 @@
 import { Button, Skeleton } from "../ui";
 import { createMemo, For, Show } from "solid-js";
 
-import type { IssueExecutionItem } from "../data/client";
+import { isIssueActive, type IssueExecutionItem } from "../data/client";
 import { ChevronRight, RefreshCw } from "../ui/icons";
 import { useApplicationResources } from "./ApplicationResources";
-import { environmentName, relativeTime } from "./model";
-
-type ExecutionState = "running" | "preparing" | "failed" | "pending";
-
-function executionState(issue: IssueExecutionItem): { key: ExecutionState; label: string } {
-  if (issue.agentRunning || issue.workspaceStatus === "running") return { key: "running", label: "执行中" };
-  if (issue.workspaceStatus === "preparing") return { key: "preparing", label: "环境准备中" };
-  if (issue.workspaceStatus === "failed") return { key: "failed", label: "执行失败" };
-  return { key: "pending", label: issue.status === "pending" ? "待确认" : "待执行" };
-}
+import { environmentName, executionState, localDateTime, relativeTime } from "./model";
 
 function attentionRank(issue: IssueExecutionItem): number {
   const state = executionState(issue).key;
@@ -29,7 +20,7 @@ export function Dashboard(props: { issues: IssueExecutionItem[]; loading: boolea
       .sort((left, right) => left.rank - right.rank || right.updatedAt - left.updatedAt)
       .map((row) => row.issue),
   );
-  const running = createMemo(() => activeIssues().filter((issue) => issue.agentRunning || issue.workspaceStatus === "running" || issue.workspaceStatus === "preparing").length);
+  const running = createMemo(() => activeIssues().filter(isIssueActive).length);
   const failed = createMemo(() => activeIssues().filter((issue) => issue.workspaceStatus === "failed").length);
   const unassigned = createMemo(() => activeIssues().filter((issue) => !issue.assigneeSubject).length);
 
@@ -96,7 +87,7 @@ export function Dashboard(props: { issues: IssueExecutionItem[]; loading: boolea
                             </span>
                           </div>
                           <span class="dashboard-assignee">{issue().assignee ?? "未分配"}</span>
-                          <time datetime={issue().updatedAt} title={new Date(issue().updatedAt).toLocaleString()}>
+                          <time datetime={issue().updatedAt} title={localDateTime(issue().updatedAt)}>
                             {relativeTime(issue().updatedAt)}
                           </time>
                           <ChevronRight size={15} aria-hidden="true" />

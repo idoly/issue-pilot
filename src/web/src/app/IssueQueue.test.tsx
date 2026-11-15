@@ -26,11 +26,13 @@ vi.mock("./ApplicationResources", () => ({
   }),
 }));
 import { IssueQueue } from "./IssueQueue";
-import { createIssueList } from "./issue-list";
+import { createIssueList, type QueueScope } from "./issue-list";
+import { settle } from "../test-settle";
 
-function Queue(props: Omit<Parameters<typeof IssueQueue>[0], "issueList">) {
+function Queue(props: Omit<Parameters<typeof IssueQueue>[0], "issueList" | "scope" | "onScopeChange">) {
   const issueList = createIssueList();
-  return <IssueQueue {...props} issueList={issueList} />;
+  const [scope, setScope] = createSignal<QueueScope>("assigned", { ownedWrite: true });
+  return <IssueQueue {...props} issueList={issueList} scope={scope()} onScopeChange={setScope} />;
 }
 
 const rows = (): IssueExecutionItem[] =>
@@ -39,11 +41,15 @@ const rows = (): IssueExecutionItem[] =>
     title: `${subject} task`,
     assignee: subject,
     assigneeSubject: subject,
+    reporterSubject: "reporter",
+    ccSubjects: [],
     service: { key: "orders", name: "Orders" },
     environmentKey: "test",
     type: "smart_analysis",
     status: "open",
     priority: "p2",
+    revision: `${subject}:1`,
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     workspaceStatus: "ready",
     agentRunning: false,
@@ -82,6 +88,24 @@ for (const change of ["status", "assignee", "title"] as const)
     fireEvent.input(screen.getByLabelText("搜索工单"), { target: { value: "second" } });
     await waitFor(() => expect(selected()).toBe("second"));
   });
+
+it("shows a failed or running execution ahead of the business status", async () => {
+  const [alice] = rows();
+  mocks.list.mockResolvedValue([
+    { ...alice!, workspaceStatus: "failed" },
+    { ...alice!, id: "running", title: "running task", agentRunning: true },
+    { ...alice!, id: "resolved", title: "resolved task", status: "resolved", workspaceStatus: "failed", resolvedAt: new Date().toISOString() },
+  ]);
+  render(() => <Queue selectedId="alice" userSubject="alice" onSelect={() => {}} />);
+  await screen.findByText("alice task");
+  fireEvent.click(screen.getByLabelText("按状态筛选"));
+  fireEvent.click(await screen.findByRole("option", { name: "全部工单" }));
+  const badge = async (title: string) => (await screen.findByText(title)).closest("[role=listitem]")!.querySelector(".queue-status")!.textContent;
+  expect(await badge("alice task")).toBe("执行失败");
+  expect(await badge("running task")).toBe("执行中");
+  // A resolved Issue keeps its business status even if its last Workspace operation failed.
+  expect(await badge("resolved task")).toBe("已解决");
+});
 
 it("changes selection for an explicit identity change and for a removed Issue", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
@@ -186,9 +210,7 @@ it("does not release a new identity's pin controls when the old preferences load
   setSubject("bob");
   const current = await screen.findByRole("button", { name: "固定 bob" });
   finishOld(["alice"]);
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(current).toHaveProperty("disabled", true);
   finishCurrent(["bob"]);
   await waitFor(() => expect(screen.getByRole("button", { name: "取消固定 bob" })).toHaveProperty("disabled", false));
@@ -234,13 +256,12 @@ for (const outcome of ["success", "failure"] as const)
     const current = await screen.findByRole("dialog", { name: "新建工单" });
     await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(3));
     finishOld();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(within(current).getByText("关联工单（0 个）")).toBeTruthy();
+    await settle();
+    // Candidates are the shared list: the superseded refresh neither replaces nor clears it.
+    expect(within(current).getByText("关联工单（2 个）")).toBeTruthy();
     expect(screen.queryByText("closed_candidate_load_failed")).toBeNull();
     finishCurrent();
-    await within(current).findByText("关联工单（2 个）");
+    await waitFor(() => expect(within(current).getByText("关联工单（2 个）")).toBeTruthy());
   });
 
 it("keeps a newly created Issue when an older initial list finishes later", async () => {
@@ -265,9 +286,7 @@ it("keeps a newly created Issue when an older initial list finishes later", asyn
     fireEvent.click(save);
     await screen.findByText(created.title);
     finishOld();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.getByText(created.title)).toBeTruthy();
     expect(selected()).toBe(created.id);
   } finally {
@@ -295,9 +314,7 @@ it("does not select an Issue created after the queue unmounts", async () => {
   view.unmount();
   selected.mockClear();
   finish();
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(selected).not.toHaveBeenCalled();
 });
 
@@ -348,9 +365,7 @@ for (const outcome of ["success", "failure"] as const)
     fireEvent.click(currentSave);
     await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(2));
     finishOld();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.getByRole("dialog", { name: "新建工单" })).toBeTruthy();
     expect(currentSave).toHaveProperty("disabled", true);
     expect(screen.queryByText("old_creation_failed")).toBeNull();
@@ -386,11 +401,64 @@ for (const outcome of ["success", "failure"] as const)
     fireEvent.click(button);
     await waitFor(() => expect(mocks.pin).toHaveBeenCalledTimes(2));
     finishOld();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(button).toHaveProperty("disabled", true);
     expect(screen.queryByText("old_identity_pin_failed")).toBeNull();
     finishCurrent();
     await screen.findByRole("button", { name: "取消固定 bob" });
   });
+
+it("filters by assigned, reported, CC and all scopes while keeping pins assignee-only", async () => {
+  const base = rows()[0]!;
+  mocks.list.mockResolvedValue([
+    { ...base, id: "assigned", title: "assigned task" },
+    { ...base, id: "reported", title: "reported task", assigneeSubject: "bob", reporterSubject: "alice" },
+    { ...base, id: "copied", title: "copied task", assigneeSubject: null, ccSubjects: ["alice", "carol"] },
+    { ...base, id: "unrelated", title: "unrelated task", assigneeSubject: null },
+  ]);
+  render(() => <Queue selectedId="" keepExternalSelection userSubject="alice" onSelect={() => {}} />);
+  const titles = () => screen.getAllByRole("listitem").map((item) => item.querySelector(".queue-title")?.textContent);
+  // The default scope preserves the previous assignee-only queue.
+  await waitFor(() => expect(titles()).toEqual(["assigned task"]));
+  const choose = async (label: string) => {
+    fireEvent.click(screen.getByLabelText("按范围筛选"));
+    fireEvent.click(await screen.findByRole("option", { name: label }));
+  };
+  await choose("我报告的");
+  await waitFor(() => expect(titles()).toEqual(["reported task"]));
+  expect(screen.queryByRole("button", { name: "固定 reported" })).toBeNull();
+  await choose("抄送我的");
+  await waitFor(() => expect(titles()).toEqual(["copied task"]));
+  await choose("全部");
+  await waitFor(() => expect(titles()).toEqual(["assigned task", "reported task", "copied task", "unrelated task"]));
+  // Unassigned and other people's Issues are visible but cannot be pinned by the current user.
+  expect(screen.getByRole("button", { name: "固定 assigned" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "固定 unrelated" })).toBeNull();
+});
+
+it("reveals an external selection by widening to a scope that contains it", async () => {
+  const base = rows()[0]!;
+  mocks.list.mockResolvedValue([
+    { ...base, id: "assigned", title: "assigned task" },
+    { ...base, id: "copied", title: "copied task", assigneeSubject: "bob", ccSubjects: ["alice"] },
+    { ...base, id: "unrelated", title: "unrelated task", assigneeSubject: "bob" },
+  ]);
+  const [reveal, setReveal] = createSignal<Parameters<typeof IssueQueue>[0]["reveal"]>(undefined, { ownedWrite: true });
+  const [selected, setSelected] = createSignal("assigned", { ownedWrite: true });
+  render(() => <Queue selectedId={selected()} keepExternalSelection userSubject="alice" reveal={reveal()} onSelect={setSelected} />);
+  await screen.findByText("assigned task");
+  setSelected("copied");
+  setReveal({ key: "copied", subject: "alice", issue: { assigneeSubject: "bob", reporterSubject: "reporter", ccSubjects: ["alice"] } });
+  await screen.findByText("copied task");
+  expect(screen.getByLabelText("按范围筛选").textContent).toContain("抄送我的");
+  setSelected("unrelated");
+  setReveal({ key: "unrelated", subject: "alice", issue: { assigneeSubject: "bob", reporterSubject: "reporter", ccSubjects: [] } });
+  await screen.findByText("unrelated task");
+  expect(screen.getByLabelText("按范围筛选").textContent).toContain("全部");
+  // A scope that already contains the revealed Issue is kept.
+  setSelected("copied");
+  setReveal({ key: "copied", subject: "alice", issue: { assigneeSubject: "bob", reporterSubject: "reporter", ccSubjects: ["alice"] } });
+  await waitFor(() => expect(screen.getByText("unrelated task")).toBeTruthy());
+  expect(screen.getByLabelText("按范围筛选").textContent).toContain("全部");
+  expect(selected()).toBe("copied");
+});

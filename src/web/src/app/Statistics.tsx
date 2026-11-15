@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { createLatestTask } from "../data/latest";
-import { fileSize, statusLabel, typeLabel } from "./model";
+import { fileSize, localDate, localDateTime, statusLabel, typeLabel } from "./model";
 
 type InsightView = "output" | "distribution" | "team" | "resources";
 type StatisticsPeriod = "7d" | "30d" | "90d";
@@ -65,7 +65,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const periodDays = createMemo(() => Number.parseInt(period(), 10));
   const filteredIssues = createMemo(() => {
     const threshold = Date.now() - periodDays() * 24 * 60 * 60_000;
-    return props.issues.filter((issue) => new Date(issue.createdAt ?? issue.updatedAt).getTime() >= threshold);
+    return props.issues.filter((issue) => Date.parse(issue.createdAt) >= threshold);
   });
   const completed = createMemo(() => filteredIssues().filter((issue) => issue.status === "resolved").length);
   const completionRate = createMemo(() => (filteredIssues().length ? Math.round((completed() / filteredIssues().length) * 1000) / 10 : 0));
@@ -119,7 +119,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
       const hours = workspaceStats()?.policy.retentionHours;
       if (hours !== null && hours !== undefined && workspace.resolvedAt) {
         const due = new Date(workspace.resolvedAt).getTime() + hours * 3_600_000;
-        if (due > Date.now()) return `保留至 ${new Date(due).toLocaleDateString()}`;
+        if (due > Date.now()) return `保留至 ${localDate(due)}`;
         return "等待定期维护";
       }
       return "按容量策略回收";
@@ -281,7 +281,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           <div class="statistics-title workspace-storage-title">
             <h2 id="workspace-capacity-title">工作区存储</h2>
             <span>{storedWorkspaces().length} 个占用空间</span>
-            <Show when={workspaceStats()}>{(stats) => <span class="workspace-sampled-at">采样于 {new Date(stats().sampledAt).toLocaleString()} · 释放时重新检查</span>}</Show>
+            <Show when={workspaceStats()}>{(stats) => <span class="workspace-sampled-at">采样于 {localDateTime(stats().sampledAt)} · 释放时重新检查</span>}</Show>
             <Button size="small" disabled={loading() || sampling()} onClick={() => refresh(true)}>
               重新采样
             </Button>

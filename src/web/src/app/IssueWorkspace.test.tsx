@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   plan: vi.fn<typeof import("../data/client").planIssueScopeTransition>(),
   create: vi.fn<typeof import("../data/client").createIssue>(),
   list: vi.fn<typeof import("../data/client").listIssues>(),
+  retry: vi.fn<typeof import("../data/client").retryIssue>(),
   user: () => ({ subject: "developer", role: "developer" }),
 }));
 vi.mock("../data/client", async (original) => ({
@@ -14,6 +15,7 @@ vi.mock("../data/client", async (original) => ({
   planIssueScopeTransition: state.plan,
   createIssue: state.create,
   listIssues: state.list,
+  retryIssue: state.retry,
 }));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({
@@ -33,6 +35,14 @@ vi.mock("./ApplicationResources", () => ({
   }),
 }));
 import { IssueWorkspace } from "./IssueWorkspace";
+import { settle } from "../test-settle";
+import { createIssueList } from "./issue-list";
+
+/** The related-Issue picker reads the shared list; it stays idle until the editor refreshes it. */
+function Workspace(props: Omit<Parameters<typeof IssueWorkspace>[0], "issueList">) {
+  const issueList = createIssueList(() => false);
+  return <IssueWorkspace {...props} issueList={issueList} />;
+}
 
 const issue: IssueDetail = {
   editVersion: "a".repeat(64),
@@ -44,13 +54,24 @@ const issue: IssueDetail = {
   status: "pending",
   assignee: null,
   assigneeSubject: null,
+  reporterSubject: "reporter",
+  ccSubjects: [],
   service: { key: "orders", name: "Orders" },
   environmentKey: "prod",
+  revision: "ISSUE-20261018-001:1",
+  createdAt: "2026-10-18T00:00:00Z",
   updatedAt: "2026-10-18T00:00:00Z",
+  workspaceStatus: "ready",
+  agentRunning: false,
+  resolvedAt: null,
   repositories: [],
   workingDirectory: "/fixture/workspaces/issue",
-  workspace: { status: "ready", sourceAvailable: false },
+  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
   attachments: [],
+  collaboratingServices: [],
+  relatedIssues: [],
+  scopeTransitions: [],
+  ccRecipients: [],
   comments: [],
 };
 function plan(current: boolean): IssueScopeTransitionPlan {
@@ -92,7 +113,7 @@ for (const outcome of ["success", "failure"] as const)
             finishCurrent = () => resolve(candidates(2));
           }),
       );
-      render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+      render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
       try {
         fireEvent.click(screen.getByRole("button", { name: "编辑关联" }));
         const old = await screen.findByRole("dialog", { name: "编辑关联工单" });
@@ -107,9 +128,7 @@ for (const outcome of ["success", "failure"] as const)
           await within(current).findByText("关联工单（2 个可选，最多选择 20 个）");
         }
         finishOld();
-        await new Promise((resolve) => {
-          setTimeout(resolve, 0);
-        });
+        await settle();
         expect(screen.queryByText("closed_related_load_failed")).toBeNull();
         expect(within(current).queryByText("关联工单（1 个可选，最多选择 20 个）")).toBeNull();
         expect(within(current).getByRole("button", { name: "保存关联" })).toHaveProperty("disabled", currentPending);
@@ -123,15 +142,17 @@ for (const outcome of ["success", "failure"] as const)
 
 it("explains why queued intent from an earlier scope was not replayed", () => {
   const failed: IssueDetail = { ...issue, status: "open", workspace: { ...issue.workspace, status: "failed", retryable: true, lastError: "agent_message_scope_changed" } };
-  render(() => <IssueWorkspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  render(() => <Workspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   expect(screen.getByRole("alert").textContent).toBe("历史排队消息的处理范围已变更，已停止恢复。请核对历史输入后重试，或按当前范围重新发送。");
   expect(screen.getByRole("button", { name: "重试处理" })).toBeTruthy();
 });
 
 it("offers an explicit retry after a failed model response", () => {
-  const failed: IssueDetail = { ...issue, status: "open", workspace: { ...issue.workspace, status: "failed", retryable: true, lastError: "model_response_failed" } };
-  render(() => <IssueWorkspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  const failed: IssueDetail = { ...issue, status: "open", workspaceStatus: "failed", workspace: { ...issue.workspace, status: "failed", retryable: true, lastError: "model_response_failed" } };
+  render(() => <Workspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   expect(screen.getByRole("alert").textContent).toBe("模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。");
+  // The failed round stays visible in the header instead of the plain "open" business status.
+  expect(document.querySelector(".issue-heading-meta .ui-badge")!.textContent).toBe("执行失败");
   expect(screen.getByRole("button", { name: "重试处理" })).toBeTruthy();
   expect(screen.queryByText("确认解决")).toBeNull();
 });
@@ -141,7 +162,7 @@ it("shows related Issue handler, status, service and environment with a navigabl
   const related = { ...issue, id: "ISSUE-20261017-002", assignee: "处理人甲", assigneeSubject: "handler", workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null };
   const unassigned = { ...related, id: "ISSUE-20261017-003", assignee: null, assigneeSubject: null };
   const detailed = { ...issue, description: "[诊断日志](work/diagnostics.log)", relatedIssues: [related, unassigned] };
-  render(() => <IssueWorkspace issue={detailed} onOpenIssue={open} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  render(() => <Workspace issue={detailed} onOpenIssue={open} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   const link = screen.getByRole("link", { name: `打开关联工单 ${related.id}` });
   expect(link.getAttribute("href")).toBe(`/?issue=${related.id}`);
   expect(within(link).getByText("处理人甲")).toBeTruthy();
@@ -158,7 +179,7 @@ it("shows related Issue handler, status, service and environment with a navigabl
 });
 
 it("omits comments and places attachments immediately after the Issue header", () => {
-  render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   expect(screen.queryByRole("heading", { name: "评论与备注" })).toBeNull();
   expect(screen.queryByLabelText("添加评论或备注")).toBeNull();
   const header = document.querySelector(".issue-header")!;
@@ -174,17 +195,15 @@ it("does not navigate to a follow-up created after the workspace unmounts", asyn
       }),
   );
   const created = vi.fn<NonNullable<Parameters<typeof import("./IssueWorkspace").IssueWorkspace>[0]["onCreatedFollowUp"]>>();
-  const development: IssueDetail = { ...issue, environmentKey: "dev", type: "defect_fix", workspace: { status: "ready", sourceAvailable: true } };
-  const view = render(() => <IssueWorkspace issue={development} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={created} />);
+  const development: IssueDetail = { ...issue, environmentKey: "dev", type: "defect_fix", workspace: { ...issue.workspace, sourceAvailable: true } };
+  const view = render(() => <Workspace issue={development} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={created} />);
   fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
   const dialog = await screen.findByRole("dialog", { name: "创建正式跟进工单" });
   fireEvent.click(within(dialog).getByRole("button", { name: "创建并关联" }));
   await waitFor(() => expect(state.create).toHaveBeenCalledOnce());
   view.unmount();
   finish();
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(created).not.toHaveBeenCalled();
 });
 
@@ -200,7 +219,7 @@ it("offers previews for supported attachments", async () => {
       { id: "archive", fileName: "archive.zip", mediaType: "application/zip", size: 512, sha256: "a".repeat(64) },
     ],
   };
-  render(() => <IssueWorkspace issue={detailed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  render(() => <Workspace issue={detailed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   for (const fileName of ["input.xlsx", "archive.zip"]) {
     expect(screen.queryByRole("button", { name: `预览 ${fileName}` })).toBeNull();
     expect(screen.getByRole("link", { name: `下载 ${fileName}` })).toBeTruthy();
@@ -223,7 +242,7 @@ for (const outcome of ["success", "failure"] as const)
         }),
     );
     state.plan.mockResolvedValueOnce(plan(true));
-    render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+    render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
     try {
       fireEvent.click(screen.getByRole("button", { name: "变更处理范围" }));
       const dialog = await screen.findByRole("dialog", { name: "变更处理范围" });
@@ -234,17 +253,36 @@ for (const outcome of ["success", "failure"] as const)
       fireEvent.click(within(dialog).getByLabelText("目标服务"));
       fireEvent.click(await screen.findByRole("option", { name: "Inventory" }));
       finish();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await settle();
       expect(within(dialog).queryByRole("region", { name: "范围变更预览" })).toBeNull();
       expect(screen.queryByText("stale_plan_failed")).toBeNull();
       const button = within(dialog).getByRole("button", { name: "预检变更" });
       await waitFor(() => expect(button).toHaveProperty("disabled", false));
       fireEvent.click(button);
       await within(dialog).findByText("新增 · current-plan-repository");
-      expect(state.plan).toHaveBeenLastCalledWith(issue.id, { serviceKey: "inventory", workMode: "test_analysis" });
+      expect(state.plan).toHaveBeenLastCalledWith(issue.id, { serviceKey: "inventory", workMode: "test_analysis" }, expect.any(AbortSignal));
     } finally {
       finish?.();
     }
   });
+
+it("disables related editing until the Issue's runtime view is ready", () => {
+  render(() => <Workspace issue={{ ...issue, workspace: { ...issue.workspace, runtimeReady: false } }} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  expect(screen.getByRole("button", { name: "编辑关联" })).toHaveProperty("disabled", true);
+});
+
+it("offers a read-only scope rebind on a resolved Issue but hides related editing", () => {
+  const resolved: IssueDetail = { ...issue, status: "resolved", resolvedAt: "2026-10-19T00:00:00Z", workspace: { ...issue.workspace, status: "stopped" } };
+  render(() => <Workspace issue={resolved} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  expect(screen.getByRole("button", { name: "变更处理范围" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "编辑关联" })).toBeNull();
+});
+
+it("shows a readable message instead of a raw retry error code", async () => {
+  const failed: IssueDetail = { ...issue, status: "open", workspace: { ...issue.workspace, status: "failed", retryable: true } };
+  state.retry.mockRejectedValueOnce(new Error("issue_not_retryable"));
+  render(() => <Workspace issue={failed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "重试处理" }));
+  await screen.findByText("工单当前无需重试，请刷新查看最新状态。");
+  expect(screen.queryByText("issue_not_retryable")).toBeNull();
+});

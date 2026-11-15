@@ -1,7 +1,7 @@
 import type { MutationOutcome } from "../../../operation-error";
 import type { IssueSearchHit } from "../../../search/contracts";
 export type { IssueSearchHit } from "../../../search/contracts";
-import { issuePilotConfig } from "../../../../issue-pilot.config";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import type { DingtalkSourceResponse, DingtalkImportInput, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 export type { DingtalkSourceResponse, DingtalkImportResponse } from "../../../mcp/dingtalk-contracts";
 
@@ -41,10 +41,17 @@ import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
   ISSUE_WORK_MODES,
+  ENVIRONMENT_KINDS,
+  canChangeIssueScope,
+  canModifyIssueCode,
+  canResetIssueSession,
   errorMessage,
+  isIssueActive,
   isWorkspaceBusy,
   issueScopeForWorkMode,
   issueWorkMode,
+  relatedIssueEntryName,
+  relatedIssueUpdateRefusal,
   type AgentConfiguration,
   type AgentModelSelection,
   type AgentCostSource,
@@ -66,8 +73,26 @@ import type {
 } from "../../../configuration/contracts";
 export type { RunEvent } from "../../../agent/events";
 
-export { mergeAgentCostSource, AGENT_RUN_STATES, AGENT_CODEMODE_MODES, ISSUE_PRIORITIES, ISSUE_STATUSES, ISSUE_WORK_MODES, errorMessage, isWorkspaceBusy, issueScopeForWorkMode, issueWorkMode };
-export type { AgentConfiguration, AgentModelSelection, AgentRunState, CapabilityName } from "../../../domain/contracts";
+export {
+  mergeAgentCostSource,
+  AGENT_RUN_STATES,
+  AGENT_CODEMODE_MODES,
+  ISSUE_PRIORITIES,
+  ISSUE_STATUSES,
+  ISSUE_WORK_MODES,
+  ENVIRONMENT_KINDS,
+  canChangeIssueScope,
+  canModifyIssueCode,
+  canResetIssueSession,
+  errorMessage,
+  isIssueActive,
+  isWorkspaceBusy,
+  issueScopeForWorkMode,
+  issueWorkMode,
+  relatedIssueEntryName,
+  relatedIssueUpdateRefusal,
+};
+export type { AgentConfiguration, AgentModelSelection, AgentRunState, CapabilityName, EnvironmentKind } from "../../../domain/contracts";
 export type { AgentCostSource, AgentFooterStats, AgentModelOption, IssuePriority, IssueStatus, IssueType, IssueWorkMode };
 export type { ApplicationParameters, ApplicationParameterKey, ApplicationParameterEditorState } from "../../../configuration/contracts";
 export type Config = Configuration;
@@ -77,7 +102,7 @@ export type ServiceInput = ServiceConfigurationInput;
 
 export type { UserRole } from "../../../domain/contracts";
 import type { UserRole } from "../../../domain/contracts";
-export { USER_ROLES, canUseIssueWorkMode } from "../../../domain/contracts";
+export { USER_ROLES, canEditManagedUser, canManageDevelopmentConfiguration, canUseIssueWorkMode, hasAdministratorAccess, hasPersonalGitIdentity } from "../../../domain/contracts";
 export interface Person {
   subject: string;
   name: string;
@@ -145,7 +170,7 @@ export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("
 export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
 export type AgentConfigurationUpdate = AgentConfiguration & { apiKey?: { mode: "replace"; value: string } | { mode: "clear" } };
 export const updateAgentConfiguration = (input: AgentConfigurationUpdate) => jsonRequest<{ ok: true }>("/api/config/agent", "PUT", input);
-export const loadManagedUsers = () => request<ManagedUser[]>("/api/users/manage");
+export const loadManagedUsers = (signal?: AbortSignal) => request<ManagedUser[]>("/api/users/manage", signal ? { signal } : undefined);
 export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
 export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(`/api/users/${encodeURIComponent(subject)}`, "PATCH", input);
 
@@ -157,11 +182,14 @@ export interface IssueListItem {
   status: IssueStatus;
   assignee: string | null;
   assigneeSubject: string | null;
+  reporterSubject: string;
+  /** Sorted CC recipient subjects; the detail additionally carries their profiles in ccRecipients. */
+  ccSubjects: string[];
   service: { key: string; name: string };
   environmentKey: string;
   /** Opaque server change token covering Issue, Workspace and Agent state. */
-  revision?: string;
-  createdAt?: string;
+  revision: string;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -189,20 +217,17 @@ export interface IssueScopeTransitionHistoryItem {
   createdAt: string;
 }
 
-export interface IssueDetail extends IssueListItem {
+export interface IssueDetail extends IssueExecutionItem {
   editVersion: string;
   description: string;
-  workspaceStatus?: WorkspaceStatus;
-  resolvedAt?: string | null;
-  agentRunning?: boolean;
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
-  workspace: { status: WorkspaceStatus; sourceAvailable: boolean; lastError?: string | null; retryable?: boolean };
+  workspace: { status: WorkspaceStatus; sourceAvailable: boolean; runtimeReady: boolean; lastError?: string | null; retryable: boolean };
   workingDirectory: string;
   attachments: Array<{ id: string; fileName: string; storedFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
-  collaboratingServices?: Array<{ key: string; name: string }>;
-  relatedIssues?: IssueExecutionItem[];
-  scopeTransitions?: IssueScopeTransitionHistoryItem[];
-  ccRecipients?: Person[];
+  collaboratingServices: Array<{ key: string; name: string }>;
+  relatedIssues: IssueExecutionItem[];
+  scopeTransitions: IssueScopeTransitionHistoryItem[];
+  ccRecipients: Person[];
   reporter?: Person;
   comments: IssueComment[];
 }
@@ -254,6 +279,17 @@ export interface IssueCreateInput extends IssueMetadataInput {
 
 const currentUserStorageKey = "issue-pilot.current-user";
 let selectedSubject: string | null | undefined;
+let identityLocked = false;
+
+/**
+ * Behind a trusted gateway (/api/me identityLocked) the gateway supplies identity: requests carry no
+ * page-selected subject and the remembered choice is forgotten. The in-memory subject remains only as
+ * a generation guard for late responses.
+ */
+export function setIdentityLocked(locked: boolean): void {
+  identityLocked = locked;
+  if (locked && typeof localStorage !== "undefined") localStorage.removeItem(currentUserStorageKey);
+}
 
 export function currentUserSubject(): string | null {
   if (selectedSubject === undefined) selectedSubject = typeof localStorage === "undefined" ? null : localStorage.getItem(currentUserStorageKey);
@@ -284,7 +320,7 @@ async function requestError(response: Response): Promise<Error> {
 
 function requestHeaders(init?: HeadersInit): Headers {
   const headers = new Headers(init);
-  const subject = currentUserSubject();
+  const subject = identityLocked ? null : currentUserSubject();
   if (subject) headers.set("X-Issue-Pilot-Subject", subject);
   return headers;
 }
@@ -304,7 +340,7 @@ async function previewBlob(path: string, signal?: AbortSignal): Promise<Blob> {
   signal?.throwIfAborted();
   const response = await fetch(path, { headers: requestHeaders(), ...(signal ? { signal } : {}) });
   if (!response.ok) throw await requestError(response);
-  const maximum = issuePilotConfig.web.filePreviewBytes;
+  const maximum = sharedConfig.web.filePreviewBytes;
   if (Number(response.headers.get("content-length")) > maximum) {
     await response.body?.cancel().catch(() => undefined);
     throw new Error("file_preview_too_large");
@@ -339,7 +375,10 @@ const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponen
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
 
 export const loadUsers = (signal?: AbortSignal) => request<Person[]>("/api/users", { signal });
-export const loadCurrentUser = (signal?: AbortSignal) => request<Person>("/api/me", { signal });
+export interface CurrentUser extends Person {
+  identityLocked: boolean;
+}
+export const loadCurrentUser = (signal?: AbortSignal) => request<CurrentUser>("/api/me", { signal });
 export const loadCatalog = (signal?: AbortSignal) => request<ConfigCatalog>("/api/catalog", { signal });
 export const loadConfig = (signal?: AbortSignal) => request<Config>("/api/config", { signal });
 export const loadApplicationParameters = (signal?: AbortSignal) => request<ApplicationParameterEditorState>("/api/config/parameters?include=issueSearch", { signal });
@@ -496,7 +535,8 @@ export async function loadSourceDiffFile(key: string, repository: string, path: 
   return { file: sourceCommitFile(response.file, code), before, after };
 }
 
-const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE" | "PUT", body: unknown) => request<T>(path, { method, body: JSON.stringify(body) });
+const jsonRequest = <T>(path: string, method: "POST" | "PATCH" | "DELETE" | "PUT", body: unknown, signal?: AbortSignal) =>
+  request<T>(path, { method, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
 
 export const searchIssues = (query: string, signal: AbortSignal) => request<IssueSearchHit[]>("/api/issue-search", { method: "POST", body: JSON.stringify({ query }), signal });
 
@@ -504,7 +544,7 @@ function appendFiles(form: FormData, files: File[]): void {
   for (const file of files) form.append("files", file, file.name);
 }
 
-export const resolveDmsScope = (input: { instanceAlias: string; schemaName: string }) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input);
+export const resolveDmsScope = (input: { instanceAlias: string; schemaName: string }, signal?: AbortSignal) => jsonRequest<DmsScopeResolution>("/api/dms/scope/resolve", "POST", input, signal);
 
 export interface ApplicationEndpoint {
   name: string;
@@ -537,7 +577,7 @@ export interface ManagedRepository {
   updatedAt: string;
   services: Array<{ key: string; name: string }>;
 }
-export const loadRepositories = () => request<ManagedRepository[]>("/api/repositories");
+export const loadRepositories = (signal?: AbortSignal) => request<ManagedRepository[]>("/api/repositories", signal ? { signal } : undefined);
 
 export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) =>
   request<{ context: string }>(`${servicePath(key)}/configuration-description`, signal ? { signal } : undefined);
@@ -575,8 +615,8 @@ export function updateIssue(
   return request(issuePath(key), { method: "PATCH", body: form });
 }
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueExecutionItem>(issuePath(key, "/status"), "PATCH", { status });
-export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }) =>
-  jsonRequest<IssueScopeTransitionPlan>(issuePath(key, "/scope-transition/plan"), "POST", target);
+export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, signal?: AbortSignal) =>
+  jsonRequest<IssueScopeTransitionPlan>(issuePath(key, "/scope-transition/plan"), "POST", target, signal);
 export const applyIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, plan: Pick<IssueScopeTransitionPlan, "expectedIssueUpdatedAt" | "planHash">) =>
   jsonRequest<{ issueKey: string }>(issuePath(key, "/scope-transition/apply"), "POST", { ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
 export interface IssueSessionSummary {
@@ -592,7 +632,6 @@ export async function readIssueQueryResult(key: string, reference: import("../..
   if (!response.ok) throw await requestError(response);
   return response.text();
 }
-export const resetIssueSession = (key: string, expectedSessionId: string) => jsonRequest<{ sessionId: string }>(issuePath(key, "/reset-session"), "POST", { expectedSessionId });
 export const abortAgent = (key: string) => request<void>(issuePath(key, "/abort"), { method: "POST" });
 export const retryIssue = (key: string) => request<void>(issuePath(key, "/retry"), { method: "POST" });
 export const agentMessageReceipt = (key: string, id: string) => request<{ state: "queued" | "started" | "rejected" | "unknown" }>(issuePath(key, `/agent-messages/${encodeURIComponent(id)}`));

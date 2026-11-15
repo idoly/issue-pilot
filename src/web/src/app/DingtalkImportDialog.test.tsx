@@ -9,7 +9,10 @@ vi.mock("../data/client", async (original) => {
   return {
     ...actual,
     loadUsers: vi.fn<typeof import("../data/client").loadUsers>(async () => users),
-    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => users.find((user) => user.subject === actual.currentUserSubject()) ?? users[0]!),
+    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({
+      ...(users.find((user) => user.subject === actual.currentUserSubject()) ?? users[0]!),
+      identityLocked: false,
+    })),
     loadCatalog: vi.fn<typeof import("../data/client").loadCatalog>(async () => ({
       environments: [{ key: "prod", name: "Prod" }],
       services: [
@@ -28,6 +31,7 @@ vi.mock("../data/client", async (original) => {
 import { importDingtalkRecords, setCurrentUserSubject, type DingtalkImportResponse } from "../data/client";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
 import { DingtalkImportButton } from "./DingtalkImportDialog";
+import { settle } from "../test-settle";
 const user = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" as const };
 const url = "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=one";
 function Harness(props: { created: () => void; opened: (key: string) => boolean }) {
@@ -135,7 +139,7 @@ test("identity changes abort the old import and ignore its late result", async (
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(signal.aborted).toBe(true);
   resolve({ user, status: "created", issueKey: "ISSUE-20261022-001" });
-  await Promise.resolve();
+  await settle();
   expect(created).not.toHaveBeenCalled();
   expect(opened).not.toHaveBeenCalled();
 });

@@ -1,12 +1,15 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Modal, Select } from "../ui";
 import { errorMessage, listIssueSessions, readIssueSession, type IssueDetail, type IssueSessionSummary } from "../data/client";
+import { MessageSquare } from "../ui/icons";
 import { useApplicationResources } from "./ApplicationResources";
 import { createLatestTask } from "../data/latest";
 import { ConversationProjection, type ConversationEntry } from "./conversation";
 import { ConversationItem } from "./AgentPanel";
+import { localDateTime } from "./model";
 
-export function IssueSessionControls(props: { issue: IssueDetail; disabled: boolean }) {
+/** Read-only session history stays available in every Issue status; resetting belongs to the edit dialog. */
+export function IssueSessionControls(props: { issue: IssueDetail }) {
   const { currentUser } = useApplicationResources();
   const [historyOpen, setHistoryOpen] = createSignal(false, { ownedWrite: true });
   const [sessions, setSessions] = createSignal<IssueSessionSummary[]>([], { ownedWrite: true });
@@ -84,22 +87,16 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
     }
   };
   return (
-    <section class="issue-session-controls">
+    <>
       <Button
-        size="small"
-        type="text"
-        disabled={props.disabled || busy()}
+        icon={<MessageSquare size={15} />}
+        disabled={busy()}
         onClick={() => {
           void loadHistory();
         }}
       >
         查看历史
       </Button>
-      <Show when={error() && !historyOpen()}>
-        <div class="workspace-error" role="alert">
-          {error()}
-        </div>
-      </Show>
       <Modal open={historyOpen()} title="历史会话" width={900} onCancel={closeHistory} onOk={closeHistory} footer={<Button onClick={closeHistory}>关闭</Button>}>
         <div class="session-history-content">
           <p class="session-history-description">历史会话只读，新会话不会自动带入旧聊天。</p>
@@ -109,7 +106,7 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
                 aria-label="选择历史会话"
                 value={selected()}
                 disabled={busy()}
-                options={sessions().map((session) => ({ value: session.sessionId, label: `${new Date(session.createdAt).toLocaleString()} · ${session.sessionId.slice(0, 8)}` }))}
+                options={sessions().map((session) => ({ value: session.sessionId, label: `${localDateTime(session.createdAt)} · ${session.sessionId.slice(-8)}` }))}
                 onChange={(id) => {
                   if (typeof id === "string") void read(id);
                 }}
@@ -165,6 +162,6 @@ export function IssueSessionControls(props: { issue: IssueDetail; disabled: bool
           </Show>
         </div>
       </Modal>
-    </section>
+    </>
   );
 }

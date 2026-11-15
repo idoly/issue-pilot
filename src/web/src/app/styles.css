@@ -247,7 +247,7 @@ textarea {
 .queue-filter-controls {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 .queue-filter-controls .ui-select {
@@ -1632,7 +1632,8 @@ summary.agent-tool-head > svg {
 .agent-tool-head code span {
   min-width: 0;
   color: var(--agent-accent);
-  overflow-wrap: anywhere;
+  /* Break inside a target only when it cannot fit a line, so short names like test/browser stay whole beside tags. */
+  overflow-wrap: break-word;
   white-space: pre-wrap;
 }
 .agent-nested-call {
@@ -3731,6 +3732,10 @@ summary.agent-tool-head > svg {
 }
 
 @media (max-width: 600px) {
+  /* Tags (sub-query, truncated, duration) move below the tool name instead of squeezing it mid-word. */
+  .agent-tool-head {
+    flex-wrap: wrap;
+  }
   .queue-toolbar {
     grid-template-columns: minmax(0, 1fr) 44px;
   }
@@ -3838,6 +3843,16 @@ summary.agent-tool-head > svg {
   }
   .identity > span {
     display: grid;
+  }
+  /* A gateway-fixed identity collapses to the avatar like the switcher; the address stays accessible and in the tooltip. */
+  .identity > strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
   }
   .identity .ui-select {
     position: absolute;

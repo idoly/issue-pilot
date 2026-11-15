@@ -1,6 +1,18 @@
 import { type Accessor, type ParentProps, createContext, createEffect, createSignal, onCleanup, useContext } from "solid-js";
 
-import { currentUserSubject, errorMessage, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, type Config, type ConfigCatalog, type Person } from "../data/client";
+import {
+  currentUserSubject,
+  errorMessage,
+  loadCatalog,
+  loadConfig,
+  loadCurrentUser,
+  loadUsers,
+  setCurrentUserSubject,
+  setIdentityLocked,
+  type Config,
+  type ConfigCatalog,
+  type Person,
+} from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { AgentDraftStore } from "./agent-drafts";
 
@@ -18,6 +30,8 @@ interface ApplicationResources {
   configurationLoaded: Accessor<boolean>;
   people: Accessor<Person[]>;
   currentUser: Accessor<Person | null>;
+  /** True behind a trusted gateway: identity comes from the gateway and cannot be switched in the page. */
+  identityLocked: Accessor<boolean>;
   catalogError: Accessor<string>;
   configurationError: Accessor<string>;
   peopleError: Accessor<string>;
@@ -62,6 +76,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   const [configurationLoaded, setConfigurationLoaded] = createSignal(false, { ownedWrite: true });
   const [people, setPeople] = createSignal<Person[]>([], { ownedWrite: true });
   const [currentUser, setCurrentUser] = createSignal<Person | null>(null, { ownedWrite: true });
+  const [identityLocked, setLocked] = createSignal(false, { ownedWrite: true });
   const [catalogError, setCatalogError] = createSignal("", { ownedWrite: true });
   const [configurationError, setConfigurationError] = createSignal("", { ownedWrite: true });
   const [peopleError, setPeopleError] = createSignal("", { ownedWrite: true });
@@ -112,8 +127,10 @@ export function ApplicationResourcesProvider(props: ParentProps) {
         setCurrentUser(null);
         setCurrentUserSubject(null, false);
       }
-      const currentUser = await loadCurrentUser(request.signal);
+      const { identityLocked: locked = false, ...currentUser } = await loadCurrentUser(request.signal);
       if (!request.isCurrent()) return users;
+      setIdentityLocked(locked);
+      setLocked(locked);
       // Pin the resolved identity without replacing another tab's remembered choice.
       setCurrentUserSubject(currentUser.subject, false);
       setPeople(users);
@@ -129,7 +146,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   };
   const selectCurrentUser = (subject: string) => {
     const user = people().find((candidate) => candidate.subject === subject);
-    if (!user) return;
+    if (!user || identityLocked()) return;
     peopleTask.cancel();
     setCurrentUserSubject(subject);
     setCurrentUser(user);
@@ -146,6 +163,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
         configurationLoaded,
         people,
         currentUser,
+        identityLocked,
         catalogError,
         configurationError,
         peopleError,

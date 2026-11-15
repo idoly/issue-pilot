@@ -3,6 +3,14 @@ import { resetMonacoTestState } from "./test-monaco";
 vi.mock("./app/monaco", async () => (await import("./test-monaco")).monacoMock);
 beforeEach(() => {
   resetMonacoTestState();
+  // jsdom resolves relative URLs against http://localhost:3000, where a real service may be listening.
+  // Unmocked requests must fail immediately instead of reaching it; tests that need fetch stub it themselves.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input) => {
+      throw new TypeError(`unmocked_fetch:${input instanceof Request ? input.url : String(input)}`);
+    }),
+  );
 });
 
 class ResizeObserverMock implements ResizeObserver {

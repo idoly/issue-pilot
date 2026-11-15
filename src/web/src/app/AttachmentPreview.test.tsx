@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail } from "../data/client";
 import { issuePilotConfig } from "../../../../issue-pilot.config";
 import { AttachmentPreview } from "./AttachmentPreview";
+import { settle } from "../test-settle";
 
 afterEach(() => {
   cleanup();
@@ -44,9 +45,7 @@ it("does not refetch a preview when an issue refresh recreates the same attachme
   await screen.findByText("stable");
   expect(load).toHaveBeenCalledOnce();
   setSelected({ ...attachment });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(load).toHaveBeenCalledOnce();
   expect(screen.getByText("stable")).toBeTruthy();
 });
@@ -105,9 +104,7 @@ for (const outcome of ["success", "failure"] as const)
       setSelected({ ...original, id: "current", fileName: "current.txt" });
       await screen.findByText("current attachment text");
       finish();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await settle();
       expect(screen.getByText("current attachment text")).toBeTruthy();
       expect(screen.getByRole("button", { name: "复制文字" })).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();

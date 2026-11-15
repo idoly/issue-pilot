@@ -6,6 +6,7 @@ import * as client from "../data/client";
 import { ConversationItem } from "./AgentPanel";
 import { ConversationProjection, resultText, type ConversationEntry } from "./conversation";
 import { QueryResult } from "./QueryResult";
+import { settle } from "../test-settle";
 
 type ToolEntry = Extract<ConversationEntry, { kind: "tool" }>;
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -73,7 +74,7 @@ describe("saved complete query reads", () => {
         else view.unmount();
         await waitFor(() => expect(read.mock.calls[0]![2].aborted).toBe(true));
         resolve(text);
-        await Promise.resolve();
+        await settle();
         expect(screen.queryByRole("table")).toBeNull();
       } finally {
         if (change !== "unmount") view.unmount();
@@ -330,7 +331,7 @@ describe("SLS result view", () => {
     await screen.findByText("正在复制…");
     view.unmount();
     resolve();
-    await Promise.resolve();
+    await settle();
     expect(screen.queryByText(/已复制/)).toBeNull();
   });
 
@@ -541,14 +542,25 @@ describe("SLS result view", () => {
         status: "pending",
         assignee: null,
         assigneeSubject: null,
+        reporterSubject: "reporter",
+        ccSubjects: [],
         service: { key: "example", name: "Example" },
         updatedAt: entry.startedAt,
         repositories: [],
         attachments: [],
         comments: [],
         environmentKey: "dev",
+        revision: "ISSUE-20261114-001:1",
+        createdAt: entry.startedAt,
+        workspaceStatus: "ready",
+        agentRunning: false,
+        resolvedAt: null,
+        collaboratingServices: [],
+        relatedIssues: [],
+        scopeTransitions: [],
+        ccRecipients: [],
         workingDirectory: "/fixture/workspaces/issue",
-        workspace: { status: "ready", sourceAvailable: false },
+        workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
       };
       const view = render(() => <ConversationItem issue={issue} entry={projection.snapshot()[0]!} />);
       try {

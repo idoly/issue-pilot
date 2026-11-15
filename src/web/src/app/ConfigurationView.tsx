@@ -1,10 +1,11 @@
 import { Button, Input, Modal, Select, Skeleton, TextArea } from "../ui";
 import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, Show, snapshot, Switch, untrack } from "solid-js";
 
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { CAPABILITY_KEYS } from "../../../domain/contracts";
 import { ChevronRight, Pencil, Plus, Trash2 } from "../ui/icons";
 import {
+  canManageDevelopmentConfiguration,
   loadServiceDbHubTargets,
   loadRepositories,
   loadServiceConfigurationDescription,
@@ -12,7 +13,6 @@ import {
   type ManagedRepository,
   createService,
   deleteService,
-  errorMessage,
   resolveDmsScope,
   updateService,
   type CapabilityName,
@@ -20,57 +20,57 @@ import {
 } from "../data/client";
 import { normalizeDmsScope, serializeCapabilityDraft, type DeploymentCapabilityDraft } from "./configuration-model";
 import { environmentName } from "./model";
+import { errorText, type ErrorTexts } from "./error-text";
+import { createLatestTask } from "../data/latest";
 import { DbHubTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
 
-function serviceSaveErrorMessage(error: unknown): string {
-  const code = errorMessage(error);
-  const messages: Record<string, string> = {
-    configuration_changed: "配置已更新，请重新打开服务后再保存。当前输入已保留。",
-    development_branches_inherited: "开发基线必须继承正式分支",
-    development_production_deployment_required: "请配置正式环境分支",
-    dms_credentials_not_configured: "请先在用户配置中设置个人或共享 DMS 凭据",
-    personal_dms_credentials_incomplete: "个人 DMS 凭据不完整，请补齐或清除后使用共享凭据",
-    invalid_dms_url: "请填写有效的 DMS MCP HTTPS URL",
-    invalid_dms_authorization: "请填写完整的 Bearer 格式 DMS MCP Authorization",
-    invalid_dms_database: "DMS 数据库解析结果无效，请重新填写",
-    invalid_dms_databases: "请至少配置一个且不超过 20 个 DMS 数据库",
-    duplicate_dms_database_schema: "DMS schema 不能重复",
-    duplicate_dms_database_id: "同一个 DMS 数据库不能配置多次",
-    dms_mcp_connection_failed: "无法连接 DMS MCP，请检查 URL 和 Authorization",
-    dms_mcp_http_429: "DMS MCP 请求被限流（HTTP 429），请稍后重试；频繁发生时请检查入口请求量和服务额度",
-    dms_mcp_http_401: "DMS MCP 认证失败（HTTP 401），请检查 Authorization",
-    dms_mcp_http_403: "DMS MCP 拒绝访问（HTTP 403），请检查凭证权限",
-    dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
-    dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
-    dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
-    invalid_dbhub_host: "请填写 DBHub 主机",
-    invalid_dbhub_username: "请填写 DBHub 用户名",
-    invalid_dbhub_password: "请填写 DBHub 密码",
-    invalid_dbhub_database: "请填写 DBHub 数据库",
-    invalid_dbhub_target: "DBHub 主机或端口无效",
-    duplicate_dbhub_target: "同一环境的 DBHub 目标不能重复",
-    invalid_sls_scope: "SLS 查询范围无效：region 和 project 只能使用小写字母、数字和连字符，logstore 使用字母、数字、下划线或连字符",
-    invalid_sls_region: "请填写 SLS region",
-    invalid_sls_project: "请填写 SLS project",
-    invalid_sls_logstores: "请至少填写一个 SLS logstore",
-    invalid_sls_logstore: "SLS logstore 无效",
-    credential_required: "该能力必须配置凭据",
-    credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
-    invalid_credential_replacement: "请填写完整的新凭据",
-    invalid_credential_update: "凭据更新状态无效，请刷新配置后重试",
-    credential_fields_not_allowed: "请刷新页面后重新提交配置",
-    repository_not_registered: "请先在仓库配置中登记地址，再在服务中选择",
-    invalid_repository: "仓库标识无效，请刷新配置后重试",
-    duplicate_repository_alias: "仓库别名不能重复",
-    invalid_deployment_repository_branches: "请为每个环境配置全部仓库分支",
-    development_capabilities_inherited: "开发环境能力继承正式和测试，请刷新后只编辑代码分支",
-    development_configuration_layout_invalid: "开发配置需要按当前迁移升级，请联系维护人员检查",
-    service_has_running_issues: "该服务有正在处理的工单，请等待处理结束或先中止 Agent",
-  };
-  return messages[code] ?? code;
-}
+// Service editor codes; the shared table covers the rest.
+const serviceSaveErrors: ErrorTexts = {
+  configuration_changed: "配置已更新，请重新打开服务后再保存。当前输入已保留。",
+  development_branches_inherited: "开发基线必须继承正式分支",
+  development_production_deployment_required: "请配置正式环境分支",
+  dms_credentials_not_configured: "请先在用户配置中设置个人或共享 DMS 凭据",
+  personal_dms_credentials_incomplete: "个人 DMS 凭据不完整，请补齐或清除后使用共享凭据",
+  invalid_dms_url: "请填写有效的 DMS MCP HTTPS URL",
+  invalid_dms_authorization: "请填写完整的 Bearer 格式 DMS MCP Authorization",
+  invalid_dms_database: "DMS 数据库解析结果无效，请重新填写",
+  invalid_dms_databases: "请至少配置一个且不超过 20 个 DMS 数据库",
+  duplicate_dms_database_schema: "DMS schema 不能重复",
+  duplicate_dms_database_id: "同一个 DMS 数据库不能配置多次",
+  dms_mcp_connection_failed: "无法连接 DMS MCP，请检查 URL 和 Authorization",
+  dms_mcp_http_429: "DMS MCP 请求被限流（HTTP 429），请稍后重试；频繁发生时请检查入口请求量和服务额度",
+  dms_mcp_http_401: "DMS MCP 认证失败（HTTP 401），请检查 Authorization",
+  dms_mcp_http_403: "DMS MCP 拒绝访问（HTTP 403），请检查凭证权限",
+  dms_mcp_scope_resolve_unavailable: "当前 DMS MCP 未提供实例或数据库解析工具",
+  dms_mcp_scope_resolve_failed: "未找到该实例或数据库，或 DMS 无法连接目标实例",
+  dms_mcp_scope_resolve_invalid_response: "DMS 返回了无法识别或不唯一的实例/数据库信息",
+  invalid_dbhub_host: "请填写 DBHub 主机",
+  invalid_dbhub_username: "请填写 DBHub 用户名",
+  invalid_dbhub_password: "请填写 DBHub 密码",
+  invalid_dbhub_database: "请填写 DBHub 数据库",
+  invalid_dbhub_target: "DBHub 主机或端口无效",
+  duplicate_dbhub_target: "同一环境的 DBHub 目标不能重复",
+  invalid_sls_scope: "SLS 查询范围无效：region 和 project 只能使用小写字母、数字和连字符，logstore 使用字母、数字、下划线或连字符",
+  invalid_sls_region: "请填写 SLS region",
+  invalid_sls_project: "请填写 SLS project",
+  invalid_sls_logstores: "请至少填写一个 SLS logstore",
+  invalid_sls_logstore: "SLS logstore 无效",
+  credential_required: "该能力必须配置凭据",
+  credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
+  invalid_credential_replacement: "请填写完整的新凭据",
+  invalid_credential_update: "凭据更新状态无效，请刷新配置后重试",
+  credential_fields_not_allowed: "请刷新页面后重新提交配置",
+  repository_not_registered: "请先在仓库配置中登记地址，再在服务中选择",
+  invalid_repository: "仓库标识无效，请刷新配置后重试",
+  duplicate_repository_alias: "仓库别名不能重复",
+  invalid_deployment_repository_branches: "请为每个环境配置全部仓库分支",
+  development_capabilities_inherited: "开发环境能力继承正式和测试，请刷新后只编辑代码分支",
+  development_configuration_layout_invalid: "开发配置需要按当前迁移升级，请联系维护人员检查",
+  service_has_running_issues: "该服务有正在处理的工单，请等待处理结束或先中止 Agent",
+};
+const serviceSaveErrorMessage = (error: unknown) => errorText(error, serviceSaveErrors);
 
 interface ServiceRepositoryDraft {
   id?: string;
@@ -150,7 +150,7 @@ function DmsDatabaseEditorRow(props: {
   const [loading, setLoading] = createSignal(false, { ownedWrite: true });
   const [resolveError, setResolveError] = createSignal("", { ownedWrite: true });
   let resolveTimer: ReturnType<typeof setTimeout> | undefined;
-  let resolveGeneration = 0;
+  const resolveTask = createLatestTask();
   const emit = (next: DmsDatabaseDraft) => {
     current = next;
     setDatabase(next);
@@ -158,7 +158,8 @@ function DmsDatabaseEditorRow(props: {
   };
   const scheduleResolve = (next: DmsDatabaseDraft) => {
     if (resolveTimer) clearTimeout(resolveTimer);
-    const generation = ++resolveGeneration;
+    // Each edit supersedes the pending or in-flight lookup before the debounce starts a new one.
+    resolveTask.cancel();
     const instanceAlias = next.instanceAlias.trim();
     const schemaName = next.schemaName.trim();
     if (!instanceAlias || !schemaName) {
@@ -167,18 +168,20 @@ function DmsDatabaseEditorRow(props: {
       return;
     }
     resolveTimer = setTimeout(() => {
+      const request = resolveTask.begin();
       setLoading(true);
       setResolveError("");
-      void resolveDmsScope({ instanceAlias, schemaName })
+      void resolveDmsScope({ instanceAlias, schemaName }, request.signal)
         .then((scope) => {
-          if (generation !== resolveGeneration || current.instanceAlias.trim() !== instanceAlias || current.schemaName.trim() !== schemaName) return;
+          if (!request.isCurrent() || current.instanceAlias.trim() !== instanceAlias || current.schemaName.trim() !== schemaName) return;
           emit({ ...current, ...scope });
         })
         .catch((error) => {
-          if (generation === resolveGeneration) setResolveError(serviceSaveErrorMessage(error));
+          if (request.isCurrent()) setResolveError(serviceSaveErrorMessage(error));
         })
         .finally(() => {
-          if (generation === resolveGeneration) setLoading(false);
+          if (request.isCurrent()) setLoading(false);
+          request.finish();
         });
     }, 500);
   };
@@ -190,7 +193,7 @@ function DmsDatabaseEditorRow(props: {
   };
   onCleanup(() => {
     if (resolveTimer) clearTimeout(resolveTimer);
-    resolveGeneration += 1;
+    resolveTask.cancel();
   });
   return (
     <div class="settings-target-row">
@@ -294,7 +297,7 @@ function ServiceDeploymentEditorRow(props: {
     (repositories) => {
       const current = untrack(repositoryBranches);
       const next = repositories.map(
-        (repository) => current.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch },
+        (repository) => current.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: sharedConfig.defaults.deployment.baseBranch },
       );
       if (next.length === current.length && next.every((branch, index) => branch.repositoryKey === current[index]?.repositoryKey && branch.baseBranch === current[index]?.baseBranch)) return;
       setRepositoryBranches(next);
@@ -312,7 +315,7 @@ function ServiceDeploymentEditorRow(props: {
     update({ dms: dms(currentDmsDraft) });
   };
   const addDmsDatabase = () => {
-    if (dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases) return;
+    if (dmsDraft().databases.length >= sharedConfig.limits.capability.dms.databases) return;
     updateDms({ databases: [...dmsDraft().databases, newDmsDatabaseDraft()] });
     requestAnimationFrame(() => {
       if (!dmsTargets?.isConnected) return;
@@ -443,7 +446,7 @@ function ServiceDeploymentEditorRow(props: {
                   <section class="settings-targets" aria-label="DMS 查询目标">
                     <div class="settings-targets-head">
                       <span>查询目标</span>
-                      <Button size="small" aria-label="添加 DMS 目标" disabled={dmsDraft().databases.length >= issuePilotConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>
+                      <Button size="small" aria-label="添加 DMS 目标" disabled={dmsDraft().databases.length >= sharedConfig.limits.capability.dms.databases} onClick={addDmsDatabase}>
                         添加目标
                       </Button>
                     </div>
@@ -509,7 +512,7 @@ function ServiceDeploymentEditorRow(props: {
 
 export function ConfigurationView(props: { selectedServiceKey?: string; onSelectService?: (key: string) => void } = {}) {
   const { currentUser, configuration, configurationLoaded, refreshCatalog, refreshConfiguration, configurationError: resourceError } = useApplicationResources();
-  const canConfigure = () => currentUser()?.role === "developer";
+  const canConfigure = () => canManageDevelopmentConfiguration(currentUser());
   let editorGeneration = 0,
     serviceRevisionDraft = 0;
   const [dbhubLoading, setDbHubLoading] = createSignal(false, { ownedWrite: true });
@@ -529,7 +532,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       await Promise.all([refreshConfiguration(), refreshCatalog()]);
       if (owner === editorGeneration) setConfigurationError("");
     } catch (error) {
-      if (owner === editorGeneration) setConfigurationError(`变更已保存，刷新配置失败：${errorMessage(error)}`);
+      if (owner === editorGeneration) setConfigurationError(`变更已保存，刷新配置失败：${errorText(error)}`);
     }
   };
   createEffect(
@@ -547,32 +550,32 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const selectedService = createMemo(() => configuration().services.find((service) => service.key === selectedServiceKey()));
   const [configurationDescription, setConfigurationDescription] = createSignal<{ serviceKey: string; subject: string; context: string } | null>(null, { ownedWrite: true });
   const [descriptionError, setDescriptionError] = createSignal("", { ownedWrite: true });
-  let descriptionController: AbortController | undefined;
+  const descriptionTask = createLatestTask();
   createEffect(
     () => ({ service: selectedService(), user: currentUser() }),
     ({ service, user }) => {
-      descriptionController?.abort();
+      descriptionTask.cancel();
       setConfigurationDescription(null);
       setDescriptionError("");
-      if (!service || user?.role !== "developer") return;
-      const controller = new AbortController();
-      descriptionController = controller;
-      void loadServiceConfigurationDescription(service.key, controller.signal)
+      if (!service || !user || !canManageDevelopmentConfiguration(user)) return;
+      const request = descriptionTask.begin();
+      void loadServiceConfigurationDescription(service.key, request.signal)
         .then((value) => {
-          if (!controller.signal.aborted) setConfigurationDescription({ serviceKey: service.key, subject: user.subject, context: value.context });
+          if (request.isCurrent()) setConfigurationDescription({ serviceKey: service.key, subject: user.subject, context: value.context });
         })
         .catch(() => {
-          if (!controller.signal.aborted) setDescriptionError("无法读取完整配置，请刷新重试");
-        });
+          if (request.isCurrent()) setDescriptionError("无法读取完整配置，请刷新重试");
+        })
+        .finally(request.finish);
     },
   );
   onCleanup(() => {
     editorGeneration++;
-    descriptionController?.abort();
+    descriptionTask.cancel();
   });
   const visibleConfigurationDescription = () => {
     const value = configurationDescription();
-    return currentUser()?.role === "developer" && value?.serviceKey === selectedServiceKey() && value.subject === currentUser()?.subject ? value.context : undefined;
+    return canConfigure() && value?.serviceKey === selectedServiceKey() && value.subject === currentUser()?.subject ? value.context : undefined;
   };
   const environmentDrafts = (service?: Service): ServiceDeploymentDraft[] =>
     ["dev", "test", "prod"].map((environmentKey) => {
@@ -582,7 +585,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
         : {
             environmentKey,
             capabilities: [],
-            repositoryBranches: service?.repositories.map((repository) => ({ repositoryKey: repository.id, baseBranch: issuePilotConfig.defaults.deployment.baseBranch })) ?? [],
+            repositoryBranches: service?.repositories.map((repository) => ({ repositoryKey: repository.id, baseBranch: sharedConfig.defaults.deployment.baseBranch })) ?? [],
           };
     });
   const resetServiceForm = () => {
@@ -613,20 +616,21 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const [repositoryChoices, setRepositoryChoices] = createSignal<ManagedRepository[]>([], { ownedWrite: true });
   const [repositoryLoading, setRepositoryLoading] = createSignal(false, { ownedWrite: true });
   const [repositoryError, setRepositoryError] = createSignal("", { ownedWrite: true });
-  let repositoryGeneration = 0;
+  const repositoryTask = createLatestTask();
   const loadRepositoryChoices = () => {
-    const generation = ++repositoryGeneration;
+    const request = repositoryTask.begin();
     setRepositoryLoading(true);
     setRepositoryError("");
-    void loadRepositories()
+    void loadRepositories(request.signal)
       .then((rows) => {
-        if (generation === repositoryGeneration) setRepositoryChoices(rows);
+        if (request.isCurrent()) setRepositoryChoices(rows);
       })
       .catch((cause) => {
-        if (generation === repositoryGeneration) setRepositoryError(errorMessage(cause));
+        if (request.isCurrent()) setRepositoryError(errorText(cause));
       })
       .finally(() => {
-        if (generation === repositoryGeneration) setRepositoryLoading(false);
+        if (request.isCurrent()) setRepositoryLoading(false);
+        request.finish();
       });
   };
   createEffect(
@@ -635,9 +639,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       if (services) loadRepositoryChoices();
     },
   );
-  onCleanup(() => {
-    repositoryGeneration += 1;
-  });
+  onCleanup(repositoryTask.cancel);
   const openNewService = () => {
     editorGeneration++;
     loadRepositoryChoices();
@@ -700,7 +702,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       for (const deployment of deployments) {
         deployment.repositoryBranches = next.map(
           (repository) =>
-            deployment.repositoryBranches.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: issuePilotConfig.defaults.deployment.baseBranch },
+            deployment.repositoryBranches.find((branch) => branch.repositoryKey === repository.key) ?? { repositoryKey: repository.key, baseBranch: sharedConfig.defaults.deployment.baseBranch },
         );
       }
     });

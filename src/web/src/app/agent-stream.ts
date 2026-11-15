@@ -1,12 +1,34 @@
-import { AGENT_RUN_STATES, type AgentRunState, type AgentFooterStats, type IssueStatus, type RunEvent } from "../data/client";
+import { AGENT_RUN_STATES, ISSUE_STATUSES, type AgentCostSource, type AgentRunState, type AgentFooterStats, type IssueStatus, type RunEvent } from "../data/client";
 import { activityForEvent, ConversationProjection, type AgentActivity, type ConversationEntry } from "./conversation";
 
 interface AgentStreamSnapshot {
-  agent?: { provider: string; model: string; thinkingLevel: string };
-  footer?: AgentFooterStats;
+  agent: { provider: string; model: string; thinkingLevel: string };
+  footer: AgentFooterStats;
   runState: AgentRunState;
-  issueStatus?: IssueStatus;
-  issueRevision?: string;
+  issueStatus: IssueStatus;
+  issueRevision: string;
+}
+
+const costSources: Record<AgentCostSource, true> = { provider: true, estimated: true, unknown: true, mixed: true };
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const isNumber = (value: unknown) => typeof value === "number";
+
+/** The snapshot replaces the whole projection, so every field is required; anything else is a protocol error. */
+function parseSnapshot(data: string): AgentStreamSnapshot {
+  const value = JSON.parse(data) as unknown;
+  if (!isRecord(value)) throw new Error("agent_event_protocol_error");
+  const { agent, footer, runState, issueStatus, issueRevision } = value;
+  if (!isRecord(agent) || ![agent.provider, agent.model, agent.thinkingLevel].every((field) => typeof field === "string")) throw new Error("agent_event_protocol_error");
+  if (
+    !isRecord(footer) ||
+    ![footer.input, footer.output, footer.cacheRead, footer.cacheWrite, footer.cost, footer.contextWindow].every(isNumber) ||
+    ![footer.latestCacheHitRate, footer.contextPercent].every((field) => field === null || isNumber(field)) ||
+    typeof footer.autoCompact !== "boolean" ||
+    !(footer.costSource === null || (typeof footer.costSource === "string" && Object.hasOwn(costSources, footer.costSource)))
+  )
+    throw new Error("agent_event_protocol_error");
+  if (!AGENT_RUN_STATES.includes(runState as AgentRunState) || !ISSUE_STATUSES.includes(issueStatus as IssueStatus) || typeof issueRevision !== "string") throw new Error("agent_event_protocol_error");
+  return value as unknown as AgentStreamSnapshot;
 }
 
 interface AgentStreamReplay {
@@ -87,10 +109,8 @@ export class AgentStreamController {
       if (!this.isCurrent(generation)) return;
       touch();
       try {
-        const parsed = JSON.parse(event.data) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agent_event_protocol_error");
-        if (!("runState" in parsed) || !AGENT_RUN_STATES.includes(parsed.runState as AgentRunState)) throw new Error("agent_event_protocol_error");
-        this.callbacks.onSnapshot(parsed as AgentStreamSnapshot, { entries: replay.snapshot(), activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
+        const snapshot = parseSnapshot(event.data);
+        this.callbacks.onSnapshot(snapshot, { entries: replay.snapshot(), activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
         this.callbacks.onConnection(true);
         this.callbacks.onError("");

@@ -51,6 +51,7 @@ vi.mock("../data/client", async (original) => ({
 import { PersonalCredentials } from "./PersonalCredentials";
 import { UserManagement } from "./UserManagement";
 import { RepositoryManagement } from "./RepositoryManagement";
+import { settle } from "../test-settle";
 
 const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer", isAdmin: true };
 // Personal credential tests use a developer without management access, so dialogs edit personal groups.
@@ -145,9 +146,7 @@ for (const outcome of ["success", "failure"] as const)
     dialog = await screen.findByRole("dialog");
     await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "Current draft" } });
     finish();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.getByRole("dialog")).toBe(dialog);
     expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "Current draft");
     expect(screen.queryByText("old_user_save_failed")).toBeNull();
@@ -283,9 +282,7 @@ test("identity changes clear secret drafts and late credential success cannot mu
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await screen.findByText("API Key");
   finish();
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(screen.queryByText("old-secret")).toBeNull();
   expect(screen.getAllByText("未配置")).toHaveLength(2);
 });

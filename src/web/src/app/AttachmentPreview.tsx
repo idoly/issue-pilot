@@ -7,7 +7,7 @@ import { fetchAttachment, type IssueDetail } from "../data/client";
 import { createLatestTask } from "../data/latest";
 
 import { attachmentPreviewKind } from "./file-preview";
-import { issuePilotConfig } from "../../../../issue-pilot.config";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
 const previewTooLarge = "文件超过预览大小限制，请关闭弹窗后下载查看。";
 
@@ -50,14 +50,14 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
     const attachment = untrack(() => props.attachment),
       issueKey = untrack(() => props.issueKey);
     reset();
-    if (!attachment || attachment.size > issuePilotConfig.web.filePreviewBytes || attachmentPreviewKind(attachment) === "unsupported") return;
+    if (!attachment || attachment.size > sharedConfig.web.filePreviewBytes || attachmentPreviewKind(attachment) === "unsupported") return;
     const task = latest.begin();
     setLoading(true);
     const file = props.loadFile ? props.loadFile(task.signal) : fetchAttachment(issueKey, attachment.id, task.signal);
     void file
       .then(async (blob) => {
         if (!task.isCurrent()) return;
-        if (blob.size > issuePilotConfig.web.filePreviewBytes) throw new Error("file_preview_too_large");
+        if (blob.size > sharedConfig.web.filePreviewBytes) throw new Error("file_preview_too_large");
         if (attachmentPreviewKind(attachment) === "text") {
           const content = await blob.text();
           if (task.isCurrent()) setText(content);
@@ -166,11 +166,11 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
                 const kind = () => attachmentPreviewKind(attachment());
                 return (
                   <Show
-                    when={kind() !== "unsupported" && attachment().size <= issuePilotConfig.web.filePreviewBytes}
+                    when={kind() !== "unsupported" && attachment().size <= sharedConfig.web.filePreviewBytes}
                     fallback={
                       <div class="attachment-preview-message" role="status">
                         <Paperclip size={24} />
-                        <p>{attachment().size > issuePilotConfig.web.filePreviewBytes ? previewTooLarge : "此格式不支持内嵌预览，请关闭弹窗后从附件列表下载查看"}</p>
+                        <p>{attachment().size > sharedConfig.web.filePreviewBytes ? previewTooLarge : "此格式不支持内嵌预览，请关闭弹窗后从附件列表下载查看"}</p>
                       </div>
                     }
                   >

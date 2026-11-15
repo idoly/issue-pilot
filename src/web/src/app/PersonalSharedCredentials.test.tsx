@@ -47,6 +47,7 @@ vi.mock("../data/client", async (original) => ({
   updateAgentConfiguration: state.saveAgent,
 }));
 import { PersonalCredentials } from "./PersonalCredentials";
+import { settle } from "../test-settle";
 
 const status: PersonalCredentialStatus = {
   revision: 2,
@@ -209,9 +210,7 @@ for (const group of ["dms", "sls"] as const)
     await waitFor(() => expect(state.load).toHaveBeenCalledTimes(2));
     await screen.findByText("API Key");
     finish();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[group === "dms" ? 2 : 3]!);
     const reopened = await screen.findByRole("dialog");
     expect(within(reopened).queryByLabelText<HTMLInputElement>("DMS 地址")?.value).toBe(group === "dms" ? "https://bob.example.test/sse" : undefined);
@@ -249,9 +248,7 @@ for (const outcome of ["success", "failure"] as const)
     fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(finishNext).toBeTypeOf("function"));
     finish();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.getByRole("dialog")).toBe(reopened);
     expect(within(reopened).getByLabelText("API Key")).toHaveProperty("value", "bob-draft");
     expect(within(reopened).getByRole("checkbox", { name: /共享凭证/ })).toHaveProperty("disabled", true);

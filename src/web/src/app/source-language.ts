@@ -1,4 +1,4 @@
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
 const extensions: Record<string, string> = {
   js: "javascript",
@@ -40,5 +40,5 @@ const names: Record<string, string> = {
   plaintext: "Plain Text",
 };
 export const sourceLanguage = (path: string, text: string) =>
-  text.length > issuePilotConfig.web.sourceHighlightCharacters ? "plaintext" : (extensions[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? "plaintext");
+  text.length > sharedConfig.web.sourceHighlightCharacters ? "plaintext" : (extensions[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? "plaintext");
 export const sourceLanguageName = (path: string) => names[extensions[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? "plaintext"]!;

@@ -16,7 +16,15 @@ vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({ currentUser: () => state.user(), people: () => [], peopleError: () => "", catalog: () => ({ environments: [], services: [] }) }),
 }));
 import { IssueWorkspace } from "./IssueWorkspace";
-const issue: IssueDetail & import("../data/client").IssueExecutionItem = {
+import { settle } from "../test-settle";
+import { createIssueList } from "./issue-list";
+
+/** The related-Issue picker reads the shared list; it stays idle until the editor refreshes it. */
+function Workspace(props: Omit<Parameters<typeof IssueWorkspace>[0], "issueList">) {
+  const issueList = createIssueList(() => false);
+  return <IssueWorkspace {...props} issueList={issueList} />;
+}
+const issue: IssueDetail = {
   workspaceStatus: "ready",
   agentRunning: false,
   resolvedAt: null,
@@ -29,13 +37,21 @@ const issue: IssueDetail & import("../data/client").IssueExecutionItem = {
   status: "pending",
   assignee: null,
   assigneeSubject: null,
+  reporterSubject: "reporter",
+  ccSubjects: [],
   service: { key: "orders", name: "Orders" },
   environmentKey: "prod",
+  revision: "ISSUE-20261018-001:1",
+  createdAt: "2026-10-18T00:00:00Z",
   updatedAt: "2026-10-18T00:00:00Z",
   repositories: [],
   workingDirectory: "/fixture/workspaces/issue",
-  workspace: { status: "ready", sourceAvailable: false },
+  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
   attachments: [],
+  collaboratingServices: [],
+  relatedIssues: [],
+  scopeTransitions: [],
+  ccRecipients: [],
   comments: [],
 };
 beforeEach(() => {
@@ -48,8 +64,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   state.user = () => ({ subject: "developer", role: "developer" });
 });
-async function open(onUpdated = async () => {}, agentRunning = false) {
-  render(() => <IssueWorkspace issue={{ ...issue, agentRunning }} onOpenSource={() => {}} onUpdated={onUpdated} onCreatedFollowUp={() => {}} />);
+async function open(onUpdated = async () => {}) {
+  render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={onUpdated} onCreatedFollowUp={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
   return screen.findByRole("dialog", { name: "编辑工单" });
 }
@@ -81,7 +97,7 @@ it("keeps the editor version across background refresh and preserves a conflicte
   const [current, setCurrent] = createSignal(issue, { ownedWrite: true });
   state.update.mockRejectedValueOnce(new Error("issue_edit_conflict"));
   state.read.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(latest);
-  render(() => <IssueWorkspace issue={current()} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  render(() => <Workspace issue={current()} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
   const dialog = await screen.findByRole("dialog", { name: "编辑工单" });
   fireEvent.input(within(dialog).getByLabelText("编辑工单标题"), { target: { value: "My draft" } });
@@ -126,13 +142,39 @@ it("saves normally without reading or resetting the session", async () => {
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
   expect(state.update.mock.calls[0]!.at(-1)).toBe(false);
 });
-for (const busy of [true, false])
-  it(`disables reset for ${busy ? "active work" : "non-developers"}`, async () => {
-    if (!busy) state.user = () => ({ subject: "viewer", role: "product" });
-    const dialog = await open(async () => {}, busy);
-    expect(within(dialog).getByRole("button", { name: "重置" })).toHaveProperty("disabled", true);
-    expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false);
-  });
+it("disables editing while an Agent round is queued or running and keeps history reachable", () => {
+  render(() => <Workspace issue={{ ...issue, agentRunning: true }} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  expect(screen.getByRole("button", { name: "编辑工单" })).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "查看历史" })).toHaveProperty("disabled", false);
+});
+it("keeps session history reachable after resolution without the edit dialog", () => {
+  render(() => <Workspace issue={{ ...issue, status: "resolved", resolvedAt: "2026-10-19T00:00:00Z" }} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
+  expect(screen.getByRole("button", { name: "查看历史" })).toHaveProperty("disabled", false);
+});
+it("disables reset when work starts while the editor is open", async () => {
+  const [current, setCurrent] = createSignal(issue);
+  render(() => <Workspace issue={current()} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑工单" });
+  setCurrent({ ...issue, agentRunning: true });
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "重置" })).toHaveProperty("disabled", true));
+  expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false);
+});
+it("explains a save refused by queued work without suggesting a reset", async () => {
+  state.update.mockRejectedValueOnce(new Error("issue_already_running"));
+  const dialog = await open();
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  const alert = await within(dialog).findByRole("alert");
+  expect(alert.textContent).toBe("工单正在处理，请等待处理结束后再保存。");
+  expect(alert.textContent).not.toContain("重置");
+});
+it("disables reset for non-developers", async () => {
+  state.user = () => ({ subject: "viewer", role: "product" });
+  const dialog = await open();
+  expect(within(dialog).getByRole("button", { name: "重置" })).toHaveProperty("disabled", true);
+  expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false);
+});
 it("reports a completed reset separately from a failed page refresh", async () => {
   const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}).mockRejectedValueOnce(new Error("网络错误")),
     dialog = await open(updated);
@@ -162,7 +204,7 @@ for (const change of ["identity", "issue"] as const)
       const [currentIssue, setIssue] = createSignal({ ...issue, attachments: [attachment] }, { ownedWrite: true });
       const [user, setUser] = createSignal({ subject: "developer", role: "developer" }, { ownedWrite: true });
       state.user = user;
-      render(() => <IssueWorkspace issue={currentIssue()} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
+      render(() => <Workspace issue={currentIssue()} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
       try {
         fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
         const oldDialog = await screen.findByRole("dialog", { name: "编辑工单" });
@@ -181,9 +223,7 @@ for (const change of ["identity", "issue"] as const)
         await waitFor(() => expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull());
 
         rejectPending(failure === "committed cleanup" ? new RequestError("attachment_finalize_failed", "committed") : new Error("old_refresh_failed"));
-        await new Promise((resolve) => {
-          setTimeout(resolve, 0);
-        });
+        await settle();
         expect(within(currentDialog).getByText("new-evidence.txt")).toBeTruthy();
         expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull();
         expect(within(currentDialog).queryByRole("alert")).toBeNull();
@@ -204,14 +244,14 @@ it("does not reset after the workspace unmounts while saving", async () => {
       }),
   );
   const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {});
-  const view = render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
+  const view = render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
   const dialog = await screen.findByRole("dialog", { name: "编辑工单" });
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   await waitFor(() => expect(state.update).toHaveBeenCalledOnce());
   view.unmount();
   finish();
-  await Promise.resolve();
+  await settle();
   expect(updated).not.toHaveBeenCalled();
 });
 it("surfaces the server refusal when there is no current session", async () => {

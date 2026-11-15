@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), listIssueSessions: state.list, readIssueSession: state.read }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueSessionControls } from "./IssueSessionControls";
+import { settle } from "../test-settle";
 const issue = { id: "ISSUE-20261030-001", status: "open", workspace: { status: "ready" }, attachments: [] } as unknown as IssueDetail;
 const sessions = [
   { sessionId: "current", createdAt: "2026-10-30T00:00:00Z", current: true },
@@ -23,7 +24,7 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 const open = () => {
-  render(() => <IssueSessionControls issue={issue} disabled={false} />);
+  render(() => <IssueSessionControls issue={issue} />);
   fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
 };
 
@@ -93,14 +94,23 @@ it("aborts a pending history read on close and ignores its late result", async (
 
 it("keeps the history panel open when the Issue object is replaced with identical content", async () => {
   const [current, setCurrent] = createSignal(issue);
-  render(() => <IssueSessionControls issue={current()} disabled={false} />);
+  render(() => <IssueSessionControls issue={current()} />);
   fireEvent.click(screen.getByRole("button", { name: "查看历史" }));
   const dialog = await screen.findByRole("dialog", { name: "历史会话" });
   const reads = state.read.mock.calls.length;
   setCurrent({ ...issue });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 20);
-  });
+  await settle();
   expect(screen.getByRole("dialog", { name: "历史会话" })).toBe(dialog);
   expect(state.read).toHaveBeenCalledTimes(reads);
+});
+it("distinguishes sessions reset within the same minute, whose time-ordered IDs share a prefix", async () => {
+  state.list.mockResolvedValue([
+    { sessionId: "019a3b2c-4d5e-7f00-8000-00000000aaa1", createdAt: "2026-10-30T00:00:30Z", current: true },
+    { sessionId: "019a3b2c-4d5e-7f00-8000-00000000bbb2", createdAt: "2026-10-30T00:00:20Z", current: false },
+    { sessionId: "019a3b2c-4d5e-7f00-8000-00000000ccc3", createdAt: "2026-10-30T00:00:10Z", current: false },
+  ]);
+  open();
+  fireEvent.click(await screen.findByRole("combobox"));
+  const labels = (await screen.findAllByRole("option")).map((option) => option.textContent);
+  expect(new Set(labels.map((label) => label?.split(" · ").at(-1))).size).toBe(labels.length);
 });

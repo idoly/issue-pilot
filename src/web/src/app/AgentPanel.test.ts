@@ -5,11 +5,71 @@ import { createSignal, createStore, reconcile } from "solid-js";
 import { marked } from "marked";
 
 import { issuePilotConfig } from "../../../../issue-pilot.config";
-import type { IssueDetail, RunEvent } from "../data/client";
+import type { AgentFooterStats, AgentRunState, IssueDetail, IssueStatus, RunEvent } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 import { AgentPanel, ConversationItem } from "./AgentPanel";
 import { AgentDraftStore } from "./agent-drafts";
 import { activityForEvent, ConversationProjection, boundedText, codemodeCalls, diffLineClass, resultText, toolNestedCalls, toolLabel, toolLabelParts, type ConversationEntry } from "./conversation";
+import { settle } from "../test-settle";
+
+function issueFixture(fields: Omit<Partial<IssueDetail>, "workspace"> & { workspace?: Partial<IssueDetail["workspace"]> } = {}): IssueDetail {
+  const { workspace, ...rest } = fields;
+  return {
+    id: "ISSUE-20260810-001",
+    title: "Fixture",
+    description: "",
+    editVersion: "a".repeat(64),
+    priority: "p1",
+    type: "defect_fix",
+    status: "open",
+    assignee: null,
+    assigneeSubject: null,
+    reporterSubject: "reporter",
+    ccSubjects: [],
+    service: { key: "service", name: "Service" },
+    environmentKey: "dev",
+    revision: "revision-1",
+    createdAt: "2026-08-10T00:00:00.000Z",
+    updatedAt: "2026-08-10T00:00:00.000Z",
+    workspaceStatus: workspace?.status ?? "ready",
+    agentRunning: false,
+    resolvedAt: null,
+    repositories: [],
+    attachments: [],
+    comments: [],
+    collaboratingServices: [],
+    relatedIssues: [],
+    scopeTransitions: [],
+    ccRecipients: [],
+    workingDirectory: "/fixture/workspaces/issue",
+    ...rest,
+    workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false, ...workspace },
+  };
+}
+
+const emptyFooter: AgentFooterStats = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+  costSource: null,
+  latestCacheHitRate: null,
+  contextPercent: null,
+  contextWindow: 0,
+  autoCompact: true,
+};
+
+/** A complete snapshot_ready payload; the default revision matches issueFixture so no refresh is implied. */
+function snapshot(fields: {
+  agent?: { provider: string; model: string; thinkingLevel: string };
+  footer?: AgentFooterStats;
+  runState: AgentRunState;
+  issueStatus: IssueStatus;
+  issueRevision?: string;
+}) {
+  return { agent: { provider: "", model: "", thinkingLevel: "" }, footer: emptyFooter, issueRevision: "revision-1", ...fields };
+}
 
 function applyAgentEvent(entries: ConversationEntry[], event: RunEvent): ConversationEntry[] {
   const projection = new ConversationProjection(entries);
@@ -79,7 +139,7 @@ describe("Agent conversation state", () => {
   });
 
   it("Escape cancels the visible active Issue once without clearing its draft; ignores composition, modifiers and hidden panels", async () => {
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-099",
       title: "Cancel",
       description: "",
@@ -98,7 +158,7 @@ describe("Agent conversation state", () => {
       agentRunning: true,
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     let resolve!: (response: Response) => void;
     const fetchRequest = vi.spyOn(globalThis, "fetch").mockReturnValue(
       new Promise<Response>((done) => {
@@ -130,9 +190,7 @@ describe("Agent conversation state", () => {
       expect(fetchRequest.mock.calls[0]?.[1]?.method).toBe("POST");
       expect(editor.value).toBe("keep this unsent draft");
       resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-      await new Promise((done) => {
-        setTimeout(done, 0);
-      });
+      await settle();
       setHidden(true);
       await waitFor(() => expect(view.container.querySelector(".agent-panel")?.hasAttribute("hidden")).toBe(true));
       fireEvent.keyDown(editor, { key: "Escape" });
@@ -159,7 +217,7 @@ describe("Agent conversation state", () => {
   });
 
   it("marks display truncation before opening a tool and clears it for a complete shorter result", async () => {
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Truncation",
       description: "",
@@ -177,7 +235,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const original = { content: [{ type: "text" as const, text: "x".repeat(issuePilotConfig.web.agentToolOutputCharacters + 1) }] };
     const [entries, setEntries] = createSignal(applyAgentEvent([], event({ type: "tool_execution_update", toolCallId: "bounded", toolName: "read", args: {}, partialResult: original })));
     const view = render(() =>
@@ -415,7 +473,7 @@ describe("Agent conversation state", () => {
   });
 
   it("keeps SDK tool cards compact, lazily mounts retained output and preserves expansion across updates", async () => {
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Tool card",
       description: "",
@@ -433,7 +491,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const initial: Extract<ConversationEntry, { kind: "tool" }> = {
       id: "tool-1",
       kind: "tool",
@@ -544,7 +602,7 @@ describe("Agent conversation state", () => {
   });
 
   it("checks expanded pasted text before sending and preserves the draft", async () => {
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -562,7 +620,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const fetchRequest = vi.spyOn(globalThis, "fetch");
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
@@ -577,7 +635,7 @@ describe("Agent conversation state", () => {
 
   it("previews pasted images and sends multipart input with the button, without sending on composition or Shift+Enter", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -595,7 +653,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:clipboard-image");
     const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const fetchRequest = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 202 }));
@@ -634,7 +692,7 @@ describe("Agent conversation state", () => {
     ["invalid_issue_root", 500, "工单目录异常，消息未接收。请保留草稿并联系管理员检查目录。"],
   ] as const)
     it(`keeps the draft and pasted image after ${code}`, async () => {
-      const issue = {
+      const issue = issueFixture({
         id: "ISSUE-20260810-001",
         title: "Test",
         description: "",
@@ -652,7 +710,7 @@ describe("Agent conversation state", () => {
         environmentKey: "dev",
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
-      } satisfies IssueDetail;
+      });
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:uncertain-image");
       const fetchRequest = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: code }), { status }));
       const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
@@ -677,7 +735,7 @@ describe("Agent conversation state", () => {
 
   it("updates auxiliary SDK usage without changing the main context or reconnecting", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -695,15 +753,18 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const source = EventSourceMock.instances[0]!;
-    source.emit("snapshot_ready", {
-      agent: { provider: "test", model: "model", thinkingLevel: "medium" },
-      footer: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, cost: 0.1, costSource: "unknown", latestCacheHitRate: 90, contextPercent: 10, contextWindow: 10_000, autoCompact: true },
-      runState: "idle",
-      issueStatus: "pending",
-    });
+    source.emit(
+      "snapshot_ready",
+      snapshot({
+        agent: { provider: "test", model: "model", thinkingLevel: "medium" },
+        footer: { input: 100, output: 10, cacheRead: 900, cacheWrite: 0, cost: 0.1, costSource: "unknown", latestCacheHitRate: 90, contextPercent: 10, contextWindow: 10_000, autoCompact: true },
+        runState: "idle",
+        issueStatus: "pending",
+      }),
+    );
     await waitFor(() => expect(screen.getByRole("group", { name: "会话用量" }).textContent?.trim()).toBe("↑100 ↓10 R900 CH90.0% $0.100 (来源未标明) 上下文 10.0%/10k (auto)"));
     const editor = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     fireEvent.input(editor, { target: { value: "draft survives usage updates" } });
@@ -740,7 +801,7 @@ describe("Agent conversation state", () => {
   ] as const)
     it(`preserves the last context estimate for ${stopReason} with ${contextTokens} usage tokens while accumulating its cost`, async () => {
       EventSourceMock.instances.length = 0;
-      const issue = {
+      const issue = issueFixture({
         id: "ISSUE-20260810-001",
         title: "Context usage",
         description: "",
@@ -758,26 +819,29 @@ describe("Agent conversation state", () => {
         environmentKey: "dev",
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
-      } satisfies IssueDetail;
+      });
       const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const source = EventSourceMock.instances[0]!;
-        source.emit("snapshot_ready", {
-          footer: {
-            input: 100,
-            output: 0,
-            cacheRead: 900,
-            cacheWrite: 0,
-            cost: 0.1,
-            costSource: "unknown",
-            latestCacheHitRate: 90,
-            contextPercent: 10,
-            contextWindow: 10_000,
-            autoCompact: true,
-          },
-          runState: "running",
-          issueStatus: "pending",
-        });
+        source.emit(
+          "snapshot_ready",
+          snapshot({
+            footer: {
+              input: 100,
+              output: 0,
+              cacheRead: 900,
+              cacheWrite: 0,
+              cost: 0.1,
+              costSource: "unknown",
+              latestCacheHitRate: 90,
+              contextPercent: 10,
+              contextWindow: 10_000,
+              autoCompact: true,
+            },
+            runState: "running",
+            issueStatus: "pending",
+          }),
+        );
         await screen.findByText("上下文 10.0%/10k (auto)");
         source.emit(
           "message",
@@ -821,7 +885,7 @@ describe("Agent conversation state", () => {
   ] as const)
     it(`keeps ${costSource} cost provenance consistent across snapshots, live entry types and reconnect`, async () => {
       EventSourceMock.instances.length = 0;
-      const issue = {
+      const issue = issueFixture({
         id: "ISSUE-20260810-001",
         title: "Cost source",
         description: "",
@@ -839,14 +903,14 @@ describe("Agent conversation state", () => {
         environmentKey: "dev",
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
-      } satisfies IssueDetail;
+      });
       const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       try {
         const source = EventSourceMock.instances[0]!;
         const footer = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.1, costSource, latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true };
         const charged = { ...usage, cost: { ...usage.cost, total: 0.1, ...(flag === undefined ? {} : { totalFromProvider: flag }) } };
         const base = { parentId: null, timestamp: new Date().toISOString() };
-        source.emit("snapshot_ready", { footer, runState: "idle", issueStatus: "pending" });
+        source.emit("snapshot_ready", snapshot({ footer, runState: "idle", issueStatus: "pending" }));
         await screen.findByText(`$0.100 (${label})`);
         source.emit("message", event({ type: "entry_appended", entry: { ...base, type: "usage", id: "auxiliary", kind: "auxiliary", provider: "test", model: "model", usage: charged } }));
         source.emit("message", event({ type: "message_end", message: { ...assistant([], "stop"), usage: charged } }));
@@ -875,7 +939,7 @@ describe("Agent conversation state", () => {
         await waitFor(() => expect(EventSourceMock.instances).toHaveLength(2));
         const resumed = EventSourceMock.instances[1]!;
         resumed.emit("message", mixed);
-        resumed.emit("snapshot_ready", { footer: { ...footer, cost: 0.7, costSource: "mixed" }, runState: "idle", issueStatus: "pending" });
+        resumed.emit("snapshot_ready", snapshot({ footer: { ...footer, cost: 0.7, costSource: "mixed" }, runState: "idle", issueStatus: "pending" }));
         await screen.findByText("$0.700 (混合来源)");
         expect(screen.queryByText("$0.800 (混合来源)")).toBeNull();
       } finally {
@@ -885,7 +949,7 @@ describe("Agent conversation state", () => {
 
   it("distinguishes a queued Issue from an executing round across reconnect and live transitions", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Queued",
       description: "",
@@ -903,13 +967,13 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     try {
       const source = EventSourceMock.instances[0]!;
       expect(screen.queryByText(/Esc 中断/)).toBeNull();
       source.emit("message", event({ type: "auto_retry_end", success: false, attempt: 3 }));
-      source.emit("snapshot_ready", { runState: "queued", issueStatus: "pending" });
+      source.emit("snapshot_ready", snapshot({ runState: "queued", issueStatus: "pending" }));
       await screen.findByText("排队中，等待执行名额…");
       expect(screen.getByTitle("中断当前处理并取消后续排队，保留未发送草稿").textContent).toContain("Esc 中断");
       expect(screen.queryByText("处理中…")).toBeNull();
@@ -920,9 +984,7 @@ describe("Agent conversation state", () => {
       expect(screen.queryByText("排队中，等待执行名额…")).toBeNull();
       source.emit("message", event({ type: "issue_status", status: "complete" }));
       source.emit("message", event({ type: "agent_settled", aborted: false }));
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await settle();
       expect(screen.getByText("处理中…")).toBeTruthy();
       expect(screen.getByText(/Esc 中断/)).toBeTruthy();
       source.emit("message", event({ type: "issue_run_state", state: "queued" }));
@@ -938,7 +1000,7 @@ describe("Agent conversation state", () => {
 
   it("renders the real EventSource lifecycle and active transcript", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -956,7 +1018,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const onRefresh = vi.fn<NonNullable<Parameters<typeof import("./AgentPanel").AgentPanel>[0]["onRefresh"]>>(async () => issue);
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
@@ -964,30 +1026,31 @@ describe("Agent conversation state", () => {
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
     source.emit("ready", { agent: { provider: "stale", model: "stale-model", thinkingLevel: "high" }, runState: "idle", issueStatus: "resolved" });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
     expect(screen.getByText("no-model")).toBeTruthy();
     expect(onRefresh).not.toHaveBeenCalled();
     expect(EventSourceMock.instances).toHaveLength(1);
-    source.emit("snapshot_ready", {
-      agent: { provider: "test", model: "model", thinkingLevel: "medium" },
-      footer: {
-        input: 11_000_000,
-        output: 1_300_000,
-        cacheRead: 498_000_000,
-        cacheWrite: 0,
-        cost: 385.206,
-        costSource: "unknown",
-        latestCacheHitRate: 95,
-        contextPercent: 32.9,
-        contextWindow: 272_000,
-        autoCompact: true,
-      },
-      runState: "idle",
-      issueStatus: "in_progress",
-    });
+    source.emit(
+      "snapshot_ready",
+      snapshot({
+        agent: { provider: "test", model: "model", thinkingLevel: "medium" },
+        footer: {
+          input: 11_000_000,
+          output: 1_300_000,
+          cacheRead: 498_000_000,
+          cacheWrite: 0,
+          cost: 385.206,
+          costSource: "unknown",
+          latestCacheHitRate: 95,
+          contextPercent: 32.9,
+          contextWindow: 272_000,
+          autoCompact: true,
+        },
+        runState: "idle",
+        issueStatus: "in_progress",
+      }),
+    );
     await waitFor(() => expect(screen.getByText("Rendered from Pi")).toBeTruthy());
     expect(onRefresh).not.toHaveBeenCalled();
     expect(EventSourceMock.instances).toHaveLength(1);
@@ -1012,9 +1075,7 @@ describe("Agent conversation state", () => {
     viewportHeight = 200;
     // A scroll event for the old bottom position reaches the panel before resize observation.
     fireEvent.scroll(transcript);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
     transcript.scrollTop = 0;
     fireEvent.scroll(transcript);
@@ -1040,7 +1101,7 @@ describe("Agent conversation state", () => {
 
   it("reconnects the conversation when a resolved Issue is reopened", async () => {
     EventSourceMock.instances.length = 0;
-    const initial = {
+    const initial = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -1058,7 +1119,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
     const view = render(() =>
       AgentPanel({
@@ -1071,7 +1132,7 @@ describe("Agent conversation state", () => {
     );
     const first = EventSourceMock.instances[0]!;
     first.emit("open");
-    first.emit("snapshot_ready", { runState: "idle", issueStatus: "resolved" });
+    first.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "resolved" }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
 
     setIssue({ ...initial, status: "open" });
@@ -1083,7 +1144,7 @@ describe("Agent conversation state", () => {
     const second = EventSourceMock.instances[1]!;
     expect(second.url).toBe(first.url);
     second.emit("open");
-    second.emit("snapshot_ready", { runState: "idle", issueStatus: "open" });
+    second.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "open" }));
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
 
     view.unmount();
@@ -1092,7 +1153,7 @@ describe("Agent conversation state", () => {
 
   it("refreshes development repository details when Agent preparation starts live", async () => {
     EventSourceMock.instances.length = 0;
-    const initial = {
+    const initial = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -1110,13 +1171,13 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "preparing", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const prepared = {
       ...initial,
       status: "in_progress" as const,
       repositories: [{ name: "service", url: "git@example.test:team/service.git", baseBranch: "main", workingBranch: "feature-issue-20260810-001" }],
       workingDirectory: "/fixture/workspaces/issue",
-      workspace: { status: "running" as const, sourceAvailable: true },
+      workspace: { ...initial.workspace, status: "running" as const, sourceAvailable: true },
     };
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
     const onRefresh = vi.fn<NonNullable<Parameters<typeof import("./AgentPanel").AgentPanel>[0]["onRefresh"]>>(async () => {
@@ -1134,7 +1195,7 @@ describe("Agent conversation state", () => {
     );
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "open" });
+    source.emit("snapshot_ready", snapshot({ runState: "running", issueStatus: "open" }));
     source.emit("message", event({ type: "agent_start" }, "agent-start-live"));
 
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(initial.id));
@@ -1144,7 +1205,7 @@ describe("Agent conversation state", () => {
 
   it("refreshes development repository details when Agent start is replayed", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -1162,14 +1223,14 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const onRefresh = vi.fn<NonNullable<Parameters<typeof import("./AgentPanel").AgentPanel>[0]["onRefresh"]>>(async () => issue);
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("message", event({ type: "agent_start" }, "agent-start-replay"));
     expect(onRefresh).not.toHaveBeenCalled();
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    source.emit("snapshot_ready", snapshot({ runState: "running", issueStatus: "in_progress" }));
 
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(issue.id));
     view.unmount();
@@ -1177,7 +1238,7 @@ describe("Agent conversation state", () => {
 
   it("focuses the conversation without hijacking native tool-card keyboard focus", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -1195,7 +1256,7 @@ describe("Agent conversation state", () => {
       environmentKey: "prod",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     const panel = screen.getByRole("region", { name: "ISSUE-20260810-001 Agent 会话" });
     const conversation = panel.querySelector(".agent-conversation") as HTMLDivElement;
@@ -1217,7 +1278,7 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("message", event({ type: "tool_execution_end", toolCallId: "keyboard-tool", toolName: "read", result: { content: [] }, isError: false }));
-    source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+    source.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
     await waitFor(() => expect(panel.querySelector("summary.agent-tool-head")).toBeTruthy());
     const summary = panel.querySelector("summary.agent-tool-head") as HTMLElement;
     scrollTo.mockClear();
@@ -1231,7 +1292,7 @@ describe("Agent conversation state", () => {
 
   it("preserves completed message nodes and selection when another assistant message starts", async ({ onTestFinished }) => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Selection fixture",
       description: "",
@@ -1249,7 +1310,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     onTestFinished(() => {
       window.getSelection()?.removeAllRanges();
@@ -1258,7 +1319,7 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Stable completed text" }], "stop") }, "completed"));
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    source.emit("snapshot_ready", snapshot({ runState: "running", issueStatus: "in_progress" }));
     const paragraph = await screen.findByText("Stable completed text");
     const text = paragraph.firstChild!;
     const range = document.createRange();
@@ -1287,7 +1348,7 @@ describe("Agent conversation state", () => {
       frames.delete(id);
     });
     const markdownParse = vi.spyOn(marked, "parse");
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -1305,7 +1366,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     onTestFinished(() => {
       view.unmount();
@@ -1315,10 +1376,8 @@ describe("Agent conversation state", () => {
     });
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    source.emit("snapshot_ready", snapshot({ runState: "running", issueStatus: "in_progress" }));
+    await settle();
     const scroller = view.container.querySelector(".agent-scroll") as HTMLDivElement;
     Object.defineProperties(scroller, {
       scrollHeight: { configurable: true, value: 1_000 },
@@ -1411,7 +1470,7 @@ describe("Agent conversation state", () => {
     const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
       frames.delete(id);
     });
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Test",
       description: "",
@@ -1429,7 +1488,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
     onTestFinished(() => {
       view.unmount();
@@ -1438,27 +1497,25 @@ describe("Agent conversation state", () => {
     });
     const first = EventSourceMock.instances[0]!;
     first.emit("open");
-    first.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    first.emit("snapshot_ready", snapshot({ runState: "running", issueStatus: "in_progress" }));
     first.emit("message", event({ type: "message_update", usage, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ghost" } }, "ghost"));
     expect(requestFrame).toHaveBeenCalledTimes(1);
     const staleFrame = frames.get(frameId)!;
     first.emit("message", event({ type: "session_reset" }, "reset"));
-    await Promise.resolve();
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(2));
     const second = EventSourceMock.instances[1]!;
     second.emit("open");
-    second.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    second.emit("snapshot_ready", snapshot({ runState: "running", issueStatus: "in_progress" }));
     // Simulate the frame that was already queued in the browser when the snapshot landed.
     staleFrame(performance.now());
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.queryByText("ghost")).toBeNull();
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
   });
 
   it("keeps unsent drafts across panel remounts and clears them when the identity changes", async ({ onTestFinished }) => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-001",
       title: "Draft fixture",
       description: "",
@@ -1476,7 +1533,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const drafts = new AgentDraftStore();
     const first = render(() => AgentPanel({ issue, drafts, onRefresh: async () => issue }));
     const firstEditor = first.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
@@ -1489,13 +1546,12 @@ describe("Agent conversation state", () => {
     const secondEditor = second.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
     expect(secondEditor.value).toBe("unsent question");
     drafts.clearAll();
-    await Promise.resolve();
-    expect((second.getByLabelText("发送给 Agent") as HTMLTextAreaElement).value).toBe("");
+    await waitFor(() => expect((second.getByLabelText("发送给 Agent") as HTMLTextAreaElement).value).toBe(""));
   });
 
   it("shows an in-flight send after a remount and surfaces its failure there without another remount", async ({ onTestFinished }) => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-002",
       title: "Pending send fixture",
       description: "",
@@ -1513,7 +1569,7 @@ describe("Agent conversation state", () => {
       environmentKey: "dev",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     let respond!: (response: Response) => void;
     const fetchRequest = vi.spyOn(globalThis, "fetch").mockImplementation(
       () =>
@@ -1561,7 +1617,7 @@ describe("Agent conversation state", () => {
 
   for (const code of ["agent_session_file_missing", "resolved_issue_cannot_run_agent"])
     it(`discards the old identity's failed send after ${code} without restoring images or disabling the new editor`, async ({ onTestFinished }) => {
-      const issue = {
+      const issue = issueFixture({
         id: "ISSUE-20260810-003",
         title: "Identity send fixture",
         description: "",
@@ -1579,7 +1635,7 @@ describe("Agent conversation state", () => {
         environmentKey: "dev",
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
-      } satisfies IssueDetail;
+      });
       const drafts = new AgentDraftStore();
       let respond!: (response: Response) => void;
       const fetchRequest = vi.spyOn(globalThis, "fetch").mockImplementation(
@@ -1621,7 +1677,7 @@ describe("Agent conversation state", () => {
     vi.useFakeTimers();
     try {
       EventSourceMock.instances.length = 0;
-      const issue = {
+      const issue = issueFixture({
         id: "ISSUE-20260810-001",
         title: "Test",
         description: "",
@@ -1639,12 +1695,12 @@ describe("Agent conversation state", () => {
         environmentKey: "prod",
         workingDirectory: "/fixture/workspaces/issue",
         workspace: { status: "ready", sourceAvailable: false },
-      } satisfies IssueDetail;
+      });
       const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
       const first = EventSourceMock.instances[0]!;
       first.emit("open");
       first.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Stable before disconnect" }], "stop") }, "message-before"));
-      first.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+      first.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText("Stable before disconnect")).toBeTruthy();
 
@@ -1663,7 +1719,7 @@ describe("Agent conversation state", () => {
       expect(screen.queryByText("Replayed after reconnect")).toBeNull();
       expect(screen.queryByText("正在加载对话…")).toBeNull();
       expect(screen.queryByText("还没有对话")).toBeNull();
-      second.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+      second.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.queryByText("Stable before disconnect")).toBeNull();
       expect(screen.getByText("Replayed after reconnect")).toBeTruthy();
@@ -1678,7 +1734,7 @@ describe("Agent conversation state", () => {
 
   it("ignores a stale Issue refresh failure after a newer refresh succeeds", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-002",
       title: "Test",
       description: "",
@@ -1696,7 +1752,7 @@ describe("Agent conversation state", () => {
       environmentKey: "prod",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     let rejectFirst!: (error: unknown) => void;
     const firstRefresh = new Promise<IssueDetail>((_resolve, reject) => {
       rejectFirst = reject;
@@ -1705,21 +1761,19 @@ describe("Agent conversation state", () => {
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+    source.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-old"));
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-new"));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
     rejectFirst(new Error("stale_network_failure"));
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.queryByRole("alert")).toBeNull();
     view.unmount();
   });
 
   it("contains Issue refresh failures and retries on the next Issue status event", async () => {
     EventSourceMock.instances.length = 0;
-    const issue = {
+    const issue = issueFixture({
       id: "ISSUE-20260810-002",
       title: "Test",
       description: "",
@@ -1737,12 +1791,12 @@ describe("Agent conversation state", () => {
       environmentKey: "prod",
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "ready", sourceAvailable: false },
-    } satisfies IssueDetail;
+    });
     const onRefresh = vi.fn<() => Promise<IssueDetail>>().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValue(issue);
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
-    source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+    source.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-failed"));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("工单状态刷新失败"));
     expect(onRefresh).toHaveBeenLastCalledWith(issue.id);
@@ -1755,7 +1809,7 @@ describe("Agent conversation state", () => {
 });
 
 describe("Agent conversation loading", () => {
-  const issue = {
+  const issue = issueFixture({
     id: "ISSUE-20261107-001",
     title: "Conversation replay",
     description: "",
@@ -1773,7 +1827,7 @@ describe("Agent conversation loading", () => {
     environmentKey: "prod",
     workingDirectory: "/fixture/workspaces/issue",
     workspace: { status: "ready", sourceAvailable: false },
-  } satisfies IssueDetail;
+  });
 
   for (const hasHistory of [false, true])
     it(`waits for snapshot_ready before displaying ${hasHistory ? "replayed history" : "an empty conversation"}`, async () => {
@@ -1792,7 +1846,7 @@ describe("Agent conversation loading", () => {
         expect(screen.queryByText("Previously saved question")).toBeNull();
         expect(screen.queryByText("还没有对话")).toBeNull();
         expect(screen.getByText("正在加载对话…")).toBeTruthy();
-        source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+        source.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.queryByText("正在加载对话…")).toBeNull();
         expect(screen.queryByText("Previously saved question") !== null).toBe(hasHistory);
@@ -1825,7 +1879,7 @@ describe("Agent conversation loading", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.getByRole("alert").textContent).toBe(diagnostic);
         expect(screen.queryByText("还没有对话")).toBeNull();
-        second.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+        second.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.queryByRole("alert")).toBeNull();
         expect(screen.getByText("还没有对话")).toBeTruthy();
@@ -1852,7 +1906,7 @@ describe("Agent conversation loading", () => {
     try {
       const first = EventSourceMock.instances[0]!;
       first.emit("open");
-      first.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+      first.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText("还没有对话")).toBeTruthy();
       setCurrent({ ...issue, id: "ISSUE-20261107-002" });
@@ -1868,7 +1922,7 @@ describe("Agent conversation loading", () => {
       expect(screen.getByText("正在加载对话…")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
       second.emit("message", event({ type: "issue_user", message: "New Issue question" }, "new-question"));
-      second.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
+      second.emit("snapshot_ready", snapshot({ runState: "idle", issueStatus: "pending" }));
       await vi.advanceTimersByTimeAsync(0);
       expect(screen.getByText("New Issue question")).toBeTruthy();
       expect(screen.queryByText("还没有对话")).toBeNull();

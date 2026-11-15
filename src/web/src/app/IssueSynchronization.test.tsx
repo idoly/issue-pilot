@@ -3,11 +3,34 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueExecutionItem } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 
-const api = vi.hoisted(() => ({ list: vi.fn<typeof import("../data/client").listIssues>(), detail: vi.fn<typeof import("../data/client").getIssue>() }));
+const api = vi.hoisted(() => {
+  type Summary = import("../data/client").IssueExecutionItem;
+  type Detail = import("../data/client").IssueDetail;
+  // Like the server, the opaque revision changes with every displayed summary fact.
+  const stamp = <T extends Summary>(item: T): T => ({
+    ...item,
+    revision: JSON.stringify([
+      item.title,
+      item.priority,
+      item.type,
+      item.status,
+      item.resolvedAt,
+      item.updatedAt,
+      item.assignee,
+      item.assigneeSubject,
+      item.service,
+      item.environmentKey,
+      item.workspaceStatus,
+      item.agentRunning,
+    ]),
+  });
+  const stampDetail = (detail: Detail): Detail => stamp({ ...detail, workspaceStatus: detail.workspace.status, relatedIssues: detail.relatedIssues.map(stamp) });
+  return { list: vi.fn<typeof import("../data/client").listIssues>(), detail: vi.fn<typeof import("../data/client").getIssue>(), stamp, stampDetail };
+});
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
-  listIssues: api.list,
-  getIssue: api.detail,
+  listIssues: async (signal?: AbortSignal) => (await api.list(signal)).map(api.stamp),
+  getIssue: async (key: string, signal?: AbortSignal) => api.stampDetail(await api.detail(key, signal)),
   listIssuePins: async () => [],
   loadUsers: async () => [{ subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" }],
   loadCurrentUser: async () => ({ subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" }),
@@ -15,6 +38,7 @@ vi.mock("../data/client", async (original) => ({
 }));
 import { App } from "./App";
 import { setCurrentUserSubject } from "../data/client";
+import { settle } from "../test-settle";
 
 let current: IssueDetail;
 const summary = (): IssueExecutionItem => {
@@ -33,13 +57,23 @@ beforeEach(() => {
     status: "pending",
     assignee: "Alice",
     assigneeSubject: "alice",
+    reporterSubject: "reporter",
+    ccSubjects: [],
     service: { key: "orders", name: "Orders" },
     environmentKey: "prod",
+    revision: "",
+    createdAt: "2026-11-09T00:00:00.000Z",
     updatedAt: "2026-11-09T00:00:00.000Z",
+    workspaceStatus: "ready",
     agentRunning: false,
-    workspace: { status: "ready", sourceAvailable: false },
+    resolvedAt: null,
+    workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
     repositories: [],
     attachments: [],
+    collaboratingServices: [],
+    relatedIssues: [],
+    scopeTransitions: [],
+    ccRecipients: [],
     comments: [],
   };
   api.list.mockImplementation(async () => [summary()]);
@@ -57,7 +91,13 @@ async function open() {
   render(() => <App initialView="issues" />);
   await screen.findByRole("heading", { name: current.title });
   const stream = EventSourceMock.instances.at(-1)!;
-  stream.emit("snapshot_ready", { runState: current.agentRunning ? "running" : "idle", running: current.agentRunning, issueStatus: current.status });
+  stream.emit("snapshot_ready", {
+    agent: { provider: "test", model: "model", thinkingLevel: "medium" },
+    footer: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costSource: null, latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true },
+    runState: current.agentRunning ? "running" : "idle",
+    issueStatus: current.status,
+    issueRevision: api.stampDetail(current).revision,
+  });
   return stream;
 }
 
@@ -72,6 +112,7 @@ it("finishes cleanup in both the conversation and details even when the business
   stream.emit("message", { id: "idle", event: { type: "issue_run_state", state: "idle" } });
   await waitFor(() => expect(api.detail).toHaveBeenCalledTimes(3));
   await waitFor(() => expect(screen.queryByText(/Esc 中断/)).toBeNull());
+  await waitFor(() => expect(screen.getByRole("button", { name: "编辑工单" })).toHaveProperty("disabled", false));
   fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
   expect(await screen.findByRole("button", { name: "重置" })).toHaveProperty("disabled", false);
 });
@@ -202,9 +243,7 @@ it("ignores a refresh from the old workspace after returning to the same Issue",
   fireEvent.click(screen.getByRole("radio", { name: "工单" }));
   await screen.findByText(current.description);
   finish({ ...old, description: "Obsolete refresh" });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(screen.queryByText("Obsolete refresh")).toBeNull();
   expect(screen.getByText(current.description)).toBeTruthy();
 });

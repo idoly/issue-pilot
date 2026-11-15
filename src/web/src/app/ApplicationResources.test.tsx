@@ -8,12 +8,13 @@ vi.mock("../data/client", async (importOriginal) => {
     loadCatalog: vi.fn<typeof import("../data/client").loadCatalog>(async () => ({ environments: [], services: [] })),
     loadConfig: vi.fn<typeof import("../data/client").loadConfig>(),
     loadUsers: vi.fn<typeof import("../data/client").loadUsers>(async () => [{ subject: "user", name: "User", email: "user@example.test", role: "developer" }]),
-    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({ subject: "user", name: "User", email: "user@example.test", role: "developer" })),
+    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({ subject: "user", name: "User", email: "user@example.test", role: "developer", identityLocked: false })),
   };
 });
 
-import { currentUserSubject, setCurrentUserSubject, type Config, type Person } from "../data/client";
+import { currentUserSubject, setCurrentUserSubject, type Config, type CurrentUser, type Person } from "../data/client";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
+import { settle } from "../test-settle";
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
@@ -45,7 +46,7 @@ describe("application configuration resources", () => {
     const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" };
     const bob: Person = { subject: "bob", name: "Bob", email: "bob@example.test", role: "product" };
     vi.mocked(client.loadUsers).mockResolvedValueOnce([alice, bob]);
-    vi.mocked(client.loadCurrentUser).mockResolvedValueOnce(alice);
+    vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ ...alice, identityLocked: false });
     let resources!: ReturnType<typeof useApplicationResources>;
     function Probe() {
       resources = useApplicationResources();
@@ -131,11 +132,11 @@ describe("application configuration resources", () => {
     const client = await import("../data/client");
     const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" };
     const bob: Person = { subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" };
-    const replacement = deferred<Person>();
+    const replacement = deferred<CurrentUser>();
     setCurrentUserSubject("alice");
     vi.mocked(client.loadUsers).mockResolvedValueOnce([alice]).mockResolvedValueOnce([bob]);
     vi.mocked(client.loadCurrentUser)
-      .mockResolvedValueOnce(alice)
+      .mockResolvedValueOnce({ ...alice, identityLocked: false })
       .mockImplementationOnce(() => replacement.promise);
     let resources!: ReturnType<typeof useApplicationResources>;
     function Probe() {
@@ -155,18 +156,18 @@ describe("application configuration resources", () => {
       expect(resources.currentUser()).toBeNull();
       expect(currentUserSubject()).toBeNull();
       expect(localStorage.getItem("issue-pilot.current-user")).toBe("bob");
-      replacement.resolve(bob);
+      replacement.resolve({ ...bob, identityLocked: false });
       await refresh;
       expect(resources.currentUser()?.subject).toBe("bob");
       expect(currentUserSubject()).toBe("bob");
     } finally {
-      replacement.resolve(bob);
+      replacement.resolve({ ...bob, identityLocked: false });
     }
   });
 
   it("does not let an unmounted identity load replace another page's selection", async () => {
     const client = await import("../data/client"),
-      current = deferred<Person>();
+      current = deferred<CurrentUser>();
     vi.mocked(client.loadCurrentUser).mockImplementationOnce(() => current.promise);
     const view = render(() => (
       <ApplicationResourcesProvider>
@@ -176,7 +177,7 @@ describe("application configuration resources", () => {
     await waitFor(() => expect(client.loadCurrentUser).toHaveBeenCalledOnce());
     view.unmount();
     setCurrentUserSubject("bob");
-    current.resolve({ subject: "user", name: "User", email: "user@example.test", role: "developer" });
+    current.resolve({ subject: "user", name: "User", email: "user@example.test", role: "developer", identityLocked: false });
     await current.promise;
     expect(currentUserSubject()).toBe("bob");
   });
@@ -230,7 +231,7 @@ describe("application configuration resources", () => {
       const client = await import("../data/client");
       const catalog = deferred<import("../data/client").ConfigCatalog>();
       const config = deferred<Config>();
-      const identity = deferred<Person>();
+      const identity = deferred<CurrentUser>();
       vi.mocked(client.loadCatalog).mockReturnValueOnce(catalog.promise);
       vi.mocked(client.loadConfig).mockReturnValueOnce(config.promise);
       vi.mocked(client.loadCurrentUser).mockReturnValueOnce(identity.promise);
@@ -250,16 +251,14 @@ describe("application configuration resources", () => {
       if (outcome === "success") {
         catalog.resolve({ environments: [], services: [], issueSearchEnabled: true });
         config.resolve(configuration("disposed"));
-        identity.resolve({ subject: "disposed", name: "Disposed", email: "disposed@example.test", role: "developer" });
+        identity.resolve({ subject: "disposed", name: "Disposed", email: "disposed@example.test", role: "developer", identityLocked: false });
       } else {
         catalog.reject(new Error("late_catalog"));
         config.reject(new Error("late_config"));
         identity.reject(new Error("late_identity"));
       }
       await pending;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await settle();
       expect(resources.catalog().issueSearchEnabled).toBeUndefined();
       expect(resources.configurationLoaded()).toBe(false);
       expect(resources.configurationError()).toBe("");

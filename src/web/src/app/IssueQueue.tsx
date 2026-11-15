@@ -2,23 +2,42 @@ import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 
 import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
-import { canUseIssueWorkMode, createIssue, errorMessage, issueScopeForWorkMode, listIssuePins, listIssues, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
+import { canUseIssueWorkMode, createIssue, listIssuePins, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
+import { createLatestTask } from "../data/latest";
+import { errorText } from "./error-text";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
-import { environmentName, priorityColor, priorityOptions, issueCreationDate, relativeTime, statusBadge, statusLabel, workModeOptions } from "./model";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import {
+  availableWorkModes as workModesFor,
+  environmentName,
+  executionBadge,
+  executionState,
+  localDateTime,
+  personLabel,
+  priorityColor,
+  priorityOptions,
+  relativeTime,
+  servicesForWorkMode,
+  statusLabel,
+} from "./model";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
-import type { IssueListResource } from "./issue-list";
+import { inQueueScope, QUEUE_SCOPES, queueScopeContaining, type IssueListResource, type QueueMembership, type QueueScope } from "./issue-list";
 
 type QueueStatusFilter = "active" | "pending" | "resolved" | "all";
+
+const queueScopeLabels: Record<QueueScope, string> = { assigned: "分配给我", reported: "我报告的", cc: "抄送我的", all: "全部" };
 
 export function IssueQueue(props: {
   selectedId: string;
   userSubject: string;
   issueList: IssueListResource;
+  /** Application-owned so the scope survives remounting the Issue view. */
+  scope: QueueScope;
+  onScopeChange: (scope: QueueScope) => void;
   hidden?: boolean;
   keepExternalSelection?: boolean;
-  reveal?: { key: string; subject: string };
+  reveal?: { key: string; subject: string; issue: QueueMembership };
   onSelect: (id: string) => void;
 }) {
   const { catalog, people, currentUser, catalogError, peopleError, refreshCatalog } = useApplicationResources();
@@ -29,13 +48,24 @@ export function IssueQueue(props: {
   const [pinnedIssueKeys, setPinnedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
   const [pinningIssueKeys, setPinningIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
   const [query, setQuery] = createSignal("", { ownedWrite: true });
+  const scope = () => props.scope;
   const [status, setStatus] = createSignal<QueueStatusFilter>("all", { ownedWrite: true });
   const [environmentFilter, setEnvironmentFilter] = createSignal("all", { ownedWrite: true });
   const [serviceFilter, setServiceFilter] = createSignal("all", { ownedWrite: true });
+  // A reveal published before identity loaded (empty subject) applies once the identity is known.
+  let appliedReveal: typeof props.reveal;
   createEffect(
-    () => props.reveal,
-    (reveal) => {
-      if (!reveal) return;
+    () => {
+      const reveal = props.reveal,
+        subject = props.userSubject;
+      return reveal && subject && (!reveal.subject || reveal.subject === subject) ? { reveal, subject } : undefined;
+    },
+    (pending) => {
+      if (!pending || pending.reveal === appliedReveal) return;
+      const { reveal, subject } = pending;
+      appliedReveal = reveal;
+      // Opening an Issue from elsewhere widens the queue scope instead of switching identity.
+      props.onScopeChange(queueScopeContaining(reveal.issue, subject, untrack(scope)));
       setQuery("");
       setStatus("all");
       setEnvironmentFilter("all");
@@ -48,12 +78,12 @@ export function IssueQueue(props: {
     const term = query().trim().toLowerCase();
     const pinned = new Set(pinnedIssueKeys());
     const matching = issues().filter((issue) => {
-      const assigneeMatch = issue.assigneeSubject === subject;
+      const scopeMatch = inQueueScope(issue, scope(), subject);
       const statusMatch = status() === "all" || (status() === "active" && issue.status !== "resolved") || issue.status === status();
       const environmentMatch = environmentFilter() === "all" || issue.environmentKey === environmentFilter();
       const serviceMatch = serviceFilter() === "all" || issue.service.key === serviceFilter();
       const searchMatch = !term || `${issue.id} ${issue.title} ${issue.service.key} ${issue.service.name} ${issue.environmentKey}`.toLowerCase().includes(term);
-      return assigneeMatch && statusMatch && environmentMatch && serviceMatch && searchMatch;
+      return scopeMatch && statusMatch && environmentMatch && serviceMatch && searchMatch;
     });
     // Only two ranks exist: retain server order inside each group without comparison sorting.
     const pinnedItems: typeof matching = [],
@@ -63,42 +93,47 @@ export function IssueQueue(props: {
   });
   const togglePinned = async (issueKey: string) => {
     if (pinsLoading() || pinningIssueKeys().includes(issueKey)) return;
+    // Pin writes for different Issues run in parallel; each belongs to the identity that started it.
     const pinned = pinnedIssueKeys().includes(issueKey),
-      owner = pinRequest;
-    setPinningIssueKeys((current) => [...current, issueKey]);
+      subject = props.userSubject,
+      current = () => !disposed && props.userSubject === subject;
+    setPinningIssueKeys((keys) => [...keys, issueKey]);
     setPinError("");
     try {
       await setIssuePinned(issueKey, !pinned);
-      if (owner !== pinRequest) return;
-      setPinnedIssueKeys((current) => (pinned ? current.filter((key) => key !== issueKey) : [...current, issueKey]));
+      if (!current()) return;
+      setPinnedIssueKeys((keys) => (pinned ? keys.filter((key) => key !== issueKey) : [...keys, issueKey]));
     } catch (error) {
-      if (owner === pinRequest) setPinError(errorMessage(error));
+      if (current()) setPinError(errorText(error));
     } finally {
-      if (owner === pinRequest) setPinningIssueKeys((current) => current.filter((key) => key !== issueKey));
+      if (current()) setPinningIssueKeys((keys) => keys.filter((key) => key !== issueKey));
     }
   };
-  let pinRequest = 0;
+  let disposed = false;
+  const pinsTask = createLatestTask();
   createEffect(
     () => props.userSubject,
     (subject) => {
-      const currentRequest = ++pinRequest;
+      pinsTask.cancel();
       setPinError("");
       setPinnedIssueKeys([]);
       setPinningIssueKeys([]);
       // A delayed initial snapshot must settle before a write can update these preferences.
       setPinsLoading(Boolean(subject));
       if (!subject) return;
-      void listIssuePins()
+      const request = pinsTask.begin();
+      void listIssuePins(request.signal)
         .then((pinned) => {
-          if (currentRequest === pinRequest) setPinnedIssueKeys(pinned);
+          if (request.isCurrent()) setPinnedIssueKeys(pinned);
         })
         .catch((error) => {
-          if (currentRequest !== pinRequest) return;
+          if (!request.isCurrent()) return;
           setPinnedIssueKeys([]);
-          setPinError(errorMessage(error));
+          setPinError(errorText(error));
         })
         .finally(() => {
-          if (currentRequest === pinRequest) setPinsLoading(false);
+          if (request.isCurrent()) setPinsLoading(false);
+          request.finish();
         });
     },
   );
@@ -108,7 +143,7 @@ export function IssueQueue(props: {
   createEffect(
     () => {
       const reveal = props.reveal;
-      if (!reveal || reveal === revealed || props.hidden || pinsLoading() || reveal.key !== props.selectedId || reveal.subject !== props.userSubject) return;
+      if (!reveal || reveal === revealed || props.hidden || pinsLoading() || reveal.key !== props.selectedId || (reveal.subject && reveal.subject !== props.userSubject)) return;
       if (filtered().some((issue) => issue.id === reveal.key)) return reveal;
     },
     (reveal) => {
@@ -130,7 +165,7 @@ export function IssueQueue(props: {
       selectedId: props.selectedId,
       visible: filtered(),
       items: issues(),
-      filter: JSON.stringify([props.userSubject, query().trim().toLowerCase(), status(), environmentFilter(), serviceFilter()]),
+      filter: JSON.stringify([props.userSubject, scope(), query().trim().toLowerCase(), status(), environmentFilter(), serviceFilter()]),
       keepExternalSelection: props.keepExternalSelection,
       loadError: loadError(),
     }),
@@ -154,7 +189,7 @@ export function IssueQueue(props: {
   const [assigneeSubject, setAssigneeSubject] = createSignal<string | null>(null, { ownedWrite: true });
   const [ccSubjects, setCcSubjects] = createSignal<string[]>([], { ownedWrite: true });
   const [relatedIssueKeys, setRelatedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
-  const [relatedCandidates, setRelatedCandidates] = createSignal<Awaited<ReturnType<typeof listIssues>>>([], { ownedWrite: true });
+  const relatedCandidates = props.issueList.items;
   const [relatedLoading, setRelatedLoading] = createSignal(false, { ownedWrite: true });
   createEffect(
     () => ({ createOpen: createOpen(), subject: props.userSubject }),
@@ -165,15 +200,16 @@ export function IssueQueue(props: {
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
-  let contextGeneration = 0,
-    relatedRequest = 0;
+  let contextGeneration = 0;
+  const relatedTask = createLatestTask();
   onCleanup(() => {
+    disposed = true;
     contextGeneration++;
-    pinRequest++;
-    relatedRequest++;
+    pinsTask.cancel();
+    relatedTask.cancel();
   });
   const closeCreateIssue = () => {
-    relatedRequest++;
+    relatedTask.cancel();
     setCreateOpen(false);
     setRelatedLoading(false);
   };
@@ -192,37 +228,24 @@ export function IssueQueue(props: {
       setCcSubjects([]);
       setAttachments([]);
       setRelatedIssueKeys([]);
-      setRelatedCandidates([]);
     },
   );
-  const availableWorkModes = createMemo(() =>
-    workModeOptions.filter((option) => {
-      if (!canUseIssueWorkMode(currentUser()?.role ?? "product", option.value)) return false;
-      const environmentKind = issueScopeForWorkMode(option.value).environmentKind;
-      return catalog().services.some((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === environmentKind));
-    }),
-  );
-  const availableServices = createMemo(() => {
-    const environmentKind = issueScopeForWorkMode(workMode()).environmentKind;
-    return catalog().services.filter((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === environmentKind));
-  });
+  const availableWorkModes = createMemo(() => workModesFor(currentUser()?.role, catalog().services));
+  const availableServices = createMemo(() => servicesForWorkMode(catalog().services, workMode()));
+  // Related-Issue candidates come from the shared list; opening the dialog refreshes it.
   const openCreateIssue = () => {
     if (!props.userSubject || saving()) return;
-    const owner = contextGeneration,
-      request = ++relatedRequest;
+    const request = relatedTask.begin();
     setCreateError("");
     setCreateOpen(true);
     setRelatedLoading(true);
-    void listIssues()
-      .then((value) => {
-        if (owner === contextGeneration && request === relatedRequest) setRelatedCandidates(value);
-      })
-      .catch((error) => {
-        if (owner === contextGeneration && request === relatedRequest) setCreateError(errorMessage(error));
-      })
-      .finally(() => {
-        if (owner === contextGeneration && request === relatedRequest) setRelatedLoading(false);
-      });
+    void props.issueList.refresh().finally(() => {
+      if (request.isCurrent()) {
+        if (props.issueList.error()) setCreateError(errorText(props.issueList.error()));
+        setRelatedLoading(false);
+      }
+      request.finish();
+    });
   };
   createEffect(
     () => ({ currentMode: workMode(), modes: availableWorkModes(), services: catalog().services, people: people() }),
@@ -232,7 +255,7 @@ export function IssueQueue(props: {
       // The assignee list is filtered by work mode; drop a selection the new mode no longer allows.
       const assignee = people.find((person) => person.subject === untrack(assigneeSubject));
       if (assignee && !canUseIssueWorkMode(assignee.role, selectedMode)) setAssigneeSubject(null);
-      const compatibleServices = services.filter((candidate) => candidate.deployments.some((deployment) => deployment.environmentKey === issueScopeForWorkMode(selectedMode).environmentKind));
+      const compatibleServices = servicesForWorkMode(services, selectedMode);
       setService((current) => (compatibleServices.some((candidate) => candidate.key === current) ? current : (compatibleServices[0]?.key ?? "")));
     },
   );
@@ -264,16 +287,7 @@ export function IssueQueue(props: {
       setAttachments([]);
       setRelatedIssueKeys([]);
     } catch (error) {
-      if (owner === contextGeneration) {
-        const code = errorMessage(error);
-        setCreateError(
-          code === "related_issue_limit_exceeded"
-            ? `关联工单最多 ${issuePilotConfig.limits.relatedIssues} 个。`
-            : code === "related_issue_context_unavailable"
-              ? "所选关联工单的工作区尚未就绪，请稍后再创建。"
-              : code,
-        );
-      }
+      if (owner === contextGeneration) setCreateError(errorText(error));
     } finally {
       if (owner === contextGeneration) setSaving(false);
     }
@@ -286,6 +300,15 @@ export function IssueQueue(props: {
       </div>
       <div class="queue-filter">
         <div class="queue-filter-controls">
+          <Select
+            aria-label="按范围筛选"
+            value={scope()}
+            onChange={(value) => {
+              const selected = selectedChoice(value, QUEUE_SCOPES);
+              if (selected) props.onScopeChange(selected);
+            }}
+            options={QUEUE_SCOPES.map((value) => ({ value, label: queueScopeLabels[value] }))}
+          />
           <Select
             aria-label="按状态筛选"
             value={status()}
@@ -357,6 +380,7 @@ export function IssueQueue(props: {
             <For each={filtered()} keyed={(row) => row.id} fallback={<div class="queue-empty">没有匹配的工单</div>}>
               {(issue) => {
                 const pinned = () => pinnedIssueKeys().includes(issue().id);
+                const state = () => executionState(issue());
                 return (
                   <div
                     role="listitem"
@@ -374,7 +398,7 @@ export function IssueQueue(props: {
                     <span class="queue-item-topline">
                       <span class="issue-key">{issue().id}</span>
                       <Tag color={priorityColor[issue().priority]}>{issue().priority.toUpperCase()}</Tag>
-                      <span class="queue-time" title={issueCreationDate(issue().createdAt, true)}>
+                      <span class="queue-time" title={localDateTime(issue().createdAt)}>
                         {relativeTime(issue().updatedAt)}
                       </span>
                     </span>
@@ -383,7 +407,7 @@ export function IssueQueue(props: {
                     </span>
                     <span class="queue-item-meta">
                       <span class="queue-status">
-                        <Badge status={statusBadge[issue().status]} text={statusLabel[issue().status]} />
+                        <Badge status={executionBadge[state().key]} text={state().label} />
                       </span>
                       <span class="queue-scope" title={`${issue().service.name} / ${environmentName(catalog().environments, issue().environmentKey)}`}>
                         <strong>{issue().service.name}</strong>
@@ -391,19 +415,21 @@ export function IssueQueue(props: {
                         <span>{environmentName(catalog().environments, issue().environmentKey)}</span>
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      class={`queue-pin${pinned() ? " pinned" : ""}`}
-                      aria-label={`${pinned() ? "取消固定" : "固定"} ${issue().id}`}
-                      title={pinned() ? "取消固定" : "固定到顶部"}
-                      disabled={pinsLoading() || pinningIssueKeys().includes(issue().id)}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void togglePinned(issue().id);
-                      }}
-                    >
-                      <Pin size={14} aria-hidden="true" />
-                    </button>
+                    <Show when={issue().assigneeSubject === props.userSubject}>
+                      <button
+                        type="button"
+                        class={`queue-pin${pinned() ? " pinned" : ""}`}
+                        aria-label={`${pinned() ? "取消固定" : "固定"} ${issue().id}`}
+                        title={pinned() ? "取消固定" : "固定到顶部"}
+                        disabled={pinsLoading() || pinningIssueKeys().includes(issue().id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void togglePinned(issue().id);
+                        }}
+                      >
+                        <Pin size={14} aria-hidden="true" />
+                      </button>
+                    </Show>
                     <ChevronRight class="queue-chevron" size={16} aria-hidden="true" />
                   </div>
                 );
@@ -482,7 +508,7 @@ export function IssueQueue(props: {
               }}
               options={people()
                 .filter((person) => canUseIssueWorkMode(person.role, workMode()))
-                .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
+                .map((person) => ({ value: person.subject, label: personLabel(person) }))}
             />
           </label>
           <label>
@@ -495,7 +521,7 @@ export function IssueQueue(props: {
                 onChange={setCcSubjects}
                 options={people()
                   .filter((person) => person.subject !== assigneeSubject())
-                  .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
+                  .map((person) => ({ value: person.subject, label: personLabel(person) }))}
               />
             </div>
           </label>
@@ -507,8 +533,8 @@ export function IssueQueue(props: {
               loading={relatedLoading()}
               inputLabel="关联工单"
               onChange={(keys) => {
-                if (keys.length > issuePilotConfig.limits.relatedIssues) {
-                  setCreateError(`关联工单最多 ${issuePilotConfig.limits.relatedIssues} 个。`);
+                if (keys.length > sharedConfig.limits.relatedIssues) {
+                  setCreateError(`关联工单最多 ${sharedConfig.limits.relatedIssues} 个。`);
                   return;
                 }
                 setRelatedIssueKeys(keys);

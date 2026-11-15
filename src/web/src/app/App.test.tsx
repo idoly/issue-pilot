@@ -6,9 +6,9 @@ vi.mock("../data/client", async (importOriginal) => {
   const { applicationParameterBounds, applicationParameterDefaults } = await import("../../../configuration/parameters");
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
-  type FixtureIssue = import("../data/client").IssueDetail & import("../data/client").IssueExecutionItem & Required<Pick<import("../data/client").IssueDetail, "scopeTransitions">>;
-  const issue = (id: string, title: string, status: import("../data/client").IssueStatus, retryable = false): FixtureIssue => ({
+  const issue = (id: string, title: string, status: import("../data/client").IssueStatus, retryable = false): import("../data/client").IssueDetail => ({
     id,
+    revision: `${id}:1`,
     editVersion: "a".repeat(64),
     title,
     description: `${title}描述`,
@@ -20,11 +20,14 @@ vi.mock("../data/client", async (importOriginal) => {
     resolvedAt: status === "resolved" ? now : null,
     assignee: id === "ISSUE-20260810-038" ? "刘宜展" : "严欣",
     assigneeSubject: (id === "ISSUE-20260810-038" ? "second-user" : "fixture-user") as string | null,
+    reporterSubject: id === "ISSUE-20260810-038" ? "second-user" : "fixture-user",
+    ccSubjects: id === "ISSUE-20260810-038" ? ["fixture-user"] : [],
     service,
     createdAt: now,
     updatedAt: now,
     repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }],
     attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }],
+    collaboratingServices: [],
     relatedIssues: [],
     scopeTransitions: [],
     comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>,
@@ -32,7 +35,7 @@ vi.mock("../data/client", async (importOriginal) => {
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" },
     environmentKey: "test",
     workingDirectory: "/fixture/workspaces/issue",
-    workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
+    workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, runtimeReady: !retryable, retryable },
   });
   const issues = [
     issue("ISSUE-20260810-042", "结算页提交后订单状态未刷新", "in_progress"),
@@ -90,7 +93,13 @@ vi.mock("../data/client", async (importOriginal) => {
     loadUsers: vi.fn<typeof import("../data/client").loadUsers>(async () =>
       structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role }))),
     ),
-    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
+    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({
+      subject: "fixture-user",
+      name: "严欣",
+      email: "owner@example.test",
+      role: "developer",
+      identityLocked: false,
+    })),
     loadSharedDmsCredentials: vi.fn<typeof import("../data/client").loadSharedDmsCredentials>(async () => ({ configured: true, revision: 0, url: "https://dms.example.test/sse" })),
     loadSharedSlsCredentials: vi.fn<typeof import("../data/client").loadSharedSlsCredentials>(async () => ({ configured: true, revision: 0 })),
     loadPersonalCredentials: vi.fn<typeof import("../data/client").loadPersonalCredentials>(async () => ({ revision: 0, model: null, gitSshConfigured: false })),
@@ -108,6 +117,12 @@ vi.mock("../data/client", async (importOriginal) => {
     })),
     updateApplicationParameters: vi.fn<typeof actual.updateApplicationParameters>(),
     searchIssues: vi.fn<typeof actual.searchIssues>(),
+    loadDingtalkSource: vi.fn<typeof actual.loadDingtalkSource>(async () => ({
+      user: { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" },
+      url: "",
+      connection: { available: true, name: "dingtalk" },
+    })),
+    importDingtalkRecords: vi.fn<typeof actual.importDingtalkRecords>(),
     loadApplicationEndpoints: vi.fn<typeof import("../data/client").loadApplicationEndpoints>(async () => ({
       endpoints: [
         {
@@ -312,6 +327,28 @@ vi.mock("../data/client", async (importOriginal) => {
 import { EventSourceMock } from "../test-setup";
 import { setCurrentUserSubject, type IssueSearchHit } from "../data/client";
 import { App } from "./App";
+import { settle } from "../test-settle";
+
+/** A complete snapshot_ready payload for the selected fixture Issue; its revision matches the fixture's. */
+const snapshot = (runState: "idle" | "queued" | "running", issueStatus: "open" | "in_progress" | "pending" | "resolved", issueRevision = "ISSUE-20260810-042:1") => ({
+  agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium" },
+  footer: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, costSource: null, latestCacheHitRate: null, contextPercent: null, contextWindow: 0, autoCompact: true },
+  runState,
+  issueStatus,
+  issueRevision,
+});
+
+/** The queue scope combobox; the selected label is part of its rendered text. */
+const queueScope = () => within(screen.getByLabelText("工单队列")).getByLabelText("按范围筛选");
+async function selectQueueScope(label: string) {
+  fireEvent.click(queueScope());
+  const options = await waitFor(() => {
+    const listbox = screen.getAllByRole("listbox").find((candidate) => within(candidate).queryByText(label));
+    if (!listbox) throw new Error("queue scope options not open");
+    return listbox;
+  });
+  fireEvent.click(within(options).getByText(label));
+}
 
 describe("issue pilot workspace", () => {
   afterEach(() => {
@@ -323,7 +360,7 @@ describe("issue pilot workspace", () => {
     window.history.replaceState(null, "", window.location.pathname);
   });
 
-  test("configures search and opens an Issue in its assignee's queue with Alt+K", async () => {
+  test("configures search and opens an Issue in a queue scope containing it with Alt+K", async () => {
     const client = await import("../data/client");
     const user = await client.loadCurrentUser();
     const catalog = await client.loadCatalog();
@@ -386,8 +423,10 @@ describe("issue pilot workspace", () => {
     fireEvent.click(link);
     await screen.findByRole("heading", { name: issue.title });
     expect(screen.queryByRole("dialog", { name: "查找相似工单" })).toBeNull();
-    expect(client.currentUserSubject()).toBe("second-user");
-    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test");
+    // Opening never changes identity; the queue widens to the CC scope that contains the Issue.
+    expect(client.currentUserSubject()).toBe("fixture-user");
+    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test");
+    await waitFor(() => expect(queueScope().textContent).toContain("抄送我的"));
     const queue = screen.getByLabelText("工单队列");
     const row = (await within(queue).findByText(issue.key)).closest('[role="listitem"]');
     expect(row?.getAttribute("aria-current")).toBe("true");
@@ -419,7 +458,7 @@ describe("issue pilot workspace", () => {
     expect(row?.getAttribute("aria-current")).toBe("true");
   });
 
-  test.each(["search", "overview", "account selector"] as const)("keeps the current account and its Agent draft when switching from %s is declined", async (origin) => {
+  test.each(["search", "overview", "account selector"] as const)("keeps the current account and its Agent draft when opening from %s", async (origin) => {
     const client = await import("../data/client");
     const issue = { key: "ISSUE-20260810-038", title: "批量审批偶发超时", status: "open" as const, assignee: "刘宜展" };
     if (origin === "search") {
@@ -449,8 +488,11 @@ describe("issue pilot workspace", () => {
       fireEvent.click(await screen.findByText("刘宜展 · lyz@example.test"));
     }
     if (origin !== "account selector") await screen.findByRole("heading", { name: issue.title });
-    expect(confirm).toHaveBeenCalledOnce();
+    // Opening another Issue keeps identity, so only the declined account switch asks for confirmation.
+    expect(confirm).toHaveBeenCalledTimes(origin === "account selector" ? 1 : 0);
     expect(client.currentUserSubject()).toBe("fixture-user");
+    // The opened Issue may have widened the queue scope; return to the assigned scope.
+    await selectQueueScope("分配给我");
     fireEvent.click(await within(screen.getByLabelText("工单队列")).findByText("ISSUE-20260810-041"));
     const restored = await screen.findByRole("region", { name: "ISSUE-20260810-041 Agent 会话" });
     expect(within(restored).getByLabelText("发送给 Agent")).toHaveProperty("value", "保留草稿");
@@ -507,14 +549,56 @@ describe("issue pilot workspace", () => {
     expect(searches).toHaveBeenCalledTimes(calls + 2);
   });
 
-  test("opens a linked Issue even when it is outside the current user's queue", async () => {
+  test("opens a linked Issue in the queue scope that contains it", async () => {
     window.history.replaceState(null, "", "/home/idoly/issue-pilot/.issue-pilot/issues/issue-20260901-002/work/customer-state-sync-java8-tests.log?issue=ISSUE-20260810-038");
     render(() => <App />);
     await screen.findByRole("heading", { name: "批量审批偶发超时" });
     expect(screen.getByRole("radio", { name: "工单" }).getAttribute("aria-checked")).toBe("true");
-    await waitFor(() => expect(within(screen.getByLabelText("工单队列")).queryByText("ISSUE-20260810-038")).toBeNull());
+    await waitFor(() => expect(queueScope().textContent).toContain("抄送我的"));
+    const row = (await within(screen.getByLabelText("工单队列")).findByText("ISSUE-20260810-038")).closest('[role="listitem"]');
+    expect(row?.getAttribute("aria-current")).toBe("true");
     expect(new URLSearchParams(window.location.search).get("issue")).toBe("ISSUE-20260810-038");
     expect(window.location.pathname).toBe("/");
+  });
+
+  test("reveals a DingTalk-imported Issue assigned to someone else by widening the queue scope without changing identity", async () => {
+    const client = await import("../data/client");
+    const base = (await client.getIssue("ISSUE-20260810-038"))!;
+    // The importer reports the new Issue; it is assigned to another developer, so the assigned scope cannot show it.
+    const imported = { ...base, id: "ISSUE-20261022-001", revision: "ISSUE-20261022-001:1", title: "钉钉导入的审批超时", reporterSubject: "fixture-user", ccSubjects: [] };
+    const existing = await client.listIssues();
+    const listIssues = vi.mocked(client.listIssues).getMockImplementation()!,
+      getIssue = vi.mocked(client.getIssue).getMockImplementation()!;
+    let created = false;
+    vi.mocked(client.listIssues).mockImplementation(async () => structuredClone(created ? [...existing, imported] : existing));
+    vi.mocked(client.getIssue).mockImplementation(async (id: string) => (id === imported.id ? structuredClone(imported) : getIssue(id)));
+    vi.mocked(client.importDingtalkRecords).mockImplementationOnce(async () => {
+      created = true;
+      return { user: { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" }, status: "created", issueKey: imported.id };
+    });
+    try {
+      render(() => <App initialView="issues" />);
+      await waitFor(() => expect(queueScope().textContent).toContain("分配给我"));
+      await waitFor(() => expect(screen.getByRole("button", { name: "钉钉" })).toHaveProperty("disabled", false));
+      fireEvent.click(screen.getByRole("button", { name: "钉钉" }));
+      const link = await screen.findByRole("textbox", { name: "钉钉记录链接" });
+      await waitFor(() => expect(link).toHaveProperty("disabled", false));
+      fireEvent.input(link, { target: { value: "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=one" } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "导入工单" })).toHaveProperty("disabled", false));
+      fireEvent.click(screen.getByRole("button", { name: "导入工单" }));
+      await screen.findByRole("heading", { name: imported.title });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "导入" })).toBeNull());
+      expect(client.importDingtalkRecords).toHaveBeenCalledOnce();
+      expect(client.currentUserSubject()).toBe("fixture-user");
+      expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test");
+      await waitFor(() => expect(queueScope().textContent).toContain("我报告的"));
+      const row = (await within(screen.getByLabelText("工单队列")).findByText(imported.id)).closest('[role="listitem"]');
+      expect(row?.getAttribute("aria-current")).toBe("true");
+      expect(new URLSearchParams(window.location.search).get("issue")).toBe(imported.id);
+    } finally {
+      vi.mocked(client.listIssues).mockImplementation(listIssues);
+      vi.mocked(client.getIssue).mockImplementation(getIssue);
+    }
   });
 
   test("navigates through a related Issue card without changing identity or losing external selection", async () => {
@@ -530,7 +614,8 @@ describe("issue pilot workspace", () => {
     await screen.findByRole("heading", { name: target.title });
     expect(new URLSearchParams(window.location.search).get("issue")).toBe(target.id);
     expect(client.currentUserSubject()).toBe("fixture-user");
-    await waitFor(() => expect(within(screen.getByLabelText("工单队列")).queryByText(target.id)).toBeNull());
+    await waitFor(() => expect(within(screen.getByLabelText("工单队列")).getByText(target.id).closest('[role="listitem"]')?.getAttribute("aria-current")).toBe("true"));
+    expect(queueScope().textContent).toContain("抄送我的");
     expect(screen.getByRole("heading", { name: target.title })).toBeTruthy();
     window.history.back();
     await screen.findByRole("heading", { name: source.title });
@@ -587,11 +672,11 @@ describe("issue pilot workspace", () => {
     expect(within(personalQueue).getByText("ISSUE-20260810-038")).toBeTruthy();
     expect(personalQueue.querySelector(".queue-item.selected")?.textContent).toContain("ISSUE-20260810-038");
     expect(within(personalQueue).queryByText("ISSUE-20260810-042")).toBeNull();
-    expect(client.currentUserSubject()).toBe("second-user");
-    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test");
+    expect(client.currentUserSubject()).toBe("fixture-user");
+    expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test");
   });
 
-  test("keeps the selected assignee when an older user-list request finishes after dashboard navigation", async () => {
+  test("keeps the current identity when an older user-list request finishes after dashboard navigation", async () => {
     const client = await import("../data/client");
     const users = await client.loadUsers();
     let finish!: (value: typeof users) => void;
@@ -606,11 +691,28 @@ describe("issue pilot workspace", () => {
       const attention = await screen.findByRole("region", { name: "团队工单动态" });
       fireEvent.click(within(attention).getByText("批量审批偶发超时").closest("button")!);
       await screen.findByRole("heading", { name: "批量审批偶发超时" });
-      expect(client.currentUserSubject()).toBe("second-user");
       finish(users);
-      await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("lyz@example.test"));
+      await waitFor(() => expect(screen.getByLabelText("当前用户").closest(".identity")?.textContent).toContain("owner@example.test"));
+      expect(client.currentUserSubject()).toBe("fixture-user");
+      // A reveal published before identity loads is applied once the identity is known.
+      await waitFor(() => expect(queueScope().textContent).toContain("抄送我的"));
     } finally {
       finish(users);
+    }
+  });
+
+  test("hides the account switcher when a trusted gateway locks identity", async () => {
+    const client = await import("../data/client");
+    vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer", identityLocked: true });
+    localStorage.setItem("issue-pilot.current-user", "second-user");
+    try {
+      render(() => <App initialView="issues" />);
+      await waitFor(() => expect(screen.getByLabelText("当前用户").textContent).toBe("owner@example.test"));
+      expect(screen.queryByRole("combobox", { name: "当前用户" })).toBeNull();
+      // The forgotten page choice cannot reappear on the next load.
+      expect(localStorage.getItem("issue-pilot.current-user")).toBeNull();
+    } finally {
+      client.setIdentityLocked(false);
     }
   });
 
@@ -676,7 +778,7 @@ describe("issue pilot workspace", () => {
   test("hides production-data and development work modes for product and test users", async () => {
     const client = await import("../data/client");
     for (const role of ["product", "test"] as const) {
-      vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role });
+      vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role, identityLocked: false });
       const view = render(() => <App initialView="issues" />);
       const queue = await screen.findByLabelText("工单队列");
       const create = within(queue).getByRole("button", { name: "新建工单" });
@@ -941,6 +1043,11 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(previewDialog).getByRole("button", { name: "关闭" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "existing.csv" })).toBeNull());
 
+    // A queued or running Agent round rejects edits, so the button is disabled instead of failing on save.
+    expect((screen.getByRole("button", { name: "编辑工单" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const issueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
     fireEvent.click(within(issueDialog).getByRole("button", { name: "放大编辑工单描述" }));
@@ -973,11 +1080,9 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByRole("dialog", { name: "切换调查范围" })).toBeNull();
     fireEvent.click(within(reopenedIssueDialog).getByRole("button", { name: "取消" }));
 
-    fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
-    await waitFor(() => expect(screen.getByRole("button", { name: "确认解决" })).toBeTruthy());
     const issueActions = document.querySelector(".issue-actions");
     expect(issueActions).toBeTruthy();
-    expect([...issueActions!.querySelectorAll("button")].map((element) => element.textContent)).toEqual(["确认解决", "变更处理范围", "编辑工单"]);
+    expect([...issueActions!.querySelectorAll("button")].map((element) => element.textContent)).toEqual(["确认解决", "变更处理范围", "编辑工单", "查看历史"]);
     fireEvent.click(screen.getByRole("button", { name: "变更处理范围" }));
     const scopeDialog = await waitFor(() => screen.getByRole("dialog", { name: "变更处理范围" }));
     fireEvent.click(within(scopeDialog).getByLabelText("目标处理方式"));
@@ -994,7 +1099,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(clientAfterConversion.applyIssueScopeTransition).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "变更处理范围" })).toBeNull());
     expect(screen.getByRole("button", { name: "变更处理范围" })).toBeTruthy();
-    expect([...issueActions!.querySelectorAll("button")].map((element) => element.textContent)).toEqual(["确认解决", "创建正式跟进", "变更处理范围", "编辑工单"]);
+    expect([...issueActions!.querySelectorAll("button")].map((element) => element.textContent)).toEqual(["确认解决", "创建正式跟进", "变更处理范围", "编辑工单", "查看历史"]);
     fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
     const followUpDialog = await waitFor(() => screen.getByRole("dialog", { name: "创建正式跟进工单" }));
     expect((within(followUpDialog).getByLabelText("正式跟进标题") as HTMLInputElement).value).toBe("【正式跟进】客户导出的 CSV 缺少时区信息");
@@ -1221,9 +1326,7 @@ describe("issue pilot workspace", () => {
         const current = await screen.findByRole("dialog", { name: "编辑服务" });
         fireEvent.input(within(current).getByLabelText("服务名称"), { target: { value: "new identity draft" } });
         finish();
-        await new Promise((resolve) => {
-          setTimeout(resolve, 0);
-        });
+        await settle();
         expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(current);
         expect(within(current).getByLabelText("服务名称")).toHaveProperty("value", "new identity draft");
         expect(screen.queryByText("old_service_save_failed")).toBeNull();
@@ -1640,6 +1743,17 @@ describe("issue pilot workspace", () => {
     view.unmount();
   });
 
+  test("keeps the queue scope when the Issue view remounts", async () => {
+    render(() => <App initialView="issues" />);
+    await waitFor(() => expect(queueScope()).toBeTruthy());
+    await selectQueueScope("全部");
+    await waitFor(() => expect(queueScope().textContent).toContain("全部"));
+    fireEvent.click(screen.getByRole("radio", { name: "首页" }));
+    await waitFor(() => expect(screen.queryByLabelText("工单队列")).toBeNull());
+    fireEvent.click(screen.getByRole("radio", { name: "工单" }));
+    await waitFor(() => expect(queueScope().textContent).toContain("全部"));
+  });
+
   test("waits for the current user before selecting an Issue", async () => {
     const client = await import("../data/client");
     const getIssue = vi.mocked(client.getIssue);
@@ -1654,7 +1768,7 @@ describe("issue pilot workspace", () => {
 
     await waitFor(() => expect(screen.getByText("没有匹配的工单")).toBeTruthy());
     expect(getIssue).not.toHaveBeenCalled();
-    resolveCurrentUser({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" });
+    resolveCurrentUser({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer", identityLocked: false });
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     expect(getIssue).toHaveBeenCalledTimes(1);
     expect(getIssue).toHaveBeenCalledWith("ISSUE-20260810-042", expect.any(AbortSignal));
@@ -1666,7 +1780,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "结算页提交后订单状态未刷新" })).toBeTruthy());
     const source = EventSourceMock.instances.at(-1)!;
     source.emit("open");
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    source.emit("snapshot_ready", snapshot("running", "in_progress"));
     await waitFor(() => expect(screen.getByText("处理中…")).toBeTruthy());
     const client = await import("../data/client");
     vi.mocked(client.sendAgentMessage).mockClear();
@@ -1676,9 +1790,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect(composer.value).toBe("working期间补充信息"));
     fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(client.sendAgentMessage).toHaveBeenCalledWith("ISSUE-20260810-042", "working期间补充信息", [], expect.any(String)));
-    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
-    const dialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect((screen.getByRole("button", { name: "编辑工单" }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(await screen.findByText("ISSUE-20260810-041"));
 
@@ -1785,7 +1897,7 @@ describe("issue pilot workspace", () => {
     listIssues.mockResolvedValueOnce([pending]);
 
     const source = EventSourceMock.instances.at(-1)!;
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    source.emit("snapshot_ready", snapshot("running", "in_progress"));
     source.emit("message", { id: "status-complete", issueId: current.id, createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
 
     await waitFor(() => expect(listIssues).toHaveBeenCalledTimes(1));
@@ -1835,7 +1947,9 @@ describe("issue pilot workspace", () => {
     expect(screen.queryByText("invalid_issue_status_transition")).toBeNull();
     expect(screen.queryByText("工单状态已变化，请按最新状态操作。")).toBeNull();
     const queueItem = screen.getAllByRole("listitem").find((item) => item.textContent?.includes("ISSUE-20260810-038"));
-    expect(queueItem?.textContent).toContain("待处理");
+    // The reopened Issue keeps its failed Workspace, which the queue shows ahead of the business status.
+    expect(queueItem?.textContent).toContain("执行失败");
+    expect(queueItem?.textContent).not.toContain("已解决");
   });
 
   test("keeps the newest Issue detail when SSE refreshes finish out of order", async () => {
@@ -1856,7 +1970,7 @@ describe("issue pilot workspace", () => {
     getIssue.mockImplementationOnce(async () => oldRefresh).mockImplementationOnce(async () => newRefresh);
     const source = EventSourceMock.instances.at(-1)!;
 
-    source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
+    source.emit("snapshot_ready", snapshot("running", "in_progress"));
     source.emit("message", { id: "status-old", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
     source.emit("message", { id: "status-new", issueId: "ISSUE-20260810-042", createdAt: new Date().toISOString(), event: { type: "issue_status", status: "complete" } });
     resolveNew({ ...current, agentRunning: false, status: "resolved", workspace: { ...current.workspace, status: "ready" } });
@@ -1865,16 +1979,12 @@ describe("issue pilot workspace", () => {
     const currentSource = EventSourceMock.instances.at(-1)!;
     const connectionCount = EventSourceMock.instances.length;
     const requestCount = getIssue.mock.calls.length;
-    currentSource.emit("snapshot_ready", { runState: "idle", issueStatus: "resolved" });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    currentSource.emit("snapshot_ready", snapshot("idle", "resolved"));
+    await settle();
     expect(EventSourceMock.instances).toHaveLength(connectionCount);
     expect(getIssue).toHaveBeenCalledTimes(requestCount);
     resolveOld({ ...current, status: "in_progress", workspace: { ...current.workspace, status: "running" } });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
 
     expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();

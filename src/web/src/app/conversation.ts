@@ -211,18 +211,6 @@ export class ConversationProjection {
   }
 }
 
-export function panelError(error: string): string {
-  const messages: Record<string, string> = {
-    agent_event_connection_failed: "事件连接中断，正在自动重连",
-    agent_event_protocol_error: "收到无法识别的 Agent 事件",
-    agent_message_failed: "消息发送失败，请重试",
-    invalid_agent_image: "只能粘贴 PNG、JPEG、GIF 或 WebP 图片",
-    agent_image_limit_exceeded: "图片数量或大小超过 multipart 限制",
-    issue_refresh_failed: "工单状态刷新失败，等待下次连接重试",
-  };
-  return messages[error] ?? error;
-}
-
 export interface AgentActivity {
   text: string;
   tone: "info" | "warning" | "error";

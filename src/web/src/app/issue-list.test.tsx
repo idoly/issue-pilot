@@ -5,6 +5,7 @@ import type { IssueExecutionItem } from "../data/client";
 const api = vi.hoisted(() => ({ list: vi.fn<typeof import("../data/client").listIssues>() }));
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), listIssues: api.list }));
 import { createIssueList, type IssueListResource } from "./issue-list";
+import { settle } from "../test-settle";
 
 const row = (title: string): IssueExecutionItem => ({
   id: "ISSUE-20261109-001",
@@ -14,8 +15,12 @@ const row = (title: string): IssueExecutionItem => ({
   status: "open",
   assignee: null,
   assigneeSubject: null,
+  reporterSubject: "reporter",
+  ccSubjects: [],
   service: { key: "orders", name: "Orders" },
   environmentKey: "prod",
+  revision: `${title}:1`,
+  createdAt: "2026-11-09T00:00:00Z",
   updatedAt: "2026-11-09T00:00:00Z",
   workspaceStatus: "ready",
   agentRunning: false,
@@ -127,14 +132,12 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
   await list.refresh();
   expect(api.list.mock.calls[0]![0]?.aborted).toBe(true);
   old.resolve([row("obsolete")]);
-  await Promise.resolve();
+  await settle();
   expect(list.items()[0]?.title).toBe("new");
   const pending = list.refresh();
   setScope(false);
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  await waitFor(() => expect(api.list.mock.calls[2]![0]?.aborted).toBe(true));
+  // Testing Library polls with the faked setInterval here; vi.waitFor keeps real polling timers.
+  await vi.waitFor(() => expect(api.list.mock.calls[2]![0]?.aborted).toBe(true));
   leaving.resolve([row("left page")]);
   await pending;
   await vi.advanceTimersByTimeAsync(20_000);

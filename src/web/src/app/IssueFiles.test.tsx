@@ -16,6 +16,7 @@ vi.mock("../data/client", async (original) => ({
 }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueFiles } from "./IssueFiles";
+import { settle } from "../test-settle";
 const issue = { id: "ISSUE-20261021-001", updatedAt: "2026-10-21T00:00:00Z", repositories: [{ name: "repository" }], attachments: [] } as unknown as IssueDetail;
 const file = (name: string, kind: IssueWorkFile["kind"] = "file"): IssueWorkFile => ({ name, path: name, kind, size: 1, updatedAt: issue.updatedAt });
 afterEach(() => {
@@ -97,9 +98,7 @@ it("cancels old identity reads and ignores their late results", async () => {
   await screen.findByText("bob.txt");
   expect(oldSignal.aborted).toBe(true);
   finishOld([file("alice.txt")]);
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settle();
   expect(screen.queryByText("alice.txt")).toBeNull();
   expect(screen.getByText("bob.txt")).toBeTruthy();
 });
@@ -118,9 +117,7 @@ it("keeps the open directory and preview when the Issue object is replaced with 
   const calls = state.list.mock.calls.length;
   // Issue refreshes (workspace tools, agent events) replace the object with identical content.
   setCurrent({ ...issue });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 20);
-  });
+  await settle();
   expect(state.list).toHaveBeenCalledTimes(calls);
   expect(screen.getByRole("dialog", { name: "note.txt" })).toBeTruthy();
   expect(screen.getAllByText("note.txt").length).toBeGreaterThan(0);
@@ -154,9 +151,7 @@ it("does not abort an in-flight listing when the Issue object is replaced with i
   await waitFor(() => expect(state.list).toHaveBeenCalledTimes(1));
   // A workspace tool event refreshes the Issue while the listing is still loading.
   setCurrent({ ...issue });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 20);
-  });
+  await settle();
   expect(signal?.aborted).toBe(false);
   finish([file("late.txt")]);
   expect(await screen.findByText("late.txt")).toBeTruthy();

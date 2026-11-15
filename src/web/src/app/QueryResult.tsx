@@ -4,7 +4,7 @@ import { copyText } from "../ui/clipboard";
 import { Markdown } from "../ui/Markdown";
 import { currentUserSubject, readIssueQueryResult } from "../data/client";
 import { createLatestTask } from "../data/latest";
-import { issuePilotConfig } from "../../../../issue-pilot.config";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import type { ConversationEntry } from "./conversation";
 
 type ToolEntry = Extract<ConversationEntry, { kind: "tool" }>;
@@ -117,7 +117,7 @@ function DmsResult(props: { entry: ToolEntry; text: string }) {
     if (!record(entry.result?.details) || entry.result.details.provider !== "aliyun-dms-mcp") return;
     // Upstream executeScript returns Markdown text, not typed rows. Render it without reconstructing data.
     // Large responses stay plain text so an explicit full read cannot mount unbounded Markdown tables.
-    if (props.text.length > issuePilotConfig.web.agentToolOutputCharacters) return;
+    if (props.text.length > sharedConfig.web.agentToolOutputCharacters) return;
     try {
       const value: unknown = JSON.parse(props.text);
       if (!record(value) || value.tool !== "executeScript" || !record(value.result) || value.result.isError === true || !Array.isArray(value.result.content)) return;

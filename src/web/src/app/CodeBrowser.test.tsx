@@ -5,6 +5,7 @@ import CodeBrowser from "./CodeBrowser";
 import { createSignal } from "solid-js";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { copyText } from "../ui/clipboard";
+import { settle } from "../test-settle";
 vi.mock("../ui/clipboard", () => ({ copyText: vi.fn<typeof import("../ui/clipboard").copyText>() }));
 
 const api = vi.hoisted(() => ({
@@ -290,8 +291,7 @@ describe("native code browser", () => {
     expect(await screen.findByRole("button", { name: "打开搜索结果 app/b.txt:1" })).toBeTruthy();
     expect(signal.aborted).toBe(true);
     finish({ matches: [{ path: "stale.txt", line: 1, column: 1, preview: "AI" }], truncated: false });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     expect(screen.queryByRole("button", { name: /打开搜索结果.*stale/ })).toBeNull();
   });
 
@@ -496,8 +496,7 @@ describe("native code browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "仓库 other" }));
     expect(await screen.findByRole("button", { name: /Other repository/ })).toBeTruthy();
     finish({ commits: [{ hash: "e".repeat(40), shortHash: "eeeeeeee", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Stale history" }], truncated: false, nextCursor: null });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     expect(screen.queryByRole("button", { name: /Stale history/ })).toBeNull();
     expect((api.loadSourceHistory.mock.calls[1]![3] as AbortSignal).aborted).toBe(true);
   });
@@ -602,8 +601,7 @@ describe("native code browser", () => {
     expect(api.loadSourceBlame).toHaveBeenLastCalledWith("ISSUE-20261017-001", "app", "a.txt", 2, expect.any(AbortSignal));
     expect(api.loadSourceBlame.mock.calls[0]![4]?.aborted).toBe(true);
     finish({ path: "a.txt", line: 1, author: "Stale author", commit: revision, shortCommit: "cccccccc", date: "2026-10-17T00:00:00Z", subject: "Stale line" });
-    await Promise.resolve();
-    await Promise.resolve();
+    await settle();
     expect(screen.getByLabelText("当前行归属").textContent).toContain("Second author");
     expect(screen.getByText("Ln 2, Col 1")).toBeTruthy();
   });
@@ -650,9 +648,7 @@ describe("native code browser", () => {
           return tooltip;
         });
         finish();
-        await new Promise((resolve) => {
-          setTimeout(resolve, 0);
-        });
+        await settle();
         expect(current.textContent).not.toContain("已复制");
         expect(current.textContent).not.toContain("复制失败");
       } finally {
@@ -731,7 +727,7 @@ describe("native code browser", () => {
     fireEvent.click(screen.getByRole("button", { name: /b\.txt/ }));
     expect(await screen.findByLabelText("代码内容 b.txt")).toHaveProperty("value", "b.txt content");
     finish(file("a.txt"));
-    await Promise.resolve();
+    await settle();
     expect(screen.getByLabelText("代码内容 b.txt")).toHaveProperty("value", "b.txt content");
   });
 

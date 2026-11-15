@@ -299,9 +299,6 @@
   color: #65706c;
   font: 12px / 1.6 var(--app-font);
 }
-.issue-session-controls {
-  margin-top: 12px;
-}
 .session-history-content {
   display: grid;
   min-width: 0;

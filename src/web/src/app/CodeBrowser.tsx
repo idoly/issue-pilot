@@ -3,13 +3,13 @@ import { createEffect, createMemo, createSignal, For, lazy, onCleanup, Show, unt
 import { Button, Input, Modal } from "../ui";
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Pencil, Trash2 } from "../ui/icons";
 import { Codicon } from "../ui/Codicon";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { sourceLanguageName } from "./source-language";
 import { sourceIndentation } from "./source-editor-settings";
 import { EditorFileIcon } from "./EditorIcons";
 import { Portal } from "@solidjs/web";
 import { copyText } from "../ui/clipboard";
-import { relativeTime } from "./model";
+import { localDateTime, relativeTime } from "./model";
 import watermark from "./editor-watermark.svg";
 import { HistoryGraph, historyGraph } from "./HistoryGraph";
 import { PanelResizeHandle } from "./PanelResizeHandle";
@@ -226,7 +226,7 @@ export default function CodeBrowser(props: {
   const [wholeWord, setWholeWord] = createSignal(false, { ownedWrite: true });
   const [searching, setSearching] = createSignal(false, { ownedWrite: true });
   const [searched, setSearched] = createSignal(false, { ownedWrite: true });
-  const [visibleSearchLimit, setVisibleSearchLimit] = createSignal<number>(issuePilotConfig.web.sourceSearchPageMatches, { ownedWrite: true });
+  const [visibleSearchLimit, setVisibleSearchLimit] = createSignal<number>(sharedConfig.web.sourceSearchPageMatches, { ownedWrite: true });
   const [searchTruncated, setSearchTruncated] = createSignal(false, { ownedWrite: true });
   const [searchTerm, setSearchTerm] = createSignal("", { ownedWrite: true });
   const [reveal, setReveal] = createSignal({ line: 1, column: 1, length: 0 }, { ownedWrite: true });
@@ -291,7 +291,7 @@ export default function CodeBrowser(props: {
   const copyCommit = async (commit: SourceCommit, detail: boolean) => {
     const owner = commitHover();
     try {
-      await copyText(detail ? `${commit.hash}\n${commit.author}\n${new Date(commit.date).toLocaleString()}\n\n${commit.subject}` : commit.hash);
+      await copyText(detail ? `${commit.hash}\n${commit.author}\n${localDateTime(commit.date)}\n\n${commit.subject}` : commit.hash);
       if (commitHover() === owner) setCopyStatus("已复制");
     } catch {
       if (commitHover() === owner) setCopyStatus("复制失败，请选择文字后按 Ctrl+C");
@@ -536,7 +536,7 @@ export default function CodeBrowser(props: {
       const refresh = () => {
         void refreshChanges();
       };
-      const timer = setInterval(refresh, issuePilotConfig.web.sourceRefreshMs);
+      const timer = setInterval(refresh, sharedConfig.web.sourceRefreshMs);
       window.addEventListener("focus", refresh);
       document.addEventListener("visibilitychange", refresh);
       return () => {
@@ -670,7 +670,7 @@ export default function CodeBrowser(props: {
       if (!value.file || !value.writable || value.saving || value.mutating || value.blocked || value.loading || value.draft === normalizedText(value.file.content)) return;
       const timer = setTimeout(() => {
         void save();
-      }, issuePilotConfig.web.sourceAutoSaveDebounceMs);
+      }, sharedConfig.web.sourceAutoSaveDebounceMs);
       return () => clearTimeout(timer);
     },
   );
@@ -699,13 +699,13 @@ export default function CodeBrowser(props: {
     setSearchTerm(term);
     setMatches([]);
     setSearchTruncated(false);
-    setVisibleSearchLimit(issuePilotConfig.web.sourceSearchPageMatches);
+    setVisibleSearchLimit(sharedConfig.web.sourceSearchPageMatches);
     try {
       const found: SearchMatch[] = [];
       let failures = 0,
         truncated = false;
-      const limit = issuePilotConfig.limits.sourceBrowser.searchMatches,
-        concurrency = issuePilotConfig.web.sourceSearchConcurrency;
+      const limit = sharedConfig.limits.sourceBrowser.searchMatches,
+        concurrency = sharedConfig.web.sourceSearchConcurrency;
       for (let offset = 0; offset < targets.length; offset += concurrency) {
         const batch = targets.slice(offset, offset + concurrency);
         const results = await Promise.allSettled(batch.map((row) => searchSource(key, row.name, term, { caseSensitive: caseSensitive(), wordMatch: wholeWord() }, request.signal)));
@@ -770,10 +770,10 @@ export default function CodeBrowser(props: {
       setMatches([]);
       setSearched(false);
       setSearchTruncated(false);
-      setVisibleSearchLimit(issuePilotConfig.web.sourceSearchPageMatches);
+      setVisibleSearchLimit(sharedConfig.web.sourceSearchPageMatches);
       searchTimer = setTimeout(() => {
         void search(value.query.trim());
-      }, issuePilotConfig.web.sourceSearchDebounceMs);
+      }, sharedConfig.web.sourceSearchDebounceMs);
       return () => clearTimeout(searchTimer);
     },
   );
@@ -911,7 +911,7 @@ export default function CodeBrowser(props: {
           .catch(() => {
             if (!request.signal.aborted) setBlameStatus("暂无行信息");
           });
-      }, issuePilotConfig.web.sourceBlameDebounceMs);
+      }, sharedConfig.web.sourceBlameDebounceMs);
       return () => {
         clearTimeout(timer);
         request.abort();
@@ -1298,7 +1298,7 @@ export default function CodeBrowser(props: {
                 }}
               </For>
               <Show when={matches().length > visibleSearchLimit()}>
-                <Button class="source-search-more" onClick={() => setVisibleSearchLimit((value) => value + issuePilotConfig.web.sourceSearchPageMatches)}>
+                <Button class="source-search-more" onClick={() => setVisibleSearchLimit((value) => value + sharedConfig.web.sourceSearchPageMatches)}>
                   显示更多结果（{matches().length - visibleSearchLimit()}）
                 </Button>
               </Show>
@@ -1702,7 +1702,7 @@ export default function CodeBrowser(props: {
               <header>
                 <Codicon name="account" />
                 <strong>{hover().commit.author}</strong>
-                <time>{new Date(hover().commit.date).toLocaleString()}</time>
+                <time>{localDateTime(hover().commit.date)}</time>
               </header>
               <p>{hover().commit.subject}</p>
               <div class="source-commit-hash">

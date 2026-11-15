@@ -1,8 +1,9 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
-import { createUser, loadManagedUsers, updateUser, USER_ROLES, type ManagedUser, type UserRole } from "../data/client";
+import { canEditManagedUser, canManageDevelopmentConfiguration, createUser, hasAdministratorAccess, loadManagedUsers, updateUser, USER_ROLES, type ManagedUser, type UserRole } from "../data/client";
+import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
-import { settingsError } from "./settings-error";
+import { errorText } from "./error-text";
 
 const roleNames: Record<UserRole, string> = { product: "产品", test: "测试", developer: "开发" };
 export function UserManagement() {
@@ -21,9 +22,9 @@ export function UserManagement() {
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [saveError, setSaveError] = createSignal("", { ownedWrite: true });
   const [conflict, setConflict] = createSignal(false, { ownedWrite: true });
-  let generation = 0,
-    loadGeneration = 0;
-  const canEdit = (user?: ManagedUser) => currentUser()?.role === "developer" && (!user?.isAdmin || currentUser()?.isAdmin === true);
+  let generation = 0;
+  const loadTask = createLatestTask();
+  const canEdit = (user?: ManagedUser) => canEditManagedUser(currentUser(), user);
   const visible = createMemo(() => rows().filter((user) => (includeInactive() || user.active) && `${user.name} ${user.email} ${user.subject}`.toLowerCase().includes(query().trim().toLowerCase())));
   const close = () => {
     setOpen(false);
@@ -34,17 +35,17 @@ export function UserManagement() {
     setConflict(false);
   };
   const load = async () => {
-    const owner = generation,
-      request = ++loadGeneration;
+    const request = loadTask.begin();
     setLoading(true);
     setError("");
     try {
-      const value = await loadManagedUsers();
-      if (owner === generation && request === loadGeneration) setRows(value);
+      const value = await loadManagedUsers(request.signal);
+      if (request.isCurrent()) setRows(value);
     } catch (cause) {
-      if (owner === generation && request === loadGeneration) setError(settingsError(cause));
+      if (request.isCurrent()) setError(errorText(cause));
     } finally {
-      if (owner === generation && request === loadGeneration) setLoading(false);
+      if (request.isCurrent()) setLoading(false);
+      request.finish();
     }
   };
   createEffect(
@@ -52,6 +53,7 @@ export function UserManagement() {
     (identity, previous) => {
       if (identity === previous) return;
       generation++;
+      loadTask.cancel();
       close();
       setSaving(false);
       setRows([]);
@@ -62,6 +64,7 @@ export function UserManagement() {
   );
   onCleanup(() => {
     generation++;
+    loadTask.cancel();
   });
   const edit = (user?: ManagedUser) => {
     if (!canEdit(user)) return;
@@ -77,7 +80,7 @@ export function UserManagement() {
     const results = await Promise.allSettled([owner === generation ? load() : undefined, refreshPeople()]);
     if (owner !== generation) return;
     const failure = results.find((result) => result.status === "rejected");
-    if (failure?.status === "rejected") setError(settingsError(failure.reason));
+    if (failure?.status === "rejected") setError(errorText(failure.reason));
   };
   const save = async () => {
     if (saving() || !canEdit(editing() ?? undefined)) return;
@@ -91,7 +94,7 @@ export function UserManagement() {
     }
     const owner = generation,
       target = editing();
-    const input = { name: name().trim(), email: email().trim(), role: role(), ...(currentUser()?.isAdmin ? { isAdmin: admin() } : {}) };
+    const input = { name: name().trim(), email: email().trim(), role: role(), ...(hasAdministratorAccess(currentUser()) ? { isAdmin: admin() } : {}) };
     setSaving(true);
     setSaveError("");
     try {
@@ -102,9 +105,9 @@ export function UserManagement() {
     } catch (cause) {
       if (owner === generation) {
         if (open()) {
-          setSaveError(settingsError(cause));
+          setSaveError(errorText(cause));
           setConflict(cause instanceof Error && cause.message === "configuration_changed");
-        } else setError(settingsError(cause));
+        } else setError(errorText(cause));
       }
     } finally {
       if (owner === generation) setSaving(false);
@@ -119,7 +122,7 @@ export function UserManagement() {
       await updateUser(user.subject, { active: !user.active, expectedRevision: user.revision });
       await refresh(owner);
     } catch (cause) {
-      if (owner === generation) setError(settingsError(cause));
+      if (owner === generation) setError(errorText(cause));
     } finally {
       if (owner === generation) setSaving(false);
     }
@@ -129,7 +132,7 @@ export function UserManagement() {
       <div>
         <header class="user-management-header">
           <strong>人员</strong>
-          <Show when={currentUser()?.role === "developer"}>
+          <Show when={canManageDevelopmentConfiguration(currentUser())}>
             <Button type="primary" size="small" disabled={saving()} onClick={() => edit()}>
               添加人员
             </Button>
@@ -270,7 +273,7 @@ export function UserManagement() {
               }}
             />
           </label>
-          <Show when={currentUser()?.isAdmin}>
+          <Show when={hasAdministratorAccess(currentUser())}>
             <label class="settings-checkbox">
               <input type="checkbox" checked={admin()} onChange={(event) => setAdmin(event.currentTarget.checked)} />
               管理权限

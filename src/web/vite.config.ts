@@ -92,5 +92,6 @@ export default defineConfig({
   },
   preview: { host: issuePilotConfig.web.host, port: issuePilotConfig.web.port, proxy: apiProxy },
   test: { setupFiles: ["./src/test-setup.ts"] },
-  build: { target: "es2022", rollupOptions: { input: path.join(import.meta.dirname, "index.html") } },
+  // The manifest (dist/.vite, not served) records this generation for scripts/prune-web-assets.ts.
+  build: { target: "es2022", manifest: true, rollupOptions: { input: path.join(import.meta.dirname, "index.html") } },
 });

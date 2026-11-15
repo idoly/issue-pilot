@@ -2,10 +2,10 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { createMemo } from "solid-js";
 
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
-const maximumCachedEntries = issuePilotConfig.web.markdownCacheEntries;
-const maximumCachedCharacters = issuePilotConfig.web.markdownCacheCharacters;
+const maximumCachedEntries = sharedConfig.web.markdownCacheEntries;
+const maximumCachedCharacters = sharedConfig.web.markdownCacheCharacters;
 const htmlCache = new Map<string, { html: string; weight: number }>();
 let cachedCharacters = 0;
 

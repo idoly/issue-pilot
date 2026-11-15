@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, For, Show, untrack } from "soli
 import { Button } from "../ui";
 import { ChevronRight, Download, File, Folder, Repo, RefreshCw } from "../ui/icons";
 import { errorMessage, attachmentUrl, fetchAttachment, fetchIssueWorkFile, issueWorkFileUrl, listIssueWorkFiles, type IssueDetail, type IssueWorkFile } from "../data/client";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { attachmentPreviewKind, workingFileMediaType } from "./file-preview";
 import { useApplicationResources } from "./ApplicationResources";
@@ -17,7 +17,7 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
     return file ? (originalAttachment(file) ?? { id: file.path, fileName: file.name, mediaType: workingFileMediaType(file.name) ?? "application/octet-stream", size: file.size, sha256: "" }) : null;
   });
   const canPreview = (file: IssueWorkFile) => {
-    if (file.kind !== "file" || file.size > issuePilotConfig.web.filePreviewBytes) return false;
+    if (file.kind !== "file" || file.size > sharedConfig.web.filePreviewBytes) return false;
     const original = originalAttachment(file);
     return original ? attachmentPreviewKind(original) !== "unsupported" : !file.managed && Boolean(workingFileMediaType(file.name));
   };

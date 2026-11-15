@@ -2,6 +2,8 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
 import { createLatestTask } from "../data/latest";
 import {
+  hasAdministratorAccess,
+  hasPersonalGitIdentity,
   loadPersonalCredentials,
   loadSharedDmsCredentials,
   loadSharedSlsCredentials,
@@ -17,7 +19,7 @@ import {
 } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { ModelCredentialDialog } from "./ModelCredentialDialog";
-import { settingsError } from "./settings-error";
+import { errorText } from "./error-text";
 
 type Group = "model" | "git" | "dms" | "sls";
 const groups: Array<{ key: Group; label: string }> = [
@@ -44,8 +46,8 @@ export function PersonalCredentials() {
   const [conflict, setConflict] = createSignal(false, { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const latest = createLatestTask();
-  const isAdmin = () => currentUser()?.isAdmin === true;
-  const canEditPersonal = (group: Group) => group !== "git" || currentUser()?.role === "developer";
+  const isAdmin = () => hasAdministratorAccess(currentUser());
+  const canEditPersonal = (group: Group) => group !== "git" || hasPersonalGitIdentity(currentUser()?.role);
   const configured = (group: Group) =>
     group === "model"
       ? Boolean(status()?.model)
@@ -90,7 +92,7 @@ export function PersonalCredentials() {
         setSharedSls(sls);
       }
     } catch (cause) {
-      if (request.isCurrent()) setError(settingsError(cause));
+      if (request.isCurrent()) setError(errorText(cause));
     } finally {
       request.finish();
     }
@@ -213,7 +215,7 @@ export function PersonalCredentials() {
       }
     } catch (cause) {
       if (request.isCurrent()) {
-        setSaveError(settingsError(cause));
+        setSaveError(errorText(cause));
         setConflict(cause instanceof Error && cause.message === "configuration_changed");
       }
     } finally {

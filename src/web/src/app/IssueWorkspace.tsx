@@ -2,27 +2,28 @@ import { Badge, Button, Input, Modal, Select, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
-import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
+import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
 import {
+  canChangeIssueScope,
+  canModifyIssueCode,
+  canResetIssueSession,
   canUseIssueWorkMode,
   applyIssueScopeTransition,
   attachmentUrl,
   createIssue,
-  errorMessage,
   getIssue,
+  isIssueActive,
   isWorkspaceBusy,
-  issueScopeForWorkMode,
   issueWorkMode,
-  listIssues,
   planIssueScopeTransition,
+  relatedIssueUpdateRefusal,
   retryIssue,
   RequestError,
   updateIssue,
   updateIssueRelatedIssues,
   updateIssueStatus,
   type IssueDetail,
-  type IssueExecutionItem,
   type IssuePriority,
   type IssueScopeTransitionPlan,
   type IssueWorkMode,
@@ -34,32 +35,31 @@ import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
 import { attachmentPreviewKind } from "./file-preview";
-import { environmentName, fileSize, priorityColor, priorityOptions, statusBadge, statusLabel, typeLabel, workModeLabel, workModeOptions } from "./model";
+import { errorText, type ErrorTexts } from "./error-text";
+import type { IssueListResource } from "./issue-list";
+import { createLatestTask } from "../data/latest";
+import {
+  attachmentDisplayName,
+  availableWorkModes,
+  environmentKind,
+  environmentName,
+  executionBadge,
+  executionState,
+  fileSize,
+  localDateTime,
+  personLabel,
+  priorityColor,
+  priorityOptions,
+  servicesForWorkMode,
+  typeLabel,
+  workModeLabel,
+} from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
 
-const workspaceErrorMessages: Record<string, string> = {
-  agent_message_scope_changed: "历史排队消息的处理范围已变更，已停止恢复。请核对历史输入后重试，或按当前范围重新发送。",
-  dms_credentials_not_configured: "尚未配置 DMS 凭据，请在用户配置中设置个人或共享 DMS 凭据后重试。",
-  personal_dms_credentials_incomplete: "个人 DMS 凭据不完整，请补齐或清除后使用共享凭据。",
-  agent_session_changed: "会话已更新，请重新打开编辑工单。",
-  agent_session_not_found: "暂无可重置的会话。",
-  issue_already_running: "工单正在处理，请等待结束后重置。",
-  invalid_subject: "处理人或抄送人包含已停用的用户，请重新选择后保存。",
-  resolved_issue_cannot_reset_session: "请先重开工单。",
-  sls_credentials_not_configured: "尚未配置 SLS 凭据，请在用户配置中设置个人或共享 SLS 凭据后重试。",
-  personal_sls_credentials_incomplete: "个人 SLS 凭据不完整，请重新设置完整凭据后重试。",
-  model_api_key_not_configured: "尚未配置模型 API Key，请在用户配置中设置个人或共享 API Key 后重试。",
-  model_response_failed: "模型响应中断，处理未完成。已有对话和文件已保留，请核对结果后重试处理。",
-  agent_run_failed: "处理未完成：发生了未识别的错误。已有对话和文件已保留，请核对结果后重试处理。",
-  database_operation_failed: "数据库操作失败，请稍后重试；如持续出现请联系管理员。",
-};
-
-// Saving relations reserves this Issue and every selected related Issue, and needs their workspaces ready.
-const relatedSaveErrorMessages: Record<string, string> = {
-  issue_already_running: "本工单或所选关联工单正在处理，请等待处理结束后再保存关联。",
-  related_issue_context_unavailable: "所选关联工单的工作区尚未就绪，请等待其准备完成后再保存关联。",
-};
+const editErrors: ErrorTexts = { issue_already_running: "工单正在处理，请等待处理结束后再保存。" };
+// Saving relations reserves this Issue and every selected related Issue.
+const relatedSaveErrors: ErrorTexts = { issue_already_running: "本工单或所选关联工单正在处理，请等待处理结束后再保存关联。" };
 
 function IssueFileRow(props: { fileName: string; label?: string; thumbnail?: string | undefined; detail: string; href: string; icon: JSX.Element; onPreview: (() => void) | undefined }) {
   const [thumbnailFailed, setThumbnailFailed] = createSignal(false, { ownedWrite: true });
@@ -94,20 +94,10 @@ function IssueFileRow(props: { fileName: string; label?: string; thumbnail?: str
   );
 }
 
-const dateTimeOptions = {
-  timeZone: issuePilotConfig.regional.timeZone,
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-} as const;
-const issueDateTimeFormat = new Intl.DateTimeFormat(issuePilotConfig.regional.locale, { ...dateTimeOptions, year: "numeric" });
-function localDateTime(value: string): string {
-  return issueDateTimeFormat.format(new Date(value));
-}
-
 export function IssueWorkspace(props: {
   issue: IssueDetail;
+  /** The shared Issue list supplies related-Issue candidates; opening the editor refreshes it. */
+  issueList: IssueListResource;
   elementRef?: (element: HTMLElement) => void;
   hidden?: boolean;
   sourcePanel?: boolean;
@@ -152,26 +142,27 @@ export function IssueWorkspace(props: {
   const [followUpError, setFollowUpError] = createSignal("", { ownedWrite: true });
   const [relatedOpen, setRelatedOpen] = createSignal(false, { ownedWrite: true });
   const [relatedKeys, setRelatedKeys] = createSignal<string[]>([], { ownedWrite: true });
-  const [relatedCandidates, setRelatedCandidates] = createSignal<IssueExecutionItem[]>([], { ownedWrite: true });
   const [relatedLoading, setRelatedLoading] = createSignal(false, { ownedWrite: true });
   const [relatedSaving, setRelatedSaving] = createSignal(false, { ownedWrite: true });
   const [relatedError, setRelatedError] = createSignal("", { ownedWrite: true });
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
-  let issueGeneration = 0,
-    scopePlanRequest = 0,
-    relatedRequest = 0;
+  let issueGeneration = 0;
+  const scopePlanTask = createLatestTask(),
+    relatedTask = createLatestTask();
   onCleanup(() => {
     issueGeneration++;
-    scopePlanRequest++;
-    relatedRequest++;
+    scopePlanTask.cancel();
+    relatedTask.cancel();
   });
   createEffect(
     () => ({ issueId: props.issue.id, subject: currentUser()?.subject, role: currentUser()?.role }),
     (context, previous) => {
       if (!previous || (context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role)) return;
       issueGeneration += 1;
+      scopePlanTask.cancel();
+      relatedTask.cancel();
       setEditOpen(false);
       setEditBase(null);
       setEditConflict(false);
@@ -195,7 +186,6 @@ export function IssueWorkspace(props: {
       setFollowUpError("");
       setRelatedOpen(false);
       setRelatedKeys([]);
-      setRelatedCandidates([]);
       setRelatedLoading(false);
       setRelatedSaving(false);
       setRelatedError("");
@@ -214,7 +204,7 @@ export function IssueWorkspace(props: {
         editDescription().trim() !== base.description ||
         editPriority() !== base.priority ||
         editAssignee() !== base.assigneeSubject ||
-        editCc().join("\0") !== (base.ccRecipients ?? []).map((person) => person.subject).join("\0") ||
+        editCc().join("\0") !== base.ccRecipients.map((person) => person.subject).join("\0") ||
         editAttachments().length > 0 ||
         removedAttachmentIds().length > 0),
     );
@@ -230,7 +220,7 @@ export function IssueWorkspace(props: {
     setEditDescription(issue.description);
     setEditPriority(issue.priority);
     setEditAssignee(issue.assigneeSubject);
-    setEditCc((issue.ccRecipients ?? []).map((person) => person.subject));
+    setEditCc(issue.ccRecipients.map((person) => person.subject));
     setEditAttachments([]);
     setRemovedAttachmentIds([]);
     setEditError("");
@@ -247,12 +237,16 @@ export function IssueWorkspace(props: {
       const latest = await getIssue(props.issue.id);
       if (generation === issueGeneration) initializeEditor(latest);
     } catch (error) {
-      if (generation === issueGeneration) setEditError(`读取失败：${errorMessage(error)}。草稿仍保留。`);
+      if (generation === issueGeneration) setEditError(`读取失败：${errorText(error)}。草稿仍保留。`);
     } finally {
       if (generation === issueGeneration) setEditSaving(false);
     }
   };
-  const resetDisabled = () => currentUser()?.role !== "developer" || Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status);
+  const issueKind = () => environmentKind(props.issue.environmentKey);
+  // Active work conflicts with the edit/reset reservation even when the server's reset rule passes.
+  const issueActive = () => isIssueActive({ agentRunning: props.issue.agentRunning, workspaceStatus: props.issue.workspace.status });
+  const resetDisabled = () =>
+    !canResetIssueSession({ actorRole: currentUser()?.role ?? "product", status: props.issue.status, agentRunning: props.issue.agentRunning }) || isWorkspaceBusy(props.issue.workspace.status);
   const closeEditor = () => {
     setEditAttachments([]);
     setRemovedAttachmentIds([]);
@@ -272,7 +266,7 @@ export function IssueWorkspace(props: {
         setEditCommitted("");
       }
     } catch (error) {
-      if (issueGeneration === generation) setEditError(`但刷新失败：${errorMessage(error)}`);
+      if (issueGeneration === generation) setEditError(`但刷新失败：${errorText(error)}`);
     }
   };
   const retryEditRefresh = async () => {
@@ -311,12 +305,11 @@ export function IssueWorkspace(props: {
       await refreshSavedIssue(generation);
     } catch (error) {
       if (issueGeneration !== generation) return;
-      const code = errorMessage(error);
       if (error instanceof RequestError && error.outcome === "committed") markEditCommitted("工单已保存，后续清理失败，请重新读取");
-      else if (code === "issue_edit_conflict") {
+      else if (error instanceof Error && error.message === "issue_edit_conflict") {
         setEditConflict(true);
         setEditError("工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。");
-      } else setEditError(workspaceErrorMessages[code] ?? code);
+      } else setEditError(errorText(error, editErrors));
     } finally {
       if (issueGeneration === generation) {
         setEditSaving(false);
@@ -333,7 +326,7 @@ export function IssueWorkspace(props: {
       await retryIssue(issueId);
       if (issueGeneration === generation) await props.onUpdated();
     } catch (error) {
-      if (issueGeneration === generation) setRetryError(errorMessage(error));
+      if (issueGeneration === generation) setRetryError(errorText(error));
     } finally {
       if (issueGeneration === generation) setRetrying(false);
     }
@@ -348,9 +341,8 @@ export function IssueWorkspace(props: {
       if (issueGeneration === generation) await props.onUpdated();
     } catch (error) {
       if (issueGeneration !== generation) return;
-      const code = errorMessage(error);
-      if (code !== "invalid_issue_status_transition") {
-        setStatusError(code);
+      if (!(error instanceof Error && error.message === "invalid_issue_status_transition")) {
+        setStatusError(errorText(error));
         return;
       }
       try {
@@ -363,21 +355,18 @@ export function IssueWorkspace(props: {
       if (issueGeneration === generation) setStatusSaving(false);
     }
   };
-  const currentWorkMode = () => issueWorkMode(props.issue.environmentKey as "prod" | "test" | "dev", props.issue.type);
-  const availableScopeModes = createMemo(() =>
-    workModeOptions.filter(({ value }) => {
-      if (!canUseIssueWorkMode(currentUser()?.role ?? "product", value)) return false;
-      if (props.issue.environmentKey === "dev" && value !== currentWorkMode()) return false;
-      const environmentKind = issueScopeForWorkMode(value).environmentKind;
-      return catalog().services.some((service) => service.deployments.some((deployment) => deployment.environmentKey === environmentKind));
-    }),
-  );
-  const availableScopeServices = createMemo(() => {
-    const environmentKind = issueScopeForWorkMode(scopeMode()).environmentKind;
-    return catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === environmentKind));
+  const currentWorkMode = () => {
+    const kind = issueKind();
+    return kind && issueWorkMode(kind, props.issue.type);
+  };
+  // Code-changing Issues only migrate between services within their own work mode.
+  const availableScopeModes = createMemo(() => {
+    const kind = issueKind();
+    return availableWorkModes(currentUser()?.role, catalog().services).filter(({ value }) => !kind || !canModifyIssueCode(kind) || value === currentWorkMode());
   });
+  const availableScopeServices = createMemo(() => servicesForWorkMode(catalog().services, scopeMode()));
   const resetScopePlan = () => {
-    scopePlanRequest++;
+    scopePlanTask.cancel();
     setScopePlanning(false);
     setScopePlan(null);
     setScopeError("");
@@ -391,17 +380,17 @@ export function IssueWorkspace(props: {
   const requestScopePlan = async () => {
     if (!scopeService()) return;
     const issueId = props.issue.id;
-    const generation = issueGeneration,
-      request = ++scopePlanRequest;
+    const request = scopePlanTask.begin();
     setScopePlanning(true);
     setScopeError("");
     try {
-      const plan = await planIssueScopeTransition(issueId, { serviceKey: scopeService(), workMode: scopeMode() });
-      if (issueGeneration === generation && request === scopePlanRequest) setScopePlan(plan);
+      const plan = await planIssueScopeTransition(issueId, { serviceKey: scopeService(), workMode: scopeMode() }, request.signal);
+      if (request.isCurrent()) setScopePlan(plan);
     } catch (error) {
-      if (issueGeneration === generation && request === scopePlanRequest) setScopeError(errorMessage(error));
+      if (request.isCurrent()) setScopeError(errorText(error));
     } finally {
-      if (issueGeneration === generation && request === scopePlanRequest) setScopePlanning(false);
+      if (request.isCurrent()) setScopePlanning(false);
+      request.finish();
     }
   };
   const applyScopeTransition = async () => {
@@ -422,13 +411,13 @@ export function IssueWorkspace(props: {
     } catch (error) {
       if (issueGeneration === generation) {
         setScopePlan(null);
-        setScopeError(errorMessage(error));
+        setScopeError(errorText(error));
       }
     } finally {
       if (issueGeneration === generation) setScopeApplying(false);
     }
   };
-  const productionServices = createMemo(() => catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === "prod")));
+  const productionServices = createMemo(() => servicesForWorkMode(catalog().services, "production_analysis"));
   const openFollowUp = () => {
     setFollowUpTitle(`【正式跟进】${props.issue.title}`);
     setFollowUpDescription(props.issue.description);
@@ -450,46 +439,46 @@ export function IssueWorkspace(props: {
         workMode: "production_analysis",
         serviceKey: followUpService(),
         assigneeSubject: people().some(({ subject }) => subject === props.issue.assigneeSubject) ? props.issue.assigneeSubject : null,
-        ccSubjects: (props.issue.ccRecipients ?? []).map(({ subject }) => subject).filter((subject) => people().some((person) => person.subject === subject)),
+        ccSubjects: props.issue.ccRecipients.map(({ subject }) => subject).filter((subject) => people().some((person) => person.subject === subject)),
         relatedIssueKeys: [issueId],
       });
       if (issueGeneration !== generation) return;
       setFollowUpOpen(false);
       props.onCreatedFollowUp(created.id);
     } catch (error) {
-      if (issueGeneration === generation) setFollowUpError(errorMessage(error));
+      if (issueGeneration === generation) setFollowUpError(errorText(error));
     } finally {
       if (issueGeneration === generation) setFollowUpSaving(false);
     }
   };
+  // A UI rule without a server counterpart: follow-ups read the development Issue's committed snapshot.
   const canCreateFollowUp = () =>
-    props.issue.environmentKey === "dev" &&
+    canModifyIssueCode(issueKind() ?? "prod") &&
     !props.issue.agentRunning &&
     ["ready", "stopped"].includes(props.issue.workspace.status) &&
     props.issue.workspace.sourceAvailable &&
     productionServices().length > 0;
-  const canEditRelatedIssues = () => props.issue.status !== "resolved";
-  const selectableRelatedIssues = createMemo(() => relatedCandidates().filter((candidate) => candidate.id !== props.issue.id));
+  const relatedRefusal = () => relatedIssueUpdateRefusal(props.issue);
+  // Resolved Issues hide the editor; other refusals (runtime view not ready) and active work disable it.
+  const canEditRelatedIssues = () => relatedRefusal() !== "related_issue_update_not_allowed";
+  const selectableRelatedIssues = createMemo(() => props.issueList.items().filter((candidate) => candidate.id !== props.issue.id));
   const closeRelatedEditor = () => {
-    relatedRequest++;
+    relatedTask.cancel();
     setRelatedOpen(false);
     setRelatedLoading(false);
   };
   const openRelatedEditor = async () => {
-    const generation = issueGeneration,
-      request = ++relatedRequest;
-    setRelatedKeys((props.issue.relatedIssues ?? []).map(({ id }) => id));
-    setRelatedCandidates([]);
+    const request = relatedTask.begin();
+    setRelatedKeys(props.issue.relatedIssues.map(({ id }) => id));
     setRelatedError("");
     setRelatedOpen(true);
     setRelatedLoading(true);
     try {
-      const candidates = await listIssues();
-      if (issueGeneration === generation && request === relatedRequest) setRelatedCandidates(candidates);
-    } catch (error) {
-      if (issueGeneration === generation && request === relatedRequest) setRelatedError(errorMessage(error));
+      await props.issueList.refresh();
+      if (request.isCurrent() && props.issueList.error()) setRelatedError(errorText(props.issueList.error()));
     } finally {
-      if (issueGeneration === generation && request === relatedRequest) setRelatedLoading(false);
+      if (request.isCurrent()) setRelatedLoading(false);
+      request.finish();
     }
   };
   const saveRelatedIssues = async () => {
@@ -503,12 +492,15 @@ export function IssueWorkspace(props: {
       await props.onUpdated();
       if (issueGeneration === generation) closeRelatedEditor();
     } catch (error) {
-      if (issueGeneration === generation) setRelatedError(relatedSaveErrorMessages[errorMessage(error)] ?? errorMessage(error));
+      if (issueGeneration === generation) setRelatedError(errorText(error, relatedSaveErrors));
     } finally {
       if (issueGeneration === generation) setRelatedSaving(false);
     }
   };
-  const canChangeScope = () => ["open", "pending"].includes(props.issue.status) && props.issue.workspace.status === "ready" && !isWorkspaceBusy(props.issue.workspace.status);
+  const canChangeScope = () => {
+    const kind = issueKind();
+    return kind !== undefined && canChangeIssueScope({ environmentKind: kind, status: props.issue.status, workspaceStatus: props.issue.workspace.status, agentRunning: props.issue.agentRunning });
+  };
   const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
   return (
     <section
@@ -522,7 +514,7 @@ export function IssueWorkspace(props: {
             <span>{props.issue.id}</span>
             <Tag color={priorityColor[props.issue.priority]}>{props.issue.priority.toUpperCase()}</Tag>
             <Tag>{typeLabel[props.issue.type]}</Tag>
-            <Badge status={statusBadge[props.issue.status]} text={statusLabel[props.issue.status]} />
+            <Badge status={executionBadge[executionState(props.issue).key]} text={executionState(props.issue).label} />
           </div>
           <h1>{props.issue.title}</h1>
           <Show when={props.issue.description.trim()}>
@@ -599,10 +591,11 @@ export function IssueWorkspace(props: {
               </Button>
             </Show>
             <Show when={props.issue.status !== "resolved"}>
-              <Button icon={<Pencil size={15} />} disabled={isWorkspaceBusy(props.issue.workspace.status)} onClick={openEditor}>
+              <Button icon={<Pencil size={15} />} disabled={issueActive()} onClick={openEditor}>
                 编辑工单
               </Button>
             </Show>
+            <IssueSessionControls issue={props.issue} />
           </div>
         </div>
       </header>
@@ -619,7 +612,7 @@ export function IssueWorkspace(props: {
       </Show>
       <Show when={props.issue.workspace.lastError}>
         <div class="workspace-error" role="alert">
-          {workspaceErrorMessages[props.issue.workspace.lastError ?? ""] ?? props.issue.workspace.lastError}
+          {errorText(props.issue.workspace.lastError)}
         </div>
       </Show>
       <section class="attachment-band issue-attachments" aria-labelledby="attachments-title">
@@ -635,7 +628,7 @@ export function IssueWorkspace(props: {
               return (
                 <IssueFileRow
                   fileName={attachment.fileName}
-                  label={kind === "image" && /^[a-f0-9]{24,}\.[a-z0-9]+$/i.test(attachment.fileName) ? `图片附件 ${index() + 1}` : attachment.fileName}
+                  label={attachmentDisplayName(attachment.fileName, kind === "image", index() + 1)}
                   thumbnail={kind === "image" ? attachmentUrl(props.issue.id, attachment.id) : undefined}
                   detail={`${kind === "image" ? attachment.mediaType.slice(6).toUpperCase() : attachment.mediaType} · ${fileSize(attachment.size)}`}
                   href={attachmentUrl(props.issue.id, attachment.id)}
@@ -647,17 +640,17 @@ export function IssueWorkspace(props: {
           </For>
         </div>
       </section>
-      <Show when={canEditRelatedIssues() || (props.issue.relatedIssues ?? []).length}>
+      <Show when={canEditRelatedIssues() || props.issue.relatedIssues.length}>
         <section class="repository-band" aria-labelledby="related-issues-title">
           <div class="band-title">
             <MessageSquare size={16} />
             <h2 id="related-issues-title">关联工单</h2>
-            <span>{props.issue.relatedIssues?.length ?? 0}</span>
+            <span>{props.issue.relatedIssues.length}</span>
             <Show when={canEditRelatedIssues()}>
               <Button
                 type="text"
                 icon={<Pencil size={14} />}
-                disabled={Boolean(props.issue.agentRunning) || isWorkspaceBusy(props.issue.workspace.status)}
+                disabled={relatedRefusal() !== null || issueActive()}
                 onClick={() => {
                   void openRelatedEditor();
                 }}
@@ -667,7 +660,7 @@ export function IssueWorkspace(props: {
             </Show>
           </div>
           <div class="related-issue-list">
-            <For each={props.issue.relatedIssues ?? []} fallback={<div class="empty-band">暂无关联工单</div>}>
+            <For each={props.issue.relatedIssues} fallback={<div class="empty-band">暂无关联工单</div>}>
               {(relatedIssue) => {
                 const assignee = relatedIssue.assignee || relatedIssue.assigneeSubject || "未分配";
                 const environment = () => environmentName(catalog().environments, relatedIssue.environmentKey);
@@ -686,7 +679,7 @@ export function IssueWorkspace(props: {
                   >
                     <strong>{relatedIssue.id}</strong>
                     <small class="related-issue-assignee">{assignee}</small>
-                    <Badge status={statusBadge[relatedIssue.status]} text={statusLabel[relatedIssue.status]} />
+                    <Badge status={executionBadge[executionState(relatedIssue).key]} text={executionState(relatedIssue).label} />
                     <small class="related-issue-service">{relatedIssue.service.name}</small>
                     <small class="related-issue-environment">{environment()}</small>
                   </a>
@@ -696,25 +689,25 @@ export function IssueWorkspace(props: {
           </div>
         </section>
       </Show>
-      <Show when={props.issue.collaboratingServices?.length}>
+      <Show when={props.issue.collaboratingServices.length}>
         <section class="repository-band" aria-label="协作服务">
           <div class="band-title">
             <Organization size={16} />
             <h2>协作服务</h2>
           </div>
           <div class="capability-labels">
-            <For each={props.issue.collaboratingServices ?? []}>{(service) => <code>{service.name}</code>}</For>
+            <For each={props.issue.collaboratingServices}>{(service) => <code>{service.name}</code>}</For>
           </div>
         </section>
       </Show>
-      <Show when={(props.issue.scopeTransitions ?? []).length}>
+      <Show when={props.issue.scopeTransitions.length}>
         <section class="repository-band" aria-labelledby="scope-history-title">
           <div class="band-title">
             <h2 id="scope-history-title">处理历史</h2>
-            <span>{props.issue.scopeTransitions?.length ?? 0}</span>
+            <span>{props.issue.scopeTransitions.length}</span>
           </div>
           <div class="issue-attachment-list">
-            <For each={props.issue.scopeTransitions ?? []}>
+            <For each={props.issue.scopeTransitions}>
               {(transition) => (
                 <div class="issue-attachment-row scope-history-row">
                   <span>
@@ -759,7 +752,7 @@ export function IssueWorkspace(props: {
         cancelText="取消"
         confirmLoading={relatedSaving()}
         cancelButtonProps={{ disabled: relatedSaving() }}
-        okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > issuePilotConfig.limits.relatedIssues }}
+        okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > sharedConfig.limits.relatedIssues }}
         onOk={() => {
           void saveRelatedIssues();
         }}
@@ -770,7 +763,7 @@ export function IssueWorkspace(props: {
         <div class="create-issue-form related-issue-form">
           <label>
             <span>
-              关联工单（{selectableRelatedIssues().length} 个可选，最多选择 {issuePilotConfig.limits.relatedIssues} 个）
+              关联工单（{selectableRelatedIssues().length} 个可选，最多选择 {sharedConfig.limits.relatedIssues} 个）
             </span>
             <RelatedIssueSelect candidates={selectableRelatedIssues()} value={relatedKeys()} loading={relatedLoading()} inputLabel="编辑关联工单" onChange={setRelatedKeys} />
           </label>
@@ -858,8 +851,7 @@ export function IssueWorkspace(props: {
                 );
                 if (!selected) return;
                 setScopeMode(selected);
-                const environmentKind = issueScopeForWorkMode(selected).environmentKind;
-                const candidates = catalog().services.filter((service) => service.deployments.some((deployment) => deployment.environmentKey === environmentKind));
+                const candidates = servicesForWorkMode(catalog().services, selected);
                 setScopeService((current) => (candidates.some((service) => service.key === current) ? current : (candidates[0]?.key ?? "")));
                 resetScopePlan();
               }}
@@ -1031,7 +1023,7 @@ export function IssueWorkspace(props: {
                 }}
                 options={people()
                   .filter((person) => !currentWorkMode() || canUseIssueWorkMode(person.role, currentWorkMode()!))
-                  .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
+                  .map((person) => ({ value: person.subject, label: personLabel(person) }))}
               />
             </label>
             <label>
@@ -1044,7 +1036,7 @@ export function IssueWorkspace(props: {
                   onChange={setEditCc}
                   options={people()
                     .filter((person) => person.subject !== editAssignee())
-                    .map((person) => ({ value: person.subject, label: `${person.name}${person.email ? ` · ${person.email}` : ""}` }))}
+                    .map((person) => ({ value: person.subject, label: personLabel(person) }))}
                 />
               </div>
             </label>
@@ -1053,7 +1045,6 @@ export function IssueWorkspace(props: {
               <Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} />
             </label>
             <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
-            <IssueSessionControls issue={props.issue} disabled={editSaving()} />
             <AttachmentPicker
               files={editAttachments}
               existingFiles={() => (editBase()?.attachments ?? []).filter((attachment) => !removedAttachmentIds().includes(attachment.id))}

@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({ user: undefined as unknown, load: vi.fn<typeof
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user }) }));
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), loadRepositories: state.load }));
 import { RepositoryManagement } from "./RepositoryManagement";
+import { settle } from "../test-settle";
 const repository = {
   id: "repository",
   revision: 0,
@@ -40,9 +41,7 @@ for (const outcome of ["success", "failure"] as const)
     setUser({ ...alice, subject: "bob", name: "Bob" });
     await screen.findByText("Example");
     finish();
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await settle();
     expect(screen.queryByText("Stale repository")).toBeNull();
     expect(screen.queryByText("old_identity_load_failed")).toBeNull();
   });
