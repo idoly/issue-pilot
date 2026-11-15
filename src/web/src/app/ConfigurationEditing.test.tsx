@@ -6,13 +6,13 @@ import type { Config } from "../data/client";
 const state = vi.hoisted(() => ({
   configuration: undefined as unknown as () => Config,
   replaceConfiguration: undefined as unknown as (value: Config) => void,
-  mysql: vi.fn(),
-  repositories: vi.fn(),
-  description: vi.fn(),
-  refresh: vi.fn(),
-  catalog: vi.fn(),
-  save: vi.fn(),
-  create: vi.fn(),
+  mysql: vi.fn<typeof import("../data/client").loadServiceDbHubTargets>(),
+  repositories: vi.fn<typeof import("../data/client").loadRepositories>(),
+  description: vi.fn<typeof import("../data/client").loadServiceConfigurationDescription>(),
+  refresh: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshConfiguration"]>(),
+  catalog: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshCatalog"]>(),
+  save: vi.fn<typeof import("../data/client").updateService>(),
+  create: vi.fn<typeof import("../data/client").createService>(),
 }));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({
@@ -70,7 +70,9 @@ beforeEach(() => {
   state.replaceConfiguration = (next) => {
     setValue(next);
   };
-  state.repositories.mockResolvedValue([{ id: "catalog", name: "App", url: "git@example.test:team/app.git", group: "other", services: [] }]);
+  state.repositories.mockResolvedValue([
+    { id: "catalog", revision: 0, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", name: "App", url: "git@example.test:team/app.git", group: "other", services: [] },
+  ]);
   state.description.mockResolvedValue({ context: "" });
   state.mysql.mockResolvedValue({ revision: 1, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysql, type: "mysql" }] }] });
   state.refresh.mockImplementation(async () => {
@@ -78,8 +80,8 @@ beforeEach(() => {
     setValue(next);
     return next;
   });
-  state.catalog.mockResolvedValue({});
-  state.create.mockResolvedValue({ key: "new" });
+  state.catalog.mockResolvedValue({ environments: [], services: [] });
+  state.create.mockResolvedValue({ key: "new", name: "New" });
   state.save.mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -91,7 +93,7 @@ test("keeps service Tabs separate from actions with many long labels", async () 
   const next = configuration();
   next.services = Array.from({ length: 20 }, (_, index) => ({ ...next.services[0]!, key: `service-${index}`, name: `digital-biz-projects/example-${index}/servers` }));
   state.replaceConfiguration(next);
-  const select = vi.fn();
+  const select = vi.fn<(key: string) => void>();
   render(() => <ConfigurationView onSelectService={select} />);
   const tabs = screen.getByRole("tablist", { name: "服务列表" });
   expect(within(tabs).getAllByRole("tab")).toHaveLength(20);
@@ -127,7 +129,9 @@ for (const outcome of ["success", "failure"] as const)
     dialog = await screen.findByRole("dialog", { name: "添加服务" });
     fireEvent.input(within(dialog).getByLabelText("服务名称"), { target: { value: "New draft" } });
     finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(within(dialog).queryByRole("alert")).toBeNull();
     const repositories = within(dialog).getByRole("combobox", { name: "关联仓库" });
     fireEvent.click(repositories);
@@ -183,7 +187,12 @@ test("a stale save retains its draft and shows reload inside the edit dialog", a
 
 test("a service save finishing after navigation refreshes shared data without replacing the new draft", async () => {
   let finish!: () => void;
-  state.save.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+  state.save.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
   const [visible, setVisible] = createSignal(true, { ownedWrite: true });
   render(() => (
     <Show when={visible()}>
@@ -243,8 +252,8 @@ test("DBHub changes MySQL targets to PostgreSQL with the selected default port",
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
   const deployment = state.save.mock.calls[0]![1].deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod");
-  expect(deployment.dbhub).toEqual([{ ...mysql, type: "postgres", port: 5432 }]);
-  expect(deployment.mysql).toBeUndefined();
+  expect(deployment?.dbhub).toEqual([{ ...mysql, type: "postgres", port: 5432 }]);
+  expect(deployment).not.toHaveProperty("mysql");
 });
 
 test("DBHub is an optional service ability and can be added and removed like the others", async () => {

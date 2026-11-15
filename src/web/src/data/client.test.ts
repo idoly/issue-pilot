@@ -40,7 +40,7 @@ describe("API client", () => {
 
   for (const read of [fetchAttachment, fetchIssueWorkFile]) {
     it(`${read.name} enforces the streamed preview budget and cancels oversized responses`, async () => {
-      const cancel = vi.fn();
+      const cancel = vi.fn<NonNullable<UnderlyingSource<Uint8Array>["cancel"]>>();
       let pulls = 0;
       const body = new ReadableStream<Uint8Array>(
         {
@@ -53,21 +53,21 @@ describe("API client", () => {
         },
         { highWaterMark: 0 },
       );
-      const fetchMock = vi.fn().mockResolvedValue(new Response(body, { headers: { "content-type": "text/plain", "content-length": "1" } }));
+      const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(body, { headers: { "content-type": "text/plain", "content-length": "1" } }));
       vi.stubGlobal("fetch", fetchMock);
       setCurrentUserSubject("alice");
       await expect(read("ISSUE-1", "file.txt")).rejects.toThrow("file_preview_too_large");
       expect(cancel).toHaveBeenCalledOnce();
       expect(pulls).toBe(3);
-      expect(new Headers(fetchMock.mock.calls[0]![1].headers).get("X-Issue-Pilot-Subject")).toBe("alice");
+      expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("X-Issue-Pilot-Subject")).toBe("alice");
     });
 
     it(`${read.name} rejects a declared oversized body without reading and preserves ordinary errors`, async () => {
-      const cancel = vi.fn(),
-        pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => controller.close());
+      const cancel = vi.fn<NonNullable<UnderlyingSource<Uint8Array>["cancel"]>>(),
+        pull = vi.fn<NonNullable<UnderlyingSource<Uint8Array>["pull"]>>((controller) => controller.close());
       const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
       const fetchMock = vi
-        .fn()
+        .fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(new Response(body, { headers: { "content-length": String(issuePilotConfig.web.filePreviewBytes + 1) } }))
         .mockResolvedValueOnce(Response.json({ error: "managed_issue_file_private" }, { status: 403 }));
       vi.stubGlobal("fetch", fetchMock);
@@ -78,7 +78,7 @@ describe("API client", () => {
     });
 
     it(`${read.name} cancels a partially read response when its preview is aborted`, async () => {
-      const cancel = vi.fn(),
+      const cancel = vi.fn<NonNullable<UnderlyingSource<Uint8Array>["cancel"]>>(),
         controller = new AbortController(),
         reason = new Error("preview_closed");
       const body = new ReadableStream<Uint8Array>(
@@ -91,29 +91,29 @@ describe("API client", () => {
         },
         { highWaterMark: 0 },
       );
-      const fetchMock = vi.fn().mockResolvedValue(new Response(body));
+      const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(body));
       vi.stubGlobal("fetch", fetchMock);
       await expect(read("ISSUE-1", "file.txt", controller.signal)).rejects.toBe(reason);
-      expect(fetchMock.mock.calls[0]![1].signal).toBe(controller.signal);
+      expect(fetchMock.mock.calls[0]![1]?.signal).toBe(controller.signal);
       expect(cancel).toHaveBeenCalledOnce();
     });
 
     it(`${read.name} accepts the exact budget, preserves MIME type and rejects pre-cancelled work`, async () => {
-      const fetchMock = vi.fn().mockResolvedValue(new Response(new Uint8Array(issuePilotConfig.web.filePreviewBytes), { headers: { "content-type": "application/pdf" } }));
+      const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(new Uint8Array(issuePilotConfig.web.filePreviewBytes), { headers: { "content-type": "application/pdf" } }));
       vi.stubGlobal("fetch", fetchMock);
       const file = await read("ISSUE-1", "file.pdf");
       expect(file.size).toBe(issuePilotConfig.web.filePreviewBytes);
       expect(file.type).toBe("application/pdf");
       const controller = new AbortController();
       controller.abort();
-      await expect(read("ISSUE-1", "file.pdf", controller.signal)).rejects.toThrow();
+      await expect(read("ISSUE-1", "file.pdf", controller.signal)).rejects.toThrow(controller.signal.reason);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   }
 
   it("keeps this page's request identity when another tab changes the remembered user", async () => {
     const fetch = vi
-      .fn()
+      .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json({ subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" }));
     vi.stubGlobal("fetch", fetch);
@@ -121,14 +121,14 @@ describe("API client", () => {
     localStorage.setItem("issue-pilot.current-user", "bob");
     await setIssuePinned("ISSUE-20260810-001", true);
     expect(currentUserSubject()).toBe("alice");
-    expect(new Headers(fetch.mock.calls[0]![1].headers).get("X-Issue-Pilot-Subject")).toBe("alice");
+    expect(new Headers(fetch.mock.calls[0]![1]?.headers).get("X-Issue-Pilot-Subject")).toBe("alice");
     setCurrentUserSubject("bob");
     await loadCurrentUser();
-    expect(new Headers(fetch.mock.calls[1]![1].headers).get("X-Issue-Pilot-Subject")).toBe("bob");
+    expect(new Headers(fetch.mock.calls[1]![1]?.headers).get("X-Issue-Pilot-Subject")).toBe("bob");
   });
 
   it("creates an issue and its initial attachments in one request", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 201 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 201 }));
     vi.stubGlobal("fetch", fetch);
     const file = new File(["evidence"], "evidence.txt", { type: "text/plain" });
 
@@ -147,18 +147,18 @@ describe("API client", () => {
     );
 
     const [, init] = fetch.mock.calls[0]!;
-    expect(init.method).toBe("POST");
-    expect(init.body).toBeInstanceOf(FormData);
-    expect((init.body as FormData).get("issue")).toContain('"title":"Investigate"');
-    expect(JSON.parse(String((init.body as FormData).get("issue"))).relatedIssueKeys).toEqual(["ISSUE-20260809-099"]);
-    const submittedFile = (init.body as FormData).get("files") as File;
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect((init!.body as FormData).get("issue")).toContain('"title":"Investigate"');
+    expect(JSON.parse(String((init!.body as FormData).get("issue"))).relatedIssueKeys).toEqual(["ISSUE-20260809-099"]);
+    const submittedFile = (init!.body as FormData).get("files") as File;
     expect(submittedFile.name).toBe("evidence.txt");
     expect(submittedFile.type).toBe("text/plain");
     expect(await submittedFile.text()).toBe("evidence");
   });
 
   it("updates issue metadata and attachment changes in one request", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const file = new File(["new evidence"], "new.txt", { type: "text/plain" });
     const input = { title: "Updated", description: "Details", priority: "p2" as const, assigneeSubject: null, ccSubjects: [], expectedEditVersion: "a".repeat(64) };
@@ -166,27 +166,29 @@ describe("API client", () => {
     await updateIssue("ISSUE-20260810-001", input, ["attachment-1"], [file]);
 
     const [, init] = fetch.mock.calls[0]!;
-    expect(init.method).toBe("PATCH");
-    expect(init.body).toBeInstanceOf(FormData);
-    expect(JSON.parse(String((init.body as FormData).get("issue")))).toEqual({ ...input, removedAttachmentIds: ["attachment-1"] });
-    expect(((init.body as FormData).get("files") as File).name).toBe("new.txt");
+    expect(init?.method).toBe("PATCH");
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect(JSON.parse(String((init!.body as FormData).get("issue")))).toEqual({ ...input, removedAttachmentIds: ["attachment-1"] });
+    expect(((init!.body as FormData).get("files") as File).name).toBe("new.txt");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("sends the selected user identity with API requests", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" }), { status: 200 }));
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     setCurrentUserSubject("lyz5613@xianhengguoji.com");
 
     await loadCurrentUser();
 
     const [, init] = fetch.mock.calls[0]!;
-    expect((init.headers as Headers).get("X-Issue-Pilot-Subject")).toBe("lyz5613@xianhengguoji.com");
+    expect((init!.headers as Headers).get("X-Issue-Pilot-Subject")).toBe("lyz5613@xianhengguoji.com");
   });
 
   it("loads the non-secret configuration catalog independently", async () => {
     const catalog = { environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }] };
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
 
     await expect(loadCatalog()).resolves.toEqual(catalog);
@@ -194,7 +196,7 @@ describe("API client", () => {
   });
 
   it("sends direct Service configuration writes", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
 
     await updateService("orders", { expectedRevision: 0, name: "Orders", description: "", repositories: [], deployments: [] });
@@ -205,7 +207,7 @@ describe("API client", () => {
   });
 
   it("passes cancellation to application resource and list reads", async () => {
-    const fetch = vi.fn().mockImplementation(async () => new Response("[]", { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response("[]", { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const controller = new AbortController();
 
@@ -216,7 +218,7 @@ describe("API client", () => {
   });
 
   it("replaces an Issue's related Issues", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
 
     await updateIssueRelatedIssues("ISSUE-20260810-001", ["ISSUE-20260809-099"]);
@@ -231,7 +233,7 @@ describe("API client", () => {
   });
 
   it("uses idempotent per-Issue pin endpoints", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetch);
 
     await setIssuePinned("ISSUE-20260810-001", true);
@@ -243,7 +245,8 @@ describe("API client", () => {
   });
 
   it("keeps source paths and search queries out of request URLs", async () => {
-    const fetch = vi.fn().mockImplementation(async (url: string) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+      const url = String(input);
       if (url.endsWith("/source/commit-file"))
         return new Response(
           JSON.stringify({
@@ -282,37 +285,37 @@ describe("API client", () => {
     await loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/订单.ts");
 
     expect(fetch.mock.calls[0]![0]).toBe("/api/issues/ISSUE-20260810-001/source/file");
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("X-Issue-Pilot-Repository")).toBe("orders");
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect((fetch.mock.calls[0]![1]!.headers as Headers).get("X-Issue-Pilot-Repository")).toBe("orders");
+    expect((fetch.mock.calls[0]![1]!.headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
     expect(fetch.mock.calls[1]![0]).toBe("/api/issues/ISSUE-20260810-001/source/search");
-    expect((fetch.mock.calls[1]![1].headers as Headers).get("X-Issue-Pilot-Query")).toBe("%E5%AE%A2%E6%88%B7%E7%BC%96%E5%8F%B7");
-    expect((fetch.mock.calls[1]![1].headers as Headers).get("X-Issue-Pilot-Case-Sensitive")).toBe("true");
-    expect((fetch.mock.calls[1]![1].headers as Headers).get("X-Issue-Pilot-Word-Match")).toBe("false");
+    expect((fetch.mock.calls[1]![1]!.headers as Headers).get("X-Issue-Pilot-Query")).toBe("%E5%AE%A2%E6%88%B7%E7%BC%96%E5%8F%B7");
+    expect((fetch.mock.calls[1]![1]!.headers as Headers).get("X-Issue-Pilot-Case-Sensitive")).toBe("true");
+    expect((fetch.mock.calls[1]![1]!.headers as Headers).get("X-Issue-Pilot-Word-Match")).toBe("false");
     expect(fetch.mock.calls[2]![0]).toBe("/api/issues/ISSUE-20260810-001/source/commit");
-    expect((fetch.mock.calls[2]![1].headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
-    expect((fetch.mock.calls[2]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect((fetch.mock.calls[2]![1]!.headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
+    expect((fetch.mock.calls[2]![1]!.headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
     expect(fetch.mock.calls[3]![0]).toBe("/api/issues/ISSUE-20260810-001/source/commit-file");
-    expect((fetch.mock.calls[3]![1].headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
-    expect((fetch.mock.calls[3]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect((fetch.mock.calls[3]![1]!.headers as Headers).get("X-Issue-Pilot-Revision")).toBe("a".repeat(40));
+    expect((fetch.mock.calls[3]![1]!.headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
     expect(fetch.mock.calls[4]![0]).toBe("/api/issues/ISSUE-20260810-001/source/blame");
-    expect((fetch.mock.calls[4]![1].headers as Headers).get("X-Issue-Pilot-Line")).toBe("7");
+    expect((fetch.mock.calls[4]![1]!.headers as Headers).get("X-Issue-Pilot-Line")).toBe("7");
     expect(fetch.mock.calls[5]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff");
-    expect((fetch.mock.calls[5]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect((fetch.mock.calls[5]![1]!.headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
     expect(fetch.mock.calls[6]![0]).toBe("/api/issues/ISSUE-20260810-001/source/diff-file");
-    expect((fetch.mock.calls[6]![1].headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
+    expect((fetch.mock.calls[6]![1]!.headers as Headers).get("X-Issue-Pilot-Path")).toBe("src%2F%E8%AE%A2%E5%8D%95.ts");
   });
 
   it("saves source text with an optimistic content hash", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ path: "src/index.ts", content: "updated\n", size: 8, sha256: "b".repeat(64) }), { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({ path: "src/index.ts", content: "updated\n", size: 8, sha256: "b".repeat(64) }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
 
     await saveSourceFile("ISSUE-20260810-001", "orders", "src/index.ts", "updated\n", "a".repeat(64));
 
     const [url, init] = fetch.mock.calls[0]!;
-    const headers = init.headers as Headers;
+    const headers = init!.headers as Headers;
     expect(url).toBe("/api/issues/ISSUE-20260810-001/source/file");
-    expect(init.method).toBe("PUT");
-    expect(init.body).toBe("updated\n");
+    expect(init?.method).toBe("PUT");
+    expect(init?.body).toBe("updated\n");
     expect(headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
     expect(headers.get("X-Issue-Pilot-Sha256")).toBe("a".repeat(64));
   });
@@ -323,14 +326,14 @@ describe("API client", () => {
       before: { path: "src/index.ts", version: "head", content: "head\n" },
       after: { path: "src/index.ts", version: "index", content: "staged\n" },
     };
-    const fetch = vi.fn().mockResolvedValue(Response.json(response));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json(response));
     vi.stubGlobal("fetch", fetch);
     await expect(loadSourceDiffFile("ISSUE-20260810-001", "orders", "src/index.ts", undefined, true)).resolves.toEqual(response);
-    expect((fetch.mock.calls[0]![1].headers as Headers).get("X-Issue-Pilot-Staged")).toBe("true");
+    expect((fetch.mock.calls[0]![1]!.headers as Headers).get("X-Issue-Pilot-Staged")).toBe("true");
   });
 
   it("rejects stale source commit response contracts", async () => {
-    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ content: "raw patch", truncated: false }), { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(JSON.stringify({ content: "raw patch", truncated: false }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
 
     await expect(loadSourceCommit("ISSUE-20260810-001", "orders", "a".repeat(40))).rejects.toThrow("source_commit_response_invalid");
@@ -342,7 +345,7 @@ describe("API client", () => {
   it("uses plan and apply for scope transitions", async () => {
     const plan = { planHash: `sha256:${"a".repeat(64)}`, expectedIssueUpdatedAt: "2026-08-10T00:00:00.000Z" };
     const fetch = vi
-      .fn()
+      .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify(plan), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ issueKey: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
@@ -352,11 +355,11 @@ describe("API client", () => {
     await expect(applyIssueScopeTransition("ISSUE-20260810-001", target, plan)).resolves.toEqual({ issueKey: "ISSUE-20260810-001" });
     expect(fetch.mock.calls[0]![0]).toBe("/api/issues/ISSUE-20260810-001/scope-transition/plan");
     expect(fetch.mock.calls[1]![0]).toBe("/api/issues/ISSUE-20260810-001/scope-transition/apply");
-    expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({ ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
+    expect(JSON.parse(String(fetch.mock.calls[1]![1]?.body))).toEqual({ ...target, expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash });
   });
 
   it("accepts a user message for Pi session delivery", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 202 }));
     vi.stubGlobal("fetch", fetch);
 
     await expect(sendAgentMessage("ISSUE-20260810-001", "Continue")).resolves.toBeUndefined();

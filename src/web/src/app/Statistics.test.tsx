@@ -7,7 +7,7 @@ import { Statistics } from "./Statistics";
 
 vi.mock("../data/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../data/client")>()),
-  loadWorkspaceStats: vi.fn(),
+  loadWorkspaceStats: vi.fn<typeof import("../data/client").loadWorkspaceStats>(),
 }));
 
 afterEach(() => {

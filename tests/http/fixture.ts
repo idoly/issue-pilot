@@ -219,7 +219,9 @@ export async function workspaceStatistics(app: FastifyInstance, refresh = false)
     const state = response.json();
     assert.equal(state.error, null);
     if (!state.sampling && state.snapshot) return state.snapshot;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   assert.fail("workspace statistics did not complete");
 }

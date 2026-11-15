@@ -584,11 +584,9 @@ export interface IssueSessionSummary {
   createdAt: string;
   current: boolean;
 }
-export const listIssueSessions = (key: string, signal?: AbortSignal) => request<IssueSessionSummary[]>(issuePath(key, "/sessions"), { ...(signal ? { signal } : {}) });
+export const listIssueSessions = (key: string, signal?: AbortSignal) => request<IssueSessionSummary[]>(issuePath(key, "/sessions"), signal ? { signal } : {});
 export const readIssueSession = (key: string, sessionId: string, offset = 0, signal?: AbortSignal) =>
-  request<{ events: import("../../../agent/events").RunEvent[]; nextOffset: number | null }>(issuePath(key, `/sessions/${encodeURIComponent(sessionId)}?offset=${offset}`), {
-    ...(signal ? { signal } : {}),
-  });
+  request<{ events: import("../../../agent/events").RunEvent[]; nextOffset: number | null }>(issuePath(key, `/sessions/${encodeURIComponent(sessionId)}?offset=${offset}`), signal ? { signal } : {});
 export async function readIssueQueryResult(key: string, reference: import("../../../agent/query-results").QueryResultReference, signal: AbortSignal): Promise<string> {
   const response = await fetch(issuePath(key, `/sessions/${encodeURIComponent(reference.sessionId)}/query-results/${encodeURIComponent(reference.entryId)}`), { headers: requestHeaders(), signal });
   if (!response.ok) throw await requestError(response);

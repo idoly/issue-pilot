@@ -26,7 +26,9 @@ test("SerialQueue preserves order, recovers from failures, and exposes idle stat
     idle = true;
   });
 
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.deepEqual(events, ["first:start"]);
   assert.equal(idle, false);
   releaseFirst();

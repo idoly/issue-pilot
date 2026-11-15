@@ -5,14 +5,14 @@ import type { PersonalCredentialStatus } from "../data/client";
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown as () => { subject: string; name: string; role: string; isAdmin?: boolean },
-  load: vi.fn(),
-  savePersonal: vi.fn(),
-  loadDms: vi.fn(),
-  saveDms: vi.fn(),
-  loadSls: vi.fn(),
-  saveSls: vi.fn(),
-  saveAgent: vi.fn(),
-  refresh: vi.fn(),
+  load: vi.fn<typeof import("../data/client").loadPersonalCredentials>(),
+  savePersonal: vi.fn<typeof import("../data/client").updatePersonalCredentials>(),
+  loadDms: vi.fn<typeof import("../data/client").loadSharedDmsCredentials>(),
+  saveDms: vi.fn<typeof import("../data/client").updateSharedDmsCredentials>(),
+  loadSls: vi.fn<typeof import("../data/client").loadSharedSlsCredentials>(),
+  saveSls: vi.fn<typeof import("../data/client").updateSharedSlsCredentials>(),
+  saveAgent: vi.fn<typeof import("../data/client").updateAgentConfiguration>(),
+  refresh: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshConfiguration"]>(),
 }));
 const agent = {
   provider: "shared",
@@ -65,7 +65,7 @@ beforeEach(() => {
   state.loadSls.mockResolvedValue({ configured: true, revision: 7 });
   state.saveSls.mockResolvedValue({ configured: false, revision: 8 });
   state.saveAgent.mockResolvedValue({ ok: true });
-  state.refresh.mockResolvedValue({});
+  state.refresh.mockResolvedValue({ agent: { ...agent, runtime: {}, apiKeyConfigured: true }, agentModels: [], environments: [], services: [] });
 });
 afterEach(() => {
   cleanup();
@@ -186,12 +186,20 @@ for (const group of ["dms", "sls"] as const)
     state.user = user;
     const save = group === "dms" ? state.saveDms : state.saveSls;
     let finish!: () => void;
-    save.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = () => resolve(group === "dms" ? { configured: true, url: "https://old-response.example.test/sse", revision: 6 } : { configured: false, revision: 8 });
-        }),
-    );
+    if (group === "dms")
+      state.saveDms.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ configured: true, url: "https://old-response.example.test/sse", revision: 6 });
+          }),
+      );
+    else
+      state.saveSls.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ configured: false, revision: 8 });
+          }),
+      );
     const dialog = await openGroup(group === "dms" ? 2 : 3);
     fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
     await waitFor(() => expect(finish).toBeTypeOf("function"));
@@ -201,10 +209,12 @@ for (const group of ["dms", "sls"] as const)
     await waitFor(() => expect(state.load).toHaveBeenCalledTimes(2));
     await screen.findByText("API Key");
     finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     fireEvent.click(within(screen.getByRole("region", { name: "我的凭证" })).getAllByRole("button")[group === "dms" ? 2 : 3]!);
     const reopened = await screen.findByRole("dialog");
-    if (group === "dms") expect(within(reopened).getByLabelText("DMS 地址")).toHaveProperty("value", "https://bob.example.test/sse");
+    expect(within(reopened).queryByLabelText<HTMLInputElement>("DMS 地址")?.value).toBe(group === "dms" ? "https://bob.example.test/sse" : undefined);
     fireEvent.click(within(reopened).getByRole("button", { name: "清除凭证" }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ expectedRevision: 20, mode: "clear" }));
   });
@@ -239,7 +249,9 @@ for (const outcome of ["success", "failure"] as const)
     fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(finishNext).toBeTypeOf("function"));
     finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.getByRole("dialog")).toBe(reopened);
     expect(within(reopened).getByLabelText("API Key")).toHaveProperty("value", "bob-draft");
     expect(within(reopened).getByRole("checkbox", { name: /共享凭证/ })).toHaveProperty("disabled", true);

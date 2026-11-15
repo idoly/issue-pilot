@@ -417,12 +417,12 @@ for (const stage of ["model discovery", "snapshot read"] as const)
         });
       }
       let abandoned: ServerResponse | undefined;
-      const disconnected = new Promise<void>((resolve) =>
+      const disconnected = new Promise<void>((resolve) => {
         fixture.app.server.once("request", (_request, response) => {
           abandoned = response;
           response.once("close", resolve);
-        }),
-      );
+        });
+      });
       const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
       const pending = fetch(`${address}/api/issues/${key}/agent-stream`, { signal: AbortSignal.any([controller.signal, context.signal]) });
       const rejected = assert.rejects(pending, { name: "AbortError" });
@@ -433,13 +433,17 @@ for (const stage of ["model discovery", "snapshot read"] as const)
       assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
       assert.equal(unsubscriptions, subscriptions);
       release();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
       assert.equal(unsubscriptions, subscriptions);
       assert.ok(abandoned);
       assert.equal(abandoned.headersSent, false);
       const before = subscriptions;
-      const closed = new Promise<void>((resolve) => fixture.app.server.once("request", (_request, response) => response.once("close", resolve)));
+      const closed = new Promise<void>((resolve) => {
+        fixture.app.server.once("request", (_request, response) => response.once("close", resolve));
+      });
       const response = await fetch(`${address}/api/issues/${key}/agent-stream`, { signal: context.signal });
       assert.equal(response.status, 200);
       const decoder = new TextDecoder();
@@ -455,7 +459,9 @@ for (const stage of ["model discovery", "snapshot read"] as const)
     } finally {
       release();
       controller.abort();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       context.mock.restoreAll();
       connection.close();
       await fixture.cleanup();
@@ -860,7 +866,12 @@ test("graceful shutdown ends open Agent streams instead of waiting for them", { 
     }
     assert.match(received, /event: snapshot_ready/);
     // Without a preClose hook this close would wait on the open stream until the test timeout.
-    const outcome = await Promise.race([fixture.stop().then(() => "closed"), new Promise((resolve) => setTimeout(() => resolve("timeout"), 5_000))]);
+    const outcome = await Promise.race([
+      fixture.stop().then(() => "closed"),
+      new Promise((resolve) => {
+        setTimeout(() => resolve("timeout"), 5_000);
+      }),
+    ]);
     assert.equal(outcome, "closed");
     while (true) {
       const { done } = await reader.read();

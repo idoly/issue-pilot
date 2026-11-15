@@ -101,7 +101,9 @@ test("server shutdown waits for an in-flight scope write before closing the data
     const stopped = f.stop().then(() => {
       closed = true;
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     assert.equal(closed, false);
     release();
     assert.equal((await write).statusCode, 200);

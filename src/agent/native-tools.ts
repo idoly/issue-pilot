@@ -134,9 +134,9 @@ export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: 
             try {
               await prepared.cleanup();
             } catch (error) {
-              // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
+              // oxlint-disable-next-line no-unsafe-finally -- the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
               if (failed) throw new AggregateError([primary, error], "issue_tool_cleanup_failed");
-              // biome-ignore lint/correctness/noUnsafeFinally: reached only when the operation succeeded; the cleanup failure is the sole error.
+              // oxlint-disable-next-line no-unsafe-finally -- reached only when the operation succeeded; the cleanup failure is the sole error.
               throw error;
             }
           }

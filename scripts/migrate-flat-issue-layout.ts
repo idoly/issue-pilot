@@ -117,7 +117,9 @@ try {
     // Release only the socket this run created; report a replaced socket without hiding the migration outcome above.
     const metadata = await lstat(socketPath).catch(() => undefined);
     if (metadata?.isSocket() && metadata.dev === socketIdentity?.dev && metadata.ino === socketIdentity.ino) {
-      await new Promise<void>((resolve, reject) => lock.close((error) => (error ? reject(error) : resolve())));
+      await new Promise<void>((resolve, reject) => {
+        lock.close((error) => (error ? reject(error) : resolve()));
+      });
     } else {
       // Closing would unlink a foreign socket; let the process exit without touching it.
       lock.unref();

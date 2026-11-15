@@ -268,7 +268,9 @@ test("HTTP stays healthy during scheduled maintenance and a failed release prese
     const closing = app.close().then(() => {
       closed = true;
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(closed, false);
     finish.resolve();
     await closing;
@@ -458,15 +460,22 @@ test("applies an updated policy to the maintenance timer without restarting the 
     assert.throws(() => manager.updatePolicy({ ...disabled, highWaterBytes: 10, targetBytes: 10 }), /workspace_target_must_be_below_high_water/);
     assert.deepEqual(manager.policy, disabled);
     // Listening with periodic maintenance disabled must not run an initial scan.
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
     assert.equal(cycles, 0);
     manager.updatePolicy({ ...disabled, maintenanceIntervalMs: 5 });
     const deadline = Date.now() + 2_000;
-    while (cycles < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    while (cycles < 2 && Date.now() < deadline)
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
     assert.ok(cycles >= 2);
     manager.updatePolicy(disabled);
     const stoppedAt = cycles;
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     assert.equal(cycles, stoppedAt);
   } finally {
     await manager.stop();
@@ -486,12 +495,16 @@ test("a slow maintenance pass does not start or accumulate timer work", async ()
   };
   manager.start(undefined, () => completed.resolve());
   try {
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     assert.equal(cycles, 1);
     manager.updatePolicy({ ...policy, maintenanceIntervalMs: 0 });
     firstPass.resolve();
     await completed.promise;
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
     assert.equal(cycles, 1);
   } finally {
     firstPass.resolve();
@@ -532,7 +545,9 @@ test("stops maintenance only after the active exclusive operation drains", async
     internal.exclusive(async () => undefined),
     /workspace_lifecycle_closing/,
   );
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.equal(stopped, false);
   releaseOperation();
   await Promise.all([operation, stopping]);
@@ -572,7 +587,9 @@ test("serializes deep inspection per Issue without blocking other Issues", async
   const stopping = manager.stop().then(() => {
     stopped = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.equal(stopped, false);
   releaseFirst();
   await Promise.all([first, sameIssue, stopping]);
@@ -695,7 +712,10 @@ test("isolates maintenance reporter failures", async () => {
     reports += 1;
     throw new Error("logger_failed");
   });
-  for (let attempt = 0; !reports && attempt < 2_000; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  for (let attempt = 0; !reports && attempt < 2_000; attempt += 1)
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
   assert.ok(reports, "maintenance did not report");
   await manager.stop();
   assert.ok(reports >= 1);
@@ -720,7 +740,10 @@ test("maintenance reports each failed Issue even when the reporter itself fails"
     reported.push(error);
     throw new Error("reporter failed");
   });
-  for (let attempt = 0; reported.length < 2 && attempt < 2_000; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  for (let attempt = 0; reported.length < 2 && attempt < 2_000; attempt += 1)
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
   assert.equal(reported.length, 2, "maintenance did not report both failures");
   await manager.stop();
   assert.match(reported[0]!.message, /ISSUE-20261024-951/);
@@ -1921,7 +1944,9 @@ test("snapshot reads remain immediate during sampling, preserve failures, and dr
   };
   assert.deepEqual(manager.readStats(), { snapshot: null, sampling: true, error: null });
   const first = manager.sampleStats();
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   for (let count = 0; count < 10; count++) assert.equal(manager.readStats().sampling, true);
   assert.equal(scans, 1);
   gate.resolve();
@@ -1946,7 +1971,9 @@ test("snapshot reads remain immediate during sampling, preserve failures, and dr
   const closing = manager.stop().then(() => {
     stopped = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.equal(stopped, false);
   gate.resolve();
   await Promise.all([retry, closing]);

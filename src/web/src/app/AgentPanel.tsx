@@ -354,9 +354,13 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
   const [queue, setQueue] = createSignal<{ steering: string[]; followUp: string[] }>({ steering: [], followUp: [] }, { ownedWrite: true });
   const [agent, setAgent] = createSignal({ provider: "", model: "", thinkingLevel: "" }, { ownedWrite: true });
   const [footer, setFooter] = createSignal<AgentFooterStats>(emptyFooter(), { ownedWrite: true });
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let panel: HTMLElement | undefined;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let transcript!: HTMLDivElement;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let conversation!: HTMLDivElement;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let editor: HTMLTextAreaElement | undefined;
   let followLatest = true;
   let followedTop = 0;

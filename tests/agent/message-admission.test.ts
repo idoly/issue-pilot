@@ -518,7 +518,9 @@ test("receipt reads protect session state without announcing an Agent run", asyn
       closed = true;
     });
     // Give close time to finish if it forgot to wait for the admission queue.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(closed, false);
     release();
     assert.deepEqual(await receipt, { state: "unknown" });

@@ -146,14 +146,12 @@ export class SourceBrowser {
         const limit = issuePilotConfig.limits.sourceBrowser.directoryEntries;
         const visible = entries
           .filter((entry) => entry.name !== ".git")
-          .map(
-            (entry): SourceTreeEntry => ({
-              name: entry.name,
-              path: path.posix.join(parent, entry.name),
-              type: entry.mode === "040000" || entry.mode === "160000" ? "directory" : entry.mode === "120000" ? "symlink" : "file",
-              size: entry.mode.startsWith("100") ? entry.size : null,
-            }),
-          )
+          .map((entry): SourceTreeEntry => ({
+            name: entry.name,
+            path: path.posix.join(parent, entry.name),
+            type: entry.mode === "040000" || entry.mode === "160000" ? "directory" : entry.mode === "120000" ? "symlink" : "file",
+            size: entry.mode.startsWith("100") ? entry.size : null,
+          }))
           .sort(
             (left, right) =>
               Number(right.type === "directory") - Number(left.type === "directory") || Number(right.type === "file") - Number(left.type === "file") || left.name.localeCompare(right.name),
@@ -332,7 +330,7 @@ export class SourceBrowser {
           } catch (error) {
             cleanup.push(error);
           }
-        // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
+        // oxlint-disable-next-line no-unsafe-finally -- the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
         if (cleanup.length) throw new OperationError("source_save_cleanup_failed", published ? "committed" : "not_committed", { cause: new AggregateError([...failures, ...cleanup]) });
       }
       return this.workingFile(context, selected);
@@ -373,7 +371,7 @@ export class SourceBrowser {
         } catch (error) {
           cleanup.push(error);
         }
-        // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
+        // oxlint-disable-next-line no-unsafe-finally -- the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
         if (cleanup.length) throw new OperationError("source_create_cleanup_failed", failures.length ? "unknown" : "committed", { cause: new AggregateError([...failures, ...cleanup]) });
       }
       return this.workingFile(context, relativePath);
@@ -497,6 +495,7 @@ export class SourceBrowser {
   async createCommit(issue: IssueReference, repositoryName: string, message: string, author: { name: string; email: string }): Promise<void> {
     const value = message.trim();
     if (!value || value.length > 4000 || value.includes("\0")) throw domainError("invalid_source_commit_message");
+    // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
     if (!author.name.trim() || !author.email.trim() || /[\x00-\x1f\x7f]/.test(author.name) || /[\x00-\x1f\x7f]/.test(author.email)) throw domainError("invalid_source_commit_author");
     const context = await this.writableContext(issue, repositoryName);
     await this.gitMutation(context, ["-c", `user.name=${author.name.trim()}`, "-c", `user.email=${author.email.trim()}`, "commit", "-m", value], "source_commit_failed");
@@ -823,7 +822,7 @@ export class SourceBrowser {
     if (!output.endsWith("\0")) throw domainError(invalidResponse);
     const fields = output.slice(0, -1).split("\0");
     const files: SourceCommitFile[] = [];
-    for (let index = 0; index < fields.length; ) {
+    for (let index = 0; index < fields.length;) {
       const rawStatus = fields[index++];
       if (!rawStatus) throw domainError(invalidResponse);
       const rename = /^[RC]\d{1,3}$/.test(rawStatus);
@@ -958,7 +957,7 @@ export class SourceBrowser {
       try {
         await directory.close();
       } catch (error) {
-        // biome-ignore lint/correctness/noUnsafeFinally: the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
+        // oxlint-disable-next-line no-unsafe-finally -- the cleanup failure is aggregated with the in-flight primary error, so no diagnostic is lost.
         throw new OperationError("source_path_cleanup_failed", failures.length ? "unknown" : "committed", { cause: new AggregateError([...failures, error]) });
       }
     }

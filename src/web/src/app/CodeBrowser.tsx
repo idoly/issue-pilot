@@ -333,8 +333,11 @@ export default function CodeBrowser(props: {
     panelController: AbortController | undefined,
     searchController: AbortController | undefined,
     historyController: AbortController | undefined;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let comparisonToolbar!: HTMLDivElement;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let rootElement: HTMLElement | undefined;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let fileActions: HTMLDetailsElement | undefined;
   const panelRange = (panel: SourcePanel) => {
     const root = rootElement?.getBoundingClientRect();

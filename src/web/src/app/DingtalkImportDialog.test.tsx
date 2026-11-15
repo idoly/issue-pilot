@@ -8,17 +8,21 @@ vi.mock("../data/client", async (original) => {
   ];
   return {
     ...actual,
-    loadUsers: vi.fn(async () => users),
-    loadCurrentUser: vi.fn(async () => users.find((user) => user.subject === actual.currentUserSubject()) ?? users[0]!),
-    loadCatalog: vi.fn(async () => ({
+    loadUsers: vi.fn<typeof import("../data/client").loadUsers>(async () => users),
+    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => users.find((user) => user.subject === actual.currentUserSubject()) ?? users[0]!),
+    loadCatalog: vi.fn<typeof import("../data/client").loadCatalog>(async () => ({
       environments: [{ key: "prod", name: "Prod" }],
       services: [
         { key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] },
         { key: "inventory", name: "Inventory", deployments: [{ environmentKey: "prod" }] },
       ],
     })),
-    loadDingtalkSource: vi.fn(async () => ({ user: users.find((user) => user.subject === actual.currentUserSubject()) ?? users[0]!, url: "", connection: { available: true, name: "dingtalk" } })),
-    importDingtalkRecords: vi.fn(),
+    loadDingtalkSource: vi.fn<typeof import("../data/client").loadDingtalkSource>(async () => ({
+      user: users.find((user) => user.subject === actual.currentUserSubject()) ?? users[0]!,
+      url: "",
+      connection: { available: true, name: "dingtalk" },
+    })),
+    importDingtalkRecords: vi.fn<typeof import("../data/client").importDingtalkRecords>(),
   };
 });
 import { importDingtalkRecords, setCurrentUserSubject, type DingtalkImportResponse } from "../data/client";
@@ -43,7 +47,7 @@ afterEach(() => {
   cleanup();
   setCurrentUserSubject(null);
 });
-async function open(created = vi.fn(), opened = vi.fn(() => true)) {
+async function open(created = vi.fn<() => void>(), opened = vi.fn<(key: string) => boolean>(() => true)) {
   render(() => (
     <ApplicationResourcesProvider>
       <Harness created={created} opened={opened} />
@@ -66,19 +70,18 @@ for (const status of ["created", "existing"] as const)
     vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, status, issueKey: "ISSUE-20261022-001", ...(status === "existing" ? { assignee: { ...user, subject: "bob", name: "Bob" } } : {}) });
     await waitFor(() => expect(screen.getByRole("button", { name: "导入工单" })).toHaveProperty("disabled", false));
     fireEvent.click(screen.getByRole("button", { name: "导入工单" }));
-    if (status === "created") await waitFor(() => expect(screen.queryByRole("dialog", { name: "导入" })).toBeNull());
-    else {
-      await screen.findByText(/当前处理人：Bob/);
-      expect(screen.getByRole("dialog", { name: "导入" })).toBeTruthy();
-    }
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "导入" }) !== null).toBe(status === "existing");
+      expect(screen.queryByText(/当前处理人：Bob/) !== null).toBe(status === "existing");
+    });
     expect(importDingtalkRecords).toHaveBeenCalledWith({ url, serviceKey: "orders", workMode: "production_analysis", priority: "p2", startAgent: true }, expect.any(AbortSignal));
     expect(opened).toHaveBeenCalledTimes(status === "created" ? 1 : 0);
     expect(created).toHaveBeenCalledTimes(status === "created" ? 1 : 0);
   });
 test("keeps the imported Issue available when navigation is declined", async () => {
   const { created, opened } = await open(
-    vi.fn(),
-    vi.fn(() => false),
+    vi.fn<() => void>(),
+    vi.fn<(key: string) => boolean>(() => false),
   );
   fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });
   vi.mocked(importDingtalkRecords).mockResolvedValueOnce({ user, status: "created", issueKey: "ISSUE-20261022-001" });

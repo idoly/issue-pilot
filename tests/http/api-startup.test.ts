@@ -218,7 +218,9 @@ test("closes Fastify exactly once when the process receives a shutdown signal", 
   const removeHandlers = installShutdownHandlers(app, target as never);
   target.emit("SIGTERM");
   target.emit("SIGINT");
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.equal(closes, 1);
   removeHandlers();
   assert.equal(target.listenerCount("SIGTERM"), 0);
@@ -244,7 +246,9 @@ test("redacts nested database failures from shutdown diagnostics while retaining
   const removeHandlers = installShutdownHandlers(app, target);
   try {
     target.emit("SIGTERM");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(logged.length, 1);
     assert.doesNotMatch(inspect(logged), /fixture-private-key|insert into private_configuration/);
     assert.match(inspect(logged), /database_operation_failed:SQLITE_IOERR/);
@@ -267,7 +271,9 @@ test("isolates shutdown reporting failures", async () => {
   } as unknown as FastifyInstance;
   const removeHandlers = installShutdownHandlers(app, target as never);
   target.emit("SIGTERM");
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   removeHandlers();
   assert.equal(target.listenerCount("SIGTERM"), 0);
   assert.equal(target.listenerCount("SIGINT"), 0);

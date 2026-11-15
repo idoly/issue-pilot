@@ -92,7 +92,7 @@ describe("local UI controls", () => {
   });
 
   it("keeps disabled options and loading controls inactive", async () => {
-    const change = vi.fn();
+    const change = vi.fn<() => void>();
     const view = render(() => (
       <>
         <Select
@@ -117,7 +117,7 @@ describe("local UI controls", () => {
   });
 
   it("starts and moves keyboard highlights only on enabled options", async () => {
-    const change = vi.fn();
+    const change = vi.fn<(value: string) => void>();
     render(() => (
       <Select
         aria-label="选择"
@@ -160,7 +160,7 @@ describe("local UI controls", () => {
     const beta = { value: "", label: "Beta" };
     const delta = { value: "d", label: "Delta" };
     const [options, setOptions] = createSignal([disabled, beta, delta], { ownedWrite: true });
-    const change = vi.fn();
+    const change = vi.fn<(value: string) => void>();
     render(() => <Select aria-label="选择" showSearch options={options()} onChange={change} />);
     fireEvent.click(screen.getByRole("combobox"));
     const input = await screen.findByRole("searchbox");
@@ -186,7 +186,7 @@ describe("local UI controls", () => {
 
   for (const state of [{ disabled: true }, { loading: true }])
     it(`ignores keyboard removal while ${state.disabled ? "disabled" : "loading"}`, () => {
-      const change = vi.fn();
+      const change = vi.fn<(value: string[]) => void>();
       const view = render(() => <Select mode="multiple" aria-label="锁定选择" value={["a"]} onChange={change} options={[{ value: "a", label: "Alpha" }]} {...state} />);
       const trigger = screen.getByRole("combobox", { name: "锁定选择" });
       fireEvent.keyDown(trigger, { key: "Backspace" });
@@ -198,7 +198,7 @@ describe("local UI controls", () => {
 
   it("keeps a dialog and its draft when clicking or dragging onto the backdrop", async () => {
     const [open, setOpen] = createSignal(true, { ownedWrite: true });
-    const cancel = vi.fn(() => setOpen(false));
+    const cancel = vi.fn<() => void>(() => setOpen(false));
     render(() => (
       <Modal open={open()} title="编辑" onOk={() => {}} onCancel={cancel}>
         <Input aria-label="草稿" />
@@ -253,7 +253,7 @@ describe("local UI controls", () => {
   });
 
   it("prevents dialog dismissal during save and keeps password inputs masked", async () => {
-    const cancel = vi.fn();
+    const cancel = vi.fn<() => void>();
     const view = render(() => (
       <Modal open title="保存中" confirmLoading onOk={() => {}} onCancel={cancel}>
         <PasswordInput aria-label="密钥" value="secret" />

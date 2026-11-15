@@ -27,7 +27,7 @@ function document(row: { title: string; description: string }): string {
 function splitDocument(text: string): string[] {
   const bytes = Buffer.from(text);
   const chunks: string[] = [];
-  for (let start = 0; start < bytes.length; ) {
+  for (let start = 0; start < bytes.length;) {
     let end = Math.min(start + CHUNK_BYTES, bytes.length);
     if (end < bytes.length) {
       const preferred = start + CHUNK_BYTES / 2;

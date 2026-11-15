@@ -261,7 +261,9 @@ test("source tree waits for pending metadata before closing a failed listing", a
       (error) => assert.equal(error, failure),
     );
     await ready;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(closed, false);
     release();
     await observed;

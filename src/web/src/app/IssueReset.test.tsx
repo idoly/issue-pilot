@@ -2,7 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/te
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { RequestError, type IssueDetail } from "../data/client";
-const state = vi.hoisted(() => ({ update: vi.fn(), read: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
+const state = vi.hoisted(() => ({
+  update: vi.fn<typeof import("../data/client").updateIssue>(),
+  read: vi.fn<typeof import("../data/client").getIssue>(),
+  user: () => ({ subject: "developer", role: "developer" }),
+}));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   updateIssue: state.update,
@@ -12,7 +16,10 @@ vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({ currentUser: () => state.user(), people: () => [], peopleError: () => "", catalog: () => ({ environments: [], services: [] }) }),
 }));
 import { IssueWorkspace } from "./IssueWorkspace";
-const issue: IssueDetail = {
+const issue: IssueDetail & import("../data/client").IssueExecutionItem = {
+  workspaceStatus: "ready",
+  agentRunning: false,
+  resolvedAt: null,
   editVersion: "a".repeat(64),
   id: "ISSUE-20261018-001",
   title: "Synthetic scope",
@@ -47,7 +54,7 @@ async function open(onUpdated = async () => {}, agentRunning = false) {
   return screen.findByRole("dialog", { name: "编辑工单" });
 }
 it("saves edits and resets from the footer without confirmation", async () => {
-  const updated = vi.fn(async () => {}),
+  const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}),
     confirm = vi.spyOn(window, "confirm");
   const dialog = await open(updated);
   await fireEvent.input(within(dialog).getByLabelText("编辑工单标题"), { target: { value: "修改后的标题" } });
@@ -99,7 +106,7 @@ it("keeps the editor version across background refresh and preserves a conflicte
 });
 it("preserves uploads and allows the unchanged edit to retry after atomic reset failure", async () => {
   state.update.mockRejectedValueOnce(new Error("reset_failed"));
-  const updated = vi.fn(async () => {}),
+  const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}),
     dialog = await open(updated);
   const file = new File(["content"], "evidence.txt", { type: "text/plain" });
   await fireEvent.change(within(dialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
@@ -113,7 +120,7 @@ it("preserves uploads and allows the unchanged edit to retry after atomic reset 
 });
 
 it("saves normally without reading or resetting the session", async () => {
-  const updated = vi.fn(async () => {}),
+  const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}),
     dialog = await open(updated);
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
@@ -127,7 +134,7 @@ for (const busy of [true, false])
     expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false);
   });
 it("reports a completed reset separately from a failed page refresh", async () => {
-  const updated = vi.fn(async () => {}).mockRejectedValueOnce(new Error("网络错误")),
+  const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}).mockRejectedValueOnce(new Error("网络错误")),
     dialog = await open(updated);
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已保存并重置，但刷新失败");
@@ -148,7 +155,7 @@ for (const change of ["identity", "issue"] as const)
       const pending = new Promise<never>((_, reject) => {
         rejectPending = reject;
       });
-      const updated = vi.fn(async () => {});
+      const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {});
       if (failure === "committed cleanup") state.update.mockImplementationOnce(() => pending);
       else updated.mockImplementationOnce(() => pending);
       const attachment = { id: "existing", fileName: "existing.txt", mediaType: "text/plain", size: 3, sha256: "a".repeat(64) };
@@ -161,7 +168,7 @@ for (const change of ["identity", "issue"] as const)
         const oldDialog = await screen.findByRole("dialog", { name: "编辑工单" });
         fireEvent.click(within(oldDialog).getByRole("button", { name: "重置" }));
         await waitFor(() => expect(state.update).toHaveBeenCalledOnce());
-        if (failure === "refresh") await waitFor(() => expect(updated).toHaveBeenCalledOnce());
+        await waitFor(() => expect(updated).toHaveBeenCalledTimes(failure === "refresh" ? 1 : 0));
 
         if (change === "identity") setUser({ subject: "other-developer", role: "developer" });
         else setIssue({ ...currentIssue(), id: "ISSUE-20261018-002" });
@@ -174,7 +181,9 @@ for (const change of ["identity", "issue"] as const)
         await waitFor(() => expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull());
 
         rejectPending(failure === "committed cleanup" ? new RequestError("attachment_finalize_failed", "committed") : new Error("old_refresh_failed"));
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
         expect(within(currentDialog).getByText("new-evidence.txt")).toBeTruthy();
         expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull();
         expect(within(currentDialog).queryByRole("alert")).toBeNull();
@@ -194,7 +203,7 @@ it("does not reset after the workspace unmounts while saving", async () => {
         finish = () => resolve(issue);
       }),
   );
-  const updated = vi.fn(async () => {});
+  const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {});
   const view = render(() => <IssueWorkspace issue={issue} onOpenSource={() => {}} onUpdated={updated} onCreatedFollowUp={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
   const dialog = await screen.findByRole("dialog", { name: "编辑工单" });

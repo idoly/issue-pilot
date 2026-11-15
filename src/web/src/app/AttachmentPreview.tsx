@@ -25,6 +25,7 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
   const [imageDragging, setImageDragging] = createSignal(false, { ownedWrite: true });
   const latest = createLatestTask();
   const copyTask = createLatestTask();
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let imageViewport: HTMLDivElement | undefined;
   let imageDrag: { pointerId: number; x: number; y: number; scrollLeft: number; scrollTop: number } | undefined;
 

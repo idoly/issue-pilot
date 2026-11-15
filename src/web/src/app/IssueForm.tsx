@@ -75,15 +75,13 @@ interface RelatedIssueOption {
 
 export function RelatedIssueSelect(props: { candidates: IssueExecutionItem[]; value: string[]; loading?: boolean; inputLabel: string; onChange: (value: string[]) => void }) {
   const options = () =>
-    props.candidates.map(
-      (candidate): RelatedIssueOption => ({
-        value: candidate.id,
-        label: candidate.id,
-        title: candidate.title,
-        searchText: `${candidate.id} ${candidate.title} ${candidate.service.key} ${candidate.service.name}`.toLowerCase(),
-        candidate,
-      }),
-    );
+    props.candidates.map((candidate): RelatedIssueOption => ({
+      value: candidate.id,
+      label: candidate.id,
+      title: candidate.title,
+      searchText: `${candidate.id} ${candidate.title} ${candidate.service.key} ${candidate.service.name}`.toLowerCase(),
+      candidate,
+    }));
   return (
     <div class="multi-select-trigger related-issue-select">
       <Select<RelatedIssueOption>
@@ -121,6 +119,7 @@ export function AttachmentPicker(props: {
   onFilesChange: (files: File[]) => void;
   onError: (message: string) => void;
 }) {
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let input: HTMLInputElement | undefined;
   const existingFiles = () => props.existingFiles?.() ?? [];
   const totalCount = () => existingFiles().length + props.files().length;

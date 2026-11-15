@@ -23,9 +23,9 @@ describe("Monaco source adapter", () => {
   });
 
   it("forwards editing, cursor changes and the save command without feeding model updates back", async () => {
-    const saved = vi.fn(),
-      position = vi.fn(),
-      changed = vi.fn();
+    const saved = vi.fn<NonNullable<Parameters<typeof import("./SourceText").SourceText>[0]["onSave"]>>(),
+      position = vi.fn<NonNullable<Parameters<typeof import("./SourceText").SourceText>[0]["onPosition"]>>(),
+      changed = vi.fn<NonNullable<Parameters<typeof import("./SourceText").SourceText>[0]["onInput"]>>();
     const [value, setValue] = createSignal("first\nsecond", { ownedWrite: true });
     render(() => (
       <SourceText
@@ -55,7 +55,7 @@ describe("Monaco source adapter", () => {
   });
 
   it("reports the new default cursor even when Monaco does not emit another selection event", async () => {
-    const position = vi.fn();
+    const position = vi.fn<NonNullable<Parameters<typeof import("./SourceText").SourceText>[0]["onPosition"]>>();
     const [file, setFile] = createSignal({ path: "large.txt", value: "one\ntwo\nthree", reveal: { line: 3, column: 1, length: 0 } }, { ownedWrite: true });
     render(() => <SourceText path={file().path} value={file().value} reveal={file().reveal} readonly={false} onInput={() => {}} onSave={() => {}} onPosition={position} />);
     await screen.findByLabelText("代码内容 large.txt");

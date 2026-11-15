@@ -89,7 +89,9 @@ async function fixture(t: TestContext, blockFirst = false) {
 async function idle(engine: AgentEngine, issueId: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
     if (!engine.isRunning(issueId)) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error("recovery_round_not_idle");
 }
@@ -99,7 +101,9 @@ test("explicit retry recovers unstarted text and images without recording anothe
   try {
     const images: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }];
     appendAgentMessage(f.manager, f.issue, "Recover this unstarted input", images);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(f.deliveries.length, 0, "opening an Engine does not automatically resume work");
     f.engine.enqueue(f.issue.id);
     await f.engine.close();

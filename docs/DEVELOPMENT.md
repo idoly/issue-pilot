@@ -42,6 +42,13 @@ npm run lint
 git diff --check
 ```
 
+格式化使用 Oxfmt（`.oxfmtrc.json`），Lint 使用 Oxlint（`.oxlintrc.json`），保留 2 空格、200 列和原有排除范围。启用基础、TypeScript、Oxc、Unicorn、Import、Promise、Vitest 的正确性规则，另检查类型导入与 Promise 执行器返回值；警告和失效禁用注释都会阻止通过。类型检查仍由 TypeScript 执行，不以 Lint 代替。
+
+- Promise 执行器只负责调用 resolve/reject，不返回定时器、监听器或赋值结果。
+- 测试 mock 使用真实函数或组件回调的类型，夹具遵守实际返回契约；每个参数化分支都应有明确断言，禁止残留聚焦测试。
+- Solid 的 JSX `ref` 自动赋值、Vite 的 `?worker` 导出、控制字符过滤、事件监听器快照和保留清理错误等必要例外，在对应行解释，不全局放宽规则。允许 `import()` 类型注解。
+- 两项工具默认单线程运行，不格式化业务数据、已发布迁移、文档或构建产物。增加规则先试跑，修正有效告警，并检查框架语义；不可仅因告警多就关闭规则。
+
 资源受限时，以下两条分别替代 `npm test` 的后端和 Web 部分：
 
 ```bash

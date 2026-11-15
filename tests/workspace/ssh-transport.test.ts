@@ -40,9 +40,13 @@ test("bound Git push uses personal SSH and preserves target refs, rejecting othe
     const authorized = path.join(root, "authorized_keys");
     await writeFile(authorized, await readFile(path.join(root, "personal.pub")), { mode: 0o600 });
     const reservation = createServer();
-    await new Promise<void>((resolve) => reservation.listen(0, "127.0.0.2", resolve));
+    await new Promise<void>((resolve) => {
+      reservation.listen(0, "127.0.0.2", resolve);
+    });
     const port = (reservation.address() as { port: number }).port;
-    await new Promise<void>((resolve) => reservation.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      reservation.close(() => resolve());
+    });
     const config = path.join(root, "sshd_config");
     await writeFile(
       config,

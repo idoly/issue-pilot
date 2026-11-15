@@ -118,7 +118,9 @@ test("pending cleanup drains every staging root and retains the original failure
       },
     );
     await started;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(settled, false);
     release();
     await assert.rejects(operation, (error) => error instanceof AggregateError && error.errors.includes(primary) && error.errors.includes(cleanup));

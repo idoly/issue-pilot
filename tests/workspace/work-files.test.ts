@@ -69,7 +69,9 @@ test("separate store instances share destination serialization and queued cancel
       },
     );
     controller.abort(reason);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(secondSettled, false);
     release();
     await writing;
@@ -379,7 +381,9 @@ test("listing waits for pending metadata before closing its directory after a fa
       (error) => assert.equal(error, failure),
     );
     await ready;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(closed, false);
     release();
     await observed;

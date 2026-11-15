@@ -5,7 +5,9 @@ import { Markdown } from "../ui/Markdown";
 import { environmentName } from "./model";
 
 export function ServiceOverview(props: { service: Service; configurationDescription?: string | undefined; repositories: ManagedRepository[]; environments: Array<{ key: string; name: string }> }) {
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let repositoryList!: HTMLElement;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let descriptionBody!: HTMLDivElement;
   createEffect(
     () => props.service.key,

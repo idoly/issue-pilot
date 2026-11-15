@@ -626,7 +626,7 @@ export class PiSessionRuntime {
             try {
               await queries.close();
             } catch (cleanup) {
-              // biome-ignore lint/correctness/noUnsafeFinally: preserve both the round failure and disposal failure.
+              // oxlint-disable-next-line no-unsafe-finally -- preserve both the round failure and disposal failure.
               throw new Error("dms_mcp_connection_cleanup_failed", { cause: new AggregateError(failure === undefined ? [cleanup] : [failure, cleanup]) });
             }
           }

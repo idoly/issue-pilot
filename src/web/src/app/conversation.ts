@@ -294,6 +294,7 @@ export function resultText(entry: Extract<ConversationEntry, { kind: "tool" }>):
       .filter((part): part is TextContent => part.type === "text")
       .map((part) => part.text)
       .join("\n") ?? "";
+  // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
   return entry.name === "bash" ? text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "") : text;
 }
 

@@ -5,6 +5,7 @@ import { Button } from "../ui";
 import { createSourceModel, monaco, sourceEditorOptions } from "./monaco";
 
 export function SourceDiff(props: { value: { path: string; before: string; after: string }; toolbar: HTMLElement; onOpen: () => void; disabled: boolean }) {
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let container!: HTMLDivElement;
   let code: monaco.editor.IStandaloneDiffEditor | undefined, models: monaco.editor.IDiffEditorModel | undefined;
   let current: typeof props.value | undefined, changed: monaco.IDisposable | undefined;

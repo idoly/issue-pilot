@@ -24,7 +24,9 @@ after(async () => {
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error("condition_not_met");
 }
@@ -139,7 +141,9 @@ test("reserves issues against concurrent Agent activity and always releases rese
     await blocked;
     throw new Error("operation_failed");
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   await assert.rejects(
     engine.runExclusive(["issue-1"], async () => undefined),
     /issue_already_running/,
@@ -163,12 +167,16 @@ test("drains active reservations before closing and rejects new activity", async
   const reservation = engine.runExclusive(["issue-1"], async () => {
     await gate;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   let closed = false;
   const closing = engine.close().then(() => {
     closed = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.equal(closed, false);
   assert.throws(() => engine.enqueue("issue-2"), /agent_engine_closing/);
   await assert.rejects(engine.send("issue-2", "message"), /agent_engine_closing/);
@@ -261,6 +269,7 @@ test("retains an accepted message without dispatching it after the Issue becomes
       set: () => ({
         where: () => ({
           returning: async () => (status === "open" || status === "pending" ? [{ id: "issue-1" }] : []),
+          // oxlint-disable-next-line unicorn/no-thenable -- The Drizzle test double must support both returning() and awaiting the update.
           then: (resolve: (value: undefined) => void) => {
             workspaceUpdates += 1;
             resolve(undefined);
@@ -565,7 +574,9 @@ test("queues a waiting steering message when the preceding turn becomes idle", {
     closed = true;
   });
   try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(closed, false);
     release();
     await accepted;
@@ -788,7 +799,9 @@ test("finishes failed run cleanup before starting queued work", { timeout: 5_000
       events.push("second");
     });
     await ready;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     assert.deepEqual(events, ["first", "cleanup-start"]);
     assert.equal(engine.getRunState("issue-1"), "running", "cleanup still owns the execution slot");
     assert.deepEqual(states, ["queued", "running"]);
@@ -858,7 +871,9 @@ test("reopens a session for a queued message after the preceding round failed", 
     await engine.send("issue-1", "second");
     fail();
     await stopped;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     assert.deepEqual(reopened, []);
     release();
     await waitFor(() => !engine.isRunning("issue-1"));
@@ -942,6 +957,7 @@ test("a failed Agent operation disposes and revokes its SDK session", async () =
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-"));
   let stopped = false;
   const published: RunEvent[] = [];
+  // oxlint-disable-next-line unicorn/no-thenable -- The Drizzle test double must support both returning() and awaiting the update.
   const transaction = { update: () => ({ set: () => ({ where: () => ({ returning: async () => [{ id: "issue-1" }], then: (resolve: (value: undefined) => void) => resolve(undefined) }) }) }) };
   const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
   const engine = new AgentEngine(database as never, root, (event) => published.push(event));

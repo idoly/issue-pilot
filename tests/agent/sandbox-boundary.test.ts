@@ -45,7 +45,9 @@ test("concurrent sandbox cleanup calls wait for the same resource shutdown", asy
         secondSettled = true;
       },
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(secondSettled, false);
     release();
     await Promise.all([first, second]);
@@ -111,9 +113,13 @@ test("SRT blocks direct and proxy access to host HTTP and visible Unix sockets t
     requests++;
     void writeFile(outside, "Unix escaped").then(() => socket.end("done"));
   });
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    http.listen(0, "127.0.0.1", resolve);
+  });
   const socketPath = path.join(own, "host.sock");
-  await new Promise<void>((resolve) => unix.listen(socketPath, resolve));
+  await new Promise<void>((resolve) => {
+    unix.listen(socketPath, resolve);
+  });
   try {
     const port = (http.address() as { port: number }).port;
     const bash = issueNativeTools({ writeRoot: own }).find((tool) => tool.name === "bash")!;
@@ -131,7 +137,14 @@ test("SRT blocks direct and proxy access to host HTTP and visible Unix sockets t
     assert.equal(requests, 0);
     assert.equal(await readFile(outside, "utf8"), "untouched");
   } finally {
-    await Promise.all([new Promise<void>((resolve) => http.close(() => resolve())), new Promise<void>((resolve) => unix.close(() => resolve()))]);
+    await Promise.all([
+      new Promise<void>((resolve) => {
+        http.close(() => resolve());
+      }),
+      new Promise<void>((resolve) => {
+        unix.close(() => resolve());
+      }),
+    ]);
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -164,7 +177,9 @@ test("a configured raw TCP MCP client uses the authenticated proxy even without 
     connections++;
     socket.end("mysql fixture greeting");
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.2", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.2", resolve);
+  });
   const port = (server.address() as { port: number }).port;
   try {
     const code = `require('node:net').connect(${port},'127.0.0.2').on('data',chunk=>process.stdout.write(chunk)).on('error',()=>{process.exitCode=9})`;
@@ -179,7 +194,9 @@ test("a configured raw TCP MCP client uses the authenticated proxy even without 
       await command.cleanup();
     }
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     await rm(root, { recursive: true, force: true });
   }
 });

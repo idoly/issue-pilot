@@ -2,12 +2,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/te
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Person } from "../data/client";
-const state = vi.hoisted(() => ({ user: undefined as unknown, load: vi.fn() }));
+const state = vi.hoisted(() => ({ user: undefined as unknown, load: vi.fn<typeof import("../data/client").loadRepositories>() }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user }) }));
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), loadRepositories: state.load }));
 import { RepositoryManagement } from "./RepositoryManagement";
 const repository = {
   id: "repository",
+  revision: 0,
   name: "Example",
   url: "git@example.test:example.git",
   group: "other",
@@ -39,7 +40,9 @@ for (const outcome of ["success", "failure"] as const)
     setUser({ ...alice, subject: "bob", name: "Bob" });
     await screen.findByText("Example");
     finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.queryByText("Stale repository")).toBeNull();
     expect(screen.queryByText("old_identity_load_failed")).toBeNull();
   });

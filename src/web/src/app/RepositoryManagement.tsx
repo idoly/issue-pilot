@@ -21,6 +21,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
     const selected = group();
     return selected ? sortedRows().filter((row) => row.group === selected) : sortedRows();
   });
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let list: HTMLDivElement | undefined;
   createEffect(group, () => {
     if (list) list.scrollTop = 0;

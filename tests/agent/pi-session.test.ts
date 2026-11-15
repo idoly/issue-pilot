@@ -64,7 +64,9 @@ async function waitForMcp(managed: Awaited<ReturnType<PiSessionRuntime["start"]>
   for (let attempt = 0; attempt < 200; attempt++) {
     const tools = managed.session.getAllTools().filter((tool) => tool.name.startsWith("mcp__"));
     if (tools.length) return tools;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error("mcp_tools_not_ready");
 }
@@ -180,10 +182,14 @@ test("times out only while waiting for model output", async () => {
   });
   watchdog.start();
   watchdog.observe({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: {} });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 30);
+  });
   assert.equal(timeouts, 0);
   watchdog.observe({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: { content: [] }, isError: false });
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 30);
+  });
   assert.equal(timeouts, 1);
   watchdog.stop();
   assert.throws(() => new AgentResponseWatchdog(0, () => undefined), /invalid_model_response_idle_timeout/);

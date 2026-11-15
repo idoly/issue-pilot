@@ -102,6 +102,7 @@ export function IssueQueue(props: {
         });
     },
   );
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let list: HTMLDivElement | undefined;
   let revealed: typeof props.reveal;
   createEffect(

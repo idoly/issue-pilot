@@ -1259,7 +1259,7 @@ try {
   await dmsCard.locator("summary").click();
   await dmsCard.getByRole("cell", { name: "ready", exact: true }).waitFor();
 
-  const unexpected = failures.filter((failure) => !/^Failed to load resource: the server responded with a status of 409/.test(failure));
+  const unexpected = failures.filter((failure) => !failure.startsWith("Failed to load resource: the server responded with a status of 409"));
   assert.deepEqual(unexpected, []);
   const inspection = openDatabase(databaseFile);
   try {

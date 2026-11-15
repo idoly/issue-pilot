@@ -20,7 +20,11 @@ export async function loadDeploymentRepositories(
       .where(and(eq(serviceDeployments.serviceId, input.serviceId), eq(serviceDeployments.environmentId, input.environmentId)))
       .limit(1)
       .then((rows) => rows[0]),
-    database.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, input.serviceId)).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
+    database
+      .select()
+      .from(serviceRepositories)
+      .where(eq(serviceRepositories.serviceId, input.serviceId))
+      .orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
   ]);
   const deployment = scope?.deployment;
   if (!deployment) throw new Error("issue_service_deployment_not_found");

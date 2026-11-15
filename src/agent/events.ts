@@ -56,6 +56,7 @@ export class AgentEventBus {
     this.updateReplay(event);
     const issueListeners = this.listeners.get(event.issueId);
     if (!issueListeners) return;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Snapshot registrations before callbacks can add or remove listeners.
     for (const listener of [...issueListeners]) if (!this.deliver(listener, event)) issueListeners.delete(listener);
     if (!issueListeners.size && this.listeners.get(event.issueId) === issueListeners) this.listeners.delete(event.issueId);
   }
@@ -235,10 +236,10 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
             ? customData.images.filter((image): image is ImageContent =>
                 Boolean(
                   image &&
-                    typeof image === "object" &&
-                    (image as { type?: unknown }).type === "image" &&
-                    typeof (image as { data?: unknown }).data === "string" &&
-                    typeof (image as { mimeType?: unknown }).mimeType === "string",
+                  typeof image === "object" &&
+                  (image as { type?: unknown }).type === "image" &&
+                  typeof (image as { data?: unknown }).data === "string" &&
+                  typeof (image as { mimeType?: unknown }).mimeType === "string",
                 ),
               )
             : [];

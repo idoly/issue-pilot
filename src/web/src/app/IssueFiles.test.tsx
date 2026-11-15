@@ -2,7 +2,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueWorkFile } from "../data/client";
-const state = vi.hoisted(() => ({ list: vi.fn(), user: () => ({ subject: "alice", role: "developer" }), read: vi.fn(), original: vi.fn() }));
+const state = vi.hoisted(() => ({
+  list: vi.fn<typeof import("../data/client").listIssueWorkFiles>(),
+  user: () => ({ subject: "alice", role: "developer" }),
+  read: vi.fn<typeof import("../data/client").fetchIssueWorkFile>(),
+  original: vi.fn<typeof import("../data/client").fetchAttachment>(),
+}));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   listIssueWorkFiles: state.list,
@@ -61,7 +66,7 @@ it("keeps managed metadata private and previews original attachments through the
     { ...file(stored), managed: true },
     { ...file(".session-private.jsonl"), managed: true },
   ]);
-  state.original.mockResolvedValue(new Response("original preview").blob());
+  state.original.mockImplementation(() => new Response("original preview").blob());
   render(() => <IssueFiles issue={detailed} />);
   const preview = await screen.findByRole("button", { name: "预览工作文件 input.txt" });
   expect(state.original).not.toHaveBeenCalled();
@@ -92,7 +97,9 @@ it("cancels old identity reads and ignores their late results", async () => {
   await screen.findByText("bob.txt");
   expect(oldSignal.aborted).toBe(true);
   finishOld([file("alice.txt")]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(screen.queryByText("alice.txt")).toBeNull();
   expect(screen.getByText("bob.txt")).toBeTruthy();
 });
@@ -111,7 +118,9 @@ it("keeps the open directory and preview when the Issue object is replaced with 
   const calls = state.list.mock.calls.length;
   // Issue refreshes (workspace tools, agent events) replace the object with identical content.
   setCurrent({ ...issue });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
   expect(state.list).toHaveBeenCalledTimes(calls);
   expect(screen.getByRole("dialog", { name: "note.txt" })).toBeTruthy();
   expect(screen.getAllByText("note.txt").length).toBeGreaterThan(0);
@@ -134,7 +143,7 @@ it("does not abort an in-flight listing when the Issue object is replaced with i
   let finish!: (rows: IssueWorkFile[]) => void;
   let signal: AbortSignal | undefined;
   state.list.mockImplementationOnce(
-    (_key: string, _directory: string, provided: AbortSignal) =>
+    (_key: string, _directory?: string, provided?: AbortSignal) =>
       new Promise<IssueWorkFile[]>((resolve) => {
         signal = provided;
         finish = resolve;
@@ -145,7 +154,9 @@ it("does not abort an in-flight listing when the Issue object is replaced with i
   await waitFor(() => expect(state.list).toHaveBeenCalledTimes(1));
   // A workspace tool event refreshes the Issue while the listing is still loading.
   setCurrent({ ...issue });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
   expect(signal?.aborted).toBe(false);
   finish([file("late.txt")]);
   expect(await screen.findByText("late.txt")).toBeTruthy();

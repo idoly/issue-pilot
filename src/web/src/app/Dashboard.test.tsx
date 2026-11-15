@@ -58,7 +58,7 @@ describe("Dashboard focus ranking", () => {
       [issue("ISSUE-20261101-001", { workspaceStatus: "failed", assigneeSubject: "developer", assignee: "Developer" }), issue("ISSUE-20261101-002", { updatedAt: "2026-11-03T00:00:00.000Z" })],
       { ownedWrite: true },
     );
-    const selected = vi.fn();
+    const selected = vi.fn<NonNullable<Parameters<typeof import("./Dashboard").Dashboard>[0]["onSelectIssue"]>>();
     render(() => <Dashboard issues={issues()} loading={false} loadError="" refreshing={false} onRefresh={() => {}} onSelectIssue={selected} />);
     expect(order()).toEqual(["ISSUE-20261101-001", "ISSUE-20261101-002"]);
     setIssues((rows) => rows.map((row) => (row.id.endsWith("001") ? { ...row, workspaceStatus: "ready" } : row)));

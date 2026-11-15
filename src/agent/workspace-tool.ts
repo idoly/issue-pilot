@@ -104,7 +104,7 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
     try {
       await prepared.cleanup();
     } catch (error) {
-      // biome-ignore lint/correctness/noUnsafeFinally: preserve the command error when cleanup also fails.
+      // oxlint-disable-next-line no-unsafe-finally -- preserve the command error when cleanup also fails.
       throw new AggregateError(failure === undefined ? [error] : [failure, error], "workspace_git_cleanup_failed");
     }
   }

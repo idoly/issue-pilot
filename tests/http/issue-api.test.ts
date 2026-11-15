@@ -437,7 +437,12 @@ test("serializes Issue assignee changes with user deactivation", async () => {
     const disable = fixture.app
       .inject({ method: "PATCH", url: "/api/users/next-owner", headers, payload: { expectedRevision: 0, name: "Next Owner", email: "next@example.test", role: "developer", active: false } })
       .then((response) => response);
-    const disabledBeforeEdit = await Promise.race([disable.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 100))]);
+    const disabledBeforeEdit = await Promise.race([
+      disable.then(() => true),
+      new Promise<false>((resolve) => {
+        setTimeout(() => resolve(false), 100);
+      }),
+    ]);
     release();
     assert.equal((await edit).statusCode, 200);
     assert.equal((await disable).statusCode, 409);

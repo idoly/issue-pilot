@@ -284,7 +284,9 @@ test("queues Codemode scripts across three sessions instead of exceeding SDK wor
     }, 200);
     timers.add(timer);
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const fixtures: Awaited<ReturnType<typeof fixture>>[] = [],
@@ -309,7 +311,9 @@ test("queues Codemode scripts across three sessions instead of exceeding SDK wor
     for (const managed of sessions) await managed.stop();
     for (const f of fixtures) await f.close();
     for (const timer of timers) clearTimeout(timer);
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 });
 
@@ -471,7 +475,9 @@ test("batches evidence reads while enforcing native source and SQL boundaries", 
       for (const finish of waiting.splice(0)) finish();
     }
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const f = await fixture("on");
@@ -520,7 +526,9 @@ test("batches evidence reads while enforcing native source and SQL boundaries", 
     for (const finish of waiting.splice(0)) finish();
     await managed?.stop();
     await f.close();
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 });
 
@@ -663,8 +671,25 @@ test("Codemode images and truncated output are archived in the Issue root before
     const files = (await readdir(f.root)).filter((name) => name.startsWith("codemode-"));
     assert.equal(files.filter((name) => name.endsWith(".png")).length, 1, JSON.stringify(f.events.filter((event) => event.type === "tool_execution_end")).slice(0, 1800));
     assert.equal(files.filter((name) => name.endsWith(".txt")).length, 1);
-    assert.deepEqual(await readFile(path.join(f.root, files.find((name) => name.endsWith(".png"))!)), Buffer.from(png, "base64"));
-    assert.match(await readFile(path.join(f.root, files.find((name) => name.endsWith(".txt"))!), "utf8"), /x{50000}/);
+    assert.deepEqual(
+      await readFile(
+        path.join(
+          f.root,
+          files.find((name) => name.endsWith(".png"))!,
+        ),
+      ),
+      Buffer.from(png, "base64"),
+    );
+    assert.match(
+      await readFile(
+        path.join(
+          f.root,
+          files.find((name) => name.endsWith(".txt"))!,
+        ),
+        "utf8",
+      ),
+      /x{50000}/,
+    );
   } finally {
     await managed?.stop();
     await f.close();
@@ -684,7 +709,9 @@ test("cancels nested evidence requests and permits another script after abort", 
     started();
     response.once("close", disconnected);
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const f = await fixture("on");
@@ -704,6 +731,8 @@ test("cancels nested evidence requests and permits another script after abort", 
     await managed?.stop();
     await f.close();
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 });

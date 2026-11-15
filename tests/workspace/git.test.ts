@@ -268,7 +268,9 @@ test("serializes repository operations across manager instances sharing one stat
       internal.git = async (args) => {
         active += 1;
         maximumActive = Math.max(maximumActive, active);
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
         active -= 1;
         if (args[0] === "check-ref-format") return `${args.at(-1)}\n`;
         return args.includes("rev-parse") ? "a".repeat(40) : "";

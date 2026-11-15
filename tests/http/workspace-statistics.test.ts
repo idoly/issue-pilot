@@ -43,7 +43,9 @@ test("an unreadable Issue subtree preserves the last complete workspace statisti
     await chmod(locked.path, 0);
     let state = (await fixture.app.inject("/api/workspaces/stats?refresh=true")).json();
     for (let attempt = 0; state.sampling && attempt < 500; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
       const response = await fixture.app.inject("/api/workspaces/stats");
       assert.equal(response.statusCode, 200);
       state = response.json();

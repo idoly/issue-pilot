@@ -276,7 +276,10 @@ test("browses only registered Issue repository content", async () => {
     const blameCommand = commands.find(({ args }) => args.includes("blame"))!;
     assert.deepEqual(blameCommand.args.slice(-4), ["-L", "1,1", "--", "src/index.ts"]);
     const historyCommand = commands.find(({ args }) => args.includes("log"))!;
-    assert.match(historyCommand.args.find((argument) => argument.startsWith("--format="))!, /%H%x00%P/);
+    assert.match(
+      historyCommand.args.find((argument) => argument.startsWith("--format="))!,
+      /%H%x00%P/,
+    );
     const commitDiffCommand = commands.find(({ args }) => args.includes("--name-status"))!;
     assert.ok(commitDiffCommand.args.includes("--no-ext-diff"));
     assert.ok(commitDiffCommand.args.includes("--no-textconv"));

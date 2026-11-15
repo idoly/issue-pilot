@@ -11,7 +11,9 @@ import { createApiFixture, createIssue, createService } from "../http/fixture.ts
 async function waitFor(check: () => boolean) {
   for (let n = 0; n < 200; n++) {
     if (check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error("condition_not_met");
 }
@@ -92,7 +94,9 @@ test("cancellation state-write failure is reported to the caller and releases th
     engine.enqueue(issue!.id);
     await waitFor(() => started);
     const stopping = engine.abort(issue!.id);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.throws(() => engine.enqueue(issue!.id), /issue_already_running/);
     release();
     await assert.rejects(stopping, /agent_abort_failed/);

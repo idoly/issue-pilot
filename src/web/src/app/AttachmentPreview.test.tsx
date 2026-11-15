@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 it("does not request a known oversized attachment and leaves it available for ordinary download", async () => {
-  const load = vi.fn();
+  const load = vi.fn<NonNullable<Parameters<typeof import("./AttachmentPreview").AttachmentPreview>[0]["loadFile"]>>();
   render(() => (
     <AttachmentPreview
       issueKey="ISSUE-1"
@@ -38,13 +38,15 @@ it("rejects a file that grew after listing before decoding or creating an object
 
 it("does not refetch a preview when an issue refresh recreates the same attachment object", async () => {
   const attachment = { id: "stable", fileName: "stable.txt", mediaType: "text/plain", size: 6, sha256: "a".repeat(64) };
-  const load = vi.fn().mockResolvedValue(new Blob(["stable"], { type: "text/plain" }));
+  const load = vi.fn<NonNullable<Parameters<typeof import("./AttachmentPreview").AttachmentPreview>[0]["loadFile"]>>().mockResolvedValue(new Blob(["stable"], { type: "text/plain" }));
   const [selected, setSelected] = createSignal<IssueDetail["attachments"][number]>(attachment, { ownedWrite: true });
   render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={selected()} loadFile={load} onClose={() => {}} />);
   await screen.findByText("stable");
   expect(load).toHaveBeenCalledOnce();
   setSelected({ ...attachment });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(load).toHaveBeenCalledOnce();
   expect(screen.getByText("stable")).toBeTruthy();
 });
@@ -52,7 +54,7 @@ it("does not refetch a preview when an issue refresh recreates the same attachme
 for (const action of ["close", "switch"] as const)
   it(`cancels an attachment request when the preview ${action === "close" ? "closes" : "changes files"}`, async () => {
     const responses: Array<(response: Response) => void> = [];
-    const fetchMock = vi.fn().mockImplementation(
+    const fetchMock = vi.fn<typeof globalThis.fetch>().mockImplementation(
       () =>
         new Promise<Response>((resolve) => {
           responses.push(resolve);
@@ -68,8 +70,8 @@ for (const action of ["close", "switch"] as const)
       setSelected(action === "close" ? null : { ...original, id: "current", fileName: "current.txt" });
       await waitFor(() => expect(signal?.aborted).toBe(true));
       responses[0]!(new Response("stale attachment text"));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(action === "switch" ? 2 : 1));
       if (action === "switch") {
-        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
         responses[1]!(new Response("current attachment text"));
         await screen.findByText("current attachment text");
       }
@@ -83,7 +85,7 @@ for (const outcome of ["success", "failure"] as const)
   it(`ignores a previous attachment's clipboard ${outcome}`, async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string) => new Response(url.endsWith("/old") ? "old attachment text" : "current attachment text")),
+      vi.fn<typeof globalThis.fetch>(async (url) => new Response(String(url).endsWith("/old") ? "old attachment text" : "current attachment text")),
     );
     const clipboard = await import("../ui/clipboard");
     let finish!: () => void;
@@ -103,7 +105,9 @@ for (const outcome of ["success", "failure"] as const)
       setSelected({ ...original, id: "current", fileName: "current.txt" });
       await screen.findByText("current attachment text");
       finish();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(screen.getByText("current attachment text")).toBeTruthy();
       expect(screen.getByRole("button", { name: "复制文字" })).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
@@ -115,7 +119,7 @@ for (const outcome of ["success", "failure"] as const)
 it("keeps attachment text available after a clipboard failure and allows retry", async () => {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response("copyable attachment text")),
+    vi.fn<typeof globalThis.fetch>(async () => new Response("copyable attachment text")),
   );
   const clipboard = await import("../ui/clipboard");
   vi.spyOn(clipboard, "copyText").mockRejectedValueOnce(new Error("clipboard_write_failed")).mockResolvedValueOnce();
@@ -130,7 +134,7 @@ it("keeps attachment text available after a clipboard failure and allows retry",
 });
 
 it("retries a failed attachment preview while retaining the download action", async () => {
-  const fetchMock = vi.fn().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValueOnce(new Response("Recovered attachment"));
+  const fetchMock = vi.fn<typeof globalThis.fetch>().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValueOnce(new Response("Recovered attachment"));
   vi.stubGlobal("fetch", fetchMock);
   render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "text", fileName: "notes.txt", mediaType: "text/plain", size: 20, sha256: "a".repeat(64) }} onClose={() => {}} />);
   await screen.findByRole("alert");
@@ -142,7 +146,7 @@ it("retries a failed attachment preview while retaining the download action", as
 });
 
 it("offers an Excel attachment download without fetching or parsing its contents", async () => {
-  const fetchMock = vi.fn();
+  const fetchMock = vi.fn<typeof globalThis.fetch>();
   vi.stubGlobal("fetch", fetchMock);
   const attachment = {
     id: "workbook",

@@ -35,7 +35,10 @@ function serviceContext(description: string, entries: readonly ServiceContextEnt
 async function projectConfigurationCatalog(database: DatabaseReader): Promise<ConfigurationCatalog> {
   const [environmentRows, serviceRows, deploymentRows, [search]] = await Promise.all([
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
-    database.select({ id: services.id, key: services.key, name: services.name }).from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
+    database
+      .select({ id: services.id, key: services.key, name: services.name })
+      .from(services)
+      .orderBy(asc(services.createdAt), sql`${services}.rowid`),
     database
       .select({ serviceId: serviceDeployments.serviceId, environmentId: serviceDeployments.environmentId })
       .from(serviceDeployments)
@@ -70,9 +73,18 @@ async function projectConfiguration(database: DatabaseReader, agentModels: Agent
     loadGlobalAgentConfiguration(database),
     loadSharedAgentApiKey(database),
     database.select().from(environments).where(inArray(environments.key, ENVIRONMENT_KINDS)).orderBy(asc(environments.name)),
-    database.select().from(services).orderBy(asc(services.createdAt), sql`${services}.rowid`),
-    database.select().from(serviceDeployments).orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
-    database.select().from(serviceRepositories).orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
+    database
+      .select()
+      .from(services)
+      .orderBy(asc(services.createdAt), sql`${services}.rowid`),
+    database
+      .select()
+      .from(serviceDeployments)
+      .orderBy(asc(serviceDeployments.createdAt), sql`${serviceDeployments}.rowid`),
+    database
+      .select()
+      .from(serviceRepositories)
+      .orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
     database.select().from(serviceDeploymentRepositories),
     database
       .select({

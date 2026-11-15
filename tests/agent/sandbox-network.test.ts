@@ -42,7 +42,9 @@ test("open networking uses the live mode for HTTP and SOCKS while preserving hos
   let prepared: Awaited<ReturnType<typeof prepareIssueCommand>> | undefined;
   const failures: unknown[] = [];
   try {
-    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
     const upstreamUrl = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
     for (const key of environmentKeys) process.env[key] = key.toLowerCase() === "no_proxy" ? "" : upstreamUrl;
     installApplicationParameters({ ...original, networkMode: "allowlist", networkAllowedDomains: [] });
@@ -148,7 +150,14 @@ test("open networking uses the live mode for HTTP and SOCKS while preserving hos
       else process.env[key] = value;
     }
     for (const socket of sockets) socket.destroy();
-    cleanup.push(...(await Promise.allSettled([new Promise<void>((resolve) => upstream.close(() => resolve())), rm(root, { recursive: true, force: true })])));
+    cleanup.push(
+      ...(await Promise.allSettled([
+        new Promise<void>((resolve) => {
+          upstream.close(() => resolve());
+        }),
+        rm(root, { recursive: true, force: true }),
+      ])),
+    );
     failures.push(...cleanup.filter((result): result is PromiseRejectedResult => result.status === "rejected").map((result) => result.reason));
   }
   if (failures.length === 1) throw failures[0];

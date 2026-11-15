@@ -165,6 +165,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   let closing = false;
   app.addHook("preClose", async () => {
     closing = true;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Snapshot registrations before callbacks can add or remove listeners.
     for (const end of [...activeStreams]) end();
   });
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {

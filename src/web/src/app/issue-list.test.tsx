@@ -2,7 +2,7 @@ import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IssueExecutionItem } from "../data/client";
-const api = vi.hoisted(() => ({ list: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn<typeof import("../data/client").listIssues>() }));
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), listIssues: api.list }));
 import { createIssueList, type IssueListResource } from "./issue-list";
 
@@ -125,14 +125,16 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
   const view = render(() => <Probe />);
   await waitFor(() => expect(api.list).toHaveBeenCalledOnce());
   await list.refresh();
-  expect(api.list.mock.calls[0]![0].aborted).toBe(true);
+  expect(api.list.mock.calls[0]![0]?.aborted).toBe(true);
   old.resolve([row("obsolete")]);
   await Promise.resolve();
   expect(list.items()[0]?.title).toBe("new");
   const pending = list.refresh();
   setScope(false);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await waitFor(() => expect(api.list.mock.calls[2]![0].aborted).toBe(true));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await waitFor(() => expect(api.list.mock.calls[2]![0]?.aborted).toBe(true));
   leaving.resolve([row("left page")]);
   await pending;
   await vi.advanceTimersByTimeAsync(20_000);
@@ -142,7 +144,7 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
   await waitFor(() => expect(list.items()[0]?.title).toBe("home"));
   const final = list.refresh();
   view.unmount();
-  expect(api.list.mock.calls[4]![0].aborted).toBe(true);
+  expect(api.list.mock.calls[4]![0]?.aborted).toBe(true);
   closing.reject(new Error("late error"));
   await final;
   await vi.advanceTimersByTimeAsync(20_000);

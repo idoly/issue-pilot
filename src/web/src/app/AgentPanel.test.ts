@@ -130,7 +130,9 @@ describe("Agent conversation state", () => {
       expect(fetchRequest.mock.calls[0]?.[1]?.method).toBe("POST");
       expect(editor.value).toBe("keep this unsent draft");
       resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-      await new Promise((done) => setTimeout(done, 0));
+      await new Promise((done) => {
+        setTimeout(done, 0);
+      });
       setHidden(true);
       await waitFor(() => expect(view.container.querySelector(".agent-panel")?.hasAttribute("hidden")).toBe(true));
       fireEvent.keyDown(editor, { key: "Escape" });
@@ -666,7 +668,7 @@ describe("Agent conversation state", () => {
         expect(editor.value).toBe("");
         expect(screen.getByText("check the uncertain operation")).toBeTruthy();
         expect(screen.getByAltText("uncertain.png")).toBeTruthy();
-        if (code === "resolved_issue_cannot_run_agent") expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(true);
+        expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(code === "resolved_issue_cannot_run_agent");
         expect(fetchRequest).toHaveBeenCalledTimes(1);
       } finally {
         view.unmount();
@@ -918,7 +920,9 @@ describe("Agent conversation state", () => {
       expect(screen.queryByText("排队中，等待执行名额…")).toBeNull();
       source.emit("message", event({ type: "issue_status", status: "complete" }));
       source.emit("message", event({ type: "agent_settled", aborted: false }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(screen.getByText("处理中…")).toBeTruthy();
       expect(screen.getByText(/Esc 中断/)).toBeTruthy();
       source.emit("message", event({ type: "issue_run_state", state: "queued" }));
@@ -953,14 +957,16 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
-    const onRefresh = vi.fn(async () => issue);
+    const onRefresh = vi.fn<NonNullable<Parameters<typeof import("./AgentPanel").AgentPanel>[0]["onRefresh"]>>(async () => issue);
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     expect(source.url).toBe("/api/issues/ISSUE-20260810-001/agent-stream");
     source.emit("open");
     source.emit("message", event({ type: "message_end", message: assistant([{ type: "text", text: "Rendered from Pi" }], "stop") }, "message-live"));
     source.emit("ready", { agent: { provider: "stale", model: "stale-model", thinkingLevel: "high" }, runState: "idle", issueStatus: "resolved" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
     expect(screen.getByText("no-model")).toBeTruthy();
     expect(onRefresh).not.toHaveBeenCalled();
@@ -1006,7 +1012,9 @@ describe("Agent conversation state", () => {
     viewportHeight = 200;
     // A scroll event for the old bottom position reaches the panel before resize observation.
     fireEvent.scroll(transcript);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.queryByRole("button", { name: "回到最新" })).toBeNull();
     transcript.scrollTop = 0;
     fireEvent.scroll(transcript);
@@ -1111,7 +1119,7 @@ describe("Agent conversation state", () => {
       workspace: { status: "running" as const, sourceAvailable: true },
     };
     const [issue, setIssue] = createSignal<IssueDetail>(initial);
-    const onRefresh = vi.fn(async () => {
+    const onRefresh = vi.fn<NonNullable<Parameters<typeof import("./AgentPanel").AgentPanel>[0]["onRefresh"]>>(async () => {
       setIssue(prepared);
       return prepared;
     });
@@ -1155,7 +1163,7 @@ describe("Agent conversation state", () => {
       workingDirectory: "/fixture/workspaces/issue",
       workspace: { status: "running", sourceAvailable: false },
     } satisfies IssueDetail;
-    const onRefresh = vi.fn(async () => issue);
+    const onRefresh = vi.fn<NonNullable<Parameters<typeof import("./AgentPanel").AgentPanel>[0]["onRefresh"]>>(async () => issue);
     const view = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh }));
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
@@ -1308,7 +1316,9 @@ describe("Agent conversation state", () => {
     const source = EventSourceMock.instances[0]!;
     source.emit("open");
     source.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     const scroller = view.container.querySelector(".agent-scroll") as HTMLDivElement;
     Object.defineProperties(scroller, {
       scrollHeight: { configurable: true, value: 1_000 },
@@ -1439,7 +1449,9 @@ describe("Agent conversation state", () => {
     second.emit("snapshot_ready", { runState: "running", issueStatus: "in_progress" });
     // Simulate the frame that was already queued in the browser when the snapshot landed.
     staleFrame(performance.now());
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.queryByText("ghost")).toBeNull();
     expect(cancelFrame).toHaveBeenCalledWith(frameId);
   });
@@ -1698,7 +1710,9 @@ describe("Agent conversation state", () => {
     source.emit("message", event({ type: "issue_status", status: "complete" }, "status-new"));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(2));
     rejectFirst(new Error("stale_network_failure"));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.queryByRole("alert")).toBeNull();
     view.unmount();
   });
@@ -1781,10 +1795,8 @@ describe("Agent conversation loading", () => {
         source.emit("snapshot_ready", { runState: "idle", issueStatus: "pending" });
         await vi.advanceTimersByTimeAsync(0);
         expect(screen.queryByText("正在加载对话…")).toBeNull();
-        if (hasHistory) {
-          expect(screen.getByText("Previously saved question")).toBeTruthy();
-          expect(screen.queryByText("还没有对话")).toBeNull();
-        } else expect(screen.getByText("还没有对话")).toBeTruthy();
+        expect(screen.queryByText("Previously saved question") !== null).toBe(hasHistory);
+        expect(screen.queryByText("还没有对话") !== null).toBe(!hasHistory);
       } finally {
         view.unmount();
         vi.useRealTimers();

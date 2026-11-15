@@ -35,6 +35,7 @@ export function Button(props: ButtonProps) {
 type InputProps = Omit<JSX.InputHTMLAttributes<HTMLInputElement>, "prefix"> & { prefix?: JSX.Element; allowClear?: boolean };
 export function Input(props: InputProps) {
   const rest = omit(props, "prefix", "allowClear", "class");
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let element!: HTMLInputElement;
   return (
     <span class={`ui-input-affix-wrapper ${props.class ?? ""}`}>

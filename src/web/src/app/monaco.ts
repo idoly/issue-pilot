@@ -1,4 +1,5 @@
 import * as monaco from "monaco-editor/editor/editor.api.js";
+// oxlint-disable-next-line import/default -- Vite generates the default worker constructor for the ?worker import.
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import "monaco-editor/editor/browser/coreCommands.js";
 import "monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js";
@@ -37,7 +38,7 @@ window.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 monaco.languages.register({ id: "json", extensions: [".json"], aliases: ["JSON", "json"], mimetypes: ["application/json"] });
 monaco.languages.setTokensProvider("json", createTokenizationSupport(true));
 monaco.languages.setLanguageConfiguration("json", {
-  wordPattern: /(-?\d*\.\d\w*)|([^\[\{\]\}\:\"\,\s]+)/g,
+  wordPattern: /(-?\d*\.\d\w*)|([^[{\]}:",\s]+)/g,
   comments: { lineComment: "//", blockComment: ["/*", "*/"] },
   brackets: [
     ["{", "}"],

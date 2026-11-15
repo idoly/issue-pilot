@@ -3,7 +3,12 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueExecutionItem } from "../data/client";
 
-const mocks = vi.hoisted(() => ({ pins: vi.fn(), pin: vi.fn(), create: vi.fn(), list: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  pins: vi.fn<typeof import("../data/client").listIssuePins>(),
+  pin: vi.fn<typeof import("../data/client").setIssuePinned>(),
+  create: vi.fn<typeof import("../data/client").createIssue>(),
+  list: vi.fn<typeof import("../data/client").listIssues>(),
+}));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   listIssues: mocks.list,
@@ -60,7 +65,7 @@ for (const change of ["status", "assignee", "title"] as const)
     let items = [rows()[0]!, { ...rows()[0]!, id: "second", title: "second task" }];
     mocks.list.mockImplementation(async () => items);
     const [selected, setSelected] = createSignal("alice", { ownedWrite: true });
-    const select = vi.fn(setSelected);
+    const select = vi.fn<(key: string) => void>(setSelected);
     render(() => <Queue selectedId={selected()} userSubject="alice" onSelect={select} />);
     await screen.findByText("alice task");
     fireEvent.click(screen.getByLabelText("按状态筛选"));
@@ -181,7 +186,9 @@ it("does not release a new identity's pin controls when the old preferences load
   setSubject("bob");
   const current = await screen.findByRole("button", { name: "固定 bob" });
   finishOld(["alice"]);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(current).toHaveProperty("disabled", true);
   finishCurrent(["bob"]);
   await waitFor(() => expect(screen.getByRole("button", { name: "取消固定 bob" })).toHaveProperty("disabled", false));
@@ -227,7 +234,9 @@ for (const outcome of ["success", "failure"] as const)
     const current = await screen.findByRole("dialog", { name: "新建工单" });
     await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(3));
     finishOld();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(within(current).getByText("关联工单（0 个）")).toBeTruthy();
     expect(screen.queryByText("closed_candidate_load_failed")).toBeNull();
     finishCurrent();
@@ -256,7 +265,9 @@ it("keeps a newly created Issue when an older initial list finishes later", asyn
     fireEvent.click(save);
     await screen.findByText(created.title);
     finishOld();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.getByText(created.title)).toBeTruthy();
     expect(selected()).toBe(created.id);
   } finally {
@@ -269,10 +280,10 @@ it("does not select an Issue created after the queue unmounts", async () => {
   mocks.create.mockImplementationOnce(
     () =>
       new Promise((resolve) => {
-        finish = () => resolve({ id: "late-created" });
+        finish = () => resolve({ ...rows()[0]!, id: "late-created" });
       }),
   );
-  const selected = vi.fn();
+  const selected = vi.fn<(key: string) => void>();
   const view = render(() => <Queue selectedId="alice" userSubject="alice" onSelect={selected} />);
   fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
   const dialog = await screen.findByRole("dialog", { name: "新建工单" });
@@ -284,7 +295,9 @@ it("does not select an Issue created after the queue unmounts", async () => {
   view.unmount();
   selected.mockClear();
   finish();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(selected).not.toHaveBeenCalled();
 });
 
@@ -294,7 +307,7 @@ for (const outcome of ["success", "failure"] as const)
     mocks.create.mockImplementationOnce(
       () =>
         new Promise((resolve, reject) => {
-          finishOld = outcome === "success" ? () => resolve({ id: "old-created", assigneeSubject: "alice" }) : () => reject(new Error("old_creation_failed"));
+          finishOld = outcome === "success" ? () => resolve({ ...rows()[0]!, id: "old-created", assigneeSubject: "alice" }) : () => reject(new Error("old_creation_failed"));
         }),
     );
     mocks.create.mockImplementationOnce(
@@ -302,6 +315,7 @@ for (const outcome of ["success", "failure"] as const)
         new Promise((resolve) => {
           finishCurrent = () =>
             resolve({
+              ...rows()[1]!,
               id: "bob-created",
               title: "bob creation",
               assigneeSubject: "bob",
@@ -314,7 +328,7 @@ for (const outcome of ["success", "failure"] as const)
         }),
     );
     const [subject, setSubject] = createSignal("alice", { ownedWrite: true });
-    const selected = vi.fn();
+    const selected = vi.fn<(key: string) => void>();
     render(() => <Queue selectedId="" userSubject={subject()} onSelect={selected} />);
     fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
     const old = await screen.findByRole("dialog", { name: "新建工单" });
@@ -334,7 +348,9 @@ for (const outcome of ["success", "failure"] as const)
     fireEvent.click(currentSave);
     await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(2));
     finishOld();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.getByRole("dialog", { name: "新建工单" })).toBeTruthy();
     expect(currentSave).toHaveProperty("disabled", true);
     expect(screen.queryByText("old_creation_failed")).toBeNull();
@@ -370,7 +386,9 @@ for (const outcome of ["success", "failure"] as const)
     fireEvent.click(button);
     await waitFor(() => expect(mocks.pin).toHaveBeenCalledTimes(2));
     finishOld();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(button).toHaveProperty("disabled", true);
     expect(screen.queryByText("old_identity_pin_failed")).toBeNull();
     finishCurrent();

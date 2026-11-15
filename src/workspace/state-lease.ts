@@ -102,7 +102,10 @@ export class ApplicationStateLease {
     await starting?.catch(() => undefined);
     const server = this.server;
     this.server = undefined;
-    if (server) await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    if (server)
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     await this.removeOwnedSocket();
   }
   private async removeOwnedSocket(): Promise<void> {

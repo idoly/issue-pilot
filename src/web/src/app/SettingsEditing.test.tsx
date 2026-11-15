@@ -5,18 +5,18 @@ import type { ManagedUser, Person, PersonalCredentialStatus } from "../data/clie
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown,
-  users: vi.fn(),
-  createUser: vi.fn(),
-  updateUser: vi.fn(),
-  credentials: vi.fn(),
-  saveCredentials: vi.fn(),
-  repositories: vi.fn(),
-  register: vi.fn(),
-  updateRepository: vi.fn(),
-  removeRepository: vi.fn(),
-  refreshPeople: vi.fn(),
-  refreshConfiguration: vi.fn(),
-  refreshCatalog: vi.fn(),
+  users: vi.fn<typeof import("../data/client").loadManagedUsers>(),
+  createUser: vi.fn<typeof import("../data/client").createUser>(),
+  updateUser: vi.fn<typeof import("../data/client").updateUser>(),
+  credentials: vi.fn<typeof import("../data/client").loadPersonalCredentials>(),
+  saveCredentials: vi.fn<typeof import("../data/client").updatePersonalCredentials>(),
+  repositories: vi.fn<typeof import("../data/client").loadRepositories>(),
+  register: vi.fn<typeof import("../data/client").registerRepository>(),
+  updateRepository: vi.fn<typeof import("../data/client").updateRepository>(),
+  removeRepository: vi.fn<typeof import("../data/client").deleteRepository>(),
+  refreshPeople: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshPeople"]>(),
+  refreshConfiguration: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshConfiguration"]>(),
+  refreshCatalog: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshCatalog"]>(),
 }));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({
@@ -73,13 +73,20 @@ beforeEach(() => {
   state.updateUser.mockResolvedValue(users[0]);
   state.credentials.mockResolvedValue(status);
   state.saveCredentials.mockResolvedValue({ ...status, revision: 4 });
-  state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", group: "other", services: [], revision: 2 }]);
+  state.repositories.mockResolvedValue([
+    { id: "repo", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", name: "Repository", url: "git@example.test:team/repo.git", group: "other", services: [], revision: 2 },
+  ]);
   state.register.mockResolvedValue({ id: "new" });
   state.updateRepository.mockResolvedValue({ ok: true });
   state.removeRepository.mockResolvedValue(undefined);
   state.refreshPeople.mockResolvedValue([]);
-  state.refreshConfiguration.mockResolvedValue({});
-  state.refreshCatalog.mockResolvedValue({});
+  state.refreshConfiguration.mockResolvedValue({
+    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false },
+    agentModels: [],
+    environments: [],
+    services: [],
+  });
+  state.refreshCatalog.mockResolvedValue({ environments: [], services: [] });
 });
 afterEach(() => {
   cleanup();
@@ -138,7 +145,9 @@ for (const outcome of ["success", "failure"] as const)
     dialog = await screen.findByRole("dialog");
     await fireEvent.input(within(dialog).getByLabelText("人员姓名"), { target: { value: "Current draft" } });
     finish();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.getByRole("dialog")).toBe(dialog);
     expect(within(dialog).getByLabelText("人员姓名")).toHaveProperty("value", "Current draft");
     expect(screen.queryByText("old_user_save_failed")).toBeNull();
@@ -147,7 +156,12 @@ for (const outcome of ["success", "failure"] as const)
 
 test("a repository save finishing after navigation refreshes shared bindings without reloading the disposed list", async () => {
   let finish!: () => void;
-  state.updateRepository.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+  state.updateRepository.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ ok: true });
+      }),
+  );
   const view = render(() => <RepositoryManagement />);
   await screen.findByText("Repository");
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
@@ -269,7 +283,9 @@ test("identity changes clear secret drafts and late credential success cannot mu
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await screen.findByText("API Key");
   finish();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(screen.queryByText("old-secret")).toBeNull();
   expect(screen.getAllByText("未配置")).toHaveLength(2);
 });
@@ -308,8 +324,19 @@ test("repository saving infers a name, preserves stale drafts and refreshes shar
 });
 
 test("repository usage navigates to its service and linked repositories cannot be deleted", async () => {
-  state.repositories.mockResolvedValue([{ id: "repo", name: "Repository", url: "git@example.test:team/repo.git", group: "other", revision: 2, services: [{ key: "orders", name: "Orders" }] }]);
-  const select = vi.fn();
+  state.repositories.mockResolvedValue([
+    {
+      id: "repo",
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-01T00:00:00Z",
+      name: "Repository",
+      url: "git@example.test:team/repo.git",
+      group: "other",
+      revision: 2,
+      services: [{ key: "orders", name: "Orders" }],
+    },
+  ]);
+  const select = vi.fn<(key: string) => void>();
   render(() => <RepositoryManagement onSelectService={select} />);
   await screen.findByText("Repository");
   fireEvent.click(screen.getByRole("button", { name: "Orders" }));

@@ -5,32 +5,32 @@ import CodeBrowser from "./CodeBrowser";
 import { createSignal } from "solid-js";
 import { issuePilotConfig } from "../../../../issue-pilot.config.ts";
 import { copyText } from "../ui/clipboard";
-vi.mock("../ui/clipboard", () => ({ copyText: vi.fn() }));
+vi.mock("../ui/clipboard", () => ({ copyText: vi.fn<typeof import("../ui/clipboard").copyText>() }));
 
 const api = vi.hoisted(() => ({
-  loadSourceRepositories: vi.fn(),
-  loadSourceTree: vi.fn(),
-  loadSourceFile: vi.fn(),
-  saveSourceFile: vi.fn(),
-  searchSource: vi.fn(),
-  loadSourceDiff: vi.fn(),
-  loadSourceDiffFile: vi.fn(),
-  stageSourcePaths: vi.fn(),
-  unstageSourcePaths: vi.fn(),
-  discardSourcePaths: vi.fn(),
-  commitSourceChanges: vi.fn(),
-  loadSourceHistory: vi.fn(),
-  loadSourceCommit: vi.fn(),
-  loadSourceCommitFile: vi.fn(),
-  loadSourceBlame: vi.fn(),
-  createSourceFile: vi.fn(),
-  createSourceDirectory: vi.fn(),
-  deleteSourcePath: vi.fn(),
-  renameSourcePath: vi.fn(),
+  loadSourceRepositories: vi.fn<typeof import("../data/client").loadSourceRepositories>(),
+  loadSourceTree: vi.fn<typeof import("../data/client").loadSourceTree>(),
+  loadSourceFile: vi.fn<typeof import("../data/client").loadSourceFile>(),
+  saveSourceFile: vi.fn<typeof import("../data/client").saveSourceFile>(),
+  searchSource: vi.fn<typeof import("../data/client").searchSource>(),
+  loadSourceDiff: vi.fn<typeof import("../data/client").loadSourceDiff>(),
+  loadSourceDiffFile: vi.fn<typeof import("../data/client").loadSourceDiffFile>(),
+  stageSourcePaths: vi.fn<typeof import("../data/client").stageSourcePaths>(),
+  unstageSourcePaths: vi.fn<typeof import("../data/client").unstageSourcePaths>(),
+  discardSourcePaths: vi.fn<typeof import("../data/client").discardSourcePaths>(),
+  commitSourceChanges: vi.fn<typeof import("../data/client").commitSourceChanges>(),
+  loadSourceHistory: vi.fn<typeof import("../data/client").loadSourceHistory>(),
+  loadSourceCommit: vi.fn<typeof import("../data/client").loadSourceCommit>(),
+  loadSourceCommitFile: vi.fn<typeof import("../data/client").loadSourceCommitFile>(),
+  loadSourceBlame: vi.fn<typeof import("../data/client").loadSourceBlame>(),
+  createSourceFile: vi.fn<typeof import("../data/client").createSourceFile>(),
+  createSourceDirectory: vi.fn<typeof import("../data/client").createSourceDirectory>(),
+  deleteSourcePath: vi.fn<typeof import("../data/client").deleteSourcePath>(),
+  renameSourcePath: vi.fn<typeof import("../data/client").renameSourcePath>(),
 }));
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), ...api }));
 const revision = "c".repeat(40);
-const changedFile = { path: "a.txt", previousPath: null, status: "modified" };
+const changedFile: import("../data/client").SourceCommitFile = { path: "a.txt", previousPath: null, status: "modified" };
 const file = (path: string, content = `${path} content`) => ({ path, content, size: content.length, sha256: "a".repeat(64) });
 const mount = (development = false) =>
   render(() => <CodeBrowser issueKey="ISSUE-20261017-001" development={development} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />);
@@ -52,13 +52,22 @@ describe("native code browser", () => {
     api.saveSourceFile.mockImplementation(async (_key: string, _repo: string, path: string, content: string) => ({ ...file(path, content), sha256: "b".repeat(64) }));
     api.searchSource.mockResolvedValue({ matches: [{ path: "b.txt", line: 1, column: 1, preview: "needle" }], truncated: false });
     api.loadSourceDiff.mockResolvedValue({ files: [], truncated: false });
-    api.loadSourceDiffFile.mockResolvedValue({ file: changedFile, before: { content: "before" }, after: { content: "after" } });
+    api.loadSourceDiffFile.mockResolvedValue({
+      file: changedFile,
+      before: { path: "a.txt", version: "index", content: "before" },
+      after: { path: "a.txt", version: "working-tree", content: "after" },
+    });
     api.loadSourceHistory.mockResolvedValue({
+      nextCursor: null,
       commits: [{ hash: revision, shortHash: "cccccccc", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" }],
       truncated: false,
     });
     api.loadSourceCommit.mockResolvedValue({ files: [changedFile], truncated: false });
-    api.loadSourceCommitFile.mockResolvedValue({ file: changedFile, before: { content: "old revision" }, after: { content: "new revision" } });
+    api.loadSourceCommitFile.mockResolvedValue({
+      file: changedFile,
+      before: { path: "a.txt", revision: "b".repeat(40), content: "old revision" },
+      after: { path: "a.txt", revision, content: "new revision" },
+    });
     api.loadSourceBlame.mockResolvedValue({ path: "a.txt", line: 1, commit: revision, shortCommit: "cccccccc", author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Saved change" });
     api.createSourceFile.mockImplementation(async (_key: string, _repo: string, path: string) => file(path, ""));
   });
@@ -179,7 +188,7 @@ describe("native code browser", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     let modified = false;
     api.loadSourceHistory.mockRejectedValue(new Error("source_history_failed"));
-    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path?: string, _signal?: AbortSignal, staged = false) => ({
       files: modified && !staged ? [changedFile] : [],
       truncated: false,
     }));
@@ -261,7 +270,7 @@ describe("native code browser", () => {
   });
 
   it("cancels an obsolete search and ignores its late results", async () => {
-    let finish!: (value: unknown) => void;
+    let finish!: (value: Awaited<ReturnType<typeof api.searchSource>>) => void;
     api.searchSource.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -358,7 +367,7 @@ describe("native code browser", () => {
 
   it("shows changes and delegates staging, unstaging and committing", async () => {
     let staged = false;
-    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, index = false) => ({
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path?: string, _signal?: AbortSignal, index = false) => ({
       files: index === staged ? [changedFile] : [],
       truncated: false,
     }));
@@ -395,8 +404,12 @@ describe("native code browser", () => {
 
   it("keeps unchanged lines visible in a full-file comparison", async () => {
     const unchanged = Array.from({ length: 20 }, (_, index) => `unchanged line ${index + 1}`).join("\n");
-    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({ files: staged ? [] : [changedFile], truncated: false }));
-    api.loadSourceDiffFile.mockResolvedValue({ file: changedFile, before: { content: unchanged + "\nold ending\n" }, after: { content: unchanged + "\nnew ending\n" } });
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path?: string, _signal?: AbortSignal, staged = false) => ({ files: staged ? [] : [changedFile], truncated: false }));
+    api.loadSourceDiffFile.mockResolvedValue({
+      file: changedFile,
+      before: { path: "a.txt", version: "index", content: unchanged + "\nold ending\n" },
+      after: { path: "a.txt", version: "working-tree", content: unchanged + "\nnew ending\n" },
+    });
     mount(true);
     await clickReady("查看差异 a.txt");
     await waitFor(() => expect(monacoTestState.models.at(-1)?.getValue()).toBe(unchanged + "\nnew ending\n"));
@@ -404,7 +417,7 @@ describe("native code browser", () => {
   });
 
   it("requires a message before committing staged changes", async () => {
-    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path: string, _signal: AbortSignal, staged = false) => ({ files: staged ? [changedFile] : [], truncated: false }));
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path?: string, _signal?: AbortSignal, staged = false) => ({ files: staged ? [changedFile] : [], truncated: false }));
     mount(true);
     await clickReady("提交暂存的变更");
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "请填写提交说明");
@@ -412,12 +425,12 @@ describe("native code browser", () => {
   });
 
   it("compares index and worktree versions separately and includes both rename paths", async () => {
-    const renamed = { status: "renamed", path: "new.txt", previousPath: "old.txt" };
+    const renamed: import("../data/client").SourceCommitFile = { status: "renamed", path: "new.txt", previousPath: "old.txt" };
     api.loadSourceDiff.mockResolvedValue({ files: [renamed], truncated: false });
-    api.loadSourceDiffFile.mockImplementation(async (_key: string, _repository: string, _path: string, _signal: AbortSignal, staged: boolean) => ({
+    api.loadSourceDiffFile.mockImplementation(async (_key: string, _repository: string, _path?: string, _signal?: AbortSignal, staged = false) => ({
       file: renamed,
-      before: { content: staged ? "committed" : "indexed" },
-      after: { content: staged ? "indexed" : "working" },
+      before: { path: "old.txt", version: staged ? "head" : "index", content: staged ? "committed" : "indexed" },
+      after: { path: "new.txt", version: staged ? "index" : "working-tree", content: staged ? "indexed" : "working" },
     }));
     mount(true);
     await waitFor(() => expect(screen.getAllByRole("button", { name: "查看差异 new.txt" })).toHaveLength(2));
@@ -459,7 +472,7 @@ describe("native code browser", () => {
   });
 
   it("ignores older history arriving after the selected repository changes", async () => {
-    let finish!: (value: unknown) => void;
+    let finish!: (value: Awaited<ReturnType<typeof api.loadSourceHistory>>) => void;
     api.loadSourceRepositories.mockResolvedValue(["app", "other"].map((name) => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
     api.loadSourceHistory.mockResolvedValueOnce({
       commits: [{ hash: revision, shortHash: "cccccccc", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "App change" }],
@@ -482,7 +495,7 @@ describe("native code browser", () => {
     await waitFor(() => expect(api.loadSourceHistory).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "仓库 other" }));
     expect(await screen.findByRole("button", { name: /Other repository/ })).toBeTruthy();
-    finish({ commits: [{ hash: "e".repeat(40), subject: "Stale history" }], truncated: false, nextCursor: null });
+    finish({ commits: [{ hash: "e".repeat(40), shortHash: "eeeeeeee", parents: [], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Stale history" }], truncated: false, nextCursor: null });
     await Promise.resolve();
     await Promise.resolve();
     expect(screen.queryByRole("button", { name: /Stale history/ })).toBeNull();
@@ -507,8 +520,8 @@ describe("native code browser", () => {
     });
     api.loadSourceCommitFile.mockImplementation(async (_key: string, _repo: string, _revision: string, path: string) => ({
       file: { ...changedFile, path },
-      before: { content: `before ${path}` },
-      after: { content: `after ${path}` },
+      before: { path, revision: "b".repeat(40), content: `before ${path}` },
+      after: { path, revision: _revision, content: `after ${path}` },
     }));
     mount(true);
     await clickReady(/Saved change/);
@@ -527,6 +540,7 @@ describe("native code browser", () => {
 
   it("keeps files nested under each of several expanded Graph commits", async () => {
     api.loadSourceHistory.mockResolvedValue({
+      nextCursor: null,
       commits: [
         { hash: revision, shortHash: "cccccccc", parents: ["d".repeat(40)], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "Newest" },
         { hash: "d".repeat(40), shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Older" },
@@ -570,7 +584,7 @@ describe("native code browser", () => {
   });
 
   it("updates the permanent status bar from the clicked line and ignores stale blame", async () => {
-    let finish!: (value: unknown) => void;
+    let finish!: (value: Awaited<ReturnType<typeof api.loadSourceBlame>>) => void;
     api.loadSourceFile.mockResolvedValue(file("a.txt", "first\nsecond\nthird\n"));
     api.loadSourceBlame.mockImplementationOnce(
       () =>
@@ -586,8 +600,8 @@ describe("native code browser", () => {
     fireEvent.click(editor);
     await waitFor(() => expect(screen.getByLabelText("当前行归属").textContent).toContain("Second author"));
     expect(api.loadSourceBlame).toHaveBeenLastCalledWith("ISSUE-20261017-001", "app", "a.txt", 2, expect.any(AbortSignal));
-    expect(api.loadSourceBlame.mock.calls[0]![4].aborted).toBe(true);
-    finish({ path: "a.txt", line: 1, author: "Stale author" });
+    expect(api.loadSourceBlame.mock.calls[0]![4]?.aborted).toBe(true);
+    finish({ path: "a.txt", line: 1, author: "Stale author", commit: revision, shortCommit: "cccccccc", date: "2026-10-17T00:00:00Z", subject: "Stale line" });
     await Promise.resolve();
     await Promise.resolve();
     expect(screen.getByLabelText("当前行归属").textContent).toContain("Second author");
@@ -610,6 +624,7 @@ describe("native code browser", () => {
     it(`ignores clipboard ${outcome} from a different commit hover`, async () => {
       const secondHash = "d".repeat(40);
       api.loadSourceHistory.mockResolvedValue({
+        nextCursor: null,
         commits: [
           { hash: revision, shortHash: "cccccccc", parents: [secondHash], author: "Fixture", date: "2026-10-17T00:00:00Z", subject: "First commit" },
           { hash: secondHash, shortHash: "dddddddd", parents: [], author: "Fixture", date: "2026-10-16T00:00:00Z", subject: "Second commit" },
@@ -635,7 +650,9 @@ describe("native code browser", () => {
           return tooltip;
         });
         finish();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
         expect(current.textContent).not.toContain("已复制");
         expect(current.textContent).not.toContain("复制失败");
       } finally {
@@ -665,19 +682,19 @@ describe("native code browser", () => {
 
   it("opens independent roots and single-child chains, preserving expansion after a save", async () => {
     api.loadSourceRepositories.mockResolvedValue(["app", "other"].map((name) => ({ name, url: `https://example.test/${name}.git`, branch: "main", access: "write" })));
-    api.loadSourceTree.mockImplementation(async (_key: string, repository: string, path: string) => ({
+    api.loadSourceTree.mockImplementation(async (_key: string, repository: string, path = "") => ({
       path,
       truncated: false,
       entries:
         repository === "other"
-          ? [{ path: "readme.md", name: "readme.md", type: "file" }]
+          ? [{ path: "readme.md", name: "readme.md", type: "file", size: 12 }]
           : path === ""
-            ? [{ path: "src", name: "src", type: "directory" }]
+            ? [{ path: "src", name: "src", type: "directory", size: null }]
             : path === "src"
-              ? [{ path: "src/main", name: "main", type: "directory" }]
+              ? [{ path: "src/main", name: "main", type: "directory", size: null }]
               : path === "src/main"
-                ? [{ path: "src/main/code", name: "code", type: "directory" }]
-                : [{ path: "src/main/code/value.ts", name: "value.ts", type: "file" }],
+                ? [{ path: "src/main/code", name: "code", type: "directory", size: null }]
+                : [{ path: "src/main/code/value.ts", name: "value.ts", type: "file", size: 12 }],
     }));
     mount();
     expect((await screen.findByRole("button", { name: "仓库 app" })).getAttribute("aria-expanded")).toBe("true");

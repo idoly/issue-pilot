@@ -2,7 +2,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/te
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSignal } from "solid-js";
 import type { IssueDetail } from "../data/client";
-const state = vi.hoisted(() => ({ list: vi.fn(), read: vi.fn(), user: () => ({ subject: "dev", role: "developer" }) }));
+const state = vi.hoisted(() => ({
+  list: vi.fn<typeof import("../data/client").listIssueSessions>(),
+  read: vi.fn<typeof import("../data/client").readIssueSession>(),
+  user: () => ({ subject: "dev", role: "developer" }),
+}));
 vi.mock("../data/client", async (original) => ({ ...(await original<typeof import("../data/client")>()), listIssueSessions: state.list, readIssueSession: state.read }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: () => state.user() }) }));
 import { IssueSessionControls } from "./IssueSessionControls";
@@ -94,7 +98,9 @@ it("keeps the history panel open when the Issue object is replaced with identica
   const dialog = await screen.findByRole("dialog", { name: "历史会话" });
   const reads = state.read.mock.calls.length;
   setCurrent({ ...issue });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
   expect(screen.getByRole("dialog", { name: "历史会话" })).toBe(dialog);
   expect(state.read).toHaveBeenCalledTimes(reads);
 });

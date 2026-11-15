@@ -8,7 +8,7 @@ function maskQuoted(statement: string): string {
   // alternate quoting have different boundaries, so any of them disables masking for the whole statement.
   if (/\$[^\s$]*\$/.test(statement) || /[qQ]'./.test(statement)) return statement;
   let masked = "";
-  for (let index = 0; index < statement.length; ) {
+  for (let index = 0; index < statement.length;) {
     const quote = statement[index]!;
     if (quote !== "'" && quote !== '"' && quote !== "`") {
       masked += quote;

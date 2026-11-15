@@ -37,7 +37,9 @@ test("a subprocess error does not release its owner before stdio closes", async 
   );
   try {
     child.emit("error", reason);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(settled, false);
     child.emit("close", 1);
     await assert.rejects(execution, (error) => error === reason);
@@ -74,7 +76,9 @@ for (const channel of ["stdout", "stderr", "stdin"] as const)
     );
     try {
       assert.doesNotThrow(() => child[channel].emit("error", reason));
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       assert.equal(settled, false);
       child.emit("close", 1);
       await assert.rejects(execution, (error) => error === reason);

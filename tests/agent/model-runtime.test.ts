@@ -83,7 +83,9 @@ test("shares one offline Pi catalog refresh and lists every model of the Operato
   const runtime = {
     async refresh(options: unknown) {
       refreshes.push(options);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
       return { aborted: false, errors: new Map() };
     },
     // Availability depends on host authentication, which no longer selects candidates.

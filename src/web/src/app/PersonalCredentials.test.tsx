@@ -3,7 +3,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, test, vi } from "vitest";
 import type { PersonalCredentialStatus } from "../data/client";
 
-const state = vi.hoisted(() => ({ user: undefined as unknown, load: vi.fn() }));
+const state = vi.hoisted(() => ({ user: undefined as unknown, load: vi.fn<typeof import("../data/client").loadPersonalCredentials>() }));
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({
     currentUser: state.user,

@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe("browser clipboard", () => {
   it("copies through the secure clipboard when available", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn<Clipboard["writeText"]>().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     await copyText("提交信息");
     expect(writeText).toHaveBeenCalledWith("提交信息");
@@ -25,7 +25,7 @@ describe("browser clipboard", () => {
     const button = document.createElement("button");
     document.body.append(button);
     button.focus();
-    const copy = vi.fn(() => {
+    const copy = vi.fn<Document["execCommand"]>(() => {
       expect((document.activeElement as HTMLTextAreaElement).value).toBe("提交信息");
       return true;
     });

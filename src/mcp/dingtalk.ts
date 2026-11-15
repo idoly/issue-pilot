@@ -158,6 +158,7 @@ function decodeDingtalkAttachments(record: DingtalkRecord, field: string | undef
   for (const item of value) {
     const file = object(item);
     if (file.isLink === true || file.type === "link") {
+      // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
       if (typeof file.filename !== "string" || !file.filename.trim() || /[\u0000-\u001f\u007f]/.test(file.filename) || typeof file.url !== "string" || /[\u0000-\u001f\u007f]/.test(file.url))
         throw new DingtalkError("invalid_dingtalk_attachments");
       let url: URL;
@@ -174,6 +175,7 @@ function decodeDingtalkAttachments(record: DingtalkRecord, field: string | undef
       typeof file.resourceId !== "string" ||
       typeof file.filename !== "string" ||
       !file.filename.trim() ||
+      // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
       /[/\\\u0000-\u001f\u007f]/.test(file.filename) ||
       [".", ".."].includes(file.filename) ||
       !Number.isSafeInteger(file.size) ||

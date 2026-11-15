@@ -18,9 +18,9 @@ describe("AgentStreamController", () => {
     vi.useFakeTimers();
     try {
       const sources: ClosingErrorEventSource[] = [],
-        onSnapshot = vi.fn(),
-        onEvent = vi.fn(),
-        onError = vi.fn();
+        onSnapshot = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onSnapshot"]>(),
+        onEvent = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onEvent"]>(),
+        onError = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onError"]>();
       const controller = new AgentStreamController(
         (id) => `/api/issues/${id}/agent-stream`,
         1000,
@@ -69,9 +69,9 @@ describe("AgentStreamController", () => {
     it(`recovers a complete conversation after a malformed ${phase} message instead of keeping a partial stream`, async () => {
       vi.useFakeTimers();
       const sources: ClosingErrorEventSource[] = [];
-      const onSnapshot = vi.fn(),
-        onEvent = vi.fn(),
-        onError = vi.fn();
+      const onSnapshot = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onSnapshot"]>(),
+        onEvent = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onEvent"]>(),
+        onError = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onError"]>();
       const controller = new AgentStreamController(
         (id) => `/stream/${id}`,
         1000,
@@ -113,7 +113,7 @@ describe("AgentStreamController", () => {
 
   it("reconnects on a session reset and discards events from the previous stream", async () => {
     const sources: ClosingErrorEventSource[] = [],
-      onEvent = vi.fn();
+      onEvent = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onEvent"]>();
     const controller = new AgentStreamController(
       (id) => `/api/issues/${id}/agent-stream`,
       1000,

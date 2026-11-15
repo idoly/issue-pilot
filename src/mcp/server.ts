@@ -134,6 +134,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       // Check the whole group before decoding or constructing multipart copies. byteLength may overestimate
       // invalid Base64; the canonical round-trip check below still rejects invalid encodings.
       for (const file of attachments) {
+        // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
         if (/[/\\\u0000-\u001f\u007f]/.test(file.fileName) || [".", ".."].includes(file.fileName) || Buffer.byteLength(file.fileName) > issuePilotConfig.limits.filesystemNameBytes)
           throw new Error("invalid_attachment_name");
         const mediaType = file.mediaType ?? "application/octet-stream";

@@ -167,7 +167,7 @@ export async function planFlatIssueLayout(stateRoot: string, issues: FlatLayoutI
       managed = new Set(["agent", "attachments", "outputs", "runtime", "work"]);
     if (names.length) {
       for (const name of await entries(root)) {
-        if (name === ".issue-runtime.json" || /^\.related-issue-/.test(name)) throw new Error(`flat_layout_runtime_collision:${issue.key}/${name}`);
+        if (name === ".issue-runtime.json" || name.startsWith(".related-issue-")) throw new Error(`flat_layout_runtime_collision:${issue.key}/${name}`);
       }
     }
     for (const name of names.filter((name) => !managed.has(name) && !/^\.runtime-(?:previous-)?[0-9a-f-]{36}$/.test(name))) {

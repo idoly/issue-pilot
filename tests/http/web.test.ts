@@ -133,7 +133,9 @@ test("serves the production Web and keeps unlisted files private", async (contex
     } finally {
       await app.close();
     }
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.deepEqual(listenerWarnings, [], "HTML fallback must not repeatedly assimilate the Fastify reply thenable");
   } finally {
     await rm(root, { recursive: true, force: true });

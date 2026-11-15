@@ -5,10 +5,10 @@ vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
   return {
     ...actual,
-    loadCatalog: vi.fn(async () => ({ environments: [], services: [] })),
-    loadConfig: vi.fn(),
-    loadUsers: vi.fn(async () => [{ subject: "user", name: "User", email: "user@example.test" }]),
-    loadCurrentUser: vi.fn(async () => ({ subject: "user", name: "User", email: "user@example.test" })),
+    loadCatalog: vi.fn<typeof import("../data/client").loadCatalog>(async () => ({ environments: [], services: [] })),
+    loadConfig: vi.fn<typeof import("../data/client").loadConfig>(),
+    loadUsers: vi.fn<typeof import("../data/client").loadUsers>(async () => [{ subject: "user", name: "User", email: "user@example.test", role: "developer" }]),
+    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({ subject: "user", name: "User", email: "user@example.test", role: "developer" })),
   };
 });
 
@@ -257,7 +257,9 @@ describe("application configuration resources", () => {
         identity.reject(new Error("late_identity"));
       }
       await pending;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(resources.catalog().issueSearchEnabled).toBeUndefined();
       expect(resources.configurationLoaded()).toBe(false);
       expect(resources.configurationError()).toBe("");

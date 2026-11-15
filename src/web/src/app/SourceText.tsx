@@ -12,6 +12,7 @@ export function SourceText(props: {
   onSave: () => void;
   onPosition: (line: number, column: number) => void;
 }) {
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let container!: HTMLDivElement;
   let code: monaco.editor.IStandaloneCodeEditor | undefined, model: monaco.editor.ITextModel | undefined;
   let path = "",

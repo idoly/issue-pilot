@@ -2,10 +2,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/te
 import { afterEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
-const state = vi.hoisted(() => ({ plan: vi.fn(), create: vi.fn(), list: vi.fn(), user: () => ({ subject: "developer", role: "developer" }) }));
+const state = vi.hoisted(() => ({
+  plan: vi.fn<typeof import("../data/client").planIssueScopeTransition>(),
+  create: vi.fn<typeof import("../data/client").createIssue>(),
+  list: vi.fn<typeof import("../data/client").listIssues>(),
+  user: () => ({ subject: "developer", role: "developer" }),
+}));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
-  listIssueWorkFiles: vi.fn(async () => []),
+  listIssueWorkFiles: vi.fn<typeof import("../data/client").listIssueWorkFiles>(async () => []),
   planIssueScopeTransition: state.plan,
   createIssue: state.create,
   listIssues: state.list,
@@ -74,7 +79,7 @@ for (const outcome of ["success", "failure"] as const)
     it(`ignores a closed related editor's ${outcome} while the new load is ${currentPending ? "pending" : "complete"}`, async () => {
       let finishOld!: () => void, finishCurrent!: () => void;
       const candidates = (count: number) =>
-        Array.from({ length: count }, (_, index) => ({ ...issue, id: `ISSUE-20261017-00${index + 1}`, workspaceStatus: "ready", agentRunning: false, resolvedAt: null }));
+        Array.from({ length: count }, (_, index) => ({ ...issue, id: `ISSUE-20261017-00${index + 1}`, workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null }));
       state.list.mockImplementationOnce(
         () =>
           new Promise((resolve, reject) => {
@@ -102,7 +107,9 @@ for (const outcome of ["success", "failure"] as const)
           await within(current).findByText("关联工单（2 个可选，最多选择 20 个）");
         }
         finishOld();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
         expect(screen.queryByText("closed_related_load_failed")).toBeNull();
         expect(within(current).queryByText("关联工单（1 个可选，最多选择 20 个）")).toBeNull();
         expect(within(current).getByRole("button", { name: "保存关联" })).toHaveProperty("disabled", currentPending);
@@ -130,7 +137,7 @@ it("offers an explicit retry after a failed model response", () => {
 });
 
 it("shows related Issue handler, status, service and environment with a navigable card", async () => {
-  const open = vi.fn();
+  const open = vi.fn<NonNullable<Parameters<typeof import("./IssueWorkspace").IssueWorkspace>[0]["onOpenIssue"]>>();
   const related = { ...issue, id: "ISSUE-20261017-002", assignee: "处理人甲", assigneeSubject: "handler", workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null };
   const unassigned = { ...related, id: "ISSUE-20261017-003", assignee: null, assigneeSubject: null };
   const detailed = { ...issue, description: "[诊断日志](work/diagnostics.log)", relatedIssues: [related, unassigned] };
@@ -163,10 +170,10 @@ it("does not navigate to a follow-up created after the workspace unmounts", asyn
   state.create.mockImplementationOnce(
     () =>
       new Promise((resolve) => {
-        finish = () => resolve({ id: "ISSUE-20261018-999" });
+        finish = () => resolve({ ...issue, id: "ISSUE-20261018-999", workspaceStatus: "ready", agentRunning: false, resolvedAt: null });
       }),
   );
-  const created = vi.fn();
+  const created = vi.fn<NonNullable<Parameters<typeof import("./IssueWorkspace").IssueWorkspace>[0]["onCreatedFollowUp"]>>();
   const development: IssueDetail = { ...issue, environmentKey: "dev", type: "defect_fix", workspace: { status: "ready", sourceAvailable: true } };
   const view = render(() => <IssueWorkspace issue={development} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={created} />);
   fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
@@ -175,12 +182,14 @@ it("does not navigate to a follow-up created after the workspace unmounts", asyn
   await waitFor(() => expect(state.create).toHaveBeenCalledOnce());
   view.unmount();
   finish();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(created).not.toHaveBeenCalled();
 });
 
 it("offers previews for supported attachments", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(new Response('{"result":"previewed-json"}'));
+  const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response('{"result":"previewed-json"}'));
   vi.stubGlobal("fetch", fetchMock);
   const detailed: IssueDetail = {
     ...issue,
@@ -225,7 +234,9 @@ for (const outcome of ["success", "failure"] as const)
       fireEvent.click(within(dialog).getByLabelText("目标服务"));
       fireEvent.click(await screen.findByRole("option", { name: "Inventory" }));
       finish();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(within(dialog).queryByRole("region", { name: "范围变更预览" })).toBeNull();
       expect(screen.queryByText("stale_plan_failed")).toBeNull();
       const button = within(dialog).getByRole("button", { name: "预检变更" });

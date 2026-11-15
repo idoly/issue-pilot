@@ -21,6 +21,7 @@ interface ModalProps {
 
 function ModalContent(props: ModalProps) {
   const id = createUniqueId();
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let panel!: HTMLDialogElement;
   let opener: HTMLElement | undefined;
   const cancel = () => {

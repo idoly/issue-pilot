@@ -514,7 +514,9 @@ test("reserves affected Issues and commits Service changes only after sessions c
       .finally(() => {
         readSettled = true;
       });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     assert.equal(readSettled, false);
     releaseClose();
     assert.equal((await update).statusCode, 200);

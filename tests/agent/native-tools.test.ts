@@ -139,7 +139,10 @@ test("cancelling a command drains its process tree before the next operation", a
       {} as never,
     );
     await assert.rejects(operation, (error) => error === reason);
-    await invoke(issueNativeTools({ writeRoot: f.own }).find((tool) => tool.name === "write")!, { path: "late.txt", content: "new" });
+    await invoke(
+      issueNativeTools({ writeRoot: f.own }).find((tool) => tool.name === "write")!,
+      { path: "late.txt", content: "new" },
+    );
     // A leaked child writes 50ms after start; poll with a generous margin and fail as soon as it appears.
     const late = path.join(f.own, "late.txt");
     const deadline = Date.now() + 2_000;
@@ -149,7 +152,9 @@ test("cancelling a command drains its process tree before the next operation", a
         leaked = true;
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
     }
     assert.equal(leaked, false, "cancelled command tree wrote after cancellation");
   } finally {

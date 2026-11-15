@@ -471,5 +471,9 @@ export const issueWorkspaces = sqliteTable(
     lastError: text("last_error"),
     ...timestamps,
   },
-  (table) => [index("issue_workspaces_interrupted_idx").on(table.status, table.issueId).where(sql`${table.status} IN ('preparing', 'running')`)],
+  (table) => [
+    index("issue_workspaces_interrupted_idx")
+      .on(table.status, table.issueId)
+      .where(sql`${table.status} IN ('preparing', 'running')`),
+  ],
 );

@@ -33,9 +33,13 @@ export function Select<const Option extends SelectOption>(props: SelectProps<Opt
   const [query, setQuery] = createSignal("", { ownedWrite: true });
   const [highlight, setHighlight] = createSignal<string | undefined>(undefined, { ownedWrite: true });
   const [position, setPosition] = createSignal<JSX.CSSProperties>({}, { ownedWrite: true });
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let root!: HTMLDivElement;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let trigger!: HTMLDivElement;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let popup: HTMLDivElement | undefined;
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let search: HTMLInputElement | undefined;
   const multiple = () => props.mode === "multiple";
   const inactive = () => props.disabled || props.loading;

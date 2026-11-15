@@ -297,7 +297,9 @@ test("credential changes reuse the index, invalid responses keep existing vector
         const signal = init?.signal;
         assert.ok(signal);
         signal.throwIfAborted();
-        await new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
       }
       return output([vector(0)]);
     },

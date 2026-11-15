@@ -208,15 +208,15 @@ export function IssueWorkspace(props: {
     const base = editBase();
     return Boolean(
       editOpen() &&
-        !editCommitted() &&
-        base &&
-        (editTitle().trim() !== base.title ||
-          editDescription().trim() !== base.description ||
-          editPriority() !== base.priority ||
-          editAssignee() !== base.assigneeSubject ||
-          editCc().join("\0") !== (base.ccRecipients ?? []).map((person) => person.subject).join("\0") ||
-          editAttachments().length > 0 ||
-          removedAttachmentIds().length > 0),
+      !editCommitted() &&
+      base &&
+      (editTitle().trim() !== base.title ||
+        editDescription().trim() !== base.description ||
+        editPriority() !== base.priority ||
+        editAssignee() !== base.assigneeSubject ||
+        editCc().join("\0") !== (base.ccRecipients ?? []).map((person) => person.subject).join("\0") ||
+        editAttachments().length > 0 ||
+        removedAttachmentIds().length > 0),
     );
   };
   createEffect(editDirty, (dirty) => {

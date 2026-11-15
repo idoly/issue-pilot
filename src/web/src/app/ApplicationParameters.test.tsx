@@ -5,9 +5,9 @@ import type { ApplicationParameterEditorState, ApplicationParameters, Person } f
 
 const state = vi.hoisted(() => ({
   user: undefined as unknown,
-  load: vi.fn(),
-  save: vi.fn(),
-  refreshCatalog: vi.fn(),
+  load: vi.fn<typeof import("../data/client").loadApplicationParameters>(),
+  save: vi.fn<typeof import("../data/client").updateApplicationParameters>(),
+  refreshCatalog: vi.fn<ReturnType<typeof import("./ApplicationResources").useApplicationResources>["refreshCatalog"]>(),
 }));
 vi.mock("./ApplicationResources", () => ({ useApplicationResources: () => ({ currentUser: state.user, refreshCatalog: state.refreshCatalog }) }));
 vi.mock("../data/client", async (original) => ({
@@ -52,7 +52,7 @@ const parameterState = (overrides: Partial<typeof defaults> = {}, revision = 0):
 beforeEach(() => {
   state.load.mockReset();
   state.save.mockReset();
-  state.refreshCatalog.mockReset().mockResolvedValue({});
+  state.refreshCatalog.mockReset().mockResolvedValue({ environments: [], services: [] });
 });
 afterEach(() => cleanup());
 
@@ -263,7 +263,9 @@ for (const outcome of ["success", "failure"] as const)
     expect(state.save).toHaveBeenLastCalledWith({ expectedRevision: 2, overrides: { maxConcurrentIssues: 7 } });
 
     finishPrevious();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(screen.getByRole("button", { name: "保存参数" })).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("同时运行的工单")).toHaveProperty("value", "7");
     expect(screen.queryByRole("alert")).toBeNull();
@@ -308,7 +310,9 @@ test("revoking management access removes the form and ignores an in-flight save 
   expect(screen.queryByRole("region", { name: "参数表单" })).toBeNull();
   expect(screen.queryByRole("button", { name: "保存参数" })).toBeNull();
   failSave();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(screen.queryByRole("alert")).toBeNull();
   expect(state.save).toHaveBeenCalledTimes(1);
 

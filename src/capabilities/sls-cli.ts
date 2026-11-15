@@ -54,6 +54,7 @@ export const SLS_QUERY_ERRORS: readonly string[] = [
 ];
 
 function cliFailure(stderr: string): string {
+  // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
   const diagnostic = stderr.replace(/\x1b\[[0-9;]*m/g, "");
   const code = /^\s*Code:\s*([A-Za-z][A-Za-z0-9]*)\s*$/m.exec(diagnostic)?.[1];
   const status = /^\s*StatusCode:\s*([45]\d\d)\s*$/m.exec(diagnostic)?.[1];

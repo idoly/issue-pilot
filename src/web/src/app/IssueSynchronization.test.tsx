@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { IssueDetail, IssueExecutionItem } from "../data/client";
 import { EventSourceMock } from "../test-setup";
 
-const api = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn<typeof import("../data/client").listIssues>(), detail: vi.fn<typeof import("../data/client").getIssue>() }));
 vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   listIssues: api.list,
@@ -88,7 +88,12 @@ it("updates the queue from selected details and ignores an older delayed list ro
   const stream = await open();
   const stale = summary();
   let finishList!: (items: IssueExecutionItem[]) => void;
-  api.list.mockImplementationOnce(() => new Promise((resolve) => (finishList = resolve)));
+  api.list.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishList = resolve;
+      }),
+  );
   current.title = "New detail while queue request is pending";
   stream.emit("message", { id: "workspace", event: { type: "tool_execution_end", toolCallId: "workspace", toolName: "workspace", result: { content: [] }, isError: false } });
   await screen.findByRole("heading", { name: current.title });
@@ -106,7 +111,12 @@ it("reconciles a newer list change that arrived during a slow detail request", a
   const stream = await open();
   const stale = structuredClone(current);
   let finishDetail!: (detail: IssueDetail) => void;
-  api.detail.mockImplementationOnce(() => new Promise((resolve) => (finishDetail = resolve)));
+  api.detail.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishDetail = resolve;
+      }),
+  );
   stream.emit("message", { id: "slow", event: { type: "issue_status", status: "complete" } });
   await waitFor(() => expect(api.detail).toHaveBeenCalledTimes(2));
   current.title = "Newer list during the detail request";
@@ -125,7 +135,7 @@ it("reloads the same selected Issue when returning from another page", async () 
   await screen.findByRole("heading", { name: "运营总览" });
   current.description = "Changed while the workspace was closed";
   fireEvent.click(screen.getByRole("radio", { name: "工单" }));
-  await screen.findByText(current.description);
+  expect(await screen.findByText(current.description)).toBeTruthy();
 });
 
 it("polls other Issues and updates the selected details while retaining unsent conversation text", async () => {
@@ -192,7 +202,9 @@ it("ignores a refresh from the old workspace after returning to the same Issue",
   fireEvent.click(screen.getByRole("radio", { name: "工单" }));
   await screen.findByText(current.description);
   finish({ ...old, description: "Obsolete refresh" });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
   expect(screen.queryByText("Obsolete refresh")).toBeNull();
   expect(screen.getByText(current.description)).toBeTruthy();
 });

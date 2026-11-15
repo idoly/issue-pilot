@@ -179,7 +179,16 @@ test("real aliyun CLI uses isolated HTTPS, pagination, diagnostics, budgets and 
   } finally {
     for (const socket of sockets) socket.destroy();
     try {
-      await Promise.all([server, proxy].filter((value) => value !== undefined).map((value) => new Promise<void>((resolve, reject) => value.close((error) => (error ? reject(error) : resolve())))));
+      await Promise.all(
+        [server, proxy]
+          .filter((value) => value !== undefined)
+          .map(
+            (value) =>
+              new Promise<void>((resolve, reject) => {
+                value.close((error) => (error ? reject(error) : resolve()));
+              }),
+          ),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

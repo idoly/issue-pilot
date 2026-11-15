@@ -228,7 +228,7 @@ describe("SLS result view", () => {
 
   it("copies every filtered row in display order as JSON, retaining types and omitted fields", async () => {
     const records = Array.from({ length: 110 }, (_, id) => ({ id, group: id % 2 ? "omit" : "keep", enabled: false, empty: "", nested: { value: null } }));
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn<Clipboard["writeText"]>().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const view = viewResult(tool(records));
     try {
@@ -253,7 +253,7 @@ describe("SLS result view", () => {
     const message = "<script>untrusted</script>\n" + "内容".repeat(160) + "\tend";
     const record = { message, empty: "", zero: 0, enabled: false, absent: null, nested: { list: [1, 2] } };
     const entry = tool([record]);
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn<Clipboard["writeText"]>().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const view = viewResult(entry);
     try {
@@ -282,7 +282,7 @@ describe("SLS result view", () => {
   it("reports copy failure, allows retry and ignores completion belonging to a replaced result", async () => {
     let resolve!: () => void;
     const writeText = vi
-      .fn()
+      .fn<Clipboard["writeText"]>()
       .mockResolvedValueOnce(undefined)
       .mockImplementationOnce(
         () =>
@@ -318,7 +318,7 @@ describe("SLS result view", () => {
 
   it("lets an in-flight copy finish after unmount without writing to a disposed component", async () => {
     let resolve!: () => void;
-    const writeText = vi.fn().mockImplementation(
+    const writeText = vi.fn<Clipboard["writeText"]>().mockImplementation(
       () =>
         new Promise<void>((done) => {
           resolve = done;
@@ -389,7 +389,7 @@ describe("SLS result view", () => {
           .getAllByRole("cell")
           .slice(1)
           .map((cell) => cell.textContent),
-      ).toEqual(["0", "false", "null", '\"\"', '{"nested":[1,"two"]}', "—", "—", "—"]);
+      ).toEqual(["0", "false", "null", '""', '{"nested":[1,"two"]}', "—", "—", "—"]);
       expect(within(rows[2]!).getAllByRole("cell")[1]!.textContent).toBe("—");
       expect(screen.getByText("<img src=x onerror=alert(1)>")).toBeTruthy();
       expect(screen.getByText("ordinary field")).toBeTruthy();

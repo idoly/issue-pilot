@@ -20,9 +20,9 @@
     "test:ssh": "bash scripts/test-ssh.sh",
     "build": "vite build --config src/web/vite.config.ts",
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
-    "format": "biome format --write .",
-    "format:check": "biome format .",
-    "lint": "biome lint ."
+    "format": "oxfmt --threads=1 --write .",
+    "format:check": "oxfmt --threads=1 --check .",
+    "lint": "oxlint --threads=1 --ignore-path .gitignore --deny-warnings --report-unused-disable-directives ."
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.82",
@@ -40,7 +40,6 @@
     "p-map": "^7.1.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.7",
     "@solidjs/testing-library": "1.0.0-rc.2",
     "@solidjs/vite-plugin": "3.0.0-next.57",
     "@solidjs/web": "2.0.0-rc.21",
@@ -51,6 +50,8 @@
     "marked": "^18.2.0",
     "material-icon-theme": "5.40.0",
     "monaco-editor": "0.57.0",
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0",
     "solid-js": "2.0.0-rc.21",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",

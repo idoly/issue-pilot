@@ -4,10 +4,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 vi.mock("../data/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../data/client")>();
   const { applicationParameterBounds, applicationParameterDefaults } = await import("../../../configuration/parameters");
-  const { Blob } = await import("node:buffer");
   const now = new Date().toISOString();
   const service = { key: "srm", name: "SRM" };
-  const issue = (id: string, title: string, status: string, retryable = false) => ({
+  type FixtureIssue = import("../data/client").IssueDetail & import("../data/client").IssueExecutionItem & Required<Pick<import("../data/client").IssueDetail, "scopeTransitions">>;
+  const issue = (id: string, title: string, status: import("../data/client").IssueStatus, retryable = false): FixtureIssue => ({
     id,
     editVersion: "a".repeat(64),
     title,
@@ -26,10 +26,10 @@ vi.mock("../data/client", async (importOriginal) => {
     repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }],
     attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }],
     relatedIssues: [],
-    scopeTransitions: [] as Array<Record<string, unknown>>,
+    scopeTransitions: [],
     comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>,
     ccRecipients: [],
-    reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test" },
+    reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" },
     environmentKey: "test",
     workingDirectory: "/fixture/workspaces/issue",
     workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, retryable },
@@ -43,11 +43,11 @@ vi.mock("../data/client", async (importOriginal) => {
   issues[1]!.environmentKey = "prod";
   issues[1]!.service = { key: "orders", name: "Orders" };
   issues[1]!.repositories[0]!.workingBranch = null;
-  const managedUsers = [
+  const managedUsers: Omit<import("../data/client").ManagedUser, "revision">[] = [
     { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer", active: true, createdAt: now, updatedAt: now },
     { subject: "second-user", name: "刘宜展", email: "lyz@example.test", role: "developer", active: true, createdAt: now, updatedAt: now },
   ];
-  const configuration = {
+  const configuration: import("../data/client").Config = {
     agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false },
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [
@@ -66,7 +66,7 @@ vi.mock("../data/client", async (importOriginal) => {
             environmentKey: "test",
             repositoryBranches: [{ repositoryId: "srm-repository", repositoryAlias: "srm", baseBranch: "develop" }],
             capabilities: ["sls"],
-            sls: { region: "cn-test", project: "srm-test", logstores: ["srm"], credentialConfigured: true },
+            sls: { region: "cn-test", project: "srm-test", logstores: ["srm"] },
           },
         ],
         repositories: [{ id: "srm-repository", alias: "srm", url: "git@example.com:team/srm.git" }],
@@ -86,17 +86,19 @@ vi.mock("../data/client", async (importOriginal) => {
   };
   return {
     ...actual,
-    loadManagedUsers: vi.fn(async () => structuredClone(managedUsers.map((user) => ({ ...user, revision: 0 })))),
-    loadUsers: vi.fn(async () => structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role })))),
-    loadCurrentUser: vi.fn(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
-    loadSharedDmsCredentials: vi.fn(async () => ({ configured: true, revision: 0, url: "https://dms.example.test/sse" })),
-    loadSharedSlsCredentials: vi.fn(async () => ({ configured: true, revision: 0 })),
-    loadPersonalCredentials: vi.fn(async () => ({ revision: 0, model: null, gitSshConfigured: false })),
-    loadCatalog: vi.fn(async () => ({
+    loadManagedUsers: vi.fn<typeof import("../data/client").loadManagedUsers>(async () => structuredClone(managedUsers.map((user) => ({ ...user, revision: 0 })))),
+    loadUsers: vi.fn<typeof import("../data/client").loadUsers>(async () =>
+      structuredClone(managedUsers.filter((user) => user.active).map(({ subject, name, email, role }) => ({ subject, name, email, role }))),
+    ),
+    loadCurrentUser: vi.fn<typeof import("../data/client").loadCurrentUser>(async () => ({ subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" })),
+    loadSharedDmsCredentials: vi.fn<typeof import("../data/client").loadSharedDmsCredentials>(async () => ({ configured: true, revision: 0, url: "https://dms.example.test/sse" })),
+    loadSharedSlsCredentials: vi.fn<typeof import("../data/client").loadSharedSlsCredentials>(async () => ({ configured: true, revision: 0 })),
+    loadPersonalCredentials: vi.fn<typeof import("../data/client").loadPersonalCredentials>(async () => ({ revision: 0, model: null, gitSshConfigured: false })),
+    loadCatalog: vi.fn<typeof import("../data/client").loadCatalog>(async () => ({
       environments: structuredClone(configuration.environments),
       services: configuration.services.map(({ key, name, deployments }) => ({ key, name, deployments: deployments.map(({ environmentKey }) => ({ environmentKey })) })),
     })),
-    loadApplicationParameters: vi.fn(async () => ({
+    loadApplicationParameters: vi.fn<typeof import("../data/client").loadApplicationParameters>(async () => ({
       revision: 0,
       overrides: {},
       values: applicationParameterDefaults,
@@ -106,7 +108,7 @@ vi.mock("../data/client", async (importOriginal) => {
     })),
     updateApplicationParameters: vi.fn<typeof actual.updateApplicationParameters>(),
     searchIssues: vi.fn<typeof actual.searchIssues>(),
-    loadApplicationEndpoints: vi.fn(async () => ({
+    loadApplicationEndpoints: vi.fn<typeof import("../data/client").loadApplicationEndpoints>(async () => ({
       endpoints: [
         {
           name: "Issue Pilot MCP",
@@ -124,7 +126,7 @@ vi.mock("../data/client", async (importOriginal) => {
         },
       ],
     })),
-    loadRepositories: vi.fn(async () => [
+    loadRepositories: vi.fn<typeof import("../data/client").loadRepositories>(async () => [
       ...configuration.services.flatMap((service) =>
         service.repositories.map((repository) => ({
           id: repository.id,
@@ -139,16 +141,16 @@ vi.mock("../data/client", async (importOriginal) => {
       ),
       { id: "updated-repository", revision: 0, name: "Updated repository", url: "git@example.test:team/updated.git", group: "other", createdAt: now, updatedAt: now, services: [] },
     ]),
-    loadServiceConfigurationDescription: vi.fn(async (key: string) => ({
+    loadServiceConfigurationDescription: vi.fn<typeof import("../data/client").loadServiceConfigurationDescription>(async (key: string) => ({
       context: configuration.services.find((service) => service.key === key)?.context ?? configuration.services.find((service) => service.key === key)?.description ?? "",
     })),
-    loadConfig: vi.fn(async () => structuredClone(configuration)),
-    listIssues: vi.fn(async (_signal?: AbortSignal) => structuredClone(issues)),
-    createIssue: vi.fn(
+    loadConfig: vi.fn<typeof import("../data/client").loadConfig>(async () => structuredClone(configuration)),
+    listIssues: vi.fn<typeof import("../data/client").listIssues>(async (_signal?: AbortSignal) => structuredClone(issues)),
+    createIssue: vi.fn<typeof import("../data/client").createIssue>(
       async (input: {
         title: string;
         description: string;
-        priority: string;
+        priority: import("../data/client").IssuePriority;
         workMode: string;
         serviceKey: string;
         assigneeSubject: string | null;
@@ -166,16 +168,16 @@ vi.mock("../data/client", async (importOriginal) => {
         return structuredClone(created);
       },
     ),
-    listIssuePins: vi.fn(async (_signal?: AbortSignal) => [] as string[]),
-    setIssuePinned: vi.fn(async (_id: string, _pinned: boolean) => undefined),
-    updateIssueRelatedIssues: vi.fn(async (_id: string, _relatedIssueKeys: string[]) => undefined),
-    resolveDmsScope: vi.fn(async (input: { schemaName: string }) => ({
+    listIssuePins: vi.fn<typeof import("../data/client").listIssuePins>(async (_signal?: AbortSignal) => [] as string[]),
+    setIssuePinned: vi.fn<typeof import("../data/client").setIssuePinned>(async (_id: string, _pinned: boolean) => undefined),
+    updateIssueRelatedIssues: vi.fn<typeof import("../data/client").updateIssueRelatedIssues>(async (_id: string, _relatedIssueKeys: string[]) => undefined),
+    resolveDmsScope: vi.fn<typeof import("../data/client").resolveDmsScope>(async (input: { schemaName: string }) => ({
       instanceId: input.schemaName === "mdm" ? "instance-2" : "instance-1",
       instanceHost: `${input.schemaName}.db.example.test`,
       instancePort: "3306",
       databaseId: input.schemaName === "mdm" ? "456" : "123",
     })),
-    loadWorkspaceStats: vi.fn(async (_signal?: AbortSignal) => ({
+    loadWorkspaceStats: vi.fn<typeof import("../data/client").loadWorkspaceStats>(async (_signal?: AbortSignal) => ({
       sampling: false,
       error: null,
       snapshot: {
@@ -208,12 +210,12 @@ vi.mock("../data/client", async (importOriginal) => {
         ],
       },
     })),
-    getIssue: vi.fn(async (id: string) => structuredClone(issues.find((item) => item.id === id))),
-    loadSourceRepositories: vi.fn(async () => [
+    getIssue: vi.fn<typeof import("../data/client").getIssue>(async (id: string) => structuredClone(issues.find((item) => item.id === id)!)),
+    loadSourceRepositories: vi.fn<typeof import("../data/client").loadSourceRepositories>(async () => [
       { name: "srm", url: "git@example.com:team/srm.git", branch: "hotfix-issue", access: "write" as const },
       { name: "srm-server", url: "git@example.com:team/srm-server.git", branch: "hotfix-issue", access: "write" as const },
     ]),
-    loadSourceTree: vi.fn(async (_id: string, sourceRepository: string, sourcePath: string) =>
+    loadSourceTree: vi.fn<typeof import("../data/client").loadSourceTree>(async (_id: string, sourceRepository: string, sourcePath = "") =>
       sourcePath
         ? { path: sourcePath, entries: [{ name: "index.ts", path: "src/index.ts", type: "file" as const, size: 32 }], truncated: false }
         : sourceRepository === "srm-server"
@@ -227,25 +229,29 @@ vi.mock("../data/client", async (importOriginal) => {
               truncated: false,
             },
     ),
-    loadSourceFile: vi.fn(async (_id: string, _repository: string, sourcePath: string) => ({
+    loadSourceFile: vi.fn<typeof import("../data/client").loadSourceFile>(async (_id: string, _repository: string, sourcePath: string) => ({
       path: sourcePath,
       content: sourcePath === "README.md" ? "# SRM source\n" : "export const ready = true;\n",
       size: 24,
       sha256: "a".repeat(64),
     })),
-    searchSource: vi.fn(async () => ({ matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }], truncated: false })),
-    loadSourceHistory: vi.fn(async () => ({
-      commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Fixture User", date: now, subject: "Fix source browser" }],
+    searchSource: vi.fn<typeof import("../data/client").searchSource>(async () => ({
+      matches: [{ path: "src/index.ts", line: 1, column: 14, preview: "export const ready = true;" }],
       truncated: false,
     })),
-    loadSourceCommit: vi.fn(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
-    loadSourceCommitFile: vi.fn(async () => ({
+    loadSourceHistory: vi.fn<typeof import("../data/client").loadSourceHistory>(async () => ({
+      commits: [{ hash: "b".repeat(40), shortHash: "b".repeat(8), parents: ["a".repeat(40)], author: "Fixture User", date: now, subject: "Fix source browser" }],
+      nextCursor: null,
+      truncated: false,
+    })),
+    loadSourceCommit: vi.fn<typeof import("../data/client").loadSourceCommit>(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
+    loadSourceCommitFile: vi.fn<typeof import("../data/client").loadSourceCommitFile>(async () => ({
       file: { status: "modified" as const, path: "README.md", previousPath: null },
       before: { path: "README.md", revision: "a".repeat(40), content: "# Old SRM source\n" },
       after: { path: "README.md", revision: "b".repeat(40), content: "# SRM source\n" },
     })),
-    loadSourceDiff: vi.fn(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
-    loadSourceDiffFile: vi.fn(async () => ({
+    loadSourceDiff: vi.fn<typeof import("../data/client").loadSourceDiff>(async () => ({ files: [{ status: "modified" as const, path: "README.md", previousPath: null }], truncated: false })),
+    loadSourceDiffFile: vi.fn<typeof import("../data/client").loadSourceDiffFile>(async () => ({
       file: { status: "modified" as const, path: "README.md", previousPath: null },
       before: { path: "README.md", version: "index" as const, content: "# Indexed SRM source\n" },
       after: { path: "README.md", version: "working-tree" as const, content: "# SRM source\n" },
@@ -254,12 +260,12 @@ vi.mock("../data/client", async (importOriginal) => {
       const selected = issues.find((item) => item.id === id);
       if (selected) selected.workspace.retryable = false;
     },
-    updateIssueStatus: vi.fn(async (id: string, status: "open" | "resolved") => {
+    updateIssueStatus: vi.fn<typeof import("../data/client").updateIssueStatus>(async (id: string, status: "open" | "resolved") => {
       const selected = issues.find((item) => item.id === id)!;
       selected.status = status;
       return structuredClone(selected);
     }),
-    planIssueScopeTransition: vi.fn(async (id: string, target: { serviceKey: string; workMode: string }) => {
+    planIssueScopeTransition: vi.fn<typeof import("../data/client").planIssueScopeTransition>(async (id: string, target: { serviceKey: string; workMode: import("../data/client").IssueWorkMode }) => {
       const selected = issues.find((item) => item.id === id)!;
       return {
         planHash: `sha256:${"a".repeat(64)}`,
@@ -274,30 +280,32 @@ vi.mock("../data/client", async (importOriginal) => {
         warnings: [],
       };
     }),
-    applyIssueScopeTransition: vi.fn(async (id: string, target: { serviceKey: string; workMode: string }) => {
-      const selected = issues.find((item) => item.id === id)!;
-      const fromService = structuredClone(selected.service);
-      const fromWorkMode = actual.issueWorkMode(selected.environmentKey as "prod" | "test" | "dev", selected.type as Parameters<typeof actual.issueWorkMode>[1])!;
-      if (target.workMode === "development_fix") {
-        selected.environmentKey = "dev";
-        selected.type = "defect_fix";
-        selected.repositories[0]!.workingBranch = `hotfix-${id.toLowerCase()}`;
-      }
-      selected.scopeTransitions.push({
-        id: "transition-1",
-        action: "convert_to_development",
-        from: { service: fromService, workMode: fromWorkMode },
-        to: { service: structuredClone(selected.service), workMode: target.workMode },
-        repositories: { retained: [selected.repositories[0]!.url], added: [], removed: [] },
-        planHash: `sha256:${"a".repeat(64)}`,
-        actor: { subject: "fixture-user", name: "严欣" },
-        createdAt: now,
-      });
-      return { issueKey: id };
-    }),
-    fetchAttachment: vi.fn(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
-    sendAgentMessage: vi.fn(async () => undefined),
-    updateService: vi.fn(async () => undefined),
+    applyIssueScopeTransition: vi.fn<typeof import("../data/client").applyIssueScopeTransition>(
+      async (id: string, target: { serviceKey: string; workMode: import("../data/client").IssueWorkMode }) => {
+        const selected = issues.find((item) => item.id === id)!;
+        const fromService = structuredClone(selected.service);
+        const fromWorkMode = actual.issueWorkMode(selected.environmentKey as "prod" | "test" | "dev", selected.type as Parameters<typeof actual.issueWorkMode>[1])!;
+        if (target.workMode === "development_fix") {
+          selected.environmentKey = "dev";
+          selected.type = "defect_fix";
+          selected.repositories[0]!.workingBranch = `hotfix-${id.toLowerCase()}`;
+        }
+        selected.scopeTransitions.push({
+          id: "transition-1",
+          action: "convert_to_development",
+          from: { service: fromService, workMode: fromWorkMode },
+          to: { service: structuredClone(selected.service), workMode: target.workMode },
+          repositories: { retained: [selected.repositories[0]!.url], added: [], removed: [] },
+          planHash: `sha256:${"a".repeat(64)}`,
+          actor: { subject: "fixture-user", name: "严欣" },
+          createdAt: now,
+        });
+        return { issueKey: id };
+      },
+    ),
+    fetchAttachment: vi.fn<typeof import("../data/client").fetchAttachment>(async () => new Blob(["order_id,status\n42,ready\n"], { type: "text/csv" })),
+    sendAgentMessage: vi.fn<typeof import("../data/client").sendAgentMessage>(async () => undefined),
+    updateService: vi.fn<typeof import("../data/client").updateService>(async () => undefined),
   };
 });
 
@@ -629,8 +637,8 @@ describe("issue pilot workspace", () => {
   test("scrolls a dashboard Issue detail into view on a narrow screen", async () => {
     const originalMatchMedia = window.matchMedia;
     const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({ matches: true })) });
+    const scrollIntoView = vi.fn<Element["scrollIntoView"]>();
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn<(query: string) => Pick<MediaQueryList, "matches">>(() => ({ matches: true })) });
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
     try {
       render(() => <App />);
@@ -1213,7 +1221,9 @@ describe("issue pilot workspace", () => {
         const current = await screen.findByRole("dialog", { name: "编辑服务" });
         fireEvent.input(within(current).getByLabelText("服务名称"), { target: { value: "new identity draft" } });
         finish();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
         expect(screen.getByRole("dialog", { name: "编辑服务" })).toBe(current);
         expect(within(current).getByLabelText("服务名称")).toHaveProperty("value", "new identity draft");
         expect(screen.queryByText("old_service_save_failed")).toBeNull();
@@ -1856,11 +1866,15 @@ describe("issue pilot workspace", () => {
     const connectionCount = EventSourceMock.instances.length;
     const requestCount = getIssue.mock.calls.length;
     currentSource.emit("snapshot_ready", { runState: "idle", issueStatus: "resolved" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(EventSourceMock.instances).toHaveLength(connectionCount);
     expect(getIssue).toHaveBeenCalledTimes(requestCount);
     resolveOld({ ...current, status: "in_progress", workspace: { ...current.workspace, status: "running" } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(screen.getByRole("button", { name: "重新打开" })).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
