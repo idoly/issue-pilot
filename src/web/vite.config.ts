@@ -2,7 +2,10 @@
 
 import path from "node:path";
 import { createReadStream, readdirSync, readFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { promisify } from "node:util";
+import { brotliCompress, constants, gzip } from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
 import solidPlugin from "@solidjs/vite-plugin";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -48,6 +51,29 @@ function editorIconAssets(): Plugin {
   };
 }
 
+// Static assets are immutable; compress once at build time instead of on every request.
+function compressedAssets(): Plugin {
+  const brotli = promisify(brotliCompress);
+  const gz = promisify(gzip);
+  return {
+    name: "compressed-assets",
+    async writeBundle(options, bundle) {
+      if (!options.dir) throw new Error("compressed_assets_output_directory_required");
+      for (const fileName of Object.keys(bundle)) {
+        if (!/\.(?:js|css)$/.test(fileName)) continue;
+        // Vite rewrites lazy preload references during generateBundle; read the final emitted bytes.
+        const file = path.join(options.dir, fileName);
+        const source = await readFile(file);
+        if (source.length < 1024) continue;
+        const br = await brotli(source, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } });
+        const gzip = await gz(source);
+        if (br.length < source.length) await writeFile(`${file}.br`, br);
+        if (gzip.length < source.length) await writeFile(`${file}.gz`, gzip);
+      }
+    },
+  };
+}
+
 const apiProxy = {
   "/mcp": { target: `http://127.0.0.1:${issuePilotConfig.http.port}` },
   "/api": { target: `http://127.0.0.1:${issuePilotConfig.http.port}`, ws: true },
@@ -56,7 +82,7 @@ const apiProxy = {
 export default defineConfig({
   root: import.meta.dirname,
   cacheDir: "../../node_modules/.vite/issue-pilot-web",
-  plugins: [editorIconAssets(), solidPlugin()],
+  plugins: [editorIconAssets(), solidPlugin(), compressedAssets()],
   resolve: { alias: { "monaco-editor-codicons.css": path.join(monacoRoot, "esm/vs/base/browser/ui/codicons/codicon/codicon.css") } },
   server: {
     host: issuePilotConfig.web.host,

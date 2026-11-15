@@ -51,14 +51,17 @@ export async function registerWebRoutes(app: FastifyInstance, configuredRoot: st
     prefix: "/",
     maxAge: 0,
     immutable: false,
+    preCompressed: true,
     allowedPath: (name) => {
       const relative = name.replace(/^\/+/, "");
       return relative === "index.html" || relative.startsWith("assets/");
     },
     setHeaders(reply, file) {
+      // @fastify/static passes the selected .br/.gz path to this hook.
+      const original = file.replace(/\.(?:br|gz)$/, "");
       reply.header("X-Content-Type-Options", "nosniff");
-      reply.header("Cache-Control", cacheControl(file));
-      if (file.endsWith(".html")) securityHeaders(reply);
+      reply.header("Cache-Control", cacheControl(original));
+      if (original.endsWith(".html")) securityHeaders(reply);
     },
   });
   const sendHtml = (_request: FastifyRequest, reply: FastifyReply) => {

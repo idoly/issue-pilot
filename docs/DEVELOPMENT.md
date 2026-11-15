@@ -77,6 +77,20 @@ python3 /home/idoly/.local/share/issue-pilot-runtime/verify-browser-container.py
 
 它只检查运行服务的 health 和 Chromium 页面，不发送消息、挂载生产数据，也不代表完整交互验收已通过。实际工单诊断仅输出耗时、计数和稳定错误；截图、trace 和响应正文可能包含业务秘密，不默认保存。
 
+## 浏览器性能对照
+
+在独立 checkout 完成生产构建后运行：
+
+```bash
+npm run test:performance -- --runs=3 --output=/tmp/issue-pilot-performance.json
+```
+
+沿用 `ISSUE_PILOT_PLAYWRIGHT_MODULE` 和 `ISSUE_PILOT_BROWSER_WEB_ROOT`。可通过 `ISSUE_PILOT_BROWSER_WS` 连接本机测试容器内的 Playwright `run-server`，测试服务仍在主机运行；容器需能访问主机回环地址。没有服务地址或业务数据目录参数，夹具始终使用临时 SQLite、JSONL 和 Git，退出时清理。输出文件必须不存在，不覆盖已有报告。
+
+场景包含 30 张工单、4 轮短会话和 150 轮长会话，记录列表出现、详情可操作、SSE 快照到达、末条消息可见以及编辑器可操作的时间。每轮使用新的浏览器 context，随后在同一 context 热缓存刷新、切换长会话、返回原工单并打开编辑器。正常网络与 150 ms 延迟、1.6 Mbps 下行、750 Kbps 上行、4 倍 CPU 降速分别测量；`--profile=local` 或 `--profile=slow` 可缩小范围。
+
+先把修改前的 `src/web/dist` 复制到独立临时目录，再构建修改后版本，用 `--compare=/临时目录` 交替测量两套资源；比较使用同一份当前后端代码，适用于 Web 构建和静态传输改动，不代表后端版本对照。报告包含各轮数据、中位数、构建标识和请求时序。资源传输量不含 HTML 和未结束的 SSE，编辑器时间包含脚本操作耗时。服务端为热启动，实验室结果不代表线上用户分布，不设容易受主机负载影响的绝对耗时门槛。测量时不要同时运行构建或测试；临时构建与报告使用后自行清理。
+
 ## SSH 与真实 SLS CLI 协议验收
 
 - `npm run test:ssh`：rootless Podman 启动临时 OpenSSH 服务；缺少夹具不能当作通过。

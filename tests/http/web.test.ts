@@ -2,14 +2,69 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { test } from "node:test";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 
 import { buildApi } from "../../src/http/api.ts";
+import { registerWebRoutes } from "../../src/http/web-routes.ts";
 import { modelCatalog } from "./fixture.ts";
 
 const stateLease = { async start() {}, async close() {} };
+
+test("negotiates precompressed assets without changing content, cache policy or private paths", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-web-compressed-"));
+  const app = Fastify();
+  try {
+    await mkdir(path.join(root, "assets"));
+    const source = "globalThis.example = true;\n".repeat(100);
+    const file = path.join(root, "assets", "app-b1c2d3e4.js");
+    await writeFile(file, source);
+    await writeFile(`${file}.br`, brotliCompressSync(source));
+    await writeFile(`${file}.gz`, gzipSync(source));
+    await writeFile(path.join(root, "assets", "uncompressed.js"), source);
+    await writeFile(path.join(root, "private.txt.br"), brotliCompressSync("private"));
+    const html = "<!doctype html><title>Issue Pilot</title>";
+    await writeFile(path.join(root, "index.html"), html);
+    await writeFile(path.join(root, "index.html.br"), brotliCompressSync(html));
+    await registerWebRoutes(app, root);
+    for (const accept of ["br, gzip", "gzip", "br;q=0, gzip", "identity"]) {
+      const response = await app.inject({ url: "/assets/app-b1c2d3e4.js", headers: { "accept-encoding": accept } });
+      assert.equal(response.statusCode, 200);
+      const encoding = accept === "br, gzip" ? "br" : accept === "identity" ? undefined : "gzip";
+      assert.equal(response.headers["content-encoding"], encoding);
+      const content = encoding === "br" ? brotliDecompressSync(response.rawPayload) : encoding === "gzip" ? gunzipSync(response.rawPayload) : response.rawPayload;
+      assert.equal(content.toString(), source);
+      assert.match(String(response.headers["content-type"]), /javascript/);
+      assert.equal(response.headers["cache-control"], "public, max-age=31536000, immutable");
+      assert.match(String(response.headers.vary), /accept-encoding/i);
+      assert.equal(response.headers["x-content-type-options"], "nosniff");
+      const head = await app.inject({ method: "HEAD", url: "/assets/app-b1c2d3e4.js", headers: { "accept-encoding": accept } });
+      assert.equal(head.statusCode, 200);
+      assert.equal(head.headers["content-length"], response.headers["content-length"]);
+      assert.equal(head.headers["content-encoding"], encoding);
+      assert.equal(head.rawPayload.length, 0);
+      const cached = await app.inject({ url: "/assets/app-b1c2d3e4.js", headers: { "accept-encoding": accept, "if-none-match": String(response.headers.etag) } });
+      assert.equal(cached.statusCode, 304);
+    }
+    const fallback = await app.inject({ url: "/assets/uncompressed.js", headers: { "accept-encoding": "br, gzip" } });
+    assert.equal(fallback.body, source);
+    assert.equal(fallback.headers["content-encoding"], undefined);
+    assert.match(String(fallback.headers.vary), /accept-encoding/i);
+    assert.equal(fallback.headers["cache-control"], "public, max-age=3600");
+    const index = await app.inject({ url: "/", headers: { "accept-encoding": "br" } });
+    assert.equal(brotliDecompressSync(index.rawPayload).toString(), html);
+    assert.match(String(index.headers["cache-control"]), /no-store/);
+    assert.match(String(index.headers["content-security-policy"]), /frame-ancestors 'none'/);
+    assert.equal((await app.inject({ url: "/private.txt", headers: { "accept-encoding": "br" } })).statusCode, 404);
+    assert.equal((await app.inject("/private.txt.br")).statusCode, 404);
+    assert.equal((await app.inject({ url: "/assets/missing.js", headers: { "accept-encoding": "gzip" } })).statusCode, 404);
+  } finally {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("serves the production Web and keeps unlisted files private", async (context) => {
   const listenerWarnings: Error[] = [];
