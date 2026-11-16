@@ -27,6 +27,8 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.match(prompt, /recorded baseline branch\/commit/);
     assert.match(prompt, /shared parent IDs or timing alone do not prove causation/);
     assert.match(prompt, /Investigation alone does not authorize code, configuration or data changes/);
+    assert.match(prompt, /SQL for an Issue answer or work file, do not use variables, temporary tables or explicit transactions/);
+    assert.match(prompt, /explain the conflict instead of providing an unsafe script/);
     assert.doesNotMatch(prompt, /sandbox operation|output\.spreadsheet|sandbox export_output/);
     assert.match(prompt, /global MCP servers expose separate mcp__ tools through Pi in every Issue environment/);
     assert.doesNotMatch(prompt, /service_query/);

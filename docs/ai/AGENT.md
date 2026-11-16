@@ -10,6 +10,8 @@ Prod/test analysis keeps its environment's code/evidence scope. Dev code belongs
 
 The system prompt guides diagnosis with available Issue evidence, recorded baseline branches and commits, cross-source checks and explicit evidence gaps. Investigation alone does not authorize changes.
 
+Agent-authored SQL deliverables avoid variables, temporary tables and explicit transactions. If a multi-step change needs atomicity, report that the requested form cannot safely express it instead of silently removing the transaction.
+
 ## Admission and recovery
 
 HTTP 201/202 does not mean model completion. Persist input and bind the session inside the per-Issue scope; preparation failures must not lose admitted messages. Pin the request sender and reauthorize after steering/session waits without switching identity.
