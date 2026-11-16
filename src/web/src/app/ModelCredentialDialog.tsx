@@ -39,21 +39,26 @@ export function ModelCredentialDialog(props: {
   const latest = createLatestTask();
   // A target change invalidates both secret drafts and results of already-submitted writes.
   createEffect(
-    () => (props.open ? JSON.stringify([props.draftKey, props.initial, props.keyConfigured]) : ""),
-    (key, previous) => {
-      // Effects rerun on any dependency update; only a real target or initial-value change resets the draft.
-      if (key === previous) return;
+    () => {
+      if (!props.open) return undefined;
+      // Track the primitive values: the caller rebuilds `initial`, so object identity changes on every render.
+      const initial = props.initial;
+      return { draftKey: props.draftKey, provider: initial.provider, model: initial.model, thinkingLevel: initial.thinkingLevel, codemode: initial.codemode, keyConfigured: props.keyConfigured };
+    },
+    (target, previous) => {
+      // Only a real target or initial-value change resets the draft.
+      if (target && previous && Object.keys(target).every((key) => target[key as keyof typeof target] === previous[key as keyof typeof previous])) return;
+      if (!target && !previous) return;
       latest.cancel();
       setApiKey("");
       setError("");
       setSaving(false);
       props.onSavingChange(false);
-      if (!key) return;
-      const initial = props.initial;
-      setProvider(initial.provider);
-      setModel(initial.model);
-      setThinkingLevel(initial.thinkingLevel);
-      setCodemode(initial.codemode);
+      if (!target) return;
+      setProvider(target.provider);
+      setModel(target.model);
+      setThinkingLevel(target.thinkingLevel);
+      setCodemode(target.codemode);
     },
   );
   onCleanup(() => {

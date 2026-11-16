@@ -4,7 +4,8 @@ import { DBHUB_DATABASES, type DbHubTarget } from "../../../domain/contracts";
 
 type SlsTarget = { region: string; project: string; logstores: string[] };
 
-function focusNewTarget(root: HTMLElement | undefined) {
+/** Focus the newly appended target row's first input without scrolling the panel. */
+export function focusNewTarget(root: HTMLElement | undefined) {
   requestAnimationFrame(() => {
     if (!root?.isConnected) return;
     const input = root.querySelector<HTMLInputElement>(".settings-target-row:last-child input");

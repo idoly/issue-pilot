@@ -1,20 +1,9 @@
 import { type Accessor, type ParentProps, createContext, createEffect, createSignal, onCleanup, useContext } from "solid-js";
 
-import {
-  currentUserSubject,
-  errorMessage,
-  loadCatalog,
-  loadConfig,
-  loadCurrentUser,
-  loadUsers,
-  setCurrentUserSubject,
-  setIdentityLocked,
-  type Config,
-  type ConfigCatalog,
-  type Person,
-} from "../data/client";
+import { currentUserSubject, loadCatalog, loadConfig, loadCurrentUser, loadUsers, setCurrentUserSubject, setIdentityLocked, type Config, type ConfigCatalog, type Person } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { AgentDraftStore } from "./agent-drafts";
+import { errorText } from "./error-text";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
 const emptyConfiguration = (): Config => ({
@@ -62,7 +51,7 @@ function latestLoader<Value>(load: (signal: AbortSignal) => Promise<Value>, appl
       }
       return value;
     } catch (error) {
-      if (request.isCurrent()) reportError(errorMessage(error));
+      if (request.isCurrent()) reportError(errorText(error));
       throw error;
     } finally {
       request.finish();
@@ -127,7 +116,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
         setCurrentUser(null);
         setCurrentUserSubject(null, false);
       }
-      const { identityLocked: locked = false, ...currentUser } = await loadCurrentUser(request.signal);
+      const { identityLocked: locked, ...currentUser } = await loadCurrentUser(request.signal);
       if (!request.isCurrent()) return users;
       setIdentityLocked(locked);
       setLocked(locked);
@@ -138,7 +127,7 @@ export function ApplicationResourcesProvider(props: ParentProps) {
       setPeopleError("");
       return users;
     } catch (error) {
-      if (request.isCurrent()) setPeopleError(errorMessage(error));
+      if (request.isCurrent()) setPeopleError(errorText(error));
       throw error;
     } finally {
       request.finish();

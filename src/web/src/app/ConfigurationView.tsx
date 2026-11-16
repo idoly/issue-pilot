@@ -22,7 +22,7 @@ import { normalizeDmsScope, serializeCapabilityDraft, type DeploymentCapabilityD
 import { environmentName } from "./model";
 import { errorText, type ErrorTexts } from "./error-text";
 import { createLatestTask } from "../data/latest";
-import { DbHubTargetsEditor, SlsTargetsEditor } from "./ServiceTargets";
+import { DbHubTargetsEditor, SlsTargetsEditor, focusNewTarget } from "./ServiceTargets";
 import { ServiceOverview } from "./ServiceOverview";
 import { useApplicationResources } from "./ApplicationResources";
 
@@ -317,12 +317,7 @@ function ServiceDeploymentEditorRow(props: {
   const addDmsDatabase = () => {
     if (dmsDraft().databases.length >= sharedConfig.limits.capability.dms.databases) return;
     updateDms({ databases: [...dmsDraft().databases, newDmsDatabaseDraft()] });
-    requestAnimationFrame(() => {
-      if (!dmsTargets?.isConnected) return;
-      const input = dmsTargets.querySelector<HTMLInputElement>(".settings-target-row:last-child input");
-      input?.focus({ preventScroll: true });
-      input?.scrollIntoView?.({ block: "nearest" });
-    });
+    focusNewTarget(dmsTargets);
   };
   const updateDmsDatabase = (database: DmsDatabaseDraft, next: DmsDatabaseDraft) => {
     Object.assign(database, next);
@@ -685,7 +680,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
     if (!serviceRepositories().length) return "请至少选择一个关联仓库";
     return serviceDeployments.map(deploymentValidationError).find(Boolean) ?? "";
   };
-  const repositoryName = (repository: ServiceRepositoryDraft) => repositoryChoices().find((choice) => choice.url === repository.url)?.name ?? "仓库";
+  const repositoryName = (repository: ServiceRepositoryDraft) => repositoryChoices().find((choice) => choice.url === repository.url)?.name ?? (repository.alias || repository.url);
   const repositoryOptions = createMemo(() => repositoryChoices().map((repository) => ({ value: repository.url, label: repository.name, url: repository.url })));
   const selectRepositories = (urls: string[]) => {
     const previous = new Map(serviceRepositories().map((repository) => [repository.url, repository]));

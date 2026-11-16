@@ -1,5 +1,8 @@
 import { DrizzleQueryError } from "drizzle-orm";
 
+import { DomainError, OPERATIONAL_FAILURE_CODES } from "./domain/errors.ts";
+import { OperationError } from "./operation-error.ts";
+
 /** Every error reachable through `cause` and AggregateError members, without revisiting an object. */
 export function errorChain(error: unknown): unknown[] {
   const chain: unknown[] = [];
@@ -69,4 +72,18 @@ export function stableErrorReason(error: unknown, fallback: string): string {
   const diagnostic = errorDiagnostic(error);
   const message = diagnostic instanceof Error ? diagnostic.message : String(diagnostic);
   return isStableErrorCode(message) ? message : fallback;
+}
+
+/**
+ * Failures whose owner already declared a category or outcome, or that need operator inspection.
+ * Structured codes (including filesystem errno) also belong to the originating owner.
+ * A boundary may replace only unclassified failures with its own stable code; classified ones keep
+ * their category, outcome and cause.
+ */
+export function isClassifiedOwnerFailure(error: unknown): boolean {
+  return (
+    error instanceof DomainError ||
+    errorChain(error).some((cause) => cause instanceof OperationError || codeOf(cause) !== undefined) ||
+    [...OPERATIONAL_FAILURE_CODES].some((code) => hasErrorCode(error, code))
+  );
 }

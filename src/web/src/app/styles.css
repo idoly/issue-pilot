@@ -3862,7 +3862,7 @@ summary.agent-tool-head > svg {
     height: 30px;
     opacity: 0;
   }
-  .identity .ui-select input[role="combobox"] {
+  .identity .ui-select [role="combobox"] {
     position: absolute;
     inset: 0;
     width: 30px;
@@ -3908,18 +3908,6 @@ summary.agent-tool-head > svg {
   }
   .service-description-section .service-detail-heading {
     margin-bottom: 6px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .queue-item,
-  .queue-pin,
-  .queue-chevron,
-  .issue-attachment-row,
-  .agent-summary > button .ui-icon,
-  summary.agent-tool-head > svg,
-  .service-deployment-row > .deployment-toggle .ui-icon {
-    transition: none;
   }
 }
 

@@ -2,6 +2,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import type { Database, DatabaseReader } from "../db/client.ts";
 import { issueServiceScopes, environments, services, serviceDeployments } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 
 type IssueScope = { id: string; serviceId: string; environmentId: string };
@@ -28,7 +29,7 @@ export async function loadServiceRepositorySet(database: Database, serviceIds: s
     const additional = await loadDeploymentRepositories(database, { serviceId, environmentId });
     for (const row of additional.repositories) {
       const existing = byUrl.get(row.repository.url);
-      if (existing && existing.baseBranch !== row.baseBranch) throw new Error("cross_service_repository_branch_conflict");
+      if (existing && existing.baseBranch !== row.baseBranch) throw new DomainError("cross_service_repository_branch_conflict", "conflict");
       if (!existing) {
         byUrl.set(row.repository.url, row);
         repositories.push(row);

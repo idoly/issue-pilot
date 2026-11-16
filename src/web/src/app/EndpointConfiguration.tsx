@@ -1,9 +1,10 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Select, Skeleton } from "../ui";
-import { errorMessage, loadApplicationEndpoints, type ApplicationEndpoint } from "../data/client";
+import { loadApplicationEndpoints, type ApplicationEndpoint } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { copyText } from "../ui/clipboard";
 import { useApplicationResources } from "./ApplicationResources";
+import { errorText } from "./error-text";
 
 const clientFormats = [
   { value: "json", label: "Pi / Cursor / Claude Code", guidance: "Pi：~/.pi/agent/mcp.json；Cursor：.cursor/mcp.json；Claude Code：.mcp.json。将下面的条目加入已有配置。" },
@@ -28,7 +29,7 @@ export function EndpointConfiguration() {
       const value = await loadApplicationEndpoints(request.signal);
       if (request.isCurrent()) setEndpoints(value.endpoints);
     } catch (cause) {
-      if (request.isCurrent()) setError(errorMessage(cause));
+      if (request.isCurrent()) setError(errorText(cause));
     } finally {
       if (request.isCurrent()) setLoading(false);
       request.finish();

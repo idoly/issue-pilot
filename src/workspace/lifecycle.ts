@@ -82,10 +82,6 @@ class WorkspaceRefusal extends DomainError {
   constructor(reason: string, options?: ErrorOptions) {
     super(reason, "conflict", options);
   }
-
-  get reason(): string {
-    return this.code;
-  }
 }
 
 export class IssueDeletionRefusal extends WorkspaceRefusal {}

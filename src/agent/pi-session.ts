@@ -414,6 +414,10 @@ export class PiSessionRuntime {
         stopped = false;
       return {
         ...managed,
+        // Spread invokes the inner accessor once; keep it live so mid-round sends can steer.
+        get streaming() {
+          return managed.streaming;
+        },
         scopeChanged: false,
         stop: () =>
           stopped

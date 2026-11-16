@@ -371,6 +371,9 @@ export default function CodeBrowser(props: {
     historyController?.abort();
     setHistoryLoading(false);
     panelController?.abort();
+    // This read owns the changes rows; a periodic refresh started earlier must not land after it.
+    changesController?.abort();
+    changesController = undefined;
     const request = new AbortController();
     panelController = request;
     const owner = scope,
@@ -659,7 +662,13 @@ export default function CodeBrowser(props: {
         // The save settled: release the editor even when another view superseded its result.
         if (owner === scope) {
           setSaving(false);
-          if (file() === current) void refreshChanges();
+          // Restart the changes read after the save: an older in-flight refresh would otherwise be kept and the
+          // saved file would stay listed as modified until the next timer tick.
+          if (file() === current) {
+            changesController?.abort();
+            changesController = undefined;
+            void refreshChanges();
+          }
         }
       }
     }
@@ -1014,6 +1023,8 @@ export default function CodeBrowser(props: {
   };
   const keyboard = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing || !(event.ctrlKey || event.metaKey) || action()) return;
+    // The panel listens on window while mounted; never take editing shortcuts from a focused field.
+    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
     if (event.key.toLowerCase() === "p") {
       event.preventDefault();
       openPicker(event.shiftKey ? "commands" : "file");

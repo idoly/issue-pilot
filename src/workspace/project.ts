@@ -421,10 +421,11 @@ export class IssueProjectManager {
 
   private async withPersonalGit<T>(issueId: string, target: { serviceId: string; environmentId: string }, operation: () => Promise<T>): Promise<T> {
     const { repositories } = await loadIssueDeployments(this.database, { id: issueId, ...target });
-    const urls = repositories.map(({ repository }) => repository.url);
-    if (urls.every((url) => url.startsWith("file:") || path.isAbsolute(url))) return operation();
+    // Ownership is one rule; only the SSH environment is unnecessary for local repositories.
     const owner = await loadIssueCredentialOwner(this.database, issueId);
     if (owner.user.role !== "developer") throw new Error("issue_developer_owner_required");
+    const urls = repositories.map(({ repository }) => repository.url);
+    if (urls.every((url) => url.startsWith("file:") || path.isAbsolute(url))) return operation();
     const git = await createPersonalGitEnvironment(owner.credentials, urls);
     try {
       return await this.worktrees.withGitEnvironment(git.env, operation);

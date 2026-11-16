@@ -138,7 +138,8 @@ export function createIssueMcpExtension(configurations: McpConfiguration[], code
             // Drop an expired transport so a later call reconnects. Do not replay an
             // operation whose execution result is unknown merely to hide the failure.
             if (error instanceof StreamableHTTPError && error.code === 404) await close();
-            throw new Error("mcp_operation_failed");
+            // Keep the stable model-facing code; the cause stays diagnostic-only for logs.
+            throw new Error("mcp_operation_failed", { cause: error });
           }
         },
         close,

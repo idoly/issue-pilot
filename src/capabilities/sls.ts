@@ -16,7 +16,10 @@ function selectTarget(input: CapabilityInputs["sls"], configured: CapabilityConf
 }
 
 export function prepareSlsQuery(input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">) {
-  configured = selectTarget(input, configured);
+  return prepareSelectedQuery(input, selectTarget(input, configured));
+}
+
+function prepareSelectedQuery(input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">) {
   if ((input.from === undefined) !== (input.to === undefined)) throw new Error("invalid_sls_time_range");
   const now = Math.floor(Date.now() / 1000),
     to = input.to ?? now;
@@ -33,8 +36,8 @@ export function prepareSlsQuery(input: CapabilityInputs["sls"], configured: Capa
 export type SlsQuery = ReturnType<typeof prepareSlsQuery>;
 
 export async function readSlsLogs(input: CapabilityInputs["sls"], configured: CapabilityConfig<"sls">, signal?: AbortSignal, executor?: CommandExecutor) {
-  const query = prepareSlsQuery(input, configured);
   const selected = selectTarget(input, configured);
+  const query = prepareSelectedQuery(input, selected);
   const active = AbortSignal.any([AbortSignal.timeout(applicationParameters().slsExecutionMs), ...(signal ? [signal] : [])]);
   try {
     return await readSlsCli(selected, query, active, executor);

@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { createLatestTask } from "../data/latest";
+import { errorText } from "./error-text";
 import { fileSize, localDate, localDateTime, statusLabel, typeLabel } from "./model";
 
 type InsightView = "output" | "distribution" | "team" | "resources";
@@ -26,10 +27,10 @@ export function Statistics(props: { issues: IssueListItem[] }) {
         if (!request.isCurrent()) return;
         if (value.snapshot) setWorkspaceStats(value.snapshot);
         setSampling(value.sampling);
-        setSampleError(value.error ? `统计更新失败（${value.error}）${value.snapshot ? "，已保留上次结果" : "，可重新采样"}` : "");
+        setSampleError(value.error ? `统计更新失败（${errorText(value.error)}）${value.snapshot ? "，已保留上次结果" : "，可重新采样"}` : "");
       })
       .catch((reason) => {
-        if (request.isCurrent() && !request.signal.aborted) setLoadError(reason instanceof Error ? reason.message : "Workspace 统计加载失败");
+        if (request.isCurrent() && !request.signal.aborted) setLoadError(reason instanceof Error ? errorText(reason) : "Workspace 统计加载失败");
       })
       .finally(() => {
         if (request.isCurrent()) setLoading(false);

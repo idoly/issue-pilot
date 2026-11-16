@@ -2,6 +2,12 @@ import { and, asc, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { serviceDeploymentRepositories, serviceDeployments, serviceRepositories, environments } from "../db/schema.ts";
+import { DomainError } from "../domain/errors.ts";
+
+// Deployment-shape conditions the operator corrects in configuration; never server failures.
+function deploymentRefusal(code: string): DomainError {
+  return new DomainError(code, "conflict");
+}
 
 export interface DeploymentRepository {
   repository: typeof serviceRepositories.$inferSelect;
@@ -27,7 +33,7 @@ export async function loadDeploymentRepositories(
       .orderBy(asc(serviceRepositories.createdAt), sql`${serviceRepositories}.rowid`),
   ]);
   const deployment = scope?.deployment;
-  if (!deployment) throw new Error("issue_service_deployment_not_found");
+  if (!deployment) throw deploymentRefusal("issue_service_deployment_not_found");
   let branchDeployment = deployment;
   if (scope.kind === "dev") {
     const [production] = await database
@@ -36,10 +42,10 @@ export async function loadDeploymentRepositories(
       .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId))
       .where(and(eq(serviceDeployments.serviceId, input.serviceId), eq(environments.kind, "prod")))
       .limit(1);
-    if (!production) throw new Error("development_production_deployment_required");
+    if (!production) throw deploymentRefusal("development_production_deployment_required");
     branchDeployment = production.deployment;
   }
-  if (!repositories.length) throw new Error("selected_service_has_no_repository");
+  if (!repositories.length) throw deploymentRefusal("selected_service_has_no_repository");
 
   const configured = await database
     .select({ repository: serviceRepositories, baseBranch: serviceDeploymentRepositories.baseBranch })
@@ -52,7 +58,7 @@ export async function loadDeploymentRepositories(
     configured.some(({ repository }) => repository.serviceId !== input.serviceId) ||
     repositories.some((repository) => !branchByRepositoryId.has(repository.id))
   )
-    throw new Error("deployment_repository_branches_invalid");
+    throw deploymentRefusal("deployment_repository_branches_invalid");
 
   return {
     deployment,

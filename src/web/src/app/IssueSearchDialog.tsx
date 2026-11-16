@@ -1,9 +1,10 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Badge, Input, Modal } from "../ui";
 import { Search } from "../ui/icons";
-import { currentUserSubject, errorMessage, searchIssues, type IssueSearchHit } from "../data/client";
+import { currentUserSubject, searchIssues, type IssueSearchHit } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
+import { errorText } from "./error-text";
 import { statusBadge, statusLabel } from "./model";
 
 const errors: Record<string, string> = {
@@ -66,7 +67,8 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
       const found = await searchIssues(value, task.signal);
       if (current()) setHits(found);
     } catch (cause) {
-      if (current()) setError(errors[errorMessage(cause)] ?? "工单搜索失败，请稍后再试。");
+      // Search-specific wording overrides the shared table; other codes keep the shared messages.
+      if (current()) setError(errorText(cause, errors, "工单搜索失败，请稍后再试。"));
     } finally {
       if (current()) setPending(false);
       task.finish();

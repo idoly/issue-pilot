@@ -136,12 +136,20 @@ test("ready work file APIs report root loss or redirection before resolving repo
     const root = issueRoot(fixture.root, String(issue.id));
     await rm(root, { recursive: true });
     const base = `/api/issues/${issue.id}/files`;
+    // Code reads resolve the same durable root; storage damage must not be republished as a retryable binding conflict.
+    const tree = () => fixture.app.inject({ url: `/api/issues/${issue.id}/source/tree`, headers: { "x-issue-pilot-repository": "ready-root-loss" } });
+    const missingTree = await tree();
+    assert.equal(missingTree.statusCode, 500, missingTree.body);
+    assert.deepEqual(missingTree.json(), { error: "issue_root_missing" });
     for (const resource of [base, `${base}/download?path=evidence.txt`]) {
       const response = await fixture.app.inject({ method: "GET", url: resource });
       assert.equal(response.statusCode, 500, response.body);
       assert.deepEqual(response.json(), { error: "issue_root_missing" });
     }
     await symlink(fixture.root, root);
+    const redirectedTree = await tree();
+    assert.equal(redirectedTree.statusCode, 500, redirectedTree.body);
+    assert.deepEqual(redirectedTree.json(), { error: "invalid_issue_root" });
     for (const resource of [base, `${base}/download?path=evidence.txt`]) {
       const response = await fixture.app.inject({ method: "GET", url: resource });
       assert.equal(response.statusCode, 500, response.body);

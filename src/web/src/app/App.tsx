@@ -14,6 +14,7 @@ import { IssueWorkspace } from "./IssueWorkspace";
 import type { SourcePanel } from "./CodeBrowser";
 
 import { createIssueList, type QueueMembership, type QueueScope } from "./issue-list";
+import { errorText } from "./error-text";
 import { personLabel } from "./model";
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
@@ -186,7 +187,7 @@ function AppWorkspace(props: { initialView?: AppView }) {
     } catch (error) {
       if (!isCurrent()) return;
       if (kind === "selection") issueList.clearDetail(id);
-      setIssueError(error instanceof Error ? error.message : "工单加载失败");
+      setIssueError(error instanceof Error ? errorText(error) : "工单加载失败");
       throw error;
     } finally {
       const current = isCurrent();

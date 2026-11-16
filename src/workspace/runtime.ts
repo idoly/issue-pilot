@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { domainError } from "../domain/errors.ts";
 import { relatedIssueEntryName } from "../domain/contracts.ts";
 import { chmod, link, lstat, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -66,7 +67,8 @@ export async function resolveRecordedRepository(
     const { commit } = await recordedSharedSnapshot(stateRoot, issueKey, repository, name, state);
     return { root: await new WorktreeManager(stateRoot).openSharedCheckout(repository.url, commit, checkedCheckouts, state === "development_snapshot" ? repository.workingBranch! : undefined) };
   } catch (error) {
-    if (error instanceof Error && (error.message === "source_runtime_invalid" || (error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
+    // Classified owner failures (missing root, uncertain outcome, operational damage) keep their category.
+    if (isClassifiedOwnerFailure(error)) throw error;
     throw domainError("source_git_binding_invalid", { cause: error });
   }
 }

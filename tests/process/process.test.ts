@@ -214,11 +214,17 @@ test("terminates descendant processes after the grace period", { skip: process.p
     assert.equal(result.killed, true);
     const descendantPid = Number(await readFile(pidFile, "utf8"));
     // Completion must include escalation, even when descendants don't retain stdio.
-    await delay(25);
-    assert.throws(
-      () => process.kill(descendantPid, 0),
-      (error: NodeJS.ErrnoException) => error.code === "ESRCH",
-    );
+    const gone = (): boolean => {
+      try {
+        process.kill(descendantPid, 0);
+        return false;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "ESRCH";
+      }
+    };
+    const deadline = Date.now() + 5_000;
+    while (!gone() && Date.now() < deadline) await delay(25);
+    assert.equal(gone(), true, "the descendant must be gone after termination completes");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

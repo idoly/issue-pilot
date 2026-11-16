@@ -167,7 +167,7 @@ Pages are not stable cross-mutation cursors. Incomplete sessions fail SSE before
 
 ## Inbound Issue MCP
 
-/mcp supports stateless Streamable HTTP POST only; GET/DELETE return 405. It uses HTTP-selected identity. See [mcp.json](../../examples/mcp.json).
+/mcp supports stateless Streamable HTTP POST only; GET/DELETE return 405. It uses HTTP-selected identity. The Web endpoint configuration page generates the client entry (`mcpServers.issue-pilot`, `type: http`, with the `X-Issue-Pilot-Subject` header) for Pi, Cursor, Claude Code, VS Code and Codex.
 
 Tools: services_list, users_list, issues_search, issue_get, issue_create, issue_message, issue_conversation, dingtalk_import, attachment_read, work_files, work_file_read. Discover users/services first. Success JSON is in content[].text; HTTP 200 can still carry isError=true.
 

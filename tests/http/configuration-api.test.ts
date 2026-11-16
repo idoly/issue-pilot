@@ -7,7 +7,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createClient, type TransactionMode, type Transaction } from "@libsql/client";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadConfigurationCatalog } from "../../src/configuration/read.ts";
+import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
+import { issues, issueServiceScopes, services } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService, json, modelCatalog, servicePayload, testAgent } from "./fixture.ts";
 
 test("DMS scope errors preserve upstream HTTP status without private response details", async (t) => {
@@ -561,6 +563,52 @@ test("reserves affected Issues and commits Service changes only after sessions c
     assert.equal(failed.statusCode, 500);
     const after = (await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body))) as { services: Array<{ name: string }> };
     assert.equal(after.services[0]!.name, "Alpha renamed");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("renaming a collaborating service invalidates the detail of the Issues that display it", async () => {
+  const fixture = await createApiFixture();
+  try {
+    const entry = (await createService(fixture.app, "Entry")) as { key: string };
+    const included = (await createService(fixture.app, "Included")) as { key: string };
+    const issue = (await createIssue(fixture.app, entry.key)) as { id: string };
+    const unrelated = (await createIssue(fixture.app, entry.key)) as { id: string };
+    const database = openDatabase(fixture.databaseFile);
+    try {
+      const [issueRow] = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.key, issue.id));
+      const [includedRow] = await database.db.select({ id: services.id }).from(services).where(eq(services.key, included.key));
+      await database.db.insert(issueServiceScopes).values({ issueId: issueRow!.id, serviceId: includedRow!.id });
+    } finally {
+      database.close();
+    }
+    // Creation starts the Agent round; service edits wait for an idle Issue.
+    assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/abort` })).statusCode, 200);
+    assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${unrelated.id}/abort` })).statusCode, 200);
+    const before = (await fixture.app.inject({ url: `/api/issues/${issue.id}` })).json();
+    const unrelatedBefore = (await fixture.app.inject({ url: `/api/issues/${unrelated.id}` })).json();
+    assert.deepEqual(before.collaboratingServices, [{ key: included.key, name: "Included" }]);
+    const configuration = (await fixture.app.inject({ url: "/api/config" })).json();
+    const target = configuration.services.find((service: { key: string }) => service.key === included.key);
+    type Repository = { id: string; alias: string; url: string; baseBranch: string };
+    type Deployment = { environmentKey: string; capabilities: string[]; repositoryBranches: Array<{ repositoryId: string; baseBranch: string }> };
+    const renamed = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/services/${included.key}`,
+      payload: {
+        expectedRevision: target.revision,
+        name: "Included renamed",
+        description: "",
+        repositories: (target.repositories as Repository[]).map(({ id, alias, url }) => ({ id, alias, url })),
+        deployments: (target.deployments as Deployment[]).map(({ environmentKey, capabilities, repositoryBranches }) => ({ environmentKey, capabilities, repositoryBranches })),
+      },
+    });
+    assert.equal(renamed.statusCode, 200, renamed.body);
+    const after = (await fixture.app.inject({ url: `/api/issues/${issue.id}` })).json();
+    assert.deepEqual(after.collaboratingServices, [{ key: included.key, name: "Included renamed" }]);
+    assert.notEqual(after.revision, before.revision);
+    assert.equal((await fixture.app.inject({ url: `/api/issues/${unrelated.id}` })).json().revision, unrelatedBefore.revision);
   } finally {
     await fixture.cleanup();
   }

@@ -7,6 +7,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { domainError } from "../domain/errors.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
@@ -216,11 +217,13 @@ export class SourceBrowser {
     if (state === "development_workspace") return undefined;
     const snapshot = await recordedSharedSnapshot(this.stateRoot, issue.key, repository, repositoryName, state).catch((error: unknown) => {
       if (state === "read_only") return missingPathError(error);
-      if (error instanceof Error && error.message === "source_runtime_invalid") throw error;
+      // Classified owner failures keep their category; only unclassified Git binding failures are replaced.
+      if (isClassifiedOwnerFailure(error)) throw error;
       throw domainError("source_git_binding_invalid", { cause: error });
     });
     if (
       await managedGitDirectoryExists(snapshot.checkout).catch((error: unknown) => {
+        if (isClassifiedOwnerFailure(error)) throw error;
         throw domainError("source_git_binding_invalid", { cause: error });
       })
     )
@@ -228,6 +231,7 @@ export class SourceBrowser {
     await new WorktreeManager(this.stateRoot)
       .assertSnapshotCommit(repository.url, snapshot.commit, state === "development_snapshot" ? repository.workingBranch! : undefined)
       .catch((error: unknown) => {
+        if (isClassifiedOwnerFailure(error)) throw error;
         throw domainError("source_git_binding_invalid", { cause: error });
       });
     return snapshot;

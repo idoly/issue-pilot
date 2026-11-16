@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
 import { Button } from "../ui";
 import { ChevronRight, Download, File, Folder, Repo, RefreshCw } from "../ui/icons";
-import { errorMessage, attachmentUrl, fetchAttachment, fetchIssueWorkFile, issueWorkFileUrl, listIssueWorkFiles, type IssueDetail, type IssueWorkFile } from "../data/client";
+import { attachmentUrl, fetchAttachment, fetchIssueWorkFile, issueWorkFileUrl, listIssueWorkFiles, type IssueDetail, type IssueWorkFile } from "../data/client";
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { AttachmentPreview } from "./AttachmentPreview";
+import { errorText } from "./error-text";
 import { attachmentPreviewKind, workingFileMediaType } from "./file-preview";
 import { useApplicationResources } from "./ApplicationResources";
 
@@ -56,7 +57,7 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
         if (current) setFiles(rows);
       })
       .catch((cause) => {
-        if (current && !controller.signal.aborted) setError(errorMessage(cause));
+        if (current && !controller.signal.aborted) setError(errorText(cause));
       })
       .finally(() => {
         if (current) setLoading(false);

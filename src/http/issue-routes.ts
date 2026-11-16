@@ -526,9 +526,12 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       },
     );
     const workspace = workspaceRows[0];
+    // Every Issue owns exactly one Workspace. A missing row is storage damage, not a fresh workspace:
+    // reporting it as not_created would offer a retry that can only fail with the same code.
+    if (!workspace) throw new Error(`issue_workspace_missing:${issue.key}`);
     const sessionBinding = sessionRows[0];
     const reporter = reporterRows[0];
-    const workspaceStatus = workspace?.status ?? "not_created";
+    const workspaceStatus = workspace.status;
     const sessionReady = sessionBinding ? await pathExists(sessionBinding.sessionFile) : false;
     const repositoryState = classifyRepositoryState(repositoryRows);
     let repositoryNames = new Map<string, string>();
@@ -556,10 +559,10 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       workspace: {
         status: workspaceStatus,
         sourceAvailable,
-        runtimeReady: workspace?.runtimeReady === true,
-        lastError: workspace?.lastError ?? null,
+        runtimeReady: workspace.runtimeReady,
+        lastError: workspace.lastError,
         retryable:
-          issue.status !== "resolved" && !summary.agentRunning && (workspaceStatus !== "ready" || !workspace?.runtimeReady || (!sessionReady && ["open", "in_progress"].includes(issue.status))),
+          issue.status !== "resolved" && !summary.agentRunning && (workspaceStatus !== "ready" || !workspace.runtimeReady || (!sessionReady && ["open", "in_progress"].includes(issue.status))),
       },
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),

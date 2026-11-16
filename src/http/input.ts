@@ -1,7 +1,5 @@
 import { validateAgentModelSelection } from "../configuration/agent.ts";
-import { errorChain, hasErrorCode } from "../diagnostics.ts";
-import { DomainError, OPERATIONAL_FAILURE_CODES } from "../domain/errors.ts";
-import { OperationError } from "../operation-error.ts";
+import { isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS, type AgentModelDefinition, type AgentModelSelection } from "../domain/contracts.ts";
 import { choice, text } from "../domain/input.ts";
 
@@ -22,12 +20,7 @@ export class ApiError extends Error {
  * A route that names its own fallback for unexpected failures must not rename these.
  */
 export function isClassifiedFailure(error: unknown): boolean {
-  return (
-    error instanceof ApiError ||
-    error instanceof DomainError ||
-    errorChain(error).some((cause) => cause instanceof OperationError) ||
-    [...OPERATIONAL_FAILURE_CODES].some((code) => hasErrorCode(error, code))
-  );
+  return error instanceof ApiError || isClassifiedOwnerFailure(error);
 }
 
 // Shared and personal model groups accept only provider/model/thinking combinations offered by the model catalog.

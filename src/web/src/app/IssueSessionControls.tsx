@@ -1,11 +1,12 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Modal, Select } from "../ui";
-import { errorMessage, listIssueSessions, readIssueSession, type IssueDetail, type IssueSessionSummary } from "../data/client";
+import { listIssueSessions, readIssueSession, type IssueDetail, type IssueSessionSummary } from "../data/client";
 import { MessageSquare } from "../ui/icons";
 import { useApplicationResources } from "./ApplicationResources";
 import { createLatestTask } from "../data/latest";
 import { ConversationProjection, type ConversationEntry } from "./conversation";
 import { ConversationItem } from "./AgentPanel";
+import { errorText } from "./error-text";
 import { localDateTime } from "./model";
 
 /** Read-only session history stays available in every Issue status; resetting belongs to the edit dialog. */
@@ -55,7 +56,7 @@ export function IssueSessionControls(props: { issue: IssueDetail }) {
       setSelected(first);
       if (first) await read(first);
     } catch (cause) {
-      if (task.isCurrent()) setError(errorMessage(cause));
+      if (task.isCurrent()) setError(errorText(cause));
     } finally {
       if (task.isCurrent()) setBusy(false);
       task.finish();
@@ -80,7 +81,7 @@ export function IssueSessionControls(props: { issue: IssueDetail }) {
       });
       setNextOffset(page.nextOffset);
     } catch (cause) {
-      if (task.isCurrent()) setError(errorMessage(cause));
+      if (task.isCurrent()) setError(errorText(cause));
     } finally {
       if (task.isCurrent()) setBusy(false);
       task.finish();

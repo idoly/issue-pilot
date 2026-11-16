@@ -7,6 +7,7 @@ import { fetchAttachment, type IssueDetail } from "../data/client";
 import { createLatestTask } from "../data/latest";
 
 import { attachmentPreviewKind } from "./file-preview";
+import { errorText } from "./error-text";
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
 const previewTooLarge = "文件超过预览大小限制，请关闭弹窗后下载查看。";
@@ -66,7 +67,7 @@ export function AttachmentPreview(props: { issueKey: string; attachment: IssueAt
         }
       })
       .catch((cause) => {
-        if (task.isCurrent()) setError(cause instanceof Error ? (cause.message === "file_preview_too_large" ? previewTooLarge : cause.message) : "attachment_preview_failed");
+        if (task.isCurrent()) setError(cause instanceof Error ? errorText(cause, { file_preview_too_large: previewTooLarge }) : "attachment_preview_failed");
       })
       .finally(() => {
         if (task.isCurrent()) setLoading(false);

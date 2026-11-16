@@ -28,15 +28,6 @@ interface PlannedRepository {
 
 type ScopeTransitionAction = "none" | "rebind_read_only" | "convert_to_development" | "migrate_development";
 
-// Deterministic deployment/config conditions that the operator can correct, not server failures.
-const deploymentRefusals = new Set([
-  "issue_service_deployment_not_found",
-  "selected_service_has_no_repository",
-  "development_production_deployment_required",
-  "deployment_repository_branches_invalid",
-  "cross_service_repository_branch_conflict",
-]);
-
 export interface ScopeTransitionPlan {
   planHash: string;
   expectedIssueUpdatedAt: string;
@@ -66,10 +57,6 @@ export interface ScopeTransitionPlan {
 export class ScopeTransitionRefusal extends DomainError {
   constructor(reason: string, options?: ErrorOptions) {
     super(reason, "conflict", options);
-  }
-
-  get reason(): string {
-    return this.code;
   }
 }
 
@@ -128,13 +115,8 @@ export class IssueScopeTransitionManager {
     ]);
     if (!targetService || !targetEnvironment) throw new ScopeTransitionRefusal("scope_transition_target_not_found");
 
-    let targetDeployment;
-    try {
-      targetDeployment = await loadIssueDeployments(this.database, { id: current.issue.id, serviceId: targetService.id, environmentId: targetEnvironment.id });
-    } catch (error) {
-      if (error instanceof Error && deploymentRefusals.has(error.message)) throw new ScopeTransitionRefusal(error.message, { cause: error });
-      throw error;
-    }
+    // The deployment owner declares its operator-correctable conflicts; no local code catalog is needed.
+    const targetDeployment = await loadIssueDeployments(this.database, { id: current.issue.id, serviceId: targetService.id, environmentId: targetEnvironment.id });
 
     const [currentRows, currentRepositoryDefinitions] = await Promise.all([
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, current.issue.id)),

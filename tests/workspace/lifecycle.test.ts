@@ -950,7 +950,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const dirtyInspection = await lifecycle.inspectIssue(issue!.id);
     assert.equal(dirtyInspection.releasable, false);
     assert.equal(dirtyInspection.blockedReason, "workspace_has_changes");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_has_changes");
     await Promise.all(prepared.map((worktree) => access(worktree.workspacePath)));
     const dirtyRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(
@@ -963,7 +963,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const ignoredEvidence = path.join(prepared[1]!.workspacePath, "ignored-evidence.txt");
     await writeFile(ignoredEvidence, "uncommitted evidence");
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_has_changes");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_has_changes");
     assert.equal(await readFile(ignoredEvidence, "utf8"), "uncommitted evidence");
     assert.equal(
       (await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))).every((repository) => repository.localPath !== null),
@@ -982,7 +982,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const originalManifest = await readFile(manifestPath);
     await writeFile(manifestPath, JSON.stringify({ version: 1, entries: [{ name: "missing-reference", kind: "file", value: "a".repeat(64) }] }));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "issue_runtime_entry_missing");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_runtime_entry_missing");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.code === "issue_runtime_entry_missing");
     await writeFile(manifestPath, originalManifest);
     assert.equal(released.releasedBytes > 0, true);
     assert.equal(await readFile(checkpoint, "utf8"), '{"remaining":10}\n');
@@ -1044,7 +1044,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     transactionFailure = new Error("simulated_restore_transaction_failure");
     await assert.rejects(
       lifecycle.reopenIssue(issue!.id),
-      (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "simulated_restore_transaction_failure" && error.cause instanceof Error,
+      (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.code === "simulated_restore_transaction_failure" && error.cause instanceof Error,
     );
     // Uncertain outcomes, operational damage and unpublishable messages are never republished as refusals.
     const uncertain = new OperationError("simulated_restore_outcome_unknown", "unknown");
@@ -1087,7 +1087,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     assert.equal(restoredWorkspace!.status, "ready");
     assert.equal(restoredWorkspace!.runtimeReady, true);
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "issue_not_resolved");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "issue_not_resolved");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "issue_not_resolved");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
 
     await database.db
@@ -1106,7 +1106,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     await database.db.update(issueRepositories).set({ workspaceName: "mismatched-name" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_path_does_not_match_repository");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_path_does_not_match_repository");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_path_does_not_match_repository");
     await database.db.update(issueRepositories).set({ workspaceName: "alpha" }).where(eq(issueRepositories.id, restoredRows[0]!.id));
     // Git removal is the WorktreeManager boundary: change a worktree between the batch's removals.
     const removeWorktree = WorktreeManager.prototype.remove;
@@ -1116,7 +1116,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       if (removalCount === 2) await writeFile(path.join(workspacePath, "concurrent-change.txt"), "preserve\n", "utf8");
       return removeWorktree.call(this, url, workspacePath, branch);
     });
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_has_changes");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_has_changes");
     removal.mock.restore();
     for (const repository of restoredRows) {
       await access(repository.localPath!);
@@ -1163,7 +1163,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const missingRepository = restoredByUrl.get(remotes[1]!)!;
     await worktrees.remove(missingRepository.url, missingRepository.localPath!, missingRepository.workingBranch!);
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_repository_missing");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_repository_missing");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_repository_missing");
     await access(restoredByUrl.get(remotes[0]!)!.localPath!);
     const repairedRepository = await worktrees.prepare({
       issueKey: issue!.key,
@@ -1178,13 +1178,13 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
 
     await database.db.update(issueRepositories).set({ localPath: null }).where(eq(issueRepositories.id, missingRepository.id));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "development_repository_state_invalid");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "development_repository_state_invalid");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "development_repository_state_invalid");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
     await database.db.update(issueRepositories).set({ localPath: missingRepository.localPath }).where(eq(issueRepositories.id, missingRepository.id));
 
     await database.db.delete(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "development_repository_state_invalid");
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "development_repository_state_invalid");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "development_repository_state_invalid");
     await Promise.all(restoredRows.map((repository) => access(repository.localPath!)));
     await database.db.insert(issueRepositories).values(restoredRows);
 
@@ -1196,14 +1196,14 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const preservedRoot = path.join(root, "preserved-issue-root");
     await rename(issueRoot(root, issue!.key), preservedRoot);
     await database.db.update(issueWorkspaces).set({ status: "running" }).where(eq(issueWorkspaces.issueId, issue!.id));
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_busy");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_busy");
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
     await database.db.update(issueWorkspaces).set({ status: "ready" }).where(eq(issueWorkspaces.issueId, issue!.id));
     // The root held the private Git store; neither release nor reopen may rebuild from an older shared ref.
-    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_missing");
+    await assert.rejects(lifecycle.releaseIssue(issue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_missing");
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_workspace");
     assert.equal((await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id)))[0]!.status, "ready");
-    await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_missing");
+    await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => error instanceof WorkspaceRestoreRefusal && error.code === "workspace_missing");
     // A redirected root is operational damage, not a missing workspace the operator can restore.
     await symlink(preservedRoot, issueRoot(root, issue!.key));
     await assert.rejects(lifecycle.reopenIssue(issue!.id), (error: unknown) => !(error instanceof WorkspaceRestoreRefusal) && error instanceof Error && error.message === "invalid_issue_root");
@@ -1292,7 +1292,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       readOnlyMaintenance.released.some((entry) => entry.issueKey === readOnlyIssue!.key),
       false,
     );
-    await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_not_development");
+    await assert.rejects(retentionLifecycle.releaseIssue(readOnlyIssue!.id), (error: unknown) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_not_development");
     const [readOnlyWorkspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, readOnlyIssue!.id));
     assert.equal(readOnlyWorkspace!.runtimeReady, true);
   } finally {
@@ -1308,7 +1308,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     const [testEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "test")).limit(1);
     const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
     assert.ok(testEnvironment && devEnvironment);
-    await database.db.insert(subjects).values({ subject: "conversion-tester", displayName: "Conversion Tester", email: "conversion@example.test" });
+    await database.db.insert(subjects).values({ subject: "conversion-tester", role: "developer", displayName: "Conversion Tester", email: "conversion@example.test" });
     const [service] = await database.db.insert(services).values({ key: "conversion-service", name: "Conversion Service" }).returning();
     const remote = await createRemote(root, "conversion");
     await registerTestRepositories(database.db, [remote]);
@@ -1412,10 +1412,7 @@ test("converts a ready test analysis to a development defect while preserving Is
       }
       return transaction(operation);
     }) as typeof database.db.transaction;
-    await assert.rejects(
-      lifecycle.convertIssueToDevelopment(issue!.id),
-      (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "simulated_conversion_transaction_failure",
-    );
+    await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.code === "simulated_conversion_transaction_failure");
     mutableDatabase.transaction = transaction;
 
     const [rolledBackIssue] = await database.db.select().from(issues).where(eq(issues.id, issue!.id)).limit(1);
@@ -1454,7 +1451,7 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal((await database.db.select().from(issueComments).where(eq(issueComments.issueId, issue!.id))).length, 1);
     assert.deepEqual(conversionEngine.closed, [issue!.id, issue!.id]);
     assert.deepEqual(conversionEngine.enqueued, [issue!.id]);
-    await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.reason === "issue_not_convertible_to_development");
+    await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.code === "issue_not_convertible_to_development");
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });
@@ -1466,7 +1463,7 @@ test("migrates ready development scopes while preserving retained changes and ro
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
     const [devEnvironment] = await database.db.select().from(environments).where(eq(environments.kind, "dev")).limit(1);
-    await database.db.insert(subjects).values({ subject: "migration-tester", displayName: "Migration Tester" });
+    await database.db.insert(subjects).values({ subject: "migration-tester", role: "developer", displayName: "Migration Tester" });
     const [sourceService, targetService] = await database.db
       .insert(services)
       .values([
@@ -1568,7 +1565,7 @@ test("migrates ready development scopes while preserving retained changes and ro
     const transitions = new IssueScopeTransitionManager(database.db, migrationEngine as never, lifecycle);
     await assert.rejects(
       transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_feature" }),
-      (error: unknown) => error instanceof ScopeTransitionRefusal && error.reason === "development_branch_mode_immutable",
+      (error: unknown) => error instanceof ScopeTransitionRefusal && error.code === "development_branch_mode_immutable",
     );
     const plan = await transitions.plan(issue!.id, { serviceKey: targetService!.key, workMode: "development_fix" });
     assert.equal(plan.action, "migrate_development");
@@ -1595,7 +1592,7 @@ test("migrates ready development scopes while preserving retained changes and ro
         { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash },
         "migration-tester",
       ),
-      (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.reason === "scope_transition_removed_repository_changed",
+      (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.code === "scope_transition_removed_repository_changed",
     );
     assert.equal(await readFile(dirtyRemovedFile, "utf8"), "operator evidence\n");
     await unlink(dirtyRemovedFile);
@@ -1620,7 +1617,7 @@ test("migrates ready development scopes while preserving retained changes and ro
         { expectedIssueUpdatedAt: plan.expectedIssueUpdatedAt, expectedPlanHash: plan.planHash },
         "migration-tester",
       ),
-      (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.reason === "simulated_scope_migration_transaction_failure",
+      (error: unknown) => error instanceof WorkspaceScopeMigrationRefusal && error.code === "simulated_scope_migration_transaction_failure",
     );
     mutableDatabase.transaction = transaction;
     const rolledBackRepositories = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
@@ -1943,7 +1940,7 @@ test("releasing a development Issue whose root is missing is refused and leaves 
       maintenanceIntervalMs: 0,
       taskConcurrency: 1,
     });
-    await assert.rejects(manager.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_missing");
+    await assert.rejects(manager.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_missing");
     assert.deepEqual(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id)), before);
     const [workspace] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue!.id));
     assert.equal(workspace!.status, "ready");
@@ -1999,9 +1996,9 @@ test("a released Issue whose root is missing is never rebuilt from the shared br
     await rm(issueRoot(root, issue!.key), { recursive: true, force: true });
     await assert.rejects(new IssueProjectManager(database.db, root).hydrateDevelopmentRuntime(issue!), /workspace_missing/);
     await assert.rejects(access(issueRoot(root, issue!.key)), { code: "ENOENT" });
-    await assert.rejects(manager.reopenIssue(issue!.id), (error) => error instanceof WorkspaceRestoreRefusal && error.reason === "workspace_missing");
+    await assert.rejects(manager.reopenIssue(issue!.id), (error) => error instanceof WorkspaceRestoreRefusal && error.code === "workspace_missing");
     // A repeated release returns the same stable refusal rather than a generic restore failure.
-    await assert.rejects(manager.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.reason === "workspace_missing");
+    await assert.rejects(manager.releaseIssue(issue!.id), (error) => error instanceof WorkspaceReleaseRefusal && error.code === "workspace_missing");
     assert.equal(classifyRepositoryState(await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id))), "development_snapshot");
     assert.equal((await database.db.select().from(issues).where(eq(issues.id, issue!.id)))[0]!.status, "resolved");
   } finally {

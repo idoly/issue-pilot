@@ -156,11 +156,20 @@ export async function applyServiceConfiguration(options: {
   serviceUpdate?: { name: string; description: string };
 }): Promise<void> {
   const { executor, serviceId, prepared, serviceUpdate } = options;
-  if (serviceUpdate)
+  if (serviceUpdate) {
+    const [existing] = await executor.select({ name: services.name }).from(services).where(eq(services.id, serviceId)).limit(1);
     await executor
       .update(services)
       .set({ ...serviceUpdate, revision: sql`${services.revision} + 1`, updatedAt: new Date() })
       .where(eq(services.id, serviceId));
+    // Issues that include this service display its name in their detail; the entry-service name is already in
+    // the summary digest, so only collaborating references need an explicit detail revision.
+    if (existing && existing.name !== serviceUpdate.name)
+      await executor
+        .update(issues)
+        .set({ detailRevision: sql`${issues.detailRevision} + 1` })
+        .where(inArray(issues.id, executor.select({ issueId: issueServiceScopes.issueId }).from(issueServiceScopes).where(eq(issueServiceScopes.serviceId, serviceId))));
+  }
   const existingById = new Map(prepared.existingRepositories.map((repository) => [repository.id, repository]));
   const unchanged = new Set(
     prepared.parsed.repositories

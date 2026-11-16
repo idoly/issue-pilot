@@ -96,7 +96,7 @@ const model: Model<"openai-responses"> = {
   maxTokens: 8_000,
 };
 
-test("a keyed runtime honors the explicit Agent directory instead of the Operator default", async () => {
+test("a keyed runtime honors the explicit Agent directory instead of the Operator default", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-explicit-agent-"));
   const agentDirectory = join(root, "agent"),
     otherDirectory = join(root, "other-agent");
@@ -134,6 +134,15 @@ test("a keyed runtime honors the explicit Agent directory instead of the Operato
     });
     assert.equal(managed.session.model?.provider, model.provider);
     assert.equal(managed.session.model?.id, model.id);
+    // A spread-wrapped session must follow SDK transitions, not just expose an accessor.
+    let streaming = false;
+    t.mock.getter(managed.session, "isStreaming", () => streaming);
+    assert.equal(managed.streaming, false);
+    streaming = true;
+    assert.equal(managed.streaming, true);
+    streaming = false;
+    assert.equal(managed.streaming, false);
+    t.mock.restoreAll();
     await managed.stop();
   } finally {
     try {

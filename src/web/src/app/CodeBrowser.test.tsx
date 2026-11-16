@@ -741,6 +741,83 @@ describe("native code browser", () => {
     expect(await screen.findByLabelText("代码内容 b.txt")).toHaveProperty("value", "b.txt content");
   });
 
+  it("leaves Ctrl+P to a focused editor field instead of opening the file picker", async () => {
+    mount();
+    const editor = await open("a.txt");
+    fireEvent.keyDown(editor, { key: "p", ctrlKey: true });
+    await settle();
+    expect(screen.queryByLabelText("转到文件路径")).toBeNull();
+  });
+
+  it("a successful file save replaces an older changes refresh", async () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    let releaseRefresh!: (value: { files: Array<typeof changedFile>; truncated: boolean }) => void;
+    let calls = 0;
+    api.loadSourceHistory.mockResolvedValue({ commits: [], nextCursor: null, truncated: false });
+    api.loadSourceDiff.mockImplementation(async (_key, _repo, _path, _signal, staged = false) => {
+      if (staged) return { files: [], truncated: false };
+      calls += 1;
+      if (calls === 1) return { files: [], truncated: false };
+      if (calls === 2)
+        return new Promise((resolve) => {
+          releaseRefresh = resolve;
+        });
+      return { files: [changedFile], truncated: false };
+    });
+    mount();
+    const editor = await open();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "变更" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+    fireEvent.focus(window);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(2);
+    await fireEvent.input(editor, { target: { value: "edited" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((screen.getByRole("button", { name: "保存文件" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "保存文件" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.saveSourceFile).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("文件保存状态").textContent).toBe("已保存");
+    expect(calls).toBe(3);
+    releaseRefresh({ files: [], truncated: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByRole("button", { name: "查看差异 a.txt" })).toBeTruthy();
+  });
+
+  it("lets a write supersede a refresh that started before it", async () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    let releaseRefresh!: (value: { files: Array<typeof changedFile>; truncated: boolean }) => void;
+    let calls = 0;
+    api.loadSourceHistory.mockResolvedValue({ commits: [], nextCursor: null, truncated: false });
+    api.loadSourceDiff.mockImplementation(async (_key: string, _repo: string, _path?: string, _signal?: AbortSignal, staged = false) => {
+      // Only the working-tree half is held: loadChanges awaits both halves.
+      if (staged) return { files: [], truncated: false };
+      calls += 1;
+      if (calls === 1) return { files: [changedFile], truncated: false };
+      if (calls === 2) {
+        return new Promise((resolve) => {
+          releaseRefresh = resolve;
+        });
+      }
+      return { files: [], truncated: false };
+    });
+    api.stageSourcePaths.mockResolvedValue({ ok: true });
+    mount(true);
+    await screen.findByRole("button", { name: "查看差异 a.txt" });
+    // A focus-driven refresh is now in flight and will answer with pre-write rows.
+    fireEvent.focus(window);
+    await waitFor(() => expect(calls).toBe(2));
+    fireEvent.click(screen.getByRole("button", { name: "暂存" }));
+    await waitFor(() => expect(api.stageSourcePaths).toHaveBeenCalled());
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查看差异 a.txt" })).toBeNull());
+    releaseRefresh({ files: [changedFile], truncated: false });
+    await settle();
+    expect(screen.queryByRole("button", { name: "查看差异 a.txt" })).toBeNull();
+  });
+
   it("creates, renames and deletes paths through the existing API", async () => {
     mount();
     await screen.findByRole("button", { name: /a\.txt/ });

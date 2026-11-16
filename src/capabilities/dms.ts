@@ -105,7 +105,7 @@ export class DmsOperationError extends Error {
     // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
     const code = cause instanceof Error ? cause.message : "";
     const safeCode =
-      /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_(?:failed|cleanup_failed)|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|operation_cleanup_failed|result_too_large_use_export)$/.test(
+      /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_(?:failed|cleanup_failed)|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|too_many_tools|operation_cleanup_failed|result_too_large_use_export)$/.test(
         code,
       ) || code === "invalid_dms_mcp_target";
     super(safeCode ? code : "dms_mcp_operation_failed", { cause });
