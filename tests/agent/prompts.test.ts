@@ -33,6 +33,10 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.doesNotMatch(prompt, /Call them through the Issue's entry service/);
     assert.doesNotMatch(prompt, /Production\/test MCP access is read-only/);
     assert.equal(prompt.includes("Development change review:"), mode === "development");
+    if (mode === "development") {
+      assert.match(prompt, /later explicit user instruction to commit or push is sufficient to proceed/);
+      assert.doesNotMatch(prompt, /Unresolved P0\/P1 findings block commit and push/);
+    }
     if (mode !== "development") assert.match(prompt, /All repository workspaces are read-only/);
   }
   const withCapabilities = agentSystemPrompt({
