@@ -8,6 +8,8 @@ AI reference. [Index](README.md) · [Architecture](ARCHITECTURE.md) · [Configur
 
 Prod/test analysis keeps its environment's code/evidence scope. Dev code belongs to dev; evidence queries explicitly select prod/test. Included services expand allowed service/deployment tools; related Issues only add read-only evidence.
 
+The system prompt guides diagnosis with available Issue evidence, recorded baseline branches and commits, cross-source checks and explicit evidence gaps. Investigation alone does not authorize changes.
+
 ## Admission and recovery
 
 HTTP 201/202 does not mean model completion. Persist input and bind the session inside the per-Issue scope; preparation failures must not lose admitted messages. Pin the request sender and reauthorize after steering/session waits without switching identity.

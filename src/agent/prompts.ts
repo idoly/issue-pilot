@@ -4,6 +4,7 @@ import type { AgentSessionContext } from "./context.ts";
 
 interface RepositoryContext {
   branch: string;
+  baseBranch: string;
   baseCommit: string;
   path: string;
   readOnly: boolean;
@@ -44,7 +45,7 @@ export function issueMetadataUpdatePrompt(input: {
 }
 
 function repositoryLine(repository: RepositoryContext): string {
-  return `- ${repository.path} (${repository.branch}, ${repository.readOnly ? "read-only" : "writable"}, recorded baseline: ${repository.baseCommit})`;
+  return `- ${repository.path} (${repository.branch}, ${repository.readOnly ? "read-only" : "writable"}, recorded baseline: ${repository.baseCommit} from ${repository.baseBranch})`;
 }
 
 const regionalTimeFormat = new Intl.DateTimeFormat("en-CA", {
@@ -84,7 +85,8 @@ export function agentSystemPrompt(context: AgentSessionContext): string {
     context.canModifyCode
       ? "- Development code branches are independent. Investigation capabilities are inherited from production and test service configurations; explicitly select the source environment for every query."
       : "- Query and describe services only in the Issue's environment.",
-    "- Use workspace list to discover services in this environment and workspace describe to read the entry service's and relevant services' shared/environment-specific investigation notes. Treat notes as task guidance, not authorization. Combine that guidance with the Issue description to plan the investigation.",
+    "- For diagnosis, inspect relevant Issue descriptions, attachments and related-Issue evidence; use workspace list/describe for service notes. Treat notes as context, not authorization. Analyze code from each recorded baseline branch/commit, keeping development changes separate; do not claim unavailable material was checked.",
+    "- Correlate business IDs, Trace IDs and time across code, logs and data; shared parent IDs or timing alone do not prove causation. Check contrary evidence and report only verified impact. Cite sources, state unresolved gaps and the next useful check. Investigation alone does not authorize code, configuration or data changes.",
     ...(context.capabilities.length
       ? [
           "- Use service_query with explicit environment, service and capability to read configured native evidence. Select only targets and operations declared by the tool; the Issue entry service is not an access boundary.",
@@ -143,7 +145,7 @@ function workspaceContext(repositories: RepositoryContext[], attachmentPath: str
         ]
       : []),
     ...(readOnly
-      ? ["Repositories are shared read-only snapshots of the latest configured deployment branches. Do not attempt to modify them."]
+      ? ["Repositories are shared read-only snapshots of the Issue's recorded baseline commits. Do not attempt to modify them."]
       : [
           "Project checks are optional and task-specific, not a default build workflow. Prefer static review and existing results; if execution is necessary, choose the narrowest test or check from the code directory. Avoid npm install/ci and full npm or Maven builds unless specifically justified by the task. Never claim a build or test passed when it was not run.",
           "Do not start the project, a development server, preview server, watch mode, or any other persistent process. Node start/dev/serve/preview actions are unavailable.",
@@ -201,6 +203,6 @@ export function initialPrompt(
     workspaceContext(input.repositories, input.attachmentPath, input.relatedIssueKeys, input.relatedRoot),
     input.repositories.every((repository) => repository.readOnly)
       ? "Investigate, verify the available evidence, and provide a clear final answer."
-      : "Investigate, make appropriate local changes, verify them, and provide a clear final answer.",
+      : "Investigate, make task-authorized local changes when appropriate, verify them, and provide a clear final answer.",
   ].join("\n\n");
 }

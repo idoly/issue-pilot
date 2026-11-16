@@ -282,7 +282,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
           async prompt(message: string) {
             const currentIssue = options.context.canModifyCode ? devIssue! : prodIssue!;
             const recorded = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, currentIssue.id));
-            for (const repository of recorded) assert.ok(message.includes(`recorded baseline: ${repository.commitBefore}`));
+            for (const repository of recorded) assert.ok(message.includes(`recorded baseline: ${repository.commitBefore} from ${repository.baseBranch}`));
             if (starts.length !== 1) return;
             const bash = bashFor(options);
             const direct = shellQuote(path.join(extraCheckout, "README.md"));

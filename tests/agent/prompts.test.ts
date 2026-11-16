@@ -24,6 +24,9 @@ test("bundles Karpathy guidelines for every Issue Agent without changing access 
     assert.match(prompt, /native read\/bash\/edit\/write\/grep\/find\/ls/);
     assert.match(prompt, /Local tools run on the host through the Issue sandbox/);
     assert.match(prompt, /Remote MCP services enforce their own access controls/);
+    assert.match(prompt, /recorded baseline branch\/commit/);
+    assert.match(prompt, /shared parent IDs or timing alone do not prove causation/);
+    assert.match(prompt, /Investigation alone does not authorize code, configuration or data changes/);
     assert.doesNotMatch(prompt, /sandbox operation|output\.spreadsheet|sandbox export_output/);
     assert.match(prompt, /global MCP servers expose separate mcp__ tools through Pi in every Issue environment/);
     assert.doesNotMatch(prompt, /service_query/);
@@ -49,10 +52,10 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(runtimeTimeContext(now), new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(promptWithRuntimeTime("sls latest record", now), /User request:\nsls latest record/);
 
-  const readOnlyRepositories = [{ url: "git@example/repo.git", branch: "main", baseCommit: "1234567890abcdef1234567890abcdef12345678", path: "/workspace/repo", readOnly: true }];
+  const readOnlyRepositories = [{ url: "git@example/repo.git", branch: "main", baseBranch: "main", baseCommit: "1234567890abcdef1234567890abcdef12345678", path: "/workspace/repo", readOnly: true }];
   const continuation = continuationPrompt("ISSUE-20260810-001", readOnlyRepositories, "/issues/issue-20260810-001/attachments", undefined, now);
   assert.match(continuation, new RegExp(expected.replaceAll("+", "\\+")));
-  assert.match(continuation, /shared read-only snapshots of the latest configured deployment branches/);
+  assert.match(continuation, /shared read-only snapshots of the Issue's recorded baseline commits/);
   assert.doesNotMatch(continuation, /unless the user explicitly asks you to commit or push them/);
   const initial = initialPrompt(
     {
@@ -69,6 +72,7 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(initial, new RegExp(expected.replaceAll("+", "\\+")));
   assert.match(initial, /Investigate, verify the available evidence/);
   assert.ok(initial.includes(`recorded baseline: ${readOnlyRepositories[0]!.baseCommit}`));
+  assert.ok(initial.includes(`from ${readOnlyRepositories[0]!.baseBranch}`));
 
   const related = continuationPrompt("ISSUE-20260810-003", readOnlyRepositories, "/issues/issue-20260810-003/attachments", undefined, now, ["ISSUE-20260809-099"]);
   assert.match(related, /\.related-issue-20260809-099\.json/);
@@ -78,8 +82,15 @@ test("injects the current UTC and Asia/Shanghai time into every Agent prompt", (
   assert.match(related, /checkout paths listed in its metadata/);
   assert.match(related, /Never edit or delete these files/);
 
-  const writable = continuationPrompt("ISSUE-20260810-002", [{ ...readOnlyRepositories[0]!, readOnly: false }], "/issues/issue-20260810-002/attachments", undefined, now);
+  const writable = continuationPrompt(
+    "ISSUE-20260810-002",
+    [{ ...readOnlyRepositories[0]!, branch: "issue-hotfix", baseBranch: "prod", readOnly: false }],
+    "/issues/issue-20260810-002/attachments",
+    undefined,
+    now,
+  );
   assert.ok(writable.includes(`recorded baseline: ${readOnlyRepositories[0]!.baseCommit}`));
+  assert.match(writable, /issue-hotfix, writable, recorded baseline: .* from prod/);
   assert.match(writable, /defect_fix and feature_development, make only the minimum changes required/);
   assert.match(writable, /Project checks are optional and task-specific/);
   assert.match(writable, /Never claim a build or test passed when it was not run/);
