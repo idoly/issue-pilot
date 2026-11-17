@@ -20,7 +20,7 @@ Service, repository and user edits, personal credentials, shared DMS/SLS credent
 
 Pi getAgentDir() defaults to ~/.pi/agent. SDK PI_CODING_AGENT_DIR changes resources, not application state. Verify the actual process user, HOME and permissions; another shell's configuration is not equivalent.
 
-The [models.json example](../../examples/models.json) is a key-free template. Merge real providers, baseUrl, api, model IDs and capabilities into the user's models.json.providers. Do not overwrite unrelated definitions. The .invalid endpoint is unusable and omitted pricing is not a cost guarantee. The locked SDK's docs/models-configuration.md owns its full format.
+Merge real providers, baseUrl, api, model IDs and capabilities into the user's models.json.providers; the locked SDK's docs/models-configuration.md owns the full format. Do not overwrite unrelated definitions. Omitted pricing is not a cost guarantee.
 
 This offline check does not call a model or mutate the business DB; its private temporary runtime is closed:
 

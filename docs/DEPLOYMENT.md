@@ -68,7 +68,7 @@ Node 使用运行用户的私有编译缓存加快后续启动，默认位于 `~
 
 1. 准备[宿主机工具](TOOLS.md)及公共 Python 库，继续使用当前 JDK 8。
 2. 获取匹配的源码与锁文件，核对 `issue-pilot.config.ts` 的数据目录、监听和初始用户。初始用户只在空用户表生效。
-3. 为运行用户准备 `~/.pi/agent/models.json`。参考[无密钥示例](../examples/models.json)填写真实模型目录；示例域名不可直接使用。检查方法见[模型目录](ai/CONFIGURATION.md#operator-model-catalog)。模型请求 Key 随后在应用中保存。
+3. 为运行用户准备 `~/.pi/agent/models.json`，只填写真实的 provider、baseUrl、api、模型 ID 和能力；完整格式以锁定的 Pi SDK `docs/models-configuration.md` 为准。检查方法见[模型目录](ai/CONFIGURATION.md#operator-model-catalog)。模型请求 Key 随后在应用中保存。
 4. 核验 SSH `known_hosts`；开发者的私钥由本人在应用中设置，不能依赖宿主 ssh-agent。
 5. 在该独立目录依次执行，任何一步失败就停止：
 
