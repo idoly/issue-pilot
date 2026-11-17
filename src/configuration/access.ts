@@ -58,6 +58,13 @@ export async function requireDeveloper(database: IdentityDatabase, request?: Ide
   return user.subject;
 }
 
+/** Source mutations also need the full reloaded person for commit identity; callers use it where requireDeveloper's subject is not enough. */
+export async function requireDeveloperUser(database: IdentityDatabase, request?: IdentityRequest) {
+  const user = await requireCurrentUser(database, request);
+  if (!canManageDevelopmentConfiguration(user)) throw new DomainError("developer_role_required", "forbidden");
+  return user;
+}
+
 export async function requireAdmin(database: IdentityDatabase, request?: IdentityRequest): Promise<string> {
   const user = await requireCurrentUser(database, request);
   if (!hasAdministratorAccess(user)) throw new DomainError("admin_role_required", "forbidden");

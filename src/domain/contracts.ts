@@ -293,6 +293,14 @@ export function requiresDeveloperOwner(environmentKind: EnvironmentKind): boolea
   return canModifyIssueCode(environmentKind);
 }
 
+/**
+ * Whether an actor may start code-affecting work (Agent rounds, source mutations) in this Issue's environment.
+ * Analysis-only environments accept every role; code-writable ones require a developer, and isAdmin is independent.
+ */
+export function canWriteIssueCode(user: AccessHolder | null | undefined, environmentKind: EnvironmentKind | undefined): boolean {
+  return environmentKind === undefined || !canModifyIssueCode(environmentKind) || canManageDevelopmentConfiguration(user);
+}
+
 /** The development environment derives baselines from production and has no capability targets of its own. Identify it by kind, never by its configurable key. */
 export function isDevelopmentEnvironment(environmentKind: EnvironmentKind | undefined): boolean {
   return environmentKind === "dev";

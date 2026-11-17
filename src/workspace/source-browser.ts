@@ -9,9 +9,10 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { domainError } from "../domain/errors.ts";
-import { localCommandExecutor, type CommandExecutor } from "../process.ts";
+import { localCommandExecutor, type CommandExecutionOptions, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
+import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 import { issueRepositoryWorkspaceNames, managedGitDirectoryExists, WorktreeManager } from "./git.ts";
 import { recordedSharedSnapshot, resolveRecordedRepository } from "./runtime.ts";
 import type { WorkFileRepository } from "./work-files.ts";
@@ -111,6 +112,30 @@ export class SourceBrowser {
     this.database = database;
     this.stateRoot = path.resolve(stateRoot);
     this.executor = executor;
+  }
+
+  /**
+   * Every trusted Git invocation crosses this method: repository-controlled configuration must never
+   * select a program, including configuration of a nested repository Git could inspect.
+   */
+  private runGit(args: readonly string[], options: CommandExecutionOptions = {}) {
+    return this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, trustedGitArgs(args), {
+      ...options,
+      environment: trustedGitEnvironment(options.environment),
+    });
+  }
+
+  /** New gitlinks are embedded repositories, not reviewed submodules; they must never enter the index. */
+  private async assertNoEmbeddedRepository(context: SourceContext): Promise<void> {
+    const gitlinks = await indexGitlinkChanges(context.root, {
+      executor: this.executor,
+      gitExecutable: issuePilotConfig.runtime.sourceBrowser.gitExecutable,
+      environment: this.commandOptions().environment,
+    });
+    const added = gitlinks.filter((entry) => entry.added).map((entry) => entry.path);
+    if (!added.length) return;
+    await this.runGit(["-C", context.root, "reset", "-q", "HEAD", "--", ...added], this.mutationOptions()).catch(() => undefined);
+    throw domainError("embedded_repository_not_allowed");
   }
 
   async repositories(issue: IssueReference): Promise<SourceRepository[]> {
@@ -265,7 +290,7 @@ export class SourceBrowser {
       if (ancestors.length === 64) break;
     }
     if (ancestors.length) {
-      const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", snapshot.store, "cat-file", "--batch-check=%(objecttype)", "-Z"], {
+      const result = await this.runGit(["-C", snapshot.store, "cat-file", "--batch-check=%(objecttype)", "-Z"], {
         ...this.commandOptions(),
         input: Buffer.from(ancestors.join("\0") + "\0"),
       });
@@ -283,11 +308,7 @@ export class SourceBrowser {
   }
 
   private async snapshotEntries(snapshot: ColdSnapshot, tree: string, selected?: string) {
-    const result = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", snapshot.store, "ls-tree", "-lz", tree, "--", ...(selected ? [selected] : [])],
-      this.commandOptions(),
-    );
+    const result = await this.runGit(["-C", snapshot.store, "ls-tree", "-lz", tree, "--", ...(selected ? [selected] : [])], this.commandOptions());
     if (result.killed) throw domainError("source_history_timeout");
     if (result.code !== 0) throw domainError("source_git_binding_invalid");
     return result.stdout
@@ -492,6 +513,7 @@ export class SourceBrowser {
   async stage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
     await this.gitMutation(context, ["add", "-A", "--", ...this.mutablePaths(paths)], "source_stage_failed");
+    await this.assertNoEmbeddedRepository(context);
   }
 
   async unstage(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
@@ -502,7 +524,7 @@ export class SourceBrowser {
   async discard(issue: IssueReference, repositoryName: string, paths: string[]): Promise<void> {
     const context = await this.writableContext(issue, repositoryName);
     const selected = this.mutablePaths(paths);
-    const tracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "ls-files", "-z", "--", ...selected], this.mutationOptions());
+    const tracked = await this.runGit(["-C", context.root, "ls-files", "-z", "--", ...selected], this.mutationOptions());
     if (tracked.killed) throw domainError("source_discard_timeout");
     if (tracked.code !== 0) throw domainError("source_discard_failed");
     const trackedPaths = tracked.stdout.split("\0").filter(Boolean);
@@ -516,6 +538,8 @@ export class SourceBrowser {
     // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
     if (!author.name.trim() || !author.email.trim() || /[\x00-\x1f\x7f]/.test(author.name) || /[\x00-\x1f\x7f]/.test(author.email)) throw domainError("invalid_source_commit_author");
     const context = await this.writableContext(issue, repositoryName);
+    // Staging refuses new gitlinks, but a commit must not depend on that earlier admission.
+    await this.assertNoEmbeddedRepository(context);
     await this.gitMutation(context, ["-c", `user.name=${author.name.trim()}`, "-c", `user.email=${author.email.trim()}`, "commit", "-m", value], "source_commit_failed");
   }
 
@@ -615,14 +639,10 @@ export class SourceBrowser {
     if (line > lineCount) throw domainError("invalid_source_line");
     const withoutCommit = (subject: string): SourceBlame => ({ path: selected, line, commit: null, shortCommit: null, author: "", date: null, subject });
     if (!content || (content.endsWith("\n") && line === lineCount)) return withoutCommit(content ? "文件末尾" : "空文件");
-    const result = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", context.root, "blame", "--line-porcelain", "--root", "-L", `${line},${line}`, "--", selected],
-      this.commandOptions(),
-    );
+    const result = await this.runGit(["-C", context.root, "blame", "--line-porcelain", "--root", "-L", `${line},${line}`, "--", selected], this.commandOptions());
     if (result.killed) throw domainError("source_blame_timeout");
     if (result.code !== 0) {
-      const tracked = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "ls-files", "--error-unmatch", "--", selected], this.commandOptions());
+      const tracked = await this.runGit(["-C", context.root, "ls-files", "--error-unmatch", "--", selected], this.commandOptions());
       if (!tracked.killed && tracked.code === 1) return withoutCommit("未提交变更");
       throw domainError("source_blame_failed");
     }
@@ -651,7 +671,7 @@ export class SourceBrowser {
     const selected = normalizedRelativePath(relativePath);
     let revision = cursor?.revision ?? context.head;
     if (!revision) {
-      const head = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "rev-parse", "--verify", "HEAD"], {
+      const head = await this.runGit(["-C", context.root, "rev-parse", "--verify", "HEAD"], {
         ...this.commandOptions(),
         ...(signal ? { signal } : {}),
       });
@@ -661,8 +681,7 @@ export class SourceBrowser {
       if (!/^[a-f0-9]{40}$/.test(revision)) throw domainError("invalid_source_history_response");
     }
     const offset = cursor?.offset ?? 0;
-    const result = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
+    const result = await this.runGit(
       [
         "-C",
         context.root,
@@ -785,15 +804,11 @@ export class SourceBrowser {
   private async revisionContext(issue: IssueReference, repositoryName: string, revision: string): Promise<SourceRevisionContext> {
     if (!/^[a-f0-9]{40}$/.test(revision)) throw domainError("invalid_source_revision");
     const source = await this.committedContext(issue, repositoryName);
-    const ancestor = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", source.root, "merge-base", "--is-ancestor", revision, source.head ?? "HEAD"],
-      this.commandOptions(),
-    );
+    const ancestor = await this.runGit(["-C", source.root, "merge-base", "--is-ancestor", revision, source.head ?? "HEAD"], this.commandOptions());
     if (ancestor.killed) throw domainError("source_history_timeout");
     if (ancestor.code === 1) throw domainError("source_commit_not_found");
     if (ancestor.code !== 0) throw domainError("source_history_failed");
-    const parents = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", source.root, "rev-list", "--parents", "-n", "1", revision], this.commandOptions());
+    const parents = await this.runGit(["-C", source.root, "rev-list", "--parents", "-n", "1", revision], this.commandOptions());
     if (parents.killed) throw domainError("source_history_timeout");
     if (parents.code !== 0) throw domainError("source_history_failed");
     const hashes = parents.stdout.trim().split(/\s+/);
@@ -802,29 +817,38 @@ export class SourceBrowser {
   }
 
   private async changedFiles(context: SourceRevisionContext, selected: string): Promise<SourceCommitFile[]> {
-    const argumentsBeforeRange = ["-C", context.source.root, context.parent ? "diff" : "diff-tree", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C"];
+    const argumentsBeforeRange = ["-C", context.source.root, context.parent ? "diff" : "diff-tree", "--ignore-submodules=all", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C"];
     const range = context.parent ? [context.parent, context.revision] : ["--root", "--no-commit-id", "-r", context.revision];
-    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, [...argumentsBeforeRange, ...range, "--", ...(selected ? [selected] : [])], this.commandOptions());
+    const result = await this.runGit([...argumentsBeforeRange, ...range, "--", ...(selected ? [selected] : [])], this.commandOptions());
     if (result.killed) throw domainError("source_history_timeout");
     if (result.code !== 0) throw domainError("source_history_failed");
     return this.parseChangedFiles(result.stdout, "invalid_source_history_response");
   }
 
   private async workspaceChangedFiles(context: SourceContext, selected: string, staged: boolean): Promise<SourceCommitFile[]> {
-    const result = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", context.root, "diff", ...(staged ? ["--cached"] : []), "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", "-C", "--", ...(selected ? [selected] : [])],
+    const result = await this.runGit(
+      [
+        "-C",
+        context.root,
+        "diff",
+        ...(staged ? ["--cached"] : []),
+        "--ignore-submodules=all",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--name-status",
+        "-z",
+        "-M",
+        "-C",
+        "--",
+        ...(selected ? [selected] : []),
+      ],
       this.commandOptions(),
     );
     if (result.killed) throw domainError("source_diff_timeout");
     if (result.code !== 0) throw domainError("source_diff_failed");
     const files = this.parseChangedFiles(result.stdout, "invalid_source_diff_response");
     if (staged) return files;
-    const untracked = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", context.root, "ls-files", "--others", "--exclude-standard", "-z", "--", ...(selected ? [selected] : [])],
-      this.commandOptions(),
-    );
+    const untracked = await this.runGit(["-C", context.root, "ls-files", "--others", "--exclude-standard", "-z", "--", ...(selected ? [selected] : [])], this.commandOptions());
     if (untracked.killed) throw domainError("source_diff_timeout");
     if (untracked.code !== 0) throw domainError("source_diff_failed");
     const known = new Set(files.map((file) => file.path));
@@ -872,16 +896,14 @@ export class SourceBrowser {
   }
 
   private async gitFile(context: SourceContext, object: string, timeoutError: string, commandError: string): Promise<string> {
-    const result = await this.executor
-      .execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, "cat-file", "blob", object], {
-        ...this.commandOptions(issuePilotConfig.limits.sourceBrowser.fileBytes),
-        strictStdoutUtf8: true,
-      })
-      .catch((error) => {
-        if (error instanceof Error && error.message === "command_stdout_not_utf8") throw domainError("source_file_binary");
-        if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_file_too_large");
-        throw error;
-      });
+    const result = await this.runGit(["-C", context.root, "cat-file", "blob", object], {
+      ...this.commandOptions(issuePilotConfig.limits.sourceBrowser.fileBytes),
+      strictStdoutUtf8: true,
+    }).catch((error) => {
+      if (error instanceof Error && error.message === "command_stdout_not_utf8") throw domainError("source_file_binary");
+      if (error instanceof Error && error.message === "command_output_too_large") throw domainError("source_file_too_large");
+      throw error;
+    });
     if (result.killed) throw domainError(timeoutError);
     if (result.code !== 0) throw domainError(commandError);
     if (result.stdout.includes("\0")) throw domainError("source_file_binary");
@@ -923,11 +945,7 @@ export class SourceBrowser {
     const context = await this.context(issue, repositoryName);
     const expectedStore = context.store;
     if (!expectedStore) throw domainError("source_read_only");
-    const result = await this.executor.execute(
-      issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      ["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"],
-      this.mutationOptions(),
-    );
+    const result = await this.runGit(["-C", context.root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel", "--abbrev-ref", "HEAD"], this.mutationOptions());
     // A killed or failed probe is not a binding mismatch; keep the two conditions distinguishable.
     if (result.killed) throw domainError("source_git_timeout");
     const [gitDirectory, commonDirectory, workingDirectory, branch] = result.stdout.trim().split("\n");
@@ -1005,7 +1023,7 @@ export class SourceBrowser {
   }
 
   private async gitMutation(context: SourceContext, args: string[], failure: string): Promise<void> {
-    const result = await this.executor.execute(issuePilotConfig.runtime.sourceBrowser.gitExecutable, ["-C", context.root, ...args], this.mutationOptions());
+    const result = await this.runGit(["-C", context.root, ...args], this.mutationOptions());
     if (result.killed) throw domainError(`${failure.replace(/_failed$/, "")}_timeout`);
     if (result.code !== 0) throw domainError(failure);
   }

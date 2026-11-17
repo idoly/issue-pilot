@@ -20,6 +20,7 @@ import { resolveRecordedRepository } from "../workspace/runtime.ts";
 import { readIssueBranchCommit } from "../workspace/issue-git.ts";
 import { classifyRepositoryState } from "../workspace/state.ts";
 import { executeLocalCommand } from "../process.ts";
+import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "../workspace/git-command.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { domainError } from "../domain/errors.ts";
 import { prepareIssueCommand } from "./issue-sandbox.ts";
@@ -45,6 +46,22 @@ type WorkspaceToolOptions = {
   onScopeChanged?: (readRoots?: string[]) => void;
 };
 
+/** New gitlinks are embedded repositories staged from the Issue worktree, never reviewed submodules. */
+async function assertNoEmbeddedRepository(root: string): Promise<void> {
+  const gitlinks = await indexGitlinkChanges(root).catch((error: unknown) => {
+    throw new Error("workspace_git_index_invalid", { cause: error });
+  });
+  const added = gitlinks.filter((entry) => entry.added).map((entry) => entry.path);
+  if (!added.length) return;
+  const result = await executeLocalCommand("git", trustedGitArgs(["-C", root, "reset", "-q", "HEAD", "--", ...added]), {
+    timeout: issuePilotConfig.limits.process.gitOperationMs,
+    maxOutputBytes: issuePilotConfig.limits.process.gitOutputBytes,
+    environment: trustedGitEnvironment(),
+  });
+  if (result.code !== 0) throw new Error("workspace_git_index_invalid");
+  throw new Error("embedded_repository_not_allowed");
+}
+
 async function updateBoundBranch(database: Database, issue: Issue, input: GitInput, options: WorkspaceToolOptions, signal?: AbortSignal) {
   const rows = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));
   if (classifyRepositoryState(rows) !== "development_workspace") throw new Error("workspace_git_read_only");
@@ -62,6 +79,8 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
   } else if ("message" in input) {
     const message = input.message.trim();
     if (!message || message.includes("\0")) throw domainError("invalid_source_commit_message");
+    // Staging refuses new gitlinks; a commit must not depend on that earlier admission.
+    await assertNoEmbeddedRepository(root);
     args = ["commit", "-m", message];
   } else {
     if (!options.personalGit?.env.GIT_SSH_COMMAND || !/^(ssh:\/\/|[^/]+@[^:]+:)/.test(repository.url)) throw new Error("personal_git_ssh_credentials_required");
@@ -76,7 +95,7 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
       readRoots: [path.join(repositoryStorePath(options.stateRoot, repository.url), "objects"), ...(push ? (options.personalGit?.readRoots ?? []) : [])],
       networkDomains: options.networkDomains,
     },
-    ["git", "-C", root, "--literal-pathspecs", "-c", "core.hooksPath=/dev/null", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", ...args],
+    ["git", ...trustedGitArgs(["-C", root, "--literal-pathspecs", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", ...args])],
     root,
   );
   let failure: unknown;
@@ -96,6 +115,7 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
     signal?.throwIfAborted();
     if (killed) throw new Error("workspace_git_operation_timeout");
     if (code !== 0) throw new Error(`workspace_git_${input.operation}_failed: ${stderr.trim() || stdout.trim() || code}`);
+    if (input.operation === "stage") await assertNoEmbeddedRepository(root);
     return structuredJsonResult(capabilityTextResult(JSON.stringify({ operation: input.operation, repository: input.repository, branch: repository.workingBranch }), { operation: input.operation }));
   } catch (error) {
     failure = error;

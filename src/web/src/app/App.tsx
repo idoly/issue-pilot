@@ -3,7 +3,7 @@ import { createEffect, createSignal, lazy, Loading, Match, onCleanup, Show, Swit
 
 import { getIssue, type IssueDetail } from "../data/client";
 import { createLatestTask } from "../data/latest";
-import { parseIssueKey } from "../../../domain/contracts";
+import { canWriteIssueCode, parseIssueKey } from "../../../domain/contracts";
 import { DingtalkImportButton } from "./DingtalkImportDialog";
 import { AgentPanel } from "./AgentPanel";
 import { ApplicationResourcesProvider, useApplicationResources } from "./ApplicationResources";
@@ -15,7 +15,7 @@ import type { SourcePanel } from "./CodeBrowser";
 
 import { createIssueList, type QueueMembership, type QueueScope } from "./issue-list";
 import { errorText } from "./error-text";
-import { personLabel } from "./model";
+import { environmentKind, personLabel } from "./model";
 
 const CodeBrowser = lazy(() => import("./CodeBrowser"));
 const SettingsView = lazy(() => import("./SettingsView"), { export: "SettingsView" });
@@ -40,6 +40,8 @@ function AgentWorkspace(props: {
   onResize: (panel: SourcePanel, size: number) => void;
 }) {
   const { agentDrafts, currentUser } = useApplicationResources();
+  // Mirrors the server gate: a code-writable Issue runs the Agent with its developer owner's SSH identity.
+  const codeWriteAllowed = () => canWriteIssueCode(currentUser(), environmentKind(props.issue.environmentKey));
   return (
     <section
       class={`agent-workspace${props.sourceExpanded ? " source-open" : ""}${props.sourceExpanded && !props.sourceAgentOpen ? " agent-closed" : ""}`}
@@ -50,13 +52,21 @@ function AgentWorkspace(props: {
           工单详情刷新失败：{props.refreshError}
         </div>
       </Show>
-      <AgentPanel issue={props.issue} drafts={agentDrafts} hidden={props.sourceExpanded && !props.sourceAgentOpen} onRefresh={props.onRefresh} userSubject={currentUser()?.subject} />
+      <AgentPanel
+        issue={props.issue}
+        drafts={agentDrafts}
+        hidden={props.sourceExpanded && !props.sourceAgentOpen}
+        onRefresh={props.onRefresh}
+        userSubject={currentUser()?.subject}
+        codeWriteAllowed={codeWriteAllowed()}
+      />
       <Show when={props.sourceExpanded}>
         <CodeBrowser
           issueKey={props.issue.id}
           repositoryVersion={JSON.stringify([props.issue.environmentKey, props.issue.status, props.issue.workspace.status, props.issue.workspace.sourceAvailable, props.issue.repositories])}
           contentVersion={props.issue.updatedAt}
           development={props.issue.environmentKey === "dev"}
+          codeWriteAllowed={codeWriteAllowed()}
           agentOpen={props.sourceAgentOpen}
           detailsOpen={props.sourceDetailsOpen}
           onClose={props.onCloseSource}

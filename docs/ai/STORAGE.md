@@ -97,6 +97,8 @@ Preview, source, diff and MCP inline limits are separate from ordinary downloads
 
 Shared bare stores retain baseline objects/refs; shared snapshots are detached. Dev Issues retain private branches, objects, indexes and worktrees while reusing shared objects read-only. Never share writable cross-Issue hardlinks.
 
+Trusted Git runs outside the sandbox against model-writable worktrees, so every application invocation goes through [git-command.ts](../../src/workspace/git-command.ts): it prepends `core.fsmonitor=false`, `core.untrackedCache=false`, `diff.ignoreSubmodules=all`, `submodule.recurse=false` and `core.hooksPath=/dev/null`, sets `GIT_CONFIG_NOSYSTEM=1`, and every `status`/`diff`/`diff-index` call also passes `--ignore-submodules=all`. Repository-controlled configuration, including configuration of a nested repository Git might inspect, therefore never selects a program. Submodules are never recursed into. A staged gitlink that HEAD does not already contain is an embedded repository: staging and committing refuse it with `embedded_repository_not_allowed` and unstage it. Submodules already recorded in HEAD remain inspectable as plain gitlinks.
+
 | Repository-set classification | local_path | working_branch |
 | --- | --- | --- |
 | read_only | All null | All null |

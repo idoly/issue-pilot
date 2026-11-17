@@ -10,6 +10,8 @@ The application issues no login session. X-Issue-Pilot-Subject selects a DB user
 
 [requireCurrentUser](../../src/configuration/access.ts) requires active identity, pins implicit selection by createdAt/subject, and reloads authorization after relevant waits. Deactivation never switches identity. developer and isAdmin are independent.
 
+Code lives in analysis (prod/test) or code-writable (dev) environments, and only the developer role may change it: every Source mutation and every Agent message/retry that can run a dev Issue requires `role=developer` (403 `developer_role_required`). isAdmin does not grant it. Analysis Issues still accept Agent messages from every role. [canWriteIssueCode](../../src/domain/contracts.ts) is the one predicate the server and Web use; the routes re-read the person, the Issue and its environment kind after reservation/admission waits.
+
 Session lists, history pages and complete query reads reauthorize inside the configuration scope after waiting. Complete query reads also reauthorize after session preparation. SSE reauthorizes after catalog/transcript preparation and before sending headers; a deactivated reader receives an ordinary error, not a successful replay. This admission check does not revoke an already established stream. Regression: [session-read-identity.test.ts](../../tests/http/session-read-identity.test.ts).
 
 Not every GET checks identity: examples include /api/issues, /api/issues/:key, /api/users, /api/catalog and /api/config. Work-file list/download, attachment originals and Source reads require an active current user and reauthorize after the scope queue or shared-checkout wait. Assignee/reporter relations are not read access control. API/MCP private,no-store headers (selected by matched route, so query strings do not bypass them) are not authorization or encryption.
@@ -32,11 +34,11 @@ Native browser EventSource does not send the page-selected subject header. In "g
 | GET /api/issues/:key | Details, workspace (status, sourceAvailable, runtimeReady, lastError, retryable), attachments, repositories, relations and scope history from one SQLite read snapshot. Live Agent state and filesystem availability are sampled separately. |
 | POST /api/issues | 201, persisted and scheduled, not model completion |
 | PATCH /api/issues/:key | 200, complete metadata form, not arbitrary partial merge |
-| POST .../agent-messages | 202, empty body, input admitted |
+| POST .../agent-messages | 202, empty body, input admitted; developer required while the Issue's environment can modify code, rechecked by the engine's reauthorize callback. Inbound MCP issue_message uses this route |
 | GET .../agent-messages/:id | Sender-scoped durable receipt; queued / started / rejected / unknown |
 | GET .../sessions/:sessionId/query-results/:entryId | Exact saved successful native query text, text/plain, private/no-store; validated Issue/reset chain and displayed branch, at most 1 MiB UTF-8. Unknown/non-query entries are 404; oversized results are 413. No filesystem path input or query execution. |
 | POST .../abort | 200 after current/queued cancellation cleanup |
-| POST .../retry | 202 when unresolved and reservation checks permit |
+| POST .../retry | 202 when unresolved, the environment's role gate allows the caller and reservation checks permit |
 | PATCH .../status | Manual pending → resolved or resolved → open; Web rereads after a transition conflict without repeating the write |
 | DELETE /api/issues/:key | Admin permanent deletion, 204; not code release |
 | GET .../files?path=... | Directory entries; managed files list-only; active current user |
@@ -134,7 +136,7 @@ Prefix: /api/issues/:key/source/. First GET repositories for name/url/branch/acc
 | GET .../history | nextCursor; subsequent Revision/Offset headers |
 | POST .../stage, .../unstage, .../commit | Current writable dev repository; earlier access=write is not permanent permission |
 
-Headers include X-Issue-Pilot-Repository, X-Issue-Pilot-Path and X-Issue-Pilot-Sha256. Encode Source-specific values with encodeURIComponent; identity/Content-Type follow their own contracts. Reads require an active current user and reauthorize after the shared-checkout wait. Mutations reauthorize after reservation and retain repository/Git checks.
+Headers include X-Issue-Pilot-Repository, X-Issue-Pilot-Path and X-Issue-Pilot-Sha256. Encode Source-specific values with encodeURIComponent; identity/Content-Type follow their own contracts. Reads require an active current user and reauthorize after the shared-checkout wait. Mutations require the developer role before and after the reservation, refuse a resolved Issue with 403 source_read_only, and retain repository/Git checks. A test/prod repository stays read via the repository owner, not this route.
 
 Hash conflict is source_file_changed; read-only is source_read_only. Finalization failure may leave a complete target: reread before retrying. Owners: [source-browser-routes.ts](../../src/http/source-browser-routes.ts), [source-contracts.ts](../../src/workspace/source-contracts.ts).
 

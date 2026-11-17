@@ -5,12 +5,12 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { executeLocalCommand } from "../process.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 
 const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
 const exec = promisify(execFile);
-const noHooks = ["-c", "core.hooksPath=/dev/null"];
 const git = async (args: string[]) =>
-  (await exec("git", [...noHooks, ...args], { timeout: gitOperationMs, maxBuffer: gitOutputBytes, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })).stdout.trim();
+  (await exec("git", trustedGitArgs(args), { timeout: gitOperationMs, maxBuffer: gitOutputBytes, env: trustedGitEnvironment({ ...process.env, GIT_TERMINAL_PROMPT: "0" }) })).stdout.trim();
 
 async function writeAtomicGitFile(file: string, content: string): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -183,8 +183,9 @@ export async function publishIssueBranch(sharedStore: string, privateStore: stri
 async function readIndexObjects(workspace: string): Promise<Set<string>> {
   const objects = new Set<string>();
   let pending = "";
-  const listed = await executeLocalCommand("git", [...noHooks, "-C", workspace, "ls-files", "--stage", "-z"], {
+  const listed = await executeLocalCommand("git", trustedGitArgs(["-C", workspace, "ls-files", "--stage", "-z"]), {
     timeout: gitOperationMs,
+    environment: trustedGitEnvironment(),
     maxOutputBytes: null,
     onStdout: (chunk) => {
       pending += chunk;
@@ -221,8 +222,9 @@ async function initializePrivateStore(
   await git(["-C", temporary, "fetch", "--no-tags", sharedStore, "+refs/remotes/origin/*:refs/remotes/origin/*"]);
   const objects = workspace ? await readIndexObjects(workspace) : new Set<string>();
   if (commit === base && !objects.size) return;
-  const packed = await executeLocalCommand("git", [...noHooks, "-C", sharedStore, "pack-objects", "--revs", "--non-empty", path.join(temporary, "objects/pack/pack")], {
+  const packed = await executeLocalCommand("git", trustedGitArgs(["-C", sharedStore, "pack-objects", "--revs", "--non-empty", path.join(temporary, "objects/pack/pack")]), {
     timeout: gitOperationMs,
+    environment: trustedGitEnvironment(),
     input: Buffer.from([commit, `^${base}`, ...objects].join("\n") + "\n"),
   });
   if (packed.code) throw new Error("workspace_git_object_preservation_failed", { cause: new Error(packed.stderr) });

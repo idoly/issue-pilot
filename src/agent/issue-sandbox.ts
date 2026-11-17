@@ -19,6 +19,8 @@ export interface IssueFilesystemPolicy {
   networkDomains?: readonly string[];
   /** Only fixed bound-branch commands may grant writes to a selected private store. */
   writableGitStore?: string;
+  /** Pi agent directory whose resource subpaths are readable; defaults to getAgentDir(). */
+  agentDirectory?: string;
 }
 export interface PreparedIssueCommand {
   argv: string[];
@@ -148,6 +150,64 @@ const within = (root: string, value: string) => {
   const relative = path.relative(root, value);
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 };
+// Agent-directory entries sandboxed tools need: Pi's fd/rg downloads and skill files the model reads,
+// including skills shipped by installed npm/git packages. Credentials, settings, sessions, editor
+// swap files and every unlisted entry stay hidden.
+const agentReadableEntries = ["bin", "skills", "npm", "git"];
+// Home entries sandboxed tools need: the documented user-level host tool prefix (pip, global Pi, the
+// Python user site with openpyxl) and Pi's user-level ~/.agents/skills. Everything else in the home
+// directory (checkpoint databases, logs, Git/npm/cloud credentials, other agents' state) is hidden.
+const homeReadableEntries = [".local/bin", ".local/lib", ".agents/skills"];
+export interface IssueReadPolicyInput {
+  root: string;
+  application: string;
+  /** Agent directory whose resources the command may read. */
+  agent: string;
+  /** The process-wide Operator agent directory; its secrets are denied even when a test selects another. */
+  operatorAgent: string;
+  /** HOME and the account's password-database home; both are denied when they differ. */
+  homes: readonly string[];
+  temporary: string;
+  state?: string;
+  bridges: readonly string[];
+  readRoots: readonly string[];
+}
+/**
+ * Deny-by-default read policy over the host home: SRT mounts a tmpfs over each denied directory and
+ * ro-binds allowRead paths back (allowRead wins inside a denied directory; deeper denies are applied
+ * after shallower ones, and a directory allow never lifts a specific file deny).
+ */
+export function issueReadPolicy(input: IssueReadPolicyInput): { denyRead: string[]; allowRead: string[] } {
+  const homes = [...new Set(input.homes.filter((home) => path.isAbsolute(home) && path.resolve(home) !== "/").map((home) => path.resolve(home)))];
+  const agentSecrets = (agent: string) => ["auth.json", "mcp-auth.json", "models.json", "sessions"].map((name) => path.join(agent, name));
+  const agents = [...new Set([input.agent, input.operatorAgent])];
+  const denyRead = [
+    input.temporary,
+    ...homes,
+    ...homes.map((home) => path.join(home, ".ssh")),
+    ...agents.flatMap(agentSecrets),
+    // A test-selected agent directory may be the Issue root itself; never hide the root that way.
+    ...agents.filter((agent) => !within(agent, input.root) && !within(input.root, agent)),
+    ...(input.state ? [input.state] : []),
+  ];
+  const allowRead = [
+    input.root,
+    input.application,
+    ...agentReadableEntries.map((name) => path.join(input.agent, name)),
+    ...homes.flatMap((home) => homeReadableEntries.map((name) => path.join(home, name))),
+    ...input.bridges,
+    ...input.readRoots,
+  ];
+  return { denyRead: [...new Set(denyRead)], allowRead: [...new Set(allowRead)] };
+}
+// HOME can be overridden; the password-database home is where the account's real files live.
+function accountHome(): string[] {
+  try {
+    return [os.userInfo().homedir];
+  } catch {
+    return [];
+  }
+}
 /** One SRT boundary for local tools and stdio MCP. Policy is immutable for each invocation. */
 export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command: readonly string[], cwd = policy.writeRoot): Promise<PreparedIssueCommand> {
   const root = path.resolve(policy.writeRoot);
@@ -224,20 +284,18 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
         if (metadata) denyWrite.push(git);
       }
     }
-    const agent = getAgentDir(),
-      application = path.resolve(import.meta.dirname, "../..");
     const state = knownStateRoot ?? (path.basename(path.dirname(root)) === "workspaces" ? path.dirname(path.dirname(root)) : undefined);
-    const denyRead = [
-      os.tmpdir(),
-      path.join(os.homedir(), ".ssh"),
-      path.join(agent, "auth.json"),
-      path.join(agent, "mcp-auth.json"),
-      path.join(agent, "models.json"),
-      path.join(agent, "sessions"),
-      ...(state ? [state] : []),
-    ];
-    const bridges = [SandboxManager.getLinuxHttpSocketPath(), SandboxManager.getLinuxSocksSocketPath()].filter((value): value is string => typeof value === "string");
-    const allowRead = [root, application, agent, ...bridges, ...(policy.readRoots ?? [])];
+    const { denyRead, allowRead } = issueReadPolicy({
+      root,
+      application: path.resolve(import.meta.dirname, "../.."),
+      agent: policy.agentDirectory ? path.resolve(policy.agentDirectory) : getAgentDir(),
+      operatorAgent: getAgentDir(),
+      homes: [os.homedir(), ...accountHome()],
+      temporary: os.tmpdir(),
+      ...(state ? { state } : {}),
+      bridges: [SandboxManager.getLinuxHttpSocketPath(), SandboxManager.getLinuxSocksSocketPath()].filter((value): value is string => typeof value === "string"),
+      readRoots: policy.readRoots ?? [],
+    });
     const entry = path.join(import.meta.dirname, "network-exec.ts");
     const invocation = [process.execPath, "--experimental-strip-types", entry, root, config, ...command];
     if (policy.networkDomains?.length) SandboxManager.registerCommandNetworkLists(id, { allowedDomains: [...policy.networkDomains] });

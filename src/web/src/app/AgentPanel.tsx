@@ -315,7 +315,15 @@ function footerMetrics(footer: AgentFooterStats) {
   ].filter((metric) => metric.text);
 }
 
-export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefresh: (issueKey: string) => Promise<unknown>; drafts: AgentDraftStore; userSubject?: string }) {
+export function AgentPanel(props: {
+  issue: IssueDetail;
+  hidden?: boolean;
+  onRefresh: (issueKey: string) => Promise<unknown>;
+  drafts: AgentDraftStore;
+  userSubject?: string;
+  /** Mirrors the server role gate for code-writable Issues; omitting it leaves the composer to the server's answer. */
+  codeWriteAllowed?: boolean;
+}) {
   const [snapshotReady, setSnapshotReady] = createSignal(false, { ownedWrite: true });
   const [sending, setSending] = createSignal(false, { ownedWrite: true });
   const [runState, setRunState] = createSignal<AgentRunState | undefined>(undefined, { ownedWrite: true });
@@ -375,7 +383,9 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
     ({ issueId }) => loadDraft(issueId),
   );
 
-  const canSend = () => issueStatus() !== "resolved";
+  const codeWriteAllowed = () => props.codeWriteAllowed !== false;
+  const canSend = () => issueStatus() !== "resolved" && codeWriteAllowed();
+  const sendBlockedReason = () => (issueStatus() === "resolved" ? "工单已解决，重开后可发送" : "开发工单仅开发角色可发送消息");
   const canInterrupt = processing;
   const canSubmit = () => canSend() && !sending() && !submitted() && (images().length > 0 || /\S/.test(draft()));
   const usageMetrics = () => footerMetrics(footer());
@@ -905,7 +915,7 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
               ref={editor}
               rows={2}
               aria-label="发送给 Agent"
-              placeholder={canSend() ? "补充消息或粘贴图片…" : "工单已解决，重开后可发送"}
+              placeholder={canSend() ? "补充消息或粘贴图片…" : sendBlockedReason()}
               value={draft()}
               disabled={!canSend()}
               onInput={handleEditorInput}
@@ -913,6 +923,11 @@ export function AgentPanel(props: { issue: IssueDetail; hidden?: boolean; onRefr
               onSelect={protectPasteSelection}
               onKeyDown={handleEditorKeyDown}
             />
+            <Show when={!codeWriteAllowed() && issueStatus() !== "resolved"}>
+              <p class="agent-composer-notice" role="status">
+                开发工单只有开发角色可以发送消息；该工单的 Agent 会以开发人员的 Git 身份修改和推送代码。
+              </p>
+            </Show>
             <div class="agent-composer-actions">
               <span>
                 Enter 发送 · Shift+Enter 换行

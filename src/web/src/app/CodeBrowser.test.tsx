@@ -880,4 +880,22 @@ describe("native code browser", () => {
     expect(screen.getByLabelText("文件保存状态").textContent).not.toContain("保存失败");
     expect(screen.queryByText(/文件已被其他操作修改/)).toBeNull();
   });
+
+  it("keeps code editing read-only for a non-developer on a code-writable Issue", async () => {
+    const changes = render(() => (
+      <CodeBrowser issueKey="ISSUE-20261017-001" development codeWriteAllowed={false} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />
+    ));
+    expect(await screen.findByText(/只有开发角色可以修改开发工单的代码/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "提交暂存的变更" })).toBeNull();
+    changes.unmount();
+
+    render(() => (
+      <CodeBrowser issueKey="ISSUE-20261017-001" development={false} codeWriteAllowed={false} agentOpen detailsOpen onClose={() => {}} onToggleAgent={() => {}} onToggleDetails={() => {}} />
+    ));
+    const editor = await open();
+    expect(editor.readOnly).toBe(true);
+    expect((screen.getByRole("button", { name: "保存文件" }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.input(editor, { target: { value: "edited" } });
+    expect(api.saveSourceFile).not.toHaveBeenCalled();
+  });
 });

@@ -191,6 +191,8 @@ export default function CodeBrowser(props: {
   repositoryVersion?: string;
   contentVersion?: string;
   development: boolean;
+  /** Mirrors the server role gate: a code-writable Issue's source belongs to developers. */
+  codeWriteAllowed?: boolean;
   agentOpen: boolean;
   detailsOpen: boolean;
   onClose: () => void;
@@ -203,7 +205,7 @@ export default function CodeBrowser(props: {
   const [repository, setRepository] = createSignal("", { ownedWrite: true });
   const [view, setView] = createSignal<View>(untrack(() => props.development) ? "changes" : "files", { ownedWrite: true });
   const [selected, setSelected] = createSignal<{ repository: string; path: string; directory: boolean }>({ repository: "", path: "", directory: true }, { ownedWrite: true });
-  const pathWritable = () => repositories().find((row) => row.name === (selected().repository || repository()))?.access === "write";
+  const pathWritable = () => repoWritable(selected().repository || repository());
   const [searchDocument, setSearchDocument] = createSignal<{ term: string; content: string } | null>(null, { ownedWrite: true });
   const [searchSelection, setSearchSelection] = createSignal("", { ownedWrite: true });
   const [file, setFile] = createSignal<SourceFile | null>(null, { ownedWrite: true });
@@ -307,7 +309,11 @@ export default function CodeBrowser(props: {
   const [action, setAction] = createSignal<PathAction | null>(null, { ownedWrite: true });
   const [pathDraft, setPathDraft] = createSignal("", { ownedWrite: true });
   const currentRepository = createMemo(() => repositories().find((row) => row.name === repository()));
-  const writable = () => currentRepository()?.access === "write";
+  const roleRestricted = () => props.codeWriteAllowed === false;
+  // The server refuses every source mutation from a non-developer; the UI hides the same actions.
+  const repoWritable = (name: string) => !roleRestricted() && repositories().find((row) => row.name === name)?.access === "write";
+  const writable = () => repoWritable(repository());
+  const roleHint = () => roleRestricted() && currentRepository()?.access === "write";
   const editable = () => writable() && lineEndings(file()?.content ?? "") !== "mixed";
   const dirty = () => Boolean(file() && normalizedText(file()!.content) !== draft());
   createEffect(dirty, (value) => {
@@ -618,7 +624,7 @@ export default function CodeBrowser(props: {
     return loadFile(...args);
   };
   async function mutate<T>(operation: () => Promise<T>, after?: (value: T) => void | Promise<void>, targetRepository = repository()) {
-    if (busy() || repositories().find((row) => row.name === targetRepository)?.access !== "write") return;
+    if (busy() || !repoWritable(targetRepository)) return;
     const owner = scope;
     setMutating(true);
     setError("");
@@ -742,7 +748,7 @@ export default function CodeBrowser(props: {
   };
   const removeSearchMatch = (match: SearchMatch) => setMatches((value) => value.filter((row) => row !== match));
   const replaceSearchMatch = async (match: SearchMatch) => {
-    if (busy() || !mayLeave() || repositories().find((row) => row.name === match.repository)?.access !== "write") return;
+    if (busy() || !mayLeave() || !repoWritable(match.repository)) return;
     const loaded = await loadFile(match.path, { repository: match.repository, line: match.line, column: match.column });
     if (!loaded || file() !== loaded) return;
     if (lineEndings(loaded.content) === "mixed") {
@@ -1285,7 +1291,7 @@ export default function CodeBrowser(props: {
                                       icon={<Codicon name="replace" />}
                                       aria-label={`替换为空 ${match.repository}/${match.path}:${match.line}`}
                                       title="Replace"
-                                      disabled={busy() || repositories().find((row) => row.name === match.repository)?.access !== "write"}
+                                      disabled={busy() || !repoWritable(match.repository)}
                                       onClick={() => {
                                         void replaceSearchMatch(match);
                                       }}
@@ -1317,6 +1323,11 @@ export default function CodeBrowser(props: {
           </Show>
           <Show when={view() === "changes"}>
             <section class="source-git-pane">
+              <Show when={roleHint()}>
+                <div class="source-git-notice" role="status">
+                  只有开发角色可以修改开发工单的代码、暂存或提交变更。
+                </div>
+              </Show>
               <div class="source-section-title">
                 <Codicon name="chevron-down" size={14} />
                 <span>变更</span>
@@ -1691,7 +1702,7 @@ export default function CodeBrowser(props: {
             <span>{lineEndings(file()?.content ?? "") === "mixed" ? "混合换行 · 只读" : lineEndings(file()?.content ?? "")}</span>
             <span>{sourceLanguageName(activePath())}</span>
             <Show when={!writable()}>
-              <span>只读</span>
+              <span title={roleHint() ? "开发工单的代码只有开发角色可以修改" : undefined}>只读</span>
             </Show>
           </Show>
         </div>

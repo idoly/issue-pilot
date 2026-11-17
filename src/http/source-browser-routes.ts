@@ -1,9 +1,10 @@
 import type { FastifyRequest } from "fastify";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import { withSharedCheckout } from "../workspace/git.ts";
 import { ApiError } from "./input.ts";
-import { requireCurrentUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireCurrentUser, requireDeveloperUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 const sourceFileBodyLimit = issuePilotConfig.limits.sourceBrowser.fileBytes;
 
@@ -70,12 +71,16 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
   register("repositories", (issue) => sourceBrowser.repositories(issue));
   register("tree", (issue, request) => sourceBrowser.tree(issue, repository(request), relativePath(request)));
   register("file", (issue, request) => sourceBrowser.file(issue, repository(request), relativePath(request, true)));
+  // Code mutations belong to developers; the repository owner still enforces its own read-only policy.
+  // The role, status and identity are re-read after the reservation because the wait can outlive them.
+  // A resolved Issue keeps its released worktree metadata, so the route refuses it before any write.
   const mutate = async <T>(request: SourceRequest, operation: (issue: Issue, person: Awaited<ReturnType<typeof requireCurrentUser>>) => Promise<T>) => {
-    await requireCurrentUser(database, request);
+    await requireDeveloperUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     return runIssueExclusive(engine, [issue.id], async () => {
-      const person = await requireCurrentUser(database, request);
+      const person = await requireDeveloperUser(database, request);
       const current = await requireIssue(database, issue.key);
+      if (current.status === "resolved") throw new DomainError("source_read_only", "forbidden");
       return operation(current, person);
     });
   };

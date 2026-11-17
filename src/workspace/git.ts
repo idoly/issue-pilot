@@ -10,6 +10,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 import { executeLocalCommand } from "../process.ts";
 import { KeyedSerialQueue } from "../serial.ts";
+import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 import { createPrivateIssueBranch, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { assertIssueRoot, issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
@@ -357,22 +358,27 @@ export class WorktreeManager {
       }
     };
     // Read branch and dirtiness in one Git snapshot rather than spawning twice.
-    const status = await inspect(["--no-optional-locks", "-C", resolvedWorkspace, "status", "--porcelain=v2", "--branch", "--ignored=matching"]);
+    const status = await inspect(["--no-optional-locks", "-C", resolvedWorkspace, "status", "--porcelain=v2", "--branch", "--ignored=matching", "--ignore-submodules=all"]);
     const lines = status.split("\n").filter(Boolean);
     const head = lines.find((line) => line.startsWith("# branch.head "))?.slice("# branch.head ".length);
     // A historical branch can literally be named like porcelain's detached marker.
     const branch = head === "(detached)" && expectedBranch === head ? (await inspect(["-C", resolvedWorkspace, "branch", "--show-current"])).trim() : head;
     if (branch !== expectedBranch) throw new Error("workspace_branch_does_not_match_issue_policy");
     if (lines.some((line) => !line.startsWith("# "))) throw new Error("workspace_has_changes");
+    // Status never inspects submodules, so staged gitlink changes are checked against HEAD separately.
+    const gitlinks = await indexGitlinkChanges(resolvedWorkspace, { environment: { ...process.env, ...this.gitEnvironment.getStore() } as Record<string, string> }).catch((error: unknown) => {
+      throw new Error("workspace_git_inspection_failed", { cause: error });
+    });
+    if (gitlinks.length) throw new Error("workspace_has_changes");
 
     // Git status and worktree remove both honor flags that can hide local file changes.
     // ls-files -v marks skip-worktree with S and assume-unchanged entries with lowercase tags.
     let atEntryStart = true;
     let hiddenChangesPossible = false;
     try {
-      const result = await executeLocalCommand("git", ["-C", resolvedWorkspace, "ls-files", "-v", "-z"], {
+      const result = await executeLocalCommand("git", trustedGitArgs(["-C", resolvedWorkspace, "ls-files", "-v", "-z"]), {
         timeout: issuePilotConfig.limits.process.gitOperationMs,
-        environment: { ...process.env, ...this.gitEnvironment.getStore() } as Record<string, string>,
+        environment: trustedGitEnvironment({ ...process.env, ...this.gitEnvironment.getStore() }),
         maxOutputBytes: null,
         onStdout: (chunk) => {
           hiddenChangesPossible ||= (atEntryStart && /^[a-zS]/.test(chunk)) || /\0[a-zS]/.test(chunk);
@@ -681,7 +687,7 @@ export class WorktreeManager {
       if (await managedGitDirectoryExists(this.sharedCheckoutsRoot)) await managedGitDirectoryExists(checkoutParent);
       await mkdir(checkoutParent, { recursive: true });
       if ((await realpath(checkoutParent)) !== checkoutParent) throw new Error("shared_checkout_changed");
-      await this.git(["--no-lazy-fetch", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
+      await this.git(["--no-lazy-fetch", "--no-replace-objects", "-C", cachePath, "worktree", "add", "--relative-paths", "--detach", workspacePath, commit]);
       checkedCheckouts?.add(workspacePath);
     }
     checkoutLease.getStore()?.pin(workspacePath);
@@ -697,7 +703,18 @@ export class WorktreeManager {
     });
     if (head !== commit) throw new Error("shared_checkout_changed");
     // A single Git status verifies that Git resolves this detached HEAD and that even ignored content is absent.
-    const status = await this.git(["--no-optional-locks", "--no-replace-objects", "-C", checkout, "status", "--porcelain=v2", "--branch", "--untracked-files=all", "--ignored=matching"]);
+    const status = await this.git([
+      "--no-optional-locks",
+      "--no-replace-objects",
+      "-C",
+      checkout,
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "--untracked-files=all",
+      "--ignored=matching",
+      "--ignore-submodules=all",
+    ]);
     const lines = status.trimEnd().split("\n");
     if (!lines.includes(`# branch.oid ${commit}`) || !lines.includes("# branch.head (detached)") || lines.some((line) => !line.startsWith("# "))) throw new Error("shared_checkout_changed");
     checkedCheckouts?.add(checkout);
@@ -802,7 +819,11 @@ export class WorktreeManager {
 
   private async git(args: string[]): Promise<string> {
     const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
-    const { stdout } = await execFileAsync("git", args, { timeout: gitOperationMs, maxBuffer: gitOutputBytes, env: { ...process.env, ...this.gitEnvironment.getStore() } });
+    const { stdout } = await execFileAsync("git", trustedGitArgs(args), {
+      timeout: gitOperationMs,
+      maxBuffer: gitOutputBytes,
+      env: trustedGitEnvironment({ ...process.env, ...this.gitEnvironment.getStore() }),
+    });
     return stdout;
   }
 }

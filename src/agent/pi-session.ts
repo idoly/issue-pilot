@@ -324,8 +324,9 @@ function sessionTools(
         writeRoot: workspaceRoot,
         ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
         get readRoots() {
-          return [...(options.readRoots ?? []), options.agentDirectory ?? getAgentDir()];
+          return options.readRoots ?? [];
         },
+        agentDirectory: options.agentDirectory ?? getAgentDir(),
         networkDomains: options.runtime?.networkAllowedDomains ?? [],
       },
       () => ({
@@ -458,6 +459,7 @@ export class PiSessionRuntime {
           writeRoot: workspaceRoot,
           ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}),
           readRoots: options.readRoots ?? [],
+          agentDirectory,
           networkDomains: options.runtime?.networkAllowedDomains ?? [],
         },
         [configuration.stdio.command, ...configuration.stdio.args],

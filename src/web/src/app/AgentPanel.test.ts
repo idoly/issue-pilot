@@ -1906,4 +1906,22 @@ describe("Agent conversation loading", () => {
       vi.useRealTimers();
     }
   });
+
+  it("disables the composer for a non-developer on a code-writable Issue without touching analysis Issues", async () => {
+    const issue = issueFixture();
+    const denied = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue, codeWriteAllowed: false }));
+    const composer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    expect(composer.disabled).toBe(true);
+    expect(composer.placeholder).toBe("开发工单仅开发角色可发送消息");
+    expect(screen.getByText(/开发工单只有开发角色可以发送消息/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "发送消息" }) as HTMLButtonElement).disabled).toBe(true);
+    denied.unmount();
+
+    const analysis = issueFixture({ environmentKey: "prod" });
+    const allowed = render(() => AgentPanel({ issue: analysis, drafts: new AgentDraftStore(), onRefresh: async () => analysis, codeWriteAllowed: true }));
+    const analysisComposer = screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement;
+    expect(analysisComposer.disabled).toBe(false);
+    expect(screen.queryByText(/开发工单只有开发角色可以发送消息/)).toBeNull();
+    allowed.unmount();
+  });
 });

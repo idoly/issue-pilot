@@ -14,10 +14,11 @@ import { sessionFooterStats } from "../agent/footer.ts";
 import { readQueryResult } from "../agent/query-results.ts";
 import { agentSessions, issues } from "../db/schema.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
-import { personGitIdentity } from "../domain/contracts.ts";
+import { canWriteIssueCode, personGitIdentity, type AccessHolder, type EnvironmentKind } from "../domain/contracts.ts";
+import { DomainError } from "../domain/errors.ts";
 import { ApiError, record, text } from "./input.ts";
 import { issueSummaryQuery, serializeIssueSummary } from "./issue-summary.ts";
-import { requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { issueEnvironmentKind, requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
 
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -54,6 +55,11 @@ async function readAgentMessage(request: FastifyRequest): Promise<{ message: str
   }
   if (!message) throw new ApiError(400, "invalid_agent_message");
   return { message, images };
+}
+
+/** A code-writable Issue runs the Agent with its developer owner's SSH identity, so only a developer may start its rounds. */
+function requireAgentCodeAccess(person: AccessHolder, environmentKind: EnvironmentKind): void {
+  if (!canWriteIssueCode(person, environmentKind)) throw new DomainError("developer_role_required", "forbidden");
 }
 
 export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "events" | "modelCatalog" | "runScopeExclusive" | "stateRoot">): void {
@@ -133,7 +139,8 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const issue = await requireIssue(database, request.params.key);
     await runIssueExclusive(engine, [issue.id], async (reservation) => {
       const currentIssue = await requireIssue(database, issue.key);
-      await requireCurrentUser(database, request);
+      const actor = await requireCurrentUser(database, request);
+      requireAgentCodeAccess(actor, await issueEnvironmentKind(database, currentIssue));
       // The engine can start any unresolved Issue; the detail view offers the same retry for pending ones.
       if (currentIssue.status === "resolved") throw new ApiError(409, "issue_not_retryable");
       reservation.enqueue(issue.id);
@@ -328,15 +335,22 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
-    // Refuse an invalid identity or message ID before reading a possibly large multipart body.
-    await requireCurrentUser(database, request);
+    // Refuse an invalid identity, role or message ID before reading a possibly large multipart body.
+    const initial = await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
+    requireAgentCodeAccess(initial, await issueEnvironmentKind(database, issue));
     const id = request.headers["x-issue-pilot-message-id"] ?? crypto.randomUUID();
     if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new ApiError(400, "invalid_agent_message_id");
     const { message, images } = await readAgentMessage(request);
-    // Reading the body can outlive the sender's authorization.
+    // Reading the body, admission waits and steering can outlive the sender's authorization and role, so the
+    // engine's reauthorize callback reloads both the person and the Issue environment before admitting.
+    const authorize = async () => {
+      const person = await requireCurrentUser(database, request);
+      requireAgentCodeAccess(person, await issueEnvironmentKind(database, await requireIssue(database, request.params.key)));
+      return person;
+    };
     const person = await requireCurrentUser(database, request);
-    await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request), { id, subject: person.subject });
+    await engine.send(issue.id, message, personGitIdentity(person), images, authorize, { id, subject: person.subject });
     return reply.code(202).send();
   });
 }
