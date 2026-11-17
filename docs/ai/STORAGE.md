@@ -14,7 +14,7 @@ AI reference. [Index](README.md) · [Architecture](ARCHITECTURE.md) · [Human ru
 | Modified/untracked/ignored development working files | Recorded checkout | Conditionally durable until safe release |
 | Runtime manifests/wrappers, clean shared snapshots, reproducible dependency caches | Owning subsystem | Generated, but unknown/abnormal contents still require inspection |
 
-Human Issue comments and their rows were removed by [migration 0081](../../drizzle/0081_drop_issue_comments.sql); Pi conversations stay in JSONL. A SQLite rollback cannot restore files/Git. Secret projection is not encryption. A cache/tmp/legacy name alone never proves deletability.
+Human Issue comments and their rows were removed by [migration 0081](../../drizzle/0081_drop_issue_comments.sql); Pi conversations stay in JSONL. [Migration 0082](../../drizzle/0082_retire_private_secrets.sql) removed the retired `user_credentials.model_api_keys`, `application_settings.mysql_stdio` and `application_settings.max_concurrent_issues` columns and the retired `nacos`, `db`, `redis`, `mq`, `es` and `mcpServices` deployment keys after an offline export from a verified checkpoint; [migration 0083](../../drizzle/0083_redundant_trigger_cleanup.sql) removed redundant retired triggers and closed the scope-transition work-mode set. A SQLite rollback cannot restore files/Git. Secret projection is not encryption. A cache/tmp/legacy name alone never proves deletability.
 
 ## Relations and identifiers
 
@@ -25,6 +25,8 @@ Each Issue matches a valid Service/Environment Deployment and owns exactly one W
 [Migration 0078](../../drizzle/0078_issue_detail_revision.sql) adds an internal `issues.detail_revision` counter. SQLite advances it in the same transaction as a description change, scope-history append, attachment/related-Issue/included-service membership change, or repository/session binding change. These triggers follow the current write contracts and add no route-level invalidation work. Existing rows start at zero without backfilling details. Migration 0081 dropped the comment trigger with the comment table. The counter tracks Issue-owned database writes; filesystem availability and changes to separately managed display names can still be sampled independently.
 
 [Migration 0080](../../drizzle/0080_closed_domain_guards.sql) guards the closed sets that startup recovery and lifecycle SQL match literally: Issue status/priority, Workspace status and Environment kind abort with `invalid_issue_status`, `invalid_issue_priority`, `invalid_workspace_status` or `invalid_environment_kind` (internal failures, not client conflicts). Like 0070 it refuses to upgrade when existing rows fall outside these sets instead of rewriting them. It also mirrors the 0035 deployment guard for included services: a deployment used through an Issue's included service scope in that Issue's environment cannot be deleted or moved (`deployment_is_used_by_issues`). Keep the trigger lists in step with [contracts.ts](../../src/domain/contracts.ts) through a new migration.
+
+[Migration 0083](../../drizzle/0083_redundant_trigger_cleanup.sql) keeps the 0070 Issue type triggers, drops the redundant `issues_retired_type_*` pair, and replaces `scope_transitions_retired_mode_*` with `issue_scope_transitions_work_mode_valid_*`. The new triggers refuse any `from_work_mode`/`to_work_mode` outside the closed set with `invalid_issue_work_mode`, after the same refuse-if-existing-rows check as 0070/0080.
 
 Migrations run with foreign keys disabled and commit before returning. Every database open (server startup and the migrate script) then runs `PRAGMA foreign_key_check` and fails with `database_foreign_key_violation` before the API listens, instead of only after a migration ran, because the advanced journal would let the next start skip the check. [schema-drift.test.ts](../../tests/db/schema-drift.test.ts) compares a freshly migrated database with schema.ts; its explicit exception list records the known differences.
 
@@ -180,6 +182,14 @@ PY
 ```
 
 Only database.sqlite signifies completion of this example's copy and checks; preserve .partial for inspection. Record source revision, root configuration, source DB path and time without secrets. Passing SQLite checks does not validate file/Git alignment or old-code compatibility.
+
+Before releasing migration 0082, export the retired secrets from the validated checkpoint copy with [export-retired-secrets.ts](../../scripts/export-retired-secrets.ts). The script requires either the state lease or an explicit `--checkpoint-copy`, writes a new 0600 file under an owned 0700 parent, never prints values, and refuses when the columns are already gone. Keep the export private like a credential; after 0082 runs it is the only recovery source. The sequence is in the [runbook](../RUNBOOK.md#退役密钥离线留证).
+
+### Restoring a checkpoint
+
+Only after authorization for the write loss. Stop every writer first: the application and every offline tool that uses the same state lease. Keep the broken configured database plus its `-wal`/`-shm` sidecars aside as evidence; do not delete or overwrite them. Copy the checkpoint's `database.sqlite` to the configured database path as a 0600 regular file owned by the runtime user, with no sidecars from the broken copy. Then start the code revision that matches the checkpoint; do not start a newer revision and expect it to downgrade the schema.
+
+Everything written after the checkpoint is lost. JSONL conversations, attachments, work files and Git are not restored and may no longer match the restored rows; replaying them is not a supported reconstruction. Migrations 0079 and later cannot be rolled back by code alone. If the checkpoint predates them, restore the matching older revision and preserve the failed database for inspection. The release rollback rules are in [Deployment](../DEPLOYMENT.md#协调发布后端与-web); ordinary restarts create no checkpoint.
 
 ## Retention and cleanup
 

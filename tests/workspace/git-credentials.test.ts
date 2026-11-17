@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { createPersonalGitEnvironment } from "../../src/workspace/git-credentials.ts";
 
 function credentials(key: string) {
-  return { subject: "developer", modelApiKeys: {}, gitPrivateKey: key, updatedAt: new Date() };
+  return { subject: "developer", gitPrivateKey: key, updatedAt: new Date() };
 }
 const identityPath = (command: string) => command.match(/-i '([^']+)'/)![1]!;
 

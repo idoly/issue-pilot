@@ -263,9 +263,31 @@ for (const outcome of ["success", "failure"] as const)
     }
   });
 
-it("disables related editing until the Issue's runtime view is ready", () => {
-  render(() => <Workspace issue={{ ...issue, workspace: { ...issue.workspace, runtimeReady: false } }} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
-  expect(screen.getByRole("button", { name: "编辑关联" })).toHaveProperty("disabled", true);
+it("allows detaching relations without a prepared runtime view while refusing additions", async () => {
+  const existing = { ...issue, id: "ISSUE-20261017-001", workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null };
+  const candidate = { ...issue, id: "ISSUE-20261017-002", workspaceStatus: "ready" as const, agentRunning: false, resolvedAt: null };
+  state.list.mockResolvedValue([existing, candidate]);
+  const fetchMock = vi.fn<typeof globalThis.fetch>();
+  vi.stubGlobal("fetch", fetchMock);
+  render(() => (
+    <Workspace
+      issue={{ ...issue, relatedIssues: [existing], workspace: { ...issue.workspace, runtimeReady: false } }}
+      onOpenSource={() => {}}
+      onUpdated={async () => {}}
+      onCreatedFollowUp={() => {}}
+    />
+  ));
+  const button = screen.getByRole("button", { name: "编辑关联" });
+  expect(button).toHaveProperty("disabled", false);
+  fireEvent.click(button);
+  const dialog = await screen.findByRole("dialog", { name: "编辑关联工单" });
+  const selector = await waitFor(() => within(dialog).getByLabelText("编辑关联工单"));
+  fireEvent.click(selector);
+  fireEvent.click(within(await screen.findByRole("listbox")).getByText(/ISSUE-20261017-002/));
+  await waitFor(() => expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20261017-002"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("工作区尚未就绪");
+  expect(fetchMock).not.toHaveBeenCalled();
 });
 
 it("offers a read-only scope rebind on a resolved Issue but hides related editing", () => {

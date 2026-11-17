@@ -29,7 +29,8 @@ test("SLS target headings are always SLS while environment and exact query param
 });
 
 test("generated descriptions include exact capability parameters without secrets, internal access identifiers or repeated branches", () => {
-  const configuration: StoredDeploymentConfig = {
+  // Historical JSON can still contain keys removed by migration 0082; descriptions must not project them.
+  const configuration = {
     redis: { host: "redis.prod.internal", port: 6379, username: "reader", database: 7, password: "private-redis-password" },
     nacos: { serverUrl: "https://config.example.test", namespace: "prod-namespace", group: "PROD_GROUP", dataIds: ["orders.yaml"], username: "operator", password: "private-nacos-password" },
     dms: {
@@ -43,7 +44,7 @@ test("generated descriptions include exact capability parameters without secrets
     sls: { accessKeyId: "private-sls-id", accessKeySecret: "private-sls-secret", region: "cn-hangzhou", project: "prod-project", logstores: ["orders-api", "gateway"] },
     mcpServices: ["docs"],
     archivedDevelopment: { password: "private-archive" },
-  };
+  } as StoredDeploymentConfig;
   const context = deploymentContext({ kind: "prod" as const, name: "正式" }, configuration, [
     { id: "docs", name: "Docs", url: "https://docs.example.test/mcp?key=private-query-token", transport: "streamable_http", enabled: true },
   ]);

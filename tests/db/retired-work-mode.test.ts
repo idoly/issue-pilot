@@ -40,7 +40,7 @@ test("retired production data Issues and both history directions become investig
     ]);
     assert.deepEqual((await database.client.execute("SELECT session_file,workspace_path FROM issue_pilot_sessions")).rows, [{ session_file: "/state/session.jsonl", workspace_path: "/state/work" }]);
     await assert.rejects(database.client.execute("UPDATE issues SET type='data_processing'"), /retired_issue_type|invalid_issue_type/);
-    await assert.rejects(database.client.execute("UPDATE issue_scope_transitions SET to_work_mode='production_data'"), /retired_issue_work_mode/);
+    await assert.rejects(database.client.execute("UPDATE issue_scope_transitions SET to_work_mode='production_data'"), /invalid_issue_work_mode/);
     await assert.rejects(
       database.client.execute(
         "INSERT INTO issues(id,key,title,type,service_id,environment_id,reporter_subject,created_at,updated_at) VALUES('other','ISSUE-20261022-002','Other','data_processing','service','prod','owner',1,1)",

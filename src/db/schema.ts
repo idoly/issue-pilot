@@ -58,8 +58,6 @@ export const userCredentials = sqliteTable("user_credentials", {
   subject: text("subject")
     .primaryKey()
     .references(() => subjects.subject, { onDelete: "cascade" }),
-  // Retired per-provider keys remain private history; model_credentials is the current personal group.
-  modelApiKeys: json<Record<string, string>>("model_api_keys").notNull().default({}),
   modelCredentials: json<PersonalModelCredentials>("model_credentials"),
   productionDmsUrl: text("production_dms_url").notNull().default(""),
   productionDmsAuthorization: text("production_dms_authorization").notNull().default(""),
@@ -82,8 +80,6 @@ export const applicationSettings = sqliteTable(
   "application_settings",
   {
     id: integer("id").primaryKey(),
-    // Retired: 0069 copied it into parameters; never read by runtime.
-    maxConcurrentIssues: integer("max_concurrent_issues"),
     // Admin overrides of issuePilotConfig.parameters, validated by src/configuration/parameters.ts.
     parameters: json<ApplicationParameterOverrides>("parameters").notNull().default({}),
     parametersRevision: integer("parameters_revision").notNull().default(0),
@@ -93,8 +89,6 @@ export const applicationSettings = sqliteTable(
     sharedDmsRevision: integer("shared_dms_revision").notNull().default(0),
     sharedSlsCredentials: json<SlsCredentials>("shared_sls_credentials"),
     sharedSlsRevision: integer("shared_sls_revision").notNull().default(0),
-    // Retired private recovery evidence; never read or executed by runtime.
-    mysqlStdio: json<McpStdioConfiguration>("mysql_stdio"),
   },
   (table) => [check("application_settings_singleton", sql`${table.id} = 1`)],
 );

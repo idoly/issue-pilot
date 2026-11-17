@@ -20,6 +20,19 @@ test("all work modes can create and edit related Issues without weakening reserv
       const key = JSON.parse(response.body).id;
       const id = f.engine.enqueued.at(-1)!;
       f.engine.running.clear();
+      // A never-run Issue has no prepared runtime view, but detaching relations needs none.
+      const detached = await f.app.inject({ method: "PUT", url: `/api/issues/${key}/related-issues`, payload: { relatedIssueKeys: [] } });
+      assert.equal(detached.statusCode, 204, `${workMode}: ${detached.body}`);
+      f.engine.running.clear();
+      const refusedAddition = await f.app.inject({ method: "PUT", url: `/api/issues/${key}/related-issues`, payload: { relatedIssueKeys: [evidence.id] } });
+      assert.equal(refusedAddition.statusCode, 409, refusedAddition.body);
+      assert.match(refusedAddition.body, /related_issue_context_unavailable/);
+      f.engine.running.clear();
+      await db.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, id));
+      const reattached = await f.app.inject({ method: "PUT", url: `/api/issues/${key}/related-issues`, payload: { relatedIssueKeys: [evidence.id] } });
+      assert.equal(reattached.statusCode, 204, reattached.body);
+      f.engine.running.clear();
+      // A relation edit invalidates the prepared view; restore it so later reservation checks stay meaningful.
       await db.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, id));
       const detail = JSON.parse((await f.app.inject({ method: "GET", url: `/api/issues/${key}` })).body);
       assert.deepEqual(

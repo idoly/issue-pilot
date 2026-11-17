@@ -14,7 +14,7 @@ test("shared DMS credentials are private, versioned, developer-only and reserve 
   const f = await createApiFixture();
   const db = openDatabase(f.databaseFile);
   try {
-    await db.db.insert(applicationSettings).values({ id: 1, maxConcurrentIssues: 4, sharedSlsCredentials: { accessKeyId: "other-id", accessKeySecret: "other-secret" } });
+    await db.db.insert(applicationSettings).values({ id: 1, sharedSlsCredentials: { accessKeyId: "other-id", accessKeySecret: "other-secret" } });
     const get = () => f.app.inject({ method: "GET", url: "/api/config/shared-dms-credentials", headers });
     const put = (payload: Record<string, unknown>, selected = headers) => f.app.inject({ method: "PUT", url: "/api/config/shared-dms-credentials", headers: selected, payload });
     assert.deepEqual((await get()).json(), { configured: false, url: "", revision: 0 });
@@ -23,7 +23,7 @@ test("shared DMS credentials are private, versioned, developer-only and reserve 
     assert.deepEqual(saved.json(), { configured: true, url: shared.url, revision: 1 });
     assert.equal(saved.headers["cache-control"], "private, no-store");
     assert.doesNotMatch(saved.body + (await get()).body + (await f.app.inject({ method: "GET", url: "/api/config" })).body, /shared-dms-secret|other-secret/);
-    assert.equal((await db.db.select().from(applicationSettings))[0]!.maxConcurrentIssues, 4);
+    assert.equal((await db.db.select().from(applicationSettings))[0]!.sharedSlsCredentials!.accessKeyId, "other-id");
     assert.equal((await put({ mode: "replace", expectedRevision: 0, ...shared })).statusCode, 409);
     for (const payload of [
       { mode: "replace", url: shared.url },

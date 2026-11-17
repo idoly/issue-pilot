@@ -123,8 +123,13 @@ async function applyServiceDeployment(
   input: ReturnType<typeof parseServiceDeployment>,
   repositories: Map<string, { id: string }>,
 ) {
-  const retired = Object.fromEntries(Object.entries(existing?.config ?? {}).filter(([key]) => key !== "dbhub" && !CAPABILITY_KEYS.includes(key as CapabilityName)));
-  const values = { config: { ...retired, ...input.config }, updatedAt: new Date() };
+  // Retired capability and historical MCP binding keys are not carried forward. Archived development
+  // evidence stays because development layout validation still inspects it.
+  const archivedDevelopment = existing?.config.archivedDevelopment;
+  const values = {
+    config: { ...(archivedDevelopment === undefined ? {} : { archivedDevelopment }), ...input.config },
+    updatedAt: new Date(),
+  };
   if (existing && JSON.stringify(existing.config) === JSON.stringify(values.config)) {
     const branches = await executor.select().from(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, existing.id));
     if (

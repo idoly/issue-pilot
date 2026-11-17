@@ -23,6 +23,7 @@ import {
   agentSessions,
   environments,
   issueAttachments,
+  issueRelations,
   issueRepositories,
   issueScopeTransitions,
   issues,
@@ -92,8 +93,12 @@ test("uses the central Workspace lifecycle configuration", () => {
 const engine = {
   running: new Set<string>(),
   closed: [] as string[],
+  markedScopes: [] as string[][],
   closeError: undefined as Error | undefined,
   enqueue() {},
+  markScopeChanged(issueIds: string[]) {
+    this.markedScopes.push([...issueIds]);
+  },
   async send() {},
   isRunning(issueId: string) {
     return this.running.has(issueId);
@@ -111,6 +116,7 @@ const engine = {
 beforeEach(() => {
   engine.running.clear();
   engine.closed.length = 0;
+  engine.markedScopes.length = 0;
   engine.closeError = undefined;
 });
 
@@ -650,7 +656,7 @@ test("lifecycle mutations reauthorize only after earlier lifecycle and inspectio
   for (const operation of queued) await assert.rejects(operation, (error) => error === denied);
   assert.equal(authorizations, queued.length);
 
-  // A per-Issue inspection is the second wait: authorization follows it as well.
+  // A lifecycle inspection shares the exclusive queue: authorization follows it as well.
   holdInspection = true;
   const inspection = manager.inspectIssue(target!.id);
   await inspecting.promise;
@@ -666,7 +672,7 @@ test("lifecycle mutations reauthorize only after earlier lifecycle and inspectio
   assert.equal((await database.select().from(issues).where(eq(issues.id, target!.id)))[0]!.updatedAt.getTime(), target!.updatedAt.getTime());
 });
 
-test("serializes deep inspection per Issue without blocking other Issues", async (context) => {
+test("inspects Issues under the single lifecycle queue", async (context) => {
   const {
     root,
     database,
@@ -694,10 +700,8 @@ test("serializes deep inspection per Issue without blocking other Issues", async
 
   const first = manager.inspectIssue(a!.id);
   await entered.promise;
-  const sameIssue = manager.inspectIssue(a!.id);
-  const otherIssue = manager.inspectIssue(b!.id);
-  await otherIssue;
-  assert.deepEqual(inspected, [a!.id, b!.id]);
+  // Inspections share the lifecycle queue instead of overlapping or keying on the Issue.
+  const second = manager.inspectIssue(b!.id);
   let stopped = false;
   const stopping = manager.stop().then(() => {
     stopped = true;
@@ -706,9 +710,10 @@ test("serializes deep inspection per Issue without blocking other Issues", async
     setImmediate(resolve);
   });
   assert.equal(stopped, false);
+  assert.deepEqual(inspected, [a!.id]);
   firstGate.resolve();
-  await Promise.all([first, sameIssue, stopping]);
-  assert.deepEqual(inspected, [a!.id, b!.id, a!.id]);
+  await Promise.all([first, second, stopping]);
+  assert.deepEqual(inspected, [a!.id, b!.id]);
   assert.equal(stopped, true);
 });
 
@@ -878,6 +883,22 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
       })
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+    const [related] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260810-002",
+        title: "Related reader",
+        description: "",
+        status: "pending",
+        priority: "p2",
+        type: "defect_fix",
+        serviceId: service!.id,
+        environmentId: environment.id,
+        reporterSubject: "tester",
+      })
+      .returning();
+    await database.db.insert(issueRelations).values({ issueId: related!.id, relatedIssueId: issue!.id });
+    await database.db.insert(issueWorkspaces).values({ issueId: related!.id, status: "ready", runtimeReady: true });
 
     const remotes = await Promise.all([createRemote(root, "alpha"), createRemote(root, "beta")]);
     const worktrees = new WorktreeManager(root);
@@ -976,6 +997,8 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     await writeFile(checkpoint, '{"remaining":10}\n');
     const released = await lifecycle.releaseIssue(issue!.id);
     assert.equal(released.alreadyReleased, false);
+    // A released code view invalidates live sessions of Issues that read it, without reserving them.
+    assert.deepEqual(engine.markedScopes, [[related!.id]]);
     assert.equal((await lifecycle.inspectIssue(issue!.id)).blockedReason, "workspace_released");
     const manifestPath = path.join(issueRoot(root, issue!.key), ".issue-runtime.json");
     const originalManifest = await readFile(manifestPath);
@@ -1066,6 +1089,7 @@ test("releases clean workspaces while preserving attachments, sessions, and bran
     const reopenedIssue = await lifecycle.reopenIssue(issue!.id);
     assert.equal(reopenedIssue.status, "open");
     assert.equal(reopenedIssue.resolvedAt, null);
+    assert.deepEqual(engine.markedScopes, [[related!.id], [related!.id]]);
     const restoredRows = await database.db.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue!.id));
     assert.equal(
       restoredRows.every((repository) => repository.localPath?.startsWith(issueRoot(root, issue!.key))),
@@ -1335,6 +1359,25 @@ test("converts a ready test analysis to a development defect while preserving Is
       })
       .returning();
     await database.db.insert(issueWorkspaces).values({ issueId: issue!.id, status: "ready", runtimeReady: true });
+    const [related] = await database.db
+      .insert(issues)
+      .values({
+        key: "ISSUE-20260814-102",
+        title: "Related analysis evidence",
+        description: "Keep the relation",
+        status: "pending",
+        priority: "p2",
+        type: "smart_analysis",
+        serviceId: service!.id,
+        environmentId: testEnvironment.id,
+        reporterSubject: "conversion-tester",
+      })
+      .returning();
+    await database.db.insert(issueRelations).values([
+      { issueId: issue!.id, relatedIssueId: related!.id },
+      { issueId: related!.id, relatedIssueId: issue!.id },
+    ]);
+    await claimIssueRoot(root, related!.key);
 
     const worktrees = new WorktreeManager(root);
     const projects = new IssueProjectManager(database.db, root, worktrees);
@@ -1363,6 +1406,10 @@ test("converts a ready test analysis to a development defect while preserving Is
     const conversionEngine = {
       closed: [] as string[],
       enqueued: [] as string[],
+      markedScopes: [] as string[][],
+      markScopeChanged(issueIds: string[]) {
+        this.markedScopes.push([...issueIds]);
+      },
       enqueue(issueId: string) {
         this.enqueued.push(issueId);
       },
@@ -1448,6 +1495,14 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal((await stat(attachmentFile)).mode & 0o777, 0o400);
     assert.deepEqual(conversionEngine.closed, [issue!.id, issue!.id]);
     assert.deepEqual(conversionEngine.enqueued, [issue!.id]);
+    // Relations are durable across the transition; the rebuilt runtime view contains their evidence.
+    assert.deepEqual(
+      (await database.db.select().from(issueRelations).where(eq(issueRelations.issueId, issue!.id))).map(({ relatedIssueId }) => relatedIssueId),
+      [related!.id],
+    );
+    assert.equal(JSON.parse(await readFile(path.join(issueRoot(root, issue!.key), `.related-${related!.key.toLowerCase()}.json`), "utf8")).key, related!.key);
+    // The converted Issue's code view changed for anything that reads it.
+    assert.deepEqual(conversionEngine.markedScopes, [[related!.id]]);
     await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.code === "issue_not_convertible_to_development");
   } finally {
     await database.close();

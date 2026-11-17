@@ -13,7 +13,7 @@ test("shared SLS credentials are private, versioned and reserve active Issues", 
   const f = await createApiFixture();
   const db = openDatabase(f.databaseFile);
   try {
-    await db.db.insert(applicationSettings).values({ id: 1, maxConcurrentIssues: 4 });
+    await db.db.insert(applicationSettings).values({ id: 1, dingtalkFields: { description: "保留" } });
     const get = () => f.app.inject({ method: "GET", url: "/api/config/shared-sls-credentials", headers });
     const put = (payload: Record<string, unknown>, selected = headers) => f.app.inject({ method: "PUT", url: "/api/config/shared-sls-credentials", headers: selected, payload });
     const initial = await get();
@@ -23,7 +23,7 @@ test("shared SLS credentials are private, versioned and reserve active Issues", 
     assert.equal(save.statusCode, 200, save.body);
     assert.deepEqual(save.json(), { configured: true, revision: 1 });
     assert.doesNotMatch(save.body + (await get()).body + (await f.app.inject({ method: "GET", url: "/api/config" })).body, /shared-fixture/);
-    assert.equal((await db.db.select().from(applicationSettings))[0]!.maxConcurrentIssues, 4);
+    assert.equal((await db.db.select().from(applicationSettings))[0]!.dingtalkFields.description, "保留");
     assert.equal((await put({ mode: "replace", expectedRevision: 0, ...shared })).statusCode, 409);
     assert.equal((await put({ mode: "replace", expectedRevision: 1, accessKeyId: "partial" })).statusCode, 400);
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "viewer", name: "Viewer", email: "viewer@example.test", role: "product" } });

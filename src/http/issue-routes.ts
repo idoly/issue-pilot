@@ -445,9 +445,16 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
         const currentIssue = await requireIssue(database, issue.key);
         const [[workspace], currentRelations] = await Promise.all([
           database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, currentIssue.id)).limit(1),
-          database.db.select().from(issueRelations).where(eq(issueRelations.issueId, currentIssue.id)),
+          database.db
+            .select({ relatedIssueId: issueRelations.relatedIssueId, key: issues.key })
+            .from(issueRelations)
+            .innerJoin(issues, eq(issues.id, issueRelations.relatedIssueId))
+            .where(eq(issueRelations.issueId, currentIssue.id)),
         ]);
-        const refusal = relatedIssueUpdateRefusal({ status: currentIssue.status, workspace });
+        // Detaching existing relations needs no rebuilt runtime view; additions still require one.
+        const currentKeys = new Set(currentRelations.map(({ key }) => key));
+        const onlyRemoves = requestedKeys.every((key) => currentKeys.has(key));
+        const refusal = relatedIssueUpdateRefusal({ status: currentIssue.status, workspace }, { onlyRemoves });
         if (refusal) throw new ApiError(409, refusal);
         if (requestedKeys.includes(currentIssue.key)) throw new ApiError(400, "invalid_related_issues");
         const relatedIssues = await validateRelatedIssues(requestedKeys);

@@ -120,6 +120,14 @@ export class AgentEngine implements AgentController {
     return this.executingIssues.has(issueId) ? "running" : this.isRunning(issueId) ? "queued" : "idle";
   }
 
+  /** A related Issue's code view changed; its live sessions re-prepare roots on the next round without reserving it. */
+  markScopeChanged(issueIds: Iterable<string>): void {
+    for (const issueId of issueIds) {
+      const managed = this.sessions.get(issueId);
+      if (managed) managed.scopeChanged = true;
+    }
+  }
+
   async runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T> {
     this.assertOpen();
     const reserved = [...new Set(issueIds)].sort();
@@ -162,7 +170,9 @@ export class AgentEngine implements AgentController {
         if (!issue) throw new Error("issue_not_found");
         await authorize?.();
         if (request) {
-          const receipt = await this.findMessageReceipt({ id: issueId, key: issue.key }, request);
+          // Admission dedup must still run for a new input after a reset left an unreadable predecessor;
+          // the explicit receipt lookup remains strict so an uncertain client never resends.
+          const receipt = await this.findMessageReceipt({ id: issueId, key: issue.key }, request, true);
           if (receipt) {
             await authorize?.();
             if (receipt.message !== message || JSON.stringify(receipt.images) !== JSON.stringify(images)) throw new DomainError("agent_message_id_conflict", "conflict");
@@ -190,7 +200,8 @@ export class AgentEngine implements AgentController {
             messageIssue,
             userMessage,
             images,
-            (entryId) => (this.isCurrentSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId)),
+            (entryId) =>
+              this.isReusableSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
             prepareAdmission,
             request,
           );
@@ -200,7 +211,7 @@ export class AgentEngine implements AgentController {
           await assertIssueRoot(this.stateRoot, issue.key);
           // Earlier messages still queued for a later round keep their order; never steer past them.
           // Pi refuses extension commands in steer before queueing them; run any "/" input as the next round instead.
-          if (userMessage.startsWith("/") || !this.isCurrentSession(issueId, managed) || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
+          if (userMessage.startsWith("/") || !this.isReusableSession(issueId, managed) || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
             return;
           }
@@ -231,7 +242,7 @@ export class AgentEngine implements AgentController {
             managed.session.clearQueue();
             requeueAgentMessage(managed.session.sessionManager, entryId);
             this.schedule(issueId, () =>
-              this.isCurrentSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
+              this.isReusableSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
             );
             return;
           }
@@ -244,8 +255,8 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  private findMessageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest) {
-    return readIssueMessageReceipt(this.database, this.stateRoot, issue, request, this.sessions.get(issue.id)?.session.sessionManager);
+  private findMessageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, tolerateIncompleteHistory = false) {
+    return readIssueMessageReceipt(this.database, this.stateRoot, issue, request, this.sessions.get(issue.id)?.session.sessionManager, { tolerateIncompleteHistory });
   }
 
   async messageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, authorize: () => Promise<unknown>) {
@@ -836,6 +847,11 @@ export class AgentEngine implements AgentController {
 
   private isCurrentSession(issueId: string, managed: ManagedPiSession): boolean {
     return this.sessions.get(issueId) === managed;
+  }
+
+  /** A scope-changed session finishes its current round but must never start another one with stale roots. */
+  private isReusableSession(issueId: string, managed: ManagedPiSession): boolean {
+    return !managed.scopeChanged && this.isCurrentSession(issueId, managed);
   }
 
   private assertCurrentSession(issueId: string, managed: ManagedPiSession): void {

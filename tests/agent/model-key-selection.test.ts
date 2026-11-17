@@ -43,7 +43,7 @@ test("owners with a personal model group use it entirely; everyone else uses the
       { subject: "developer", displayName: "Developer", role: "developer" },
     ]);
     const personal = { provider: "personal-provider", model: "personal-model", thinkingLevel: "high" as const, codemode: "only" as const, apiKey: "personal-key" };
-    await database.db.insert(userCredentials).values({ subject: "product", modelApiKeys: { "test-provider": "retired-key" } });
+    await database.db.insert(userCredentials).values({ subject: "product" });
     const [issue] = await database.db
       .insert(issues)
       .values({ key: "ISSUE-20261102-001", title: "Keys", type: "defect_fix", serviceId: service!.id, environmentId: production!.id, reporterSubject: "product" })
@@ -66,11 +66,11 @@ test("owners with a personal model group use it entirely; everyone else uses the
 
     await assert.rejects(internal.run(issue!.id), /model_api_key_not_configured/);
     await database.db.update(globalAgentConfiguration).set({ apiKey: "shared-key" });
-    // Retired per-provider keys are history and do not form a personal group, for any role.
+    // A user without a personal group uses the shared model and key, for any role.
     await internal.run(issue!.id);
     await database.db.update(issues).set({ assigneeSubject: "developer" }).where(eq(issues.id, issue!.id));
+    await database.db.insert(userCredentials).values({ subject: "developer" });
     await internal.run(issue!.id);
-    await database.db.insert(userCredentials).values({ subject: "developer", modelApiKeys: { "test-provider": "retired-key" } });
     await internal.run(issue!.id);
     await database.db.update(userCredentials).set({ modelCredentials: personal }).where(eq(userCredentials.subject, "developer"));
     await internal.run(issue!.id);

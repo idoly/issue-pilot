@@ -230,6 +230,21 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
             signal?.throwIfAborted();
             await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
             readRoots = project.readRoots;
+          } catch (error) {
+            // The membership write is persisted intent; preparation owns the cross-media Git work and rolls
+            // back its own changes. Revert the intent too, otherwise every later round repeats the same
+            // prepare failure and hides both code and unrelated Issue edits. runtimeReady stays false so
+            // the next round re-prepares.
+            try {
+              await database.transaction(async (tx) => {
+                if (input.operation === "include") await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
+                else await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
+                await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+              });
+            } catch (revertError) {
+              throw new AggregateError([error, revertError], "workspace_scope_revert_failed");
+            }
+            throw error;
           } finally {
             onScopeChanged?.(readRoots);
           }

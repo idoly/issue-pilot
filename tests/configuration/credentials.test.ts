@@ -32,11 +32,12 @@ test("deployment inputs reject connection credentials and credential mutations",
   }
 });
 test("retired private deployment configuration and historical credentials are not projected or executed", () => {
-  const stored: StoredDeploymentConfig = {
+  // Historical JSON can still contain keys removed by migration 0082; projection must ignore them.
+  const stored = {
     ...configuration,
     db: { databases: [{ url: "mysql://legacy.example.test:3306/orders", username: "legacy", password: "retired-secret" }] },
     redis: { host: "legacy", port: 6379, username: "", database: 0 },
-  };
+  } as StoredDeploymentConfig;
   assert.deepEqual(projectCapabilityConfiguration(stored), projectCapabilityConfiguration(configuration));
   assert.doesNotMatch(JSON.stringify(projectCapabilityConfiguration(stored)), /legacy|retired-secret/);
 });

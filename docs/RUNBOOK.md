@@ -70,6 +70,24 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 
 需要执行检查点或恢复时，由维护者按[存储参考](ai/STORAGE.md#database-checkpoints)操作；不会因为有备份就自动获得修改或删除权限。
 
+## 退役密钥离线留证
+
+迁移 0082 会删除 `user_credentials.model_api_keys`、`application_settings.mysql_stdio`、`application_settings.max_concurrent_issues`，以及部署配置中的 `nacos`、`db`、`redis`、`mq`、`es`、`mcpServices`。删除后只能从数据库检查点恢复。
+
+1. 按[数据库检查点](ai/STORAGE.md#database-checkpoints)停止写入、释放租约并制作、验证检查点。
+2. 从检查点副本导出，不要连接在线数据库：
+
+   ```bash
+   node --experimental-strip-types scripts/export-retired-secrets.ts \
+     --database /absolute/path/to/checkpoint/database.sqlite \
+     --output /absolute/private/path/retired-secrets.json \
+     --checkpoint-copy
+   ```
+
+   输出目录必须是当前用户所有的 0700 目录；文件以 0600 新建且不覆盖已有文件。脚本只输出计数，不打印密钥；退役列已删除时会拒绝导出。
+3. 确认导出文件可读后，再发布并运行迁移 0082。
+4. 导出文件按凭据保管：限制访问，不放进工单目录、日志、普通备份或聊天记录。
+
 ## 恢复与回退
 
 工单根缺失时不要 `mkdir` 补空目录，不换会话绑定、不猜测分支或远端恢复。保留现有数据库和残余文件，先确认恢复材料与当前状态匹配。
@@ -121,3 +139,75 @@ node --experimental-strip-types scripts/migrate-development-git.ts \
 回退到不支持按需快照的版本前，先停写并用支持按需快照的 Git 管理逻辑展开仍被工单引用的原提交。无法确认提交或目录归属时保留现场。
 
 不要对 `data/`、共享 Git、未知临时文件或容器存储执行宽泛删除／prune。清理必须先确认具体 owner、用途及当前是否使用；历史材料的判断见[存储参考](ai/STORAGE.md#retention-and-cleanup)。
+
+## 对话文件不完整或末行未写完
+
+发送消息、查看历史或 SSE 返回 `agent_session_file_incomplete`，或历史列表把某会话标为“文件不完整”，通常是 ENOSPC/OOM/SIGKILL 中断了 Pi 对工单根下 `.session-*.jsonl` 的追加，最后一行没有写完。不要自动重建空会话、改写 JSONL 或改会话绑定。
+
+1. 停止应用和所有写入者，保留当前绑定与文件。
+2. 只读确认范围：文件非空、首行是合法 session 头、只有末尾一行缺换行或 JSON 不完整；记录大小和 SHA-256，并把原文件复制到状态根之外受控位置留证（不在 `data/` 内新增备份）。
+3. 只有确认是“单条末尾残行”时才可截断到最后一个完整换行；截断前先留证并核对偏移。空文件、头部损坏、多行损坏或中间非法 JSON 一律保留现场，不截断、不重建。
+4. 恢复通过产品执行：开发人员在该工单编辑对话中重置会话（需空闲、未解决且 `expectedSessionId` 匹配）。当前版本重置只校验旧文件头部身份，可对残缺尾行直接重置；旧文件字节保持不变，新会话文件在绑定提交前已落盘。
+5. 重置后旧会话继续保留并标记不完整。显式查询该旧消息回执会报错而不是返回 unknown，表示它可能已执行，不要重发；新消息进入新会话。
+
+## 发布或重开后工单卡住
+
+### 发布：移除工作树之后、写入释放标记之前中断
+
+1. 停止写入者，确认工单已解决且无活动轮次。
+2. 只读核对数据库：`issue_workspaces.released_at` 为空、`issue_repositories.local_path` 仍指向原工作区，而这些目录已不存在。
+3. 对每个记录的仓库核对证据：私有仓 `workspaces/<key>/.issue-git/<20位哈希>` 的 `refs/heads/<working_branch>`，与共享仓 `git/repositories/<同一哈希>` 的 `refs/heads/<working_branch>` 及 `refs/issue-pilot/snapshots/<提交>` 完全相同；`git -C <私有仓> worktree list` 不再包含该工作区。任一项不符时保留现场，不补引用、不删除私有仓。
+4. 全部符合且确认数据库事务未提交后，停止写入、按存储合同做数据库检查点，再在一个 SQLite 事务内补完与 `markReleased` 相同的状态（时间为 epoch 秒）：
+
+   ```sql
+   UPDATE issue_repositories SET local_path = NULL, updated_at = CAST(strftime('%s','now') AS INTEGER) WHERE issue_id = '<工单UUID>';
+   UPDATE issue_workspaces SET status='stopped', runtime_ready=0, released_at=CAST(strftime('%s','now') AS INTEGER), last_error=NULL, updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE issue_id = '<工单UUID>';
+   ```
+
+5. 重启后再次执行发布，应返回 `alreadyReleased: true`；运行 `--development-git` 审计核对 refs 与工作树。只有部分工作区已移除或提交不一致时不要补状态，保留现场人工确认。
+
+### 重开/转开发：创建工作树之后、数据库提交之前中断
+
+1. 停止写入者，先判断事务是否已提交：若 `issue_workspaces.released_at` 已清空、`issue_repositories.local_path` 已写入、`issues.status` 为 open（转开发则已有开发仓库记录），说明已提交，刷新页面即可，不重复操作。
+2. 未提交时数据库仍是旧状态（重开：resolved、released_at 非空、local_path 为空；转开发：read_only 记录），但工作区目录已存在。重试会报 `workspace_path_already_exists`，系统不会自动接管。
+3. 只读核对：`git -C <私有仓> worktree list` 包含该路径；工作树 HEAD 等于记录的 `working_branch`（重开时该分支必须等于发布保留的提交，可用 `refs/issue-pilot/snapshots/` 与共享仓分支核对）；`git -C <工作区> status --porcelain --ignored` 为空且没有多出提交。
+4. 全部符合时只移除工作树登记：`git -C <私有仓> worktree remove <工作区>`；保留私有仓、分支和保留引用，再重试重开/转换。不要手工插入 `local_path`。
+5. 任一项不符（有改动、多出提交、分支或指针不一致）时保留现场，不删除目录、不重置分支、不改数据库；转换中旧只读运行链接已移除时，先按存储合同的转换回滚要求核对恢复，无法确认则保留现场。
+
+## 模型响应空闲超时
+
+日志出现 `model_response_idle_timeout`（level 50）表示当前 Agent 轮次在配置的 `modelResponseIdleMs`（默认 5 分钟）内既没有收到助手流式增量，也没有正在执行的工具；看门狗会中止该会话，本轮以该错误失败。
+
+- 先看同一工单前后的模型请求、工具执行和错误码，区分模型端长时间无输出、网络中断或调用方等待；工具执行期间不计时。
+- 这不是进程崩溃或重启：服务保持健康，已完成的工具副作用不回退。不要自动重发消息、重建工单或重启服务；用户确认后再发送。
+- 连续复现时按工单和提供方归类，保留时间、错误码和耗时，不复制对话正文、SQL 或密钥。
+- 管理员可在“配置 → 参数”调整 `modelResponseIdleMs`；已建立的会话在下次计时时读取新值，无需重启。
+
+## 发布与监控
+
+协调发布使用仓库脚本，预检、检查点、Web 轮换和回退规则见[部署指南](DEPLOYMENT.md#协调发布后端与-web)；不要在运行目录原地构建。
+
+```bash
+cd /home/idoly/issue-pilot
+scripts/host/release.sh \
+  --build /absolute/path/to/release-checkout/src/web/dist \
+  --revision "$(git rev-parse HEAD)" \
+  --previous-revision <上一运行版本> \
+  --checkpoint /home/idoly/.local/state/issue-pilot-host/checkpoints
+```
+
+健康探针用于 cron 巡检，不替代发布后的手工检查。它读取 `/health`、数据盘余量、可用内存、最近 24 小时的日志轮转数和当前日志大小；正常只输出一行并以 0 退出，任一越界以 1 退出。它只读状态，不启动、停止或清理任何进程与文件。
+
+```bash
+cd /home/idoly/issue-pilot
+scripts/host/health-probe.sh
+# 可调阈值：--min-free-mb 2048 --min-available-mb 128 --max-restarts-24h 8 --max-log-mb 256
+```
+
+用 `crontab -e` 为运行用户安装（每 5 分钟一次；cron 的非零退出按 `MAILTO` 发信）：
+
+```cron
+*/5 * * * * cd /home/idoly/issue-pilot && scripts/host/health-probe.sh >> /home/idoly/.local/state/issue-pilot-host/health-probe.log 2>&1
+```
+
+`restarts_24h` 统计轮转日志数，发布重启也会计入，告警时先查应用日志和进程身份。探针日志按需人工截断，不要删除仍用于判断重启次数或故障现场的文件。

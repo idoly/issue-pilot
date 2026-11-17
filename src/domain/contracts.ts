@@ -189,25 +189,15 @@ export interface CapabilityConfiguration {
   sls?: SlsScope & SlsCredentials;
 }
 
-/** Historical private deployment fields retained for migration/recovery; never executed or projected. */
-interface RetiredCapabilityConfiguration {
-  nacos?: { serverUrl: string; namespace: string; group: string; dataIds: string[]; username: string; password?: string };
-  db?: { databases: Array<{ url: string; username: string; password: string }> };
-  redis?: { host: string; port: number; username: string; password?: string; database: number };
-  mq?: { host: string; managementPort: number; username: string; password: string; virtualHost: string };
-  es?: { url: string; username: string; password?: string };
-}
-
 export type DeploymentConfig = CapabilityConfiguration;
 export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "dms" | "sls"> & {
   dms?: DmsScope & Partial<DmsCredentials>;
   sls?: SlsScope & Partial<SlsCredentials>;
-} & RetiredCapabilityConfiguration & {
-    /** Private pre-upgrade development settings; never projected or executed. */
-    archivedDevelopment?: unknown;
-    /** Historical deployment bindings; MCP availability is now global. */
-    mcpServices?: string[];
-  };
+  /** Private pre-upgrade development settings; never projected or executed. */
+  archivedDevelopment?: unknown;
+  /** Historical deployment bindings removed by migration 0082; MCP availability is now global. */
+  mcpServices?: string[];
+};
 
 /** Credential owner is the assignee, else the reporter; callers still enforce that the owner is active. */
 export function credentialOwnerSubject(issue: { assigneeSubject: string | null; reporterSubject: string }): string {
@@ -343,12 +333,20 @@ export function canChangeIssueScope(issue: Omit<IssueScopeState, "issueType"> & 
   return !canModifyIssueCode(issue.environmentKind) || (CODE_TRANSITION_STATUSES.includes(issue.status) && issue.workspaceStatus === "ready");
 }
 
-/** Related Issues change only on an unresolved Issue whose prepared runtime view can be rebuilt. Returns the refusal code or null. */
-export function relatedIssueUpdateRefusal(issue: {
-  status: IssueStatus;
-  workspace: { status: WorkspaceStatus; runtimeReady: boolean } | undefined;
-}): "related_issue_update_not_allowed" | "related_issue_context_unavailable" | null {
+/**
+ * Related Issues change only on an unresolved Issue whose prepared runtime view can be rebuilt. Removing
+ * existing relations needs no rebuild, so it stays available while that context is unavailable, including
+ * on a never-run Issue (the caller still enforces idleness). Returns the refusal code or null.
+ */
+export function relatedIssueUpdateRefusal(
+  issue: {
+    status: IssueStatus;
+    workspace: { status: WorkspaceStatus; runtimeReady: boolean } | undefined;
+  },
+  options: { onlyRemoves?: boolean } = {},
+): "related_issue_update_not_allowed" | "related_issue_context_unavailable" | null {
   if (issue.status === "resolved") return "related_issue_update_not_allowed";
+  if (options.onlyRemoves) return null;
   if (!issue.workspace || !["ready", "stopped"].includes(issue.workspace.status) || !issue.workspace.runtimeReady) return "related_issue_context_unavailable";
   return null;
 }

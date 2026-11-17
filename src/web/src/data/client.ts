@@ -615,6 +615,8 @@ export interface IssueSessionSummary {
   sessionId: string;
   createdAt: string;
   current: boolean;
+  /** The file is known to be unreadable because its final record was cut off; history can still list it. */
+  incomplete?: boolean;
 }
 export const listIssueSessions = (key: string, signal?: AbortSignal) => request<IssueSessionSummary[]>(issuePath(key, "/sessions"), signal ? { signal } : {});
 export const readIssueSession = (key: string, sessionId: string, offset = 0, signal?: AbortSignal) =>

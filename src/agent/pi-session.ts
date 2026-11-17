@@ -72,6 +72,26 @@ export function isIssueSessionPath(file: string, root: string): boolean {
   return path.dirname(file) === root && path.basename(file).startsWith(".session-");
 }
 
+/**
+ * SQLite binds a session file with FULL sync, so the file and its directory entry must be durable first.
+ * Otherwise a power loss can leave the committed binding pointing at a truncated or missing transcript.
+ * Only session creation/reset call this; it is never on the round path.
+ */
+export async function syncSessionFile(file: string): Promise<void> {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  const directory = await open(path.dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
+
 export async function createPrivateSessionManager(cwd: string, sessionDirectory: string): Promise<SessionManager> {
   const manager = SessionManager.create(cwd, sessionDirectory);
   const generatedFile = manager.getSessionFile();
@@ -81,6 +101,7 @@ export async function createPrivateSessionManager(cwd: string, sessionDirectory:
 
   await writeFile(sessionFile, `${JSON.stringify(header)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
   try {
+    await syncSessionFile(sessionFile);
     manager.setSessionFile(sessionFile);
   } catch (error) {
     try {

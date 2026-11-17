@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { openDatabase } from "../../src/db/client.ts";
+import { migrateThrough } from "./migration-fixture.ts";
 
 test("adds stdio without changing HTTP MCP records or deployment references", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-mcp-migration-")),
@@ -33,7 +34,8 @@ test("adds stdio without changing HTTP MCP records or deployment references", as
       args: [JSON.stringify({ mcpServices: ["mcp-1"] })],
     });
     const before = (await database.client.execute("SELECT * FROM mcp_services")).rows[0]!;
-    await migrate(database.db, { migrationsFolder: path.resolve("drizzle") });
+    // Stop before 0082: this case verifies the 0055 deployment reference, and 0082 later removes the historical binding.
+    await migrateThrough(database, path.join(root, "through-before-secret-retirement"), "0081_drop_issue_comments");
     const after = (await database.client.execute("SELECT * FROM mcp_services")).rows[0]!;
     const { stdio, deployment_id, ...retained } = after;
     assert.equal(stdio, null);

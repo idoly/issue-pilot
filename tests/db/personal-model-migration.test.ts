@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { openDatabase } from "../../src/db/client.ts";
+import { migrateThrough } from "./migration-fixture.ts";
 
 test("converts only the key for the current global provider into a personal model group", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-personal-model-migration-")),
@@ -32,7 +33,8 @@ test("converts only the key for the current global provider into a personal mode
       await db.client.execute({ sql: "INSERT INTO subjects (subject,created_at,updated_at) VALUES (?,1,1)", args: [subject] });
       await db.client.execute({ sql: "INSERT INTO user_credentials (subject,revision,model_api_keys,updated_at) VALUES (?,3,?,1)", args: [subject, JSON.stringify(keys)] });
     }
-    await migrate(db.db, { migrationsFolder: path.resolve("drizzle") });
+    // Stop before 0082: that later migration removes the retired key column after its offline export.
+    await migrateThrough(db, path.join(root, "through-before-secret-retirement"), "0081_drop_issue_comments");
     const rows = Object.fromEntries((await db.client.execute("SELECT subject, revision, model_api_keys, model_credentials FROM user_credentials")).rows.map((row) => [row.subject, row]));
     assert.deepEqual(JSON.parse(String(rows.matching!.model_credentials)), { provider: "global.provider", model: "global-model", thinkingLevel: "high", codemode: "only", apiKey: "matching-key" });
     assert.equal(rows.matching!.revision, 4);

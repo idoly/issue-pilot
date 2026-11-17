@@ -34,7 +34,7 @@ test("a missing DMS credential group does not discard the SLS credentials of the
     // Shared SLS only; neither a shared nor a personal DMS group exists.
     await database.db
       .insert(applicationSettings)
-      .values({ id: 1, maxConcurrentIssues: 4, sharedSlsCredentials: { accessKeyId: "shared-sls-id", accessKeySecret: "shared-sls-secret" } })
+      .values({ id: 1, sharedSlsCredentials: { accessKeyId: "shared-sls-id", accessKeySecret: "shared-sls-secret" } })
       .onConflictDoUpdate({ target: applicationSettings.id, set: { sharedSlsCredentials: { accessKeyId: "shared-sls-id", accessKeySecret: "shared-sls-secret" } } });
     await database.db.insert(subjects).values({ subject: "tester", displayName: "Tester", role: "product" });
     await database.db.insert(userCredentials).values({ subject: "tester" });

@@ -458,8 +458,8 @@ export function IssueWorkspace(props: {
     ["ready", "stopped"].includes(props.issue.workspace.status) &&
     props.issue.workspace.sourceAvailable &&
     productionServices().length > 0;
-  const relatedRefusal = () => relatedIssueUpdateRefusal(props.issue);
-  // Resolved Issues hide the editor; other refusals (runtime view not ready) and active work disable it.
+  const relatedRefusal = (onlyRemoves = false) => relatedIssueUpdateRefusal(props.issue, { onlyRemoves });
+  // Resolved Issues hide the editor; a missing runtime view still permits detaching existing relations.
   const canEditRelatedIssues = () => relatedRefusal() !== "related_issue_update_not_allowed";
   const selectableRelatedIssues = createMemo(() => props.issueList.items().filter((candidate) => candidate.id !== props.issue.id));
   const closeRelatedEditor = () => {
@@ -484,6 +484,13 @@ export function IssueWorkspace(props: {
   const saveRelatedIssues = async () => {
     const issueId = props.issue.id;
     const generation = issueGeneration;
+    const currentKeys = new Set(props.issue.relatedIssues.map(({ id }) => id));
+    // A failed related context only blocks additions; the user can still detach broken relations.
+    const refusal = relatedRefusal(relatedKeys().every((id) => currentKeys.has(id)));
+    if (refusal) {
+      setRelatedError(errorText(refusal, relatedSaveErrors));
+      return;
+    }
     setRelatedSaving(true);
     setRelatedError("");
     try {
@@ -650,7 +657,7 @@ export function IssueWorkspace(props: {
               <Button
                 type="text"
                 icon={<Pencil size={14} />}
-                disabled={relatedRefusal() !== null || issueActive()}
+                disabled={issueActive()}
                 onClick={() => {
                   void openRelatedEditor();
                 }}

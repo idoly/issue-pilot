@@ -1,4 +1,5 @@
 import { OperationError } from "../operation-error.ts";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { errorChain, errorDiagnostic, hasErrorCode } from "../diagnostics.ts";
 import { constraintFailure } from "../db/constraints.ts";
@@ -68,16 +69,40 @@ interface ShutdownTarget {
   exitCode?: number | string | null | undefined;
 }
 
+/** The host runner supplies the checked-out revision; a manual start falls back to the package version. */
+function startupRevision(): string {
+  const runnerRevision = process.env.ISSUE_PILOT_REVISION?.trim();
+  if (runnerRevision) return runnerRevision;
+  try {
+    const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof manifest.version === "string" ? `v${manifest.version}` : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTarget = process): () => void {
   let closing = false;
   const shutdown = () => {
     if (closing) return;
     closing = true;
+    try {
+      app.log.info("Shutdown requested");
+    } catch {
+      // A logging failure cannot block shutdown.
+    }
     // Stalled downloads or uploads would otherwise keep a graceful close pending indefinitely.
     const force = setTimeout(() => app.server.closeAllConnections(), issuePilotConfig.http.shutdownGraceMs);
     force.unref();
     void app
       .close()
+      .then(() => {
+        try {
+          app.log.info("Shutdown complete");
+        } catch {
+          // A logging failure cannot turn a clean close into a failure.
+        }
+      })
       .finally(() => clearTimeout(force))
       .catch((error) => {
         // The process stops either way; a failed cleanup must not look like a clean stop to the host runner.
@@ -110,6 +135,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
   const databaseFile = options.databaseFile ?? applicationConfig.databaseFile;
   // Idle keep-alive sockets close at once; in-flight requests finish, and preClose ends long-lived SSE streams.
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: "idle" });
+  app.log.info({ revision: startupRevision() }, "Starting application");
   let connection: DatabaseConnection | undefined;
   let engine: AgentController | undefined;
   let modelRuntime: ReturnType<typeof createPiModelRuntime> | undefined;

@@ -6,8 +6,11 @@ import { useApplicationResources } from "./ApplicationResources";
 import { createLatestTask } from "../data/latest";
 import { ConversationProjection, type ConversationEntry } from "./conversation";
 import { ConversationItem } from "./AgentPanel";
-import { errorText } from "./error-text";
+import { errorText, type ErrorTexts } from "./error-text";
 import { localDateTime } from "./model";
+
+/** History reads override the admission-oriented message: an unreadable archived file is not a lost input. */
+const historyErrors: ErrorTexts = { agent_session_file_incomplete: "该历史会话文件不完整，无法显示对话。" };
 
 /** Read-only session history stays available in every Issue status; resetting belongs to the edit dialog. */
 export function IssueSessionControls(props: { issue: IssueDetail }) {
@@ -56,7 +59,7 @@ export function IssueSessionControls(props: { issue: IssueDetail }) {
       setSelected(first);
       if (first) await read(first);
     } catch (cause) {
-      if (task.isCurrent()) setError(errorText(cause));
+      if (task.isCurrent()) setError(errorText(cause, historyErrors));
     } finally {
       if (task.isCurrent()) setBusy(false);
       task.finish();
@@ -81,7 +84,7 @@ export function IssueSessionControls(props: { issue: IssueDetail }) {
       });
       setNextOffset(page.nextOffset);
     } catch (cause) {
-      if (task.isCurrent()) setError(errorText(cause));
+      if (task.isCurrent()) setError(errorText(cause, historyErrors));
     } finally {
       if (task.isCurrent()) setBusy(false);
       task.finish();
@@ -107,7 +110,10 @@ export function IssueSessionControls(props: { issue: IssueDetail }) {
                 aria-label="选择历史会话"
                 value={selected()}
                 disabled={busy()}
-                options={sessions().map((session) => ({ value: session.sessionId, label: `${localDateTime(session.createdAt)} · ${session.sessionId.slice(-8)}` }))}
+                options={sessions().map((session) => ({
+                  value: session.sessionId,
+                  label: `${localDateTime(session.createdAt)} · ${session.sessionId.slice(-8)}${session.incomplete ? " · 文件不完整" : ""}`,
+                }))}
                 onChange={(id) => {
                   if (typeof id === "string") void read(id);
                 }}

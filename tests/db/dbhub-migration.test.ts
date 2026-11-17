@@ -6,11 +6,12 @@ import { test } from "node:test";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { openDatabase, type DatabaseConnection } from "../../src/db/client.ts";
 import { environments, mcpServices, serviceDeployments, services } from "../../src/db/schema.ts";
+import { migrateThrough } from "./migration-fixture.ts";
 
 const target = { host: "db.example.test", port: 3306, username: "reader@example", password: " literal p@ss:/?#% ", database: "orders" };
 const migrationOptions = { migrationsFolder: path.resolve("drizzle") };
 
-async function withOldSchema(run: (database: DatabaseConnection) => Promise<void>): Promise<void> {
+async function withOldSchema(run: (database: DatabaseConnection, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dbhub-migration-"));
   const folder = path.join(root, "migrations");
   const database = openDatabase(path.join(root, "issues.db"));
@@ -34,7 +35,7 @@ async function withOldSchema(run: (database: DatabaseConnection) => Promise<void
       { id: "dev", key: "dev", name: "Development", kind: "dev" },
     ]);
     await database.db.insert(services).values({ id: "service", key: "service", name: "Service", revision: 3 });
-    await run(database);
+    await run(database, root);
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });
@@ -56,7 +57,8 @@ async function state(database: DatabaseConnection) {
 }
 
 test("DBHub migration preserves target order, literal credentials, unrelated data and existing connections; repeated migration is inert", async () => {
-  await withOldSchema(async (database) => {
+  await withOldSchema(async (database, root) => {
+    const through = path.join(root, "through-before-secret-retirement");
     const targets = [target, { ...target, host: "2001:db8::1", database: "audit" }];
     const historical = { mysql: [{ ...target, password: "private archived evidence" }] };
     await insertDeployment(database, "prod", { mysql: targets, redis: { historical: true } });
@@ -72,7 +74,8 @@ test("DBHub migration preserves target order, literal credentials, unrelated dat
       stdio: { command: "/fixture/node", args: ["/fixture/dbhub.js"], env: { DBHUB_DSN: "fixture-connection" } },
     });
     const before = await state(database);
-    await migrate(database.db, migrationOptions);
+    // Stop before 0082: this case verifies 0068 and the historical redis key that 0082 later removes.
+    await migrateThrough(database, through, "0081_drop_issue_comments");
     const after = await state(database);
     const configs = Object.fromEntries(after.deployments.map((row) => [String(row.id), JSON.parse(String(row.config))]));
     assert.deepEqual(configs.prod, { dbhub: targets.map((value) => ({ ...value, type: "mysql" })), redis: { historical: true } });
@@ -83,7 +86,7 @@ test("DBHub migration preserves target order, literal credentials, unrelated dat
       );
     assert.equal(after.services[0]!.revision, 4);
     assert.deepEqual(after.connections, before.connections);
-    await migrate(database.db, migrationOptions);
+    await migrateThrough(database, through, "0081_drop_issue_comments");
     assert.deepEqual(await state(database), after);
     assert.equal((await database.client.execute("PRAGMA integrity_check")).rows[0]!.integrity_check, "ok");
     assert.deepEqual((await database.client.execute("PRAGMA foreign_key_check")).rows, []);

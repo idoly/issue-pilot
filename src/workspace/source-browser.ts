@@ -11,7 +11,7 @@ import { isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { domainError } from "../domain/errors.ts";
 import { localCommandExecutor, type CommandExecutionOptions, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
-import { issueRepositories, issueWorkspaces } from "../db/schema.ts";
+import { issueRepositories, issueWorkspaces, issues } from "../db/schema.ts";
 import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 import { issueRepositoryWorkspaceNames, managedGitDirectoryExists, WorktreeManager } from "./git.ts";
 import { recordedSharedSnapshot, resolveRecordedRepository } from "./runtime.ts";
@@ -139,13 +139,16 @@ export class SourceBrowser {
   }
 
   async repositories(issue: IssueReference): Promise<SourceRepository[]> {
-    const { rows, state } = await this.repositorySet(issue);
+    const [{ rows, state }, issueRows] = await Promise.all([this.repositorySet(issue), this.database.select({ status: issues.status }).from(issues).where(eq(issues.id, issue.id)).limit(1)]);
     const names = issueRepositoryWorkspaceNames(rows);
+    // Resolved Issues keep their worktree metadata until release, but source mutations refuse them.
+    const issueRow = issueRows[0];
+    const writable = state === "development_workspace" && issueRow !== undefined && issueRow.status !== "resolved";
     return rows.map((repository) => ({
       name: names.get(repository.url)!,
       url: repository.url,
       branch: repository.workingBranch ?? repository.baseBranch,
-      access: state === "development_workspace" ? "write" : "read",
+      access: writable ? "write" : "read",
     }));
   }
 

@@ -83,6 +83,10 @@ test("client predicates mirror the server's scope, related-Issue, reset and acti
   assert.equal(relatedIssueUpdateRefusal({ ...ready, workspace: undefined }), "related_issue_context_unavailable");
   assert.equal(relatedIssueUpdateRefusal({ ...ready, workspace: { status: "ready", runtimeReady: false } }), "related_issue_context_unavailable");
   assert.equal(relatedIssueUpdateRefusal({ ...ready, workspace: { status: "failed", runtimeReady: true } }), "related_issue_context_unavailable");
+  // Detaching existing relations needs no prepared view, including on a never-run Issue.
+  assert.equal(relatedIssueUpdateRefusal({ ...ready, workspace: undefined }, { onlyRemoves: true }), null);
+  assert.equal(relatedIssueUpdateRefusal({ status: "open", workspace: { status: "not_created", runtimeReady: false } }, { onlyRemoves: true }), null);
+  assert.equal(relatedIssueUpdateRefusal({ ...ready, status: "resolved" }, { onlyRemoves: true }), "related_issue_update_not_allowed");
 
   assert.equal(canResetIssueSession({ actorRole: "developer", status: "pending", agentRunning: false }), true);
   assert.equal(canResetIssueSession({ actorRole: "test", status: "pending", agentRunning: false }), false);

@@ -575,6 +575,20 @@
       "when": 1794960000000,
       "tag": "0081_drop_issue_comments",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "6",
+      "when": 1795046400000,
+      "tag": "0082_retire_private_secrets",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1795132800000,
+      "tag": "0083_redundant_trigger_cleanup",
+      "breakpoints": true
     }
   ]
 }

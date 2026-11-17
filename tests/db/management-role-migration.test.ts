@@ -30,7 +30,7 @@ test("grants global management only to the specified user without changing busin
         args: [subject],
       });
     }
-    const credentials = (await db.client.execute("SELECT * FROM user_credentials ORDER BY subject")).rows;
+    const credentials = (await db.client.execute("SELECT * FROM user_credentials ORDER BY subject")).rows.map(({ model_api_keys: _modelApiKeys, ...row }) => row);
     await migrate(db.db, { migrationsFolder: path.resolve("drizzle") });
     const users = (await db.client.execute("SELECT subject,role,is_admin,created_at,updated_at FROM subjects ORDER BY subject")).rows;
     assert.equal(users[0]!.role, "developer");
@@ -40,8 +40,13 @@ test("grants global management only to the specified user without changing busin
     assert.equal(users[1]!.is_admin, 1);
     assert.equal(users[1]!.created_at, 11);
     const migrated = (await db.client.execute("SELECT * FROM user_credentials ORDER BY subject")).rows;
-    // Later migrations add an empty personal model group without a global model to derive it from.
+    // Later migrations add an empty personal model group without a global model to derive it from,
+    // and 0082 removes the retired per-provider keys after their offline export.
     assert.ok(migrated.every((row) => row.model_credentials === null));
+    assert.equal(
+      migrated.some((row) => "model_api_keys" in row),
+      false,
+    );
     assert.deepEqual(
       migrated.map(({ revision: _revision, model_credentials: _model, ...row }) => row),
       credentials,

@@ -27,7 +27,7 @@ test("page configuration persists across restart and old files never overwrite i
         subject: issuePilotConfig.bootstrapUser.subject,
         dingtalk: { fields: { title: "序号" }, source: { mcp: "dingtalk", url: "https://alidocs.dingtalk.com/notable/record?dentryUuid=base&sheetId=table&rowId=row", environment: "test" } },
       });
-      await connection.db.insert(applicationSettings).values({ id: 1, maxConcurrentIssues: 2, dingtalkFields: { description: "描述" } });
+      await connection.db.insert(applicationSettings).values({ id: 1, dingtalkFields: { description: "描述" } });
     } finally {
       await connection.close();
     }

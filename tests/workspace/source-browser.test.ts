@@ -398,6 +398,10 @@ test("browses only registered Issue repository content", async (context) => {
 
     await database.db.update(issueWorkspaces).set({ runtimeReady: false }).where(eq(issueWorkspaces.issueId, issue!.id));
     await assert.rejects(browser.repositories(issue!), /source_browser_unavailable/);
+    // A resolved Issue keeps its recorded worktree until release, but source mutations refuse it.
+    await database.db.update(issueWorkspaces).set({ runtimeReady: true }).where(eq(issueWorkspaces.issueId, issue!.id));
+    await database.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, issue!.id));
+    assert.deepEqual(await browser.repositories(issue!), [{ name: "application", url: "https://git.example.test/application.git", branch: "hotfix-issue-20260815-002", access: "read" }]);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

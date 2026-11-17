@@ -67,6 +67,7 @@ test("a workspace scope change retires the live session so removed service MCP t
     const internal = engine as unknown as {
       piRuntime: { start(options: Pick<StartPiSessionOptions, "mcpConfigurations" | "workspaceTool">): Promise<unknown>; close(): Promise<void> };
       run(issueId: string): Promise<void>;
+      isReusableSession(issueId: string, managed: unknown): boolean;
       sessions: Map<string, unknown>;
     };
     internal.piRuntime = {
@@ -100,6 +101,12 @@ test("a workspace scope change retires the live session so removed service MCP t
     // Without a scope change the writable development session stays live for the next round.
     assert.equal(stops, 1);
     assert.equal(internal.sessions.has(issue!.id), true);
+    // A related Issue's release marks this live session; it must re-prepare instead of reusing stale roots.
+    const managed = internal.sessions.get(issue!.id)!;
+    assert.equal(internal.isReusableSession(issue!.id, managed), true);
+    engine.markScopeChanged([issue!.id]);
+    assert.equal((managed as { scopeChanged: boolean }).scopeChanged, true);
+    assert.equal(internal.isReusableSession(issue!.id, managed), false);
     await engine.close();
   } finally {
     await database.close();

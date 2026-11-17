@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 
 import { openDatabase } from "../../src/db/client.ts";
+import { migrateThrough } from "./migration-fixture.ts";
 import { environments, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, services, subjects } from "../../src/db/schema.ts";
 import { configuredCapabilities } from "../../src/domain/contracts.ts";
 
@@ -72,6 +73,8 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0079_global_agent_revision",
       "0080_closed_domain_guards",
       "0081_drop_issue_comments",
+      "0082_retire_private_secrets",
+      "0083_redundant_trigger_cleanup",
     ],
   );
   const previousJournal = {
@@ -282,7 +285,8 @@ test("migrates each native MySQL configuration into an explicit target collectio
       sql: "insert into service_deployments (id, service_id, environment_id, config, created_at, updated_at) values ('deployment', 'service', 'environment', ?, 1, 1)",
       args: [JSON.stringify({ db: previousDb })],
     });
-    await migrate(db, { migrationsFolder: migrationSource });
+    // Stop before 0082: this case verifies the 0044 conversion, and 0082 later removes the retired db key.
+    await migrateThrough({ db, client, close }, join(root, "through-before-secret-retirement"), "0081_drop_issue_comments");
     const [row] = (await client.execute("select config from service_deployments where id = 'deployment'")).rows;
     assert.deepEqual(JSON.parse(String(row!.config)), { db: { databases: [previousDb] } });
     assert.equal((await client.execute("select count(*) count from sqlite_master where name = '_db_database_targets_guard'")).rows[0]!.count, 0);
@@ -387,7 +391,11 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     const [repository] = await db.insert(serviceRepositories).values({ serviceId: service!.id, alias: "orders", url: "git@example.test:orders.git" }).returning();
     const [testDeployment] = await db
       .insert(serviceDeployments)
-      .values({ serviceId: service!.id, environmentId: environment!.id, config: { db: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] } } })
+      .values({
+        serviceId: service!.id,
+        environmentId: environment!.id,
+        config: { archivedDevelopment: { databases: [{ url: "mysql://db.example.test:3306/orders", username: "reader", password: "secret" }] } },
+      })
       .returning();
     await assert.rejects(
       client.execute({
@@ -432,7 +440,7 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
     await assert.rejects(db.delete(serviceDeployments).where(eq(serviceDeployments.id, testDeployment!.id)), deploymentIsUsed);
     const [prodDeployment] = await db
       .insert(serviceDeployments)
-      .values({ serviceId: service!.id, environmentId: prod!.id, config: { es: { url: "http://es.example.test", username: "" } } })
+      .values({ serviceId: service!.id, environmentId: prod!.id, config: { archivedDevelopment: { url: "http://es.example.test", username: "" } } })
       .returning();
     const deployments = [testDeployment!, prodDeployment!];
     await db.insert(serviceDeploymentRepositories).values([

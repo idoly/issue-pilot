@@ -25,6 +25,8 @@ export interface AgentController {
   isRunning(issueId: string): boolean;
   getRunState(issueId: string): AgentRunState;
   runExclusive<T>(issueIds: string[], operation: (reservation: AgentReservation) => Promise<T>): Promise<T>;
+  /** Mark live sessions that read a changed Issue's evidence so they re-prepare on their next round; never reserves. */
+  markScopeChanged?(issueIds: Iterable<string>): void;
   abort(issueId: string, authorize?: () => Promise<unknown>): Promise<void>;
   setMaxConcurrentIssues(maxConcurrentIssues: number): void;
   close?(): Promise<void>;

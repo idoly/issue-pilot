@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { eq } from "drizzle-orm";
+import { applyServiceConfiguration, prepareServiceConfiguration } from "../../src/configuration/service-deployments.ts";
+import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { openDatabase } from "../../src/db/client.ts";
+import { environments, repositories, serviceDeployments, services } from "../../src/db/schema.ts";
 
 test("retiring adapters preserves private history and active switches while disabling known Playwright MCP", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-retired-upgrade-"));
@@ -34,6 +38,61 @@ test("retiring adapters preserves private history and active switches while disa
     await assert.rejects(database.client.execute("INSERT INTO capability_switches VALUES('redis',1,100)"), /CHECK/);
   } finally {
     database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deployment writes drop retired capability and binding keys but keep archived development data", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-retired-deployment-write-"));
+  const database = await openApplicationDatabase(path.join(root, "issues.db"));
+  try {
+    const [production] = await database.db.select().from(environments).where(eq(environments.key, "prod")).limit(1);
+    const [development] = await database.db.select().from(environments).where(eq(environments.key, "dev")).limit(1);
+    const url = "git@example.test:team/orders.git";
+    await database.db.insert(repositories).values({ name: "orders", url });
+    const [service] = await database.db.insert(services).values({ key: "orders", name: "Orders" }).returning();
+    const archivedDevelopment = { branch: "historical", note: "retained evidence" };
+    // Historical rows may still carry retired keys; the next write must not copy them forward.
+    await database.client.execute({
+      sql: "INSERT INTO service_deployments (id, service_id, environment_id, config, created_at, updated_at) VALUES ('deployment-prod', ?, ?, ?, unixepoch(), unixepoch())",
+      args: [
+        service!.id,
+        production!.id,
+        JSON.stringify({
+          dms: { databases: [] },
+          nacos: { serverUrl: "https://nacos.example.test", password: "nacos-secret" },
+          db: { databases: [{ url: "mysql://db.example.test/orders", password: "db-secret" }] },
+          redis: { host: "redis.example.test", password: "redis-secret" },
+          mq: { host: "mq.example.test", password: "mq-secret" },
+          es: { url: "https://es.example.test", password: "es-secret" },
+          mcpServices: ["old-binding"],
+          archivedDevelopment,
+        }),
+      ],
+    });
+    await database.db.insert(serviceDeployments).values({ serviceId: service!.id, environmentId: development!.id, config: { archivedDevelopment } });
+
+    const prepared = await prepareServiceConfiguration({
+      executor: database.db,
+      serviceId: service!.id,
+      input: {
+        repositories: [{ alias: "orders", url }],
+        deployments: [
+          { environmentKey: "prod", capabilities: [], repositoryBranches: [{ repositoryAlias: "orders", baseBranch: "main" }] },
+          { environmentKey: "dev", capabilities: [], repositoryBranches: [] },
+        ],
+      },
+    });
+    await applyServiceConfiguration({ executor: database.db, serviceId: service!.id, prepared });
+
+    const rows = await database.db.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, service!.id));
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.deepEqual(row.config, { archivedDevelopment });
+      for (const key of ["nacos", "db", "redis", "mq", "es", "mcpServices"]) assert.equal(key in row.config, false, key);
+    }
+  } finally {
+    await database.close();
     await rm(root, { recursive: true, force: true });
   }
 });

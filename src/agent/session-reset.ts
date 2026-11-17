@@ -6,7 +6,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Database } from "../db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../db/schema.ts";
 import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
-import { assertSessionFileComplete, createPrivateSessionManager, isIssueSessionPath, openRegularSessionFile } from "./pi-session.ts";
+import { assertSessionFileComplete, createPrivateSessionManager, isIssueSessionPath, openRegularSessionFile, syncSessionFile } from "./pi-session.ts";
 import { DomainError } from "../domain/errors.ts";
 
 const resetEntry = "issue-pilot-session-reset";
@@ -34,8 +34,13 @@ async function readSession(file: string, root: string) {
  */
 async function readSessionSummary(file: string, root: string) {
   if (!isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
-  const { descriptor } = await ownSessionFile(() => openRegularSessionFile(file));
+  const { descriptor, metadata } = await ownSessionFile(() => openRegularSessionFile(file));
   try {
+    // A crash inside Pi's append can leave an unterminated final record. Listing needs only the header,
+    // so record that damage for display instead of failing here; full transcript reads still refuse it.
+    const tail = Buffer.alloc(1);
+    const { bytesRead } = await descriptor.read(tail, 0, 1, metadata.size - 1);
+    const incomplete = bytesRead !== 1 || tail[0] !== 0x0a;
     let header: { sessionId: string; createdAt: string } | undefined;
     let previousFile: string | undefined;
     for await (const line of descriptor.readLines({ encoding: "utf8", autoClose: false, start: 0 })) {
@@ -64,7 +69,7 @@ async function readSessionSummary(file: string, root: string) {
       break;
     }
     if (!header) throw new Error("agent_session_file_incomplete");
-    return { ...header, previousFile };
+    return { ...header, previousFile, incomplete };
   } finally {
     await descriptor.close();
   }
@@ -82,13 +87,17 @@ export async function resetIssueSession(
   const root = issueRoot(stateRoot, issue.key);
   const [binding] = await database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
   if (!binding) throw new Error("agent_session_not_found");
-  const previous = await readSession(binding.sessionFile, root);
-  if (previous.getSessionId() !== expectedSessionId) throw new Error("agent_session_changed");
+  // Reset is the escape hatch for a transcript whose tail was cut off by ENOSPC/OOM/SIGKILL. Verify only
+  // the header identity; a full parse would refuse the damaged file forever. The old file stays untouched.
+  const previous = await readSessionSummary(binding.sessionFile, root);
+  if (previous.sessionId !== expectedSessionId) throw new Error("agent_session_changed");
   const manager = await createPrivateSessionManager(root, root);
   const file = manager.getSessionFile()!;
   try {
     // A custom entry is audit metadata, never model context. The old JSONL stays byte-for-byte intact.
     manager.appendCustomEntry(resetEntry, { previousFile: path.basename(binding.sessionFile), actor, resetAt: new Date().toISOString() });
+    // The binding below commits with FULL sync; make the new transcript durable first.
+    await syncSessionFile(file);
     await database.transaction(async (transaction) => {
       await edit?.(transaction);
       await transaction.update(agentSessions).set({ sessionFile: file, workspacePath: root, updatedAt: new Date() }).where(eq(agentSessions.issueId, issue.id));
@@ -116,12 +125,12 @@ export async function issueSessionHistory(database: Database, stateRoot: string,
   if (!binding) return [];
   let file: string | undefined = binding.sessionFile;
   const seen = new Set<string>();
-  const history: Array<{ sessionId: string; createdAt: string; current: boolean; file: string }> = [];
+  const history: Array<{ sessionId: string; createdAt: string; current: boolean; incomplete: boolean; file: string }> = [];
   while (file) {
     if (seen.has(file)) throw new Error("agent_session_history_invalid");
     seen.add(file);
-    const { sessionId, createdAt, previousFile } = await readSessionSummary(file, root);
-    history.push({ sessionId, createdAt, current: history.length === 0, file });
+    const { sessionId, createdAt, previousFile, incomplete } = await readSessionSummary(file, root);
+    history.push({ sessionId, createdAt, current: history.length === 0, incomplete, file });
     if (previousFile === undefined) break;
     if (typeof previousFile !== "string" || path.basename(previousFile) !== previousFile) throw new Error("agent_session_history_invalid");
     file = path.join(root, previousFile);
@@ -136,19 +145,39 @@ export async function readIssueSessionHistory(database: Database, stateRoot: str
   return readSession(entry.file, issueRoot(stateRoot, issue.key));
 }
 
-/** Receipt lookup follows the same validated reset chain as history, including compacted branches. */
-export async function readIssueMessageReceipt(database: Database, stateRoot: string, issue: { id: string; key: string }, request: AgentMessageRequest, current?: SessionManager) {
+/**
+ * Receipt lookup follows the same validated reset chain as history, including compacted branches.
+ * Explicit receipt reads fail when a predecessor cannot be validated: the record may sit in its
+ * unreadable tail, so "unknown" would invite a resend. Admission deduplication passes
+ * tolerateIncompleteHistory so a cut-off predecessor does not permanently block new input.
+ */
+export async function readIssueMessageReceipt(
+  database: Database,
+  stateRoot: string,
+  issue: { id: string; key: string },
+  request: AgentMessageRequest,
+  current?: SessionManager,
+  options: { tolerateIncompleteHistory?: boolean } = {},
+) {
+  const root = issueRoot(stateRoot, issue.key);
   await assertIssueRoot(stateRoot, issue.key);
   if (current) {
     const file = current.getSessionFile();
-    if (!file || !isIssueSessionPath(file, issueRoot(stateRoot, issue.key))) throw new Error("agent_session_file_incomplete");
+    if (!file || !isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
     await ownSessionFile(() => assertSessionFileComplete(file));
     const receipt = agentMessageReceipt(current, request);
     if (receipt) return receipt;
   }
   for (const entry of await issueSessionHistory(database, stateRoot, issue)) {
     if (current?.getSessionId() === entry.sessionId) continue;
-    const receipt = agentMessageReceipt(await readSession(entry.file, issueRoot(stateRoot, issue.key)), request);
+    let manager: SessionManager;
+    try {
+      manager = await readSession(entry.file, root);
+    } catch (error) {
+      if (options.tolerateIncompleteHistory && error instanceof Error && error.message === "agent_session_file_incomplete") continue;
+      throw error;
+    }
+    const receipt = agentMessageReceipt(manager, request);
     if (receipt) return receipt;
   }
   return undefined;
