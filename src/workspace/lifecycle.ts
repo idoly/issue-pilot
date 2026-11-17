@@ -131,6 +131,8 @@ export class WorkspaceLifecycleManager {
   private readonly projects: IssueProjectManager;
   private currentPolicy: WorkspaceLifecyclePolicy;
   private readonly queue = new SerialQueue();
+  // Serialize whole background jobs while they yield the lifecycle queue between batches.
+  private readonly backgroundQueue = new SerialQueue();
   private statsRequest: Promise<WorkspaceStatistics> | undefined;
   private lastStatistics: WorkspaceStatistics | null = null;
   private statisticsError: string | null = null;
@@ -183,7 +185,7 @@ export class WorkspaceLifecycleManager {
     clearTimeout(timer?.handle);
     this.maintenanceTimer = undefined;
     this.stopping = true;
-    return (this.stopPromise ??= Promise.all([timer?.active, this.queue.idle()]).then(() => undefined));
+    return (this.stopPromise ??= Promise.all([timer?.active, this.backgroundQueue.idle()]).then(() => this.queue.idle()));
   }
 
   get policy(): WorkspaceLifecyclePolicy {
@@ -249,7 +251,7 @@ export class WorkspaceLifecycleManager {
     this.sampling++;
     this.statisticsError = null;
     const revision = this.statisticsRevision;
-    const promise = this.exclusive(async () => {
+    const promise = this.background(async () => {
       const value = await this.sampleStatistics();
       this.publishStatistics(value, revision);
       return value;
@@ -267,20 +269,21 @@ export class WorkspaceLifecycleManager {
   }
 
   private async sampleStatistics(measuredBytes?: Map<string, number>): Promise<WorkspaceStatistics> {
-    const policy = this.policy;
-    const issueRows = await this.issueRows();
-    const repositories = await this.database.select().from(issueRepositories);
+    const { policy, issueRows, repositories } = await this.queue.run(async () => ({
+      policy: this.policy,
+      issueRows: await this.issueRows(),
+      repositories: await this.database.select().from(issueRepositories),
+    }));
     const repositoriesByIssue = new Map<string, IssueRepository[]>();
     for (const repository of repositories) {
       const group = repositoriesByIssue.get(repository.issueId) ?? [];
       group.push(repository);
       repositoriesByIssue.set(repository.issueId, group);
     }
-    const inspections = await pMap(issueRows, (issueRow) => this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id), false), {
-      concurrency: policy.taskConcurrency,
-      stopOnError: false,
-    });
-    const sharedGitBytes = await this.measure(gitRoot(this.stateRoot));
+    const inspections = await this.inBatches(issueRows, policy.taskConcurrency, (issueRow) =>
+      this.inspectLocked(issueRow, repositoriesByIssue.get(issueRow.issue.id) ?? [], measuredBytes?.get(issueRow.issue.id), false),
+    );
+    const sharedGitBytes = await this.queue.run(() => this.measure(gitRoot(this.stateRoot)));
     return {
       sampledAt: new Date().toISOString(),
       totalBytes: inspections.reduce((total, workspace) => total + workspace.bytes, 0),
@@ -363,23 +366,18 @@ export class WorkspaceLifecycleManager {
     const revision = this.statisticsRevision;
     this.sampling++;
     this.statisticsError = null;
-    return this.exclusive(async () => {
-      const policy = this.policy;
-      const issueRows = await this.issueRows();
+    return this.background(async () => {
+      const { policy, issueRows } = await this.queue.run(async () => ({ policy: this.policy, issueRows: await this.issueRows() }));
       const failures: Array<{ issueKey: string; error: unknown }> = [];
       // Measure per Issue: one unmeasurable tree must not abort maintenance.
-      const measuredWorkspaces = await pMap(
-        issueRows,
-        async ({ issue }) => {
-          try {
-            return { issueId: issue.id, bytes: await this.measure(issueRoot(this.stateRoot, issue.key)) };
-          } catch (error) {
-            failures.push({ issueKey: issue.key, error });
-            return undefined;
-          }
-        },
-        { concurrency: policy.taskConcurrency },
-      );
+      const measuredWorkspaces = await this.inBatches(issueRows, policy.taskConcurrency, async ({ issue }) => {
+        try {
+          return { issueId: issue.id, bytes: await this.measure(issueRoot(this.stateRoot, issue.key)) };
+        } catch (error) {
+          failures.push({ issueKey: issue.key, error });
+          return undefined;
+        }
+      });
       const measured = measuredWorkspaces.filter((workspace): workspace is { issueId: string; bytes: number } => workspace !== undefined);
       let measurementIncomplete = measured.length !== issueRows.length;
       const workspaceBytes = new Map(measured.map(({ issueId, bytes }) => [issueId, bytes]));
@@ -399,22 +397,26 @@ export class WorkspaceLifecycleManager {
       const releaseCandidate = async (candidate: IssueRow) => {
         const { id, key } = candidate.issue;
         try {
-          const measured = await this.engine.runExclusive([id], async (reservation) => {
-            const current = await this.issueRow(id);
-            attemptedIssues.add(id);
-            if (current.workspace.releasedAt) return;
-            try {
-              return await this.releaseLocked(current, reservation);
-            } catch (error) {
-              // A release can fail after writing to disk. Refresh its size before returning the reservation.
+          const measured = await this.queue.run(async () => {
+            // A foreground mutation or policy update supersedes the measured quota and retention candidates.
+            if (revision !== this.statisticsRevision) return;
+            return this.engine.runExclusive([id], async (reservation) => {
+              const current = await this.issueRow(id);
+              attemptedIssues.add(id);
+              if (current.workspace.releasedAt) return;
               try {
-                updateBytes(id, await this.measure(issueRoot(this.stateRoot, key)));
-              } catch (measurementError) {
-                measurementIncomplete = true;
-                throw new AggregateError([error, measurementError], "workspace_maintenance_measurement_failed");
+                return await this.releaseLocked(current, reservation);
+              } catch (error) {
+                // A release can fail after writing to disk. Refresh its size before returning the reservation.
+                try {
+                  updateBytes(id, await this.measure(issueRoot(this.stateRoot, key)));
+                } catch (measurementError) {
+                  measurementIncomplete = true;
+                  throw new AggregateError([error, measurementError], "workspace_maintenance_measurement_failed");
+                }
+                throw error;
               }
-              throw error;
-            }
+            });
           });
           if (!measured) return;
           updateBytes(id, measured.remainingBytes);
@@ -942,5 +944,20 @@ export class WorkspaceLifecycleManager {
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     if (this.stopping) throw new Error("workspace_lifecycle_closing");
     return this.queue.run(operation);
+  }
+
+  private async background<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.stopping) throw new Error("workspace_lifecycle_closing");
+    return this.backgroundQueue.run(operation);
+  }
+
+  private async inBatches<T, R>(items: T[], concurrency: number, operation: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = [];
+    for (let offset = 0; offset < items.length; offset += concurrency) {
+      // Only one batch is queued ahead of foreground callers. Drain admitted jobs even after stop begins.
+      const batch = items.slice(offset, offset + concurrency);
+      results.push(...(await this.queue.run(() => pMap(batch, operation, { concurrency, stopOnError: false }))));
+    }
+    return results;
   }
 }

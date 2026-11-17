@@ -717,6 +717,213 @@ test("inspects Issues under the single lifecycle queue", async (context) => {
   assert.equal(stopped, true);
 });
 
+for (const operation of ["maintain", "sampleStats"] as const)
+  test(`${operation} yields between bounded batches so reopening does not wait for the whole scan`, { timeout: 10_000 }, async (context) => {
+    const {
+      root,
+      database,
+      issues: seeded,
+    } = await seededLifecycle(
+      context,
+      Array.from({ length: 5 }, (_, index) => `ISSUE-20261117-10${index}`),
+      "test",
+    );
+    await database.update(issues).set({ status: "resolved", resolvedAt: new Date(0) });
+    const roots = new Set(seeded.map(({ key }) => issueRoot(root, key)));
+    const firstStarted = Promise.withResolvers<void>(),
+      firstGate = Promise.withResolvers<void>(),
+      laterStarted = Promise.withResolvers<void>(),
+      laterGate = Promise.withResolvers<void>();
+    let measurements = 0;
+    const measure = async (candidate: string) => {
+      if (!roots.has(candidate)) return 0;
+      const index = measurements++;
+      if (index < 2) {
+        if (index === 1) firstStarted.resolve();
+        await firstGate.promise;
+      } else {
+        laterStarted.resolve();
+        await laterGate.promise;
+      }
+      return 0;
+    };
+    const manager = new WorkspaceLifecycleManager(
+      database,
+      root,
+      engine as never,
+      { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 2 },
+      { measure },
+    );
+    const scan = manager[operation]();
+    let opening: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      await firstStarted.promise;
+      assert.equal(measurements, 2);
+      let authorizations = 0;
+      let reopened = false;
+      opening = manager
+        .reopenIssue(seeded[0]!.id, async () => {
+          authorizations++;
+        })
+        .then((issue) => {
+          assert.equal(issue.status, "open");
+          reopened = true;
+        });
+      await nextImmediate();
+      assert.equal(authorizations, 0, "authorization must still wait for the active batch");
+      firstGate.resolve();
+      await laterStarted.promise;
+      await nextImmediate();
+      assert.equal(reopened, true, "reopen must finish before the remaining measurements finish");
+      assert.equal(authorizations, 1);
+      let stopped = false;
+      closing = manager.stop().then(() => {
+        stopped = true;
+      });
+      await nextImmediate();
+      assert.equal(stopped, false);
+      laterGate.resolve();
+      await Promise.all([scan, opening, closing]);
+      assert.equal(measurements, seeded.length, "shutdown must drain batches admitted before stop");
+    } finally {
+      firstGate.resolve();
+      laterGate.resolve();
+      await Promise.allSettled([scan, opening, closing]);
+      await manager.stop();
+    }
+  });
+
+test("automatic releases yield to reopen and discard the superseded maintenance snapshot", { timeout: 10_000 }, async (context) => {
+  const {
+    root,
+    database,
+    issues: [first, target],
+  } = await seededLifecycle(context, ["ISSUE-20261117-201", "ISSUE-20261117-202"]);
+  await releasableDevelopmentIssue(root, database, first!, new Date(0));
+  await releasableDevelopmentIssue(root, database, target!, new Date(1000));
+  const releasing = Promise.withResolvers<void>(),
+    releaseGate = Promise.withResolvers<void>(),
+    samplingGit = Promise.withResolvers<void>(),
+    gitGate = Promise.withResolvers<void>();
+  const closed: string[] = [];
+  const gatedEngine = {
+    ...engine,
+    async closeSession(issueId: string) {
+      closed.push(issueId);
+      if (issueId === first!.id) {
+        releasing.resolve();
+        await releaseGate.promise;
+      }
+    },
+  };
+  let holdGit = false;
+  const manager = new WorkspaceLifecycleManager(
+    database,
+    root,
+    gatedEngine as never,
+    { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 },
+    {
+      measure: async (candidate) => {
+        if (holdGit && candidate === gitRoot(root)) {
+          samplingGit.resolve();
+          await gitGate.promise;
+        }
+        return directoryBytes(candidate);
+      },
+    },
+  );
+  const previous = await manager.sampleStats();
+  holdGit = true;
+  const maintenance = manager.maintain();
+  let opening: Promise<unknown> | undefined;
+  try {
+    await releasing.promise;
+    let reopened = false;
+    opening = manager.reopenIssue(target!.id).then((issue) => {
+      assert.equal(issue.status, "open");
+      reopened = true;
+    });
+    releaseGate.resolve();
+    await samplingGit.promise;
+    await nextImmediate();
+    assert.equal(reopened, true, "reopen must run before the next automatic release");
+    assert.deepEqual(closed, [first!.id, target!.id]);
+    assert.equal(manager.readStats().snapshot, previous);
+    gitGate.resolve();
+    const result = await maintenance;
+    await opening;
+    assert.deepEqual(
+      result.released.map(({ issueKey }) => issueKey),
+      [first!.key],
+    );
+    assert.equal(manager.readStats().snapshot, previous, "an interleaved mutation invalidates the old measurements");
+    const [workspace] = await database.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, target!.id));
+    assert.equal(workspace!.releasedAt, null);
+    const [repository] = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, target!.id));
+    await access(repository!.localPath!);
+    holdGit = false;
+    const fresh = await manager.sampleStats();
+    assert.equal(fresh.workspaces.find(({ issueId }) => issueId === target!.id)!.issueStatus, "open");
+    assert.equal(manager.readStats().snapshot, fresh);
+  } finally {
+    releaseGate.resolve();
+    gitGate.resolve();
+    await Promise.allSettled([maintenance, opening]);
+    await manager.stop();
+  }
+});
+
+test("a failed inspection batch drains its other work and a later sample can retry", { timeout: 10_000 }, async (context) => {
+  const { root, database, issues: seeded } = await seededLifecycle(context, ["ISSUE-20261117-301", "ISSUE-20261117-302", "ISSUE-20261117-303"]);
+  const started = Promise.withResolvers<void>(),
+    gate = Promise.withResolvers<void>();
+  const inspectionFailure = new Error("fixture_measurement_failed");
+  let fail = true;
+  const measured: string[] = [];
+  const manager = new WorkspaceLifecycleManager(
+    database,
+    root,
+    engine as never,
+    { retentionMs: Infinity, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 2 },
+    {
+      measure: async (candidate) => {
+        measured.push(candidate);
+        if (fail && candidate === issueRoot(root, seeded[0]!.key)) throw inspectionFailure;
+        if (fail && candidate === issueRoot(root, seeded[1]!.key)) {
+          started.resolve();
+          await gate.promise;
+        }
+        return 0;
+      },
+    },
+  );
+  let settled = false;
+  const failure = assert
+    .rejects(manager.sampleStats(), (error) => error instanceof AggregateError && error.errors.includes(inspectionFailure))
+    .then(() => {
+      settled = true;
+    });
+  try {
+    await started.promise;
+    await nextImmediate();
+    assert.equal(settled, false);
+    gate.resolve();
+    await failure;
+    assert.equal(measured.includes(issueRoot(root, seeded[2]!.key)), false);
+    assert.equal(manager.readStats().error, "workspace_statistics_failed");
+    fail = false;
+    const retried = await manager.sampleStats();
+    assert.equal(retried.workspaces.length, seeded.length);
+    assert.equal(manager.readStats().snapshot, retried);
+    assert.equal(manager.readStats().error, null);
+  } finally {
+    gate.resolve();
+    await failure;
+    await manager.stop();
+  }
+});
+
 test("shares one statistics scan and retains the complete snapshot until an explicit or scheduled update", async (context) => {
   const {
     root,

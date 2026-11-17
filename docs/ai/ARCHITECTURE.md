@@ -79,6 +79,7 @@ Keep Agent activity, Issue-set reservation, configuration scope, lifecycle and r
 configuration read: scope queue → SQLite read snapshot
 service / Issue scope write: scope queue → Issue reservation
 release / reopen: lifecycle queue → Issue reservation
+capacity background jobs: background queue → lifecycle queue per batch / release → Issue reservation for removal
 ```
 
 Read the Operator model catalog before acquiring the configuration scope queue. The queue still covers the SQLite projection and writes, and model selection writes reauthorize once inside. Repository keys include state root and URL hash. Do not reverse acquisition, replace these queues with a global lock or treat initial authorization as permanent. SQLite snapshots, configuration revisions, file hashes and Git CAS protect different facts.
