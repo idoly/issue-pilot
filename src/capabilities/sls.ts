@@ -1,6 +1,7 @@
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { applicationParameters } from "../configuration/parameters.ts";
-import { readSlsCli, SLS_QUERY_ERRORS } from "./sls-cli.ts";
+import { readSlsCli } from "./sls-cli.ts";
+import { DomainError } from "../domain/errors.ts";
 import type { CommandExecutor } from "../process.ts";
 import { SLS_LOGSTORE, type CapabilityConfig, type CapabilityInputs } from "./registry.ts";
 
@@ -43,11 +44,12 @@ export async function readSlsLogs(input: CapabilityInputs["sls"], configured: Ca
     return await readSlsCli(selected, query, active, executor);
   } catch (error) {
     // A temporary AccessKey profile may remain on disk; preserve cleanup failures even after cancellation.
-    if (error instanceof Error && error.message === "sls_credential_cleanup_failed") throw error;
+    if (error instanceof DomainError && error.code === "sls_credential_cleanup_failed") throw error;
     if (signal?.aborted) signal.throwIfAborted();
     if (active.aborted) throw new Error("sls_query_timeout");
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new Error("sls_cli_not_available");
-    if (error instanceof Error && (SLS_QUERY_ERRORS.includes(error.message) || error.message === "capability_result_too_large" || error.message === "command_output_too_large")) throw error;
+    if (error instanceof DomainError) throw error;
+    if (error instanceof Error && (error.message === "capability_result_too_large" || error.message === "command_output_too_large")) throw error;
     throw new Error("sls_query_failed");
   }
 }

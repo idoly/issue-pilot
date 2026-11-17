@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { applicationParameters } from "../configuration/parameters.ts";
+import { DomainError } from "../domain/errors.ts";
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import { capabilityResultText, capabilityTextResult } from "./contracts.ts";
 import type { CapabilityConfig } from "./registry.ts";
@@ -43,16 +44,6 @@ const networkErrors = new Map<string, string>([
   ["ERR_TLS_CERT_ALTNAME_INVALID", "sls_tls_failed"],
 ]);
 
-export const SLS_QUERY_ERRORS: readonly string[] = [
-  "sls_query_failed",
-  "sls_query_incomplete",
-  "sls_query_invalid_response",
-  "sls_sql_limit_required",
-  "sls_scan_query_not_supported",
-  ...new Set([...providerErrors.values(), ...networkErrors.values()]),
-  ...Array.from({ length: 200 }, (_, index) => `sls_http_${400 + index}`),
-];
-
 function cliFailure(stderr: string): string {
   // oxlint-disable-next-line no-control-regex -- Explicit control bytes are required for sanitization and path validation.
   const diagnostic = stderr.replace(/\x1b\[[0-9;]*m/g, "");
@@ -66,7 +57,7 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
   signal.throwIfAborted();
   const directory = await mkdtemp(path.join(tmpdir(), "issue-pilot-sls-"));
   const configPath = path.join(directory, "config.json");
-  const cleanup = () => rm(directory, { recursive: true, force: true });
+  const failures: unknown[] = [];
   try {
     await writeFile(
       configPath,
@@ -120,21 +111,21 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
         { signal, environment, maxOutputBytes: limits.resultBytes, strictStdoutUtf8: true },
       );
       signal.throwIfAborted();
-      if (result.killed) throw new Error("sls_query_timeout");
-      if (result.code !== 0) throw new Error(cliFailure(result.stderr));
+      if (result.killed) throw new DomainError("sls_query_timeout", "upstream");
+      if (result.code !== 0) throw new DomainError(cliFailure(result.stderr), "upstream");
       let response: unknown;
       try {
         response = JSON.parse(result.stdout);
       } catch {
-        throw new Error("sls_query_invalid_response");
+        throw new DomainError("sls_query_invalid_response", "upstream");
       }
-      if (!response || typeof response !== "object" || Array.isArray(response)) throw new Error("sls_query_invalid_response");
+      if (!response || typeof response !== "object" || Array.isArray(response)) throw new DomainError("sls_query_invalid_response", "upstream");
       const { data: page, meta } = response as { data?: unknown; meta?: { hasSQL?: unknown; progress?: unknown; mode?: unknown; limited?: unknown } };
-      if (!Array.isArray(page) || !meta || typeof meta.hasSQL !== "boolean") throw new Error("sls_query_invalid_response");
-      if (typeof meta.progress !== "string" || meta.progress.toLowerCase() !== "complete") throw new Error("sls_query_incomplete");
-      if ((meta.mode ?? 0) !== 0) throw new Error("sls_scan_query_not_supported");
-      if ((!meta.hasSQL && page.length > limits.sls.pageResults) || (records.length && meta.hasSQL)) throw new Error("sls_query_invalid_response");
-      if (meta.hasSQL && typeof meta.limited === "number" && meta.limited > 0 && page.length >= meta.limited) throw new Error("sls_sql_limit_required");
+      if (!Array.isArray(page) || !meta || typeof meta.hasSQL !== "boolean") throw new DomainError("sls_query_invalid_response", "upstream");
+      if (typeof meta.progress !== "string" || meta.progress.toLowerCase() !== "complete") throw new DomainError("sls_query_incomplete", "upstream");
+      if ((meta.mode ?? 0) !== 0) throw new DomainError("sls_scan_query_not_supported", "upstream");
+      if ((!meta.hasSQL && page.length > limits.sls.pageResults) || (records.length && meta.hasSQL)) throw new DomainError("sls_query_invalid_response", "upstream");
+      if (meta.hasSQL && typeof meta.limited === "number" && meta.limited > 0 && page.length >= meta.limited) throw new DomainError("sls_sql_limit_required", "upstream");
       analysis = meta.hasSQL;
       // Separate page envelopes overestimate the merged JSON size. Only rescan the whole result near the limit.
       recordsBytesUpperBound += Buffer.byteLength(capabilityResultText({ records: page }));
@@ -155,20 +146,17 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
       returnedRows: records.length,
       possiblyIncomplete: false,
     };
-    const value = capabilityTextResult(capabilityResultText({ query: metadata, records }), { provider: "aliyun-sls-cli", ...metadata });
-    try {
-      await cleanup();
-    } catch (error) {
-      throw new Error("sls_credential_cleanup_failed", { cause: error });
-    }
-    return value;
+    return capabilityTextResult(capabilityResultText({ query: metadata, records }), { provider: "aliyun-sls-cli", ...metadata });
   } catch (error) {
-    // Preserve the query outcome and any credential-directory cleanup failure separately.
-    try {
-      await cleanup();
-    } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "sls_credential_cleanup_failed");
-    }
+    failures.push(error);
     throw error;
+  } finally {
+    // One owner releases the profile exactly once, on every outcome.
+    try {
+      await rm(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      // oxlint-disable-next-line no-unsafe-finally -- Preserve both failures while making failed credential cleanup dominant.
+      throw new DomainError("sls_credential_cleanup_failed", "internal", { cause: failures.length ? new AggregateError([...failures, cleanupError]) : cleanupError });
+    }
   }
 }

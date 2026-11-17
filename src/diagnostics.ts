@@ -3,7 +3,7 @@ import { DrizzleQueryError } from "drizzle-orm";
 import { DomainError, OPERATIONAL_FAILURE_CODES } from "./domain/errors.ts";
 import { OperationError } from "./operation-error.ts";
 
-/** Every error reachable through `cause` and AggregateError members, without revisiting an object. */
+/** Every causal, aggregated or suppressed failure, without revisiting an object. */
 export function errorChain(error: unknown): unknown[] {
   const chain: unknown[] = [];
   const pending = [error],
@@ -14,6 +14,7 @@ export function errorChain(error: unknown): unknown[] {
     seen.add(current);
     chain.push(current);
     if (current instanceof AggregateError) pending.push(...current.errors);
+    if (current instanceof SuppressedError) pending.push(current.suppressed, current.error);
     if (typeof current === "object" && "cause" in current) pending.push(current.cause);
   }
   return chain;
@@ -34,7 +35,7 @@ export function errorCode(error: unknown): string {
 
 /**
  * Sanitize an error for logging. Drizzle errors embed SQL parameters, including private configuration
- * values, and pino flattens `cause` chains, so neither the query nor a raw cause may reach logs.
+ * values, and pino serializes causes and aggregate members, so only the public wrapper is logged.
  */
 export function errorDiagnostic(error: unknown): unknown {
   const queryError = errorChain(error).find((candidate): candidate is DrizzleQueryError => candidate instanceof DrizzleQueryError);
@@ -42,7 +43,7 @@ export function errorDiagnostic(error: unknown): unknown {
     const code = codeOf(queryError.cause);
     return new Error(typeof code === "string" && /^SQLITE_[A-Z_]+$/.test(code) ? `database_operation_failed:${code}` : "database_operation_failed");
   }
-  if (error instanceof Error && "cause" in error) return new Error(error.message);
+  if (error instanceof Error && ("cause" in error || error instanceof AggregateError || error instanceof SuppressedError)) return new Error(error.message);
   return error;
 }
 
@@ -59,8 +60,7 @@ export function hasErrorCode(error: unknown, code: string): boolean {
   return errorChain(error).some((candidate) => {
     const message = candidate instanceof Error ? candidate.message : typeof candidate === "string" ? candidate : "";
     // SQLite triggers surface as "SQLITE_CONSTRAINT: trigger_code"; accept only that suffix form.
-    const lastSegment = message.slice(message.lastIndexOf(": ") + 2);
-    return message === code || message.startsWith(`${code}:`) || lastSegment === code;
+    return message === code || message.startsWith(`${code}:`) || message === `SQLITE_CONSTRAINT: ${code}`;
   });
 }
 

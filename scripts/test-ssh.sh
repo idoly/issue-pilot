@@ -19,4 +19,4 @@ exec podman run --rm --network=host --userns=keep-id --user "$(id -u):$(id -g)" 
   -v "$root:$root:rw" localhost/issue-pilot-ssh-fixture:local /usr/sbin/sshd "$@"
 WRAPPER
 chmod 700 "$fixture_root/sshd"
-ISSUE_PILOT_TEST_SSHD="$fixture_root/sshd" node --experimental-strip-types --test tests/workspace/ssh-transport.test.ts
+ISSUE_PILOT_TEST_SSHD="$fixture_root/sshd" node --experimental-strip-types --test tests/integration/ssh-transport.acceptance.ts

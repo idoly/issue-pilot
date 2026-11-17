@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { EventEmitter, once } from "node:events";
+import { setImmediate as turn } from "node:timers/promises";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -267,55 +269,100 @@ test("reports non-retryable model failures without exposing upstream details", a
   }
 });
 
-test("queues Codemode scripts across three sessions instead of exceeding SDK workers", { timeout: 15_000 }, async () => {
-  let active = 0,
-    peak = 0,
-    requests = 0;
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const server = createServer((_request, response) => {
-    requests++;
-    active++;
-    peak = Math.max(peak, active);
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      active--;
-      response.writeHead(200, { "content-type": "text/plain" });
-      response.end("synthetic evidence");
-    }, 200);
-    timers.add(timer);
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const fixtures: Awaited<ReturnType<typeof fixture>>[] = [],
-    sessions: Awaited<ReturnType<PiSessionRuntime["start"]>>[] = [];
-  try {
-    for (let index = 0; index < 3; index++) {
-      const f = await fixture("on");
-      fixtures.push(f);
-      f.options.workspaceTool = evidenceTool(`http://127.0.0.1:${address.port}`);
-      f.faux.setResponses([call("return await tools.evidence_read({});"), fauxAssistantMessage("Script finished.")]);
-      sessions.push(await f.runtime.start(f.options));
-    }
-    await Promise.all(sessions.map((managed) => managed.prompt("Read the configured evidence.")));
-    assert.equal(requests, 3);
-    assert.equal(peak, 1);
-    for (const f of fixtures)
+for (const override of [undefined, "1"] as const)
+  test(`SDK worker admission respects ${override ? "configured capacity" : "default capacity"}, deadlines and cancellation`, { timeout: 15_000 }, async (t) => {
+    const previous = process.env.PI_CODEMODE_MAX_WORKERS;
+    if (override === undefined) delete process.env.PI_CODEMODE_MAX_WORKERS;
+    else process.env.PI_CODEMODE_MAX_WORKERS = override;
+    const capacity = override ? Number(override) : 2;
+    const activity = new EventEmitter();
+    const full = once(activity, "full", { signal: t.signal });
+    const release = Promise.withResolvers<void>();
+    const calls: number[] = [];
+    let active = 0,
+      peak = 0;
+    const fixtures: Awaited<ReturnType<typeof fixture>>[] = [],
+      sessions: Awaited<ReturnType<PiSessionRuntime["start"]>>[] = [],
+      pending: Promise<{ isError: boolean }>[] = [];
+    try {
+      for (let index = 0; index <= capacity; index++) {
+        const f = await fixture("on", {
+          workspaceTool: defineTool({
+            name: "evidence_read",
+            label: "Fixture evidence",
+            description: "Wait for isolated fixture evidence.",
+            parameters: obj({}),
+            execute: async () => {
+              calls.push(index);
+              active++;
+              peak = Math.max(peak, active);
+              if (active === capacity) activity.emit("full");
+              try {
+                await release.promise;
+                return { content: [{ type: "text", text: "synthetic evidence" }], details: undefined };
+              } finally {
+                active--;
+              }
+            },
+          }),
+        });
+        fixtures.push(f);
+        const onEvent = f.options.onEvent;
+        f.options.onEvent = (event) => {
+          onEvent(event);
+          if (index === capacity && event.type === "tool_execution_start" && event.toolName === "codemode") activity.emit("waiting");
+        };
+        const managed = await f.runtime.start(f.options);
+        sessions.push(managed);
+      }
+      const code = "return await tools.evidence_read({});";
+      const run = async (index: number, source = code, signal?: AbortSignal) => {
+        const f = fixtures[index]!;
+        const from = f.events.length;
+        f.faux.setResponses([call(source), fauxAssistantMessage("Script finished.")]);
+        await sessions[index]!.prompt("Read the configured evidence.", [], undefined, signal);
+        const result = f.events.slice(from).find((event) => event.type === "tool_execution_end" && event.toolName === "codemode");
+        assert.ok(result?.type === "tool_execution_end");
+        return result;
+      };
+      for (let index = 0; index < capacity; index++) pending.push(run(index));
+      await Promise.race([full, Promise.all(pending).then((results) => assert.fail(`scripts settled before filling worker slots: ${JSON.stringify(results)}`))]);
+      const timedOut = await run(capacity, '// @options: {"timeout_ms": 30}\n' + code);
+      assert.equal(timedOut.isError, true);
+      assert.match(JSON.stringify(timedOut.result), /timed out.*waiting for a free codemode worker/);
+      const controller = new AbortController();
+      const waiting = once(activity, "waiting", { signal: t.signal });
+      const cancelled = run(capacity, code, controller.signal);
+      await waiting;
+      await turn();
+      controller.abort(new Error("fixture_cancelled_while_waiting"));
+      assert.equal((await cancelled).isError, true);
+      assert.equal(calls.length, capacity, "expired and cancelled scripts must not dispatch evidence tools");
+      const queued = run(capacity);
+      pending.push(queued);
+      release.resolve();
+      const completed = await Promise.all(pending);
+      assert.equal(completed.length, capacity + 1);
+      for (const result of completed) assert.equal(result.isError, false);
       assert.deepEqual(
-        f.events.filter((event) => event.type === "tool_execution_end" && event.isError),
-        [],
+        calls.slice(0, capacity).sort(),
+        Array.from({ length: capacity }, (_, index) => index),
       );
-  } finally {
-    for (const managed of sessions) await managed.stop();
-    for (const f of fixtures) await f.close();
-    for (const timer of timers) clearTimeout(timer);
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
+      assert.equal(calls.at(-1), capacity);
+      assert.equal(calls.length, capacity + 1, "failed waiters must never be replayed after a slot opens");
+      assert.equal(peak, capacity);
+    } finally {
+      release.resolve();
+      try {
+        await Promise.allSettled(pending);
+        for (const managed of sessions) await managed.stop();
+        for (const f of fixtures) await f.close();
+      } finally {
+        if (previous === undefined) delete process.env.PI_CODEMODE_MAX_WORKERS;
+        else process.env.PI_CODEMODE_MAX_WORKERS = previous;
+      }
+    }
+  });
 
 for (const mode of ["off", "on", "only"] as const)
   test(`loads the explicit ${mode} codemode selection without host extension discovery`, async () => {

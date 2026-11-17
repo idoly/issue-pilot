@@ -14,6 +14,7 @@ import { AgentResponseWatchdog, createPrivateSessionManager, gitIdentityEnvironm
 import { hostMcpPid } from "../helpers/mcp-process.ts";
 import { IssueWorkFileStore } from "../../src/workspace/work-files.ts";
 import type { PiModelRuntime } from "../../src/agent/model-runtime.ts";
+import { errorChain } from "../../src/diagnostics.ts";
 
 test("creates a private Pi session file before the first Agent prompt", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-session-"));
@@ -134,7 +135,7 @@ test("a keyed runtime honors the explicit Agent directory instead of the Operato
     });
     assert.equal(managed.session.model?.provider, model.provider);
     assert.equal(managed.session.model?.id, model.id);
-    // A spread-wrapped session must follow SDK transitions, not just expose an accessor.
+    // The managed session must follow SDK transitions throughout its lifetime.
     let streaming = false;
     t.mock.getter(managed.session, "isStreaming", () => streaming);
     assert.equal(managed.streaming, false);
@@ -182,6 +183,64 @@ function sharedModelRuntime(runtime: ModelRuntime, requests: Array<{ provider: s
     };
   };
 }
+
+for (const fails of [false, true])
+  test(`session shutdown waits for runtime cleanup exactly once (failure=${fails})`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "issue-pilot-session-stop-"));
+    const started = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const order: string[] = [];
+    const primary = new Error("fixture_session_dispose_failed");
+    const cleanup = new Error("fixture_runtime_cleanup_failed");
+    let managed: Awaited<ReturnType<PiSessionRuntime["start"]>> | undefined;
+    try {
+      managed = await new PiSessionRuntime(() => ({
+        load: async () => modelRuntime(),
+        close: async () => {
+          order.push("runtime");
+          started.resolve();
+          await released.promise;
+          if (fails) throw cleanup;
+        },
+      })).start({
+        manager: await createPrivateSessionManager(root, root),
+        context: context({ writable: false }),
+        deploymentConfig: {},
+        modelApiKey: "fixture-key",
+        workspaceRoot: root,
+        agentDirectory: root,
+        systemPrompt: "",
+        onEvent: () => {},
+      });
+      const dispose = managed.session.dispose.bind(managed.session);
+      t.mock.method(managed.session, "dispose", () => {
+        order.push("session");
+        dispose();
+        if (fails) throw primary;
+      });
+      const first = managed.stop();
+      const second = managed.stop();
+      const settled = Promise.allSettled([first, second]);
+      assert.equal(first, second);
+      await started.promise;
+      assert.deepEqual(order, ["session", "runtime"]);
+      released.resolve();
+      for (const result of await settled) {
+        if (fails) {
+          assert.ok(result.status === "rejected", "shutdown must report both failures");
+          assert.ok(errorChain(result.reason).includes(primary));
+          assert.ok(errorChain(result.reason).includes(cleanup));
+        } else assert.equal(result.status, "fulfilled");
+      }
+      await managed.stop();
+      assert.deepEqual(order, ["session", "runtime"]);
+    } finally {
+      released.resolve();
+      await managed?.stop();
+      t.mock.restoreAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
 test("times out only while waiting for model output", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

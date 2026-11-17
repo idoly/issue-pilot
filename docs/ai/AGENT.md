@@ -6,6 +6,8 @@ AI reference. [Index](README.md) · [Architecture](ARCHITECTURE.md) · [Configur
 
 [engine.ts](../../src/agent/engine.ts) owns durable admission, per-Issue serialization, execution slots and reservations. Pi owns the model/tool pipeline, MCP discovery, connections and shutdown. Application identity, target authorization and budgets cannot be delegated to prompts or read-only hints.
 
+[pi-session.ts](../../src/agent/pi-session.ts) returns one managed session with a live streaming accessor. Its single stop lifecycle disposes the SDK session before releasing command wrappers and the keyed runtime, attempts all cleanup stages and retains combined failures. Startup failure releases the resources it acquired through the same runtime cleanup owner.
+
 Prod/test analysis keeps its environment's code/evidence scope. Dev code belongs to dev; evidence queries explicitly select prod/test. Included services expand allowed service/deployment tools; related Issues only add read-only evidence.
 
 The system prompt guides diagnosis with available Issue evidence, recorded baseline branches and commits, cross-source checks and explicit evidence gaps. Investigation alone does not authorize changes.
@@ -72,7 +74,7 @@ Root defaults are 120 seconds per execution and 12 seconds for first handshake. 
 
 One DmsQueryRound owns connections and tool discovery for one Agent prompt, keyed by the exact selected URL/Authorization. Queries serialize within that round and include queue wait in their timeout; no connection crosses Issues, credentials or rounds. The handshake borrows the request deadline, but an established transport belongs to the round lifetime. A failed call invalidates its connection without SQL replay. Successful evidence/export returns before round disposal; disposal failure is reported separately at round completion. Standalone queries retain per-call ownership. Diagnostics retain phase, elapsedMs, sqlDispatchAttempted and retryAfterSeconds without secrets. Preserve operation and close failures together; cleanup failure is not ordinary cancellation.
 
-Exports use ordinary work files and replace only after content/protocol success; preserve prior files on failure. Owner: [dms.ts](../../src/capabilities/dms.ts); regression: [dms.test.ts](../../tests/capabilities/dms.test.ts).
+Diagnostic codes come from DomainError owners, without a second message whitelist. Private details and raw SDK errors stay in the cause chain, never in Agent diagnostics. Exports use ordinary work files and replace only after content/protocol success; preserve prior files on failure. Owner: [dms.ts](../../src/capabilities/dms.ts); regression: [dms.test.ts](../../tests/capabilities/dms.test.ts).
 
 ### SLS
 
@@ -80,13 +82,13 @@ Use aliyun sls GetLogsV2. Authorize exact region/project/logstore, even when con
 
 Accept only Complete. Page ordinary logs by offset; SQL analysis retains its query limits and returns its analysis result page. A later-page failure, budget failure or incomplete result is not successful partial evidence. Return source and time.
 
-Cancellation/timeout terminates the process group and cleans credentials. Do not expose arbitrary CLI error text. Credential-directory cleanup failure keeps its stable error and is not downgraded to cancellation. Owners: [sls.ts](../../src/capabilities/sls.ts), [sls-cli.ts](../../src/capabilities/sls-cli.ts); tests: [sls.test.ts](../../tests/capabilities/sls.test.ts), [CLI fixture](../../tests/integration/sls-cli.acceptance.ts).
+Cancellation/timeout terminates the process group and cleans credentials. The CLI owner declares safe query failures as DomainError; callers preserve that classification without a second code catalog. Do not expose arbitrary CLI error text. One finally path removes credentials exactly once, retaining query and cleanup failures together; cleanup failure is internal and is not downgraded to cancellation. Owners: [sls.ts](../../src/capabilities/sls.ts), [sls-cli.ts](../../src/capabilities/sls-cli.ts); tests: [sls.test.ts](../../tests/capabilities/sls.test.ts), [CLI fixture](../../tests/integration/sls-cli.acceptance.ts).
 
 ### MCP and Codemode
 
 Inbound /mcp operates Issues; service MCP provides deployment tools; global connections (no deployment_id) serve DingTalk imports only, and deployment-bound rows are service tools regardless of name. Do not combine their authority. MySQL uses configured external MCP; retired adapters do not execute.
 
-DMS/SLS can run through Codemode tools.service_query. off exposes direct tools, on combines direct/orchestrated use, only primarily uses orchestration discovery. Execution is process-wide FIFO, one script at a time; root queue budgets are 120 seconds/32 entries. Cancelled waiters do not execute; script parallelism does not bypass Issue/repository/DMS constraints.
+DMS/SLS can run through Codemode tools.service_query. off exposes direct tools, on combines direct/orchestrated use, only primarily uses orchestration discovery. The SDK alone owns process-wide FIFO worker admission, cancellation and release after actual worker exit. Pi 1.5.2 defaults to two workers; a positive PI_CODEMODE_MAX_WORKERS overrides capacity. Waiting is capped at 60 seconds and counts toward any shorter script deadline; this is not the query execution budget. The application adds no second queue or waiter-count limit. Cancelled or timed-out waiters do not execute; script parallelism does not bypass Issue/repository/DMS constraints.
 
 Pi owns registration, discovery, connection, cancellation and shutdown. The application retains same-origin/redirect checks, SQLite authority, literal credentials, budgets and authorization. See [client.ts](../../src/mcp/client.ts), [pi-extension.ts](../../src/mcp/pi-extension.ts), [codemode-extension.ts](../../src/agent/codemode-extension.ts) and [patches](../../patches/README.md).
 

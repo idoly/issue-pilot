@@ -56,3 +56,13 @@ test("translates driver constraint failures once and ignores codes embedded in q
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a failed cleanup cannot turn a constraint failure into a retryable conflict", () => {
+  const primary = Object.assign(new Error("UNIQUE constraint failed: parent.name"), { code: "SQLITE_CONSTRAINT_UNIQUE" });
+  const cleanup = new Error("fixture_cleanup_failed");
+  assert.equal(constraintFailure(primary)?.statusCode, 409);
+  for (const combined of [new AggregateError([primary, cleanup], "operation_cleanup_failed"), new SuppressedError(cleanup, primary, "operation_cleanup_failed")]) {
+    assert.equal(constraintFailure(combined), undefined);
+    assert.equal(constraintFailure(new Error("outer_failure", { cause: combined })), undefined);
+  }
+});

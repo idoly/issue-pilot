@@ -1,7 +1,7 @@
 import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -83,6 +83,23 @@ function mutationPathError(error: unknown): never {
     if (code === "EEXIST") throw domainError("source_path_exists");
   }
   throw error;
+}
+
+/** Bound actual bytes as well as metadata: another writer may grow the file after stat. */
+async function readSourceBytes(handle: FileHandle): Promise<Buffer> {
+  const maximum = issuePilotConfig.limits.sourceBrowser.fileBytes;
+  const metadata = await handle.stat();
+  if (!metadata.isFile()) throw domainError("source_path_not_file");
+  if (metadata.size > maximum) throw domainError("source_file_too_large");
+  const chunks: Buffer[] = [];
+  let size = 0;
+  // end is inclusive: one extra byte distinguishes an exact-limit file from an oversized one.
+  for await (const chunk of handle.createReadStream({ autoClose: false, start: 0, end: maximum })) {
+    size += chunk.length;
+    if (size > maximum) throw domainError("source_file_too_large");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
 }
 
 export class SourceBrowser {
@@ -299,10 +316,7 @@ export class SourceBrowser {
       const currentFile = await open(candidate, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       let current: Buffer;
       try {
-        const currentMetadata = await currentFile.stat();
-        if (!currentMetadata.isFile()) throw domainError("source_path_not_file");
-        if (currentMetadata.size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw domainError("source_file_too_large");
-        current = await currentFile.readFile();
+        current = await readSourceBytes(currentFile);
       } finally {
         await currentFile.close();
       }
@@ -877,14 +891,10 @@ export class SourceBrowser {
   private async workingFile(context: SourceContext, relativePath: string): Promise<SourceFile> {
     const file = await this.resolvePath(context.root, relativePath);
     const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    let content: Buffer, size: number;
+    let content: Buffer;
     try {
       if ((await realpath(`/proc/self/fd/${handle.fd}`)) !== file) throw domainError("source_path_outside_repository");
-      const metadata = await handle.stat();
-      if (!metadata.isFile()) throw domainError("source_path_not_file");
-      size = metadata.size;
-      if (size > issuePilotConfig.limits.sourceBrowser.fileBytes) throw domainError("source_file_too_large");
-      content = await handle.readFile();
+      content = await readSourceBytes(handle);
     } finally {
       await handle.close();
     }
@@ -895,7 +905,7 @@ export class SourceBrowser {
     } catch {
       throw domainError("source_file_binary");
     }
-    return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size, sha256: createHash("sha256").update(content).digest("hex") };
+    return { path: sourcePath(normalizedRelativePath(relativePath)), content: text, size: content.length, sha256: createHash("sha256").update(content).digest("hex") };
   }
 
   private async repositorySet(issue: IssueReference) {

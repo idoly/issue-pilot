@@ -44,6 +44,8 @@ Native browser EventSource does not send the page-selected subject header. Witho
 
 Configuration, users, repositories, MCP, capability switches, pins and statistics have separate owners. Do not infer bodies/permissions or impose one concurrency mechanism on all endpoints.
 
+Failure classification follows owner outcomes first. A constraint nested in AggregateError or SuppressedError cannot make a combined operation/cleanup failure a retryable conflict. The shared diagnostic reader traverses causes, aggregate members and suppressed failures; logging projects the outer error without exposing private nested messages or SQL parameters.
+
 ## Issue vector search
 
 Owner: [issue-search-routes.ts](../../src/http/issue-search-routes.ts) and [issue-index.ts](../../src/search/issue-index.ts). See the [configuration guide](../CONFIGURATION.md#工单语义搜索) for the operator workflow.

@@ -12,17 +12,21 @@ function extendedCode(error: unknown): string | undefined {
 
 /**
  * The single translation of SQLite constraint failures into conflict DomainErrors. It reads the driver's
- * structured constraint code; only trigger failures read the message, whose last segment is the trigger's code.
+ * structured constraint code; only trigger failures read the exact trigger message after the driver's prefix.
  * Drizzle query wrappers are skipped because their message embeds SQL parameters.
  */
 export function constraintFailure(error: unknown): DomainError | undefined {
-  for (const candidate of errorChain(error)) {
+  const chain = errorChain(error);
+  // A second failure means cleanup/rollback did not settle normally. Its owner must declare the
+  // outcome; finding a constraint in the primary failure cannot make the whole operation retryable.
+  if (chain.some((candidate) => candidate instanceof AggregateError || candidate instanceof SuppressedError)) return undefined;
+  for (const candidate of chain) {
     const code = extendedCode(candidate);
     if (!code) continue;
     if (code === "SQLITE_CONSTRAINT_UNIQUE" || code === "SQLITE_CONSTRAINT_PRIMARYKEY") return new DomainError("conflict", "conflict", { cause: error });
     if (code === "SQLITE_CONSTRAINT_FOREIGNKEY") return new DomainError("resource_in_use", "conflict", { cause: error });
     if (code === "SQLITE_CONSTRAINT_TRIGGER" && candidate instanceof Error) {
-      const trigger = candidate.message.slice(candidate.message.lastIndexOf(": ") + 2);
+      const trigger = candidate.message.replace(/^SQLITE_CONSTRAINT: /, "");
       if (CONFLICT_TRIGGER_CODES.has(trigger)) return new DomainError(trigger, "conflict", { cause: error });
     }
   }

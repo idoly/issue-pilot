@@ -103,7 +103,7 @@ npm run test:performance -- --runs=3 --output=/tmp/issue-pilot-performance.json
 - `npm run test:ssh`：rootless Podman 启动临时 OpenSSH 服务；缺少夹具不能当作通过。
 - `npm run test:sls-cli`：真实 aliyun CLI 配临时 HTTPS／CONNECT 服务，需要 OpenSSL，不访问真实云服务。
 
-二者的前提和清理方式见[测试夹具](../tests/fixtures/README.md)。不构建应用镜像，不使用远端 CI。
+二者均在 `tests/integration/`，不进入 `npm test`，也不自动探测宿主机 sshd 后跳过验收。前提和清理方式见[测试夹具](../tests/fixtures/README.md)。不构建应用镜像，不使用远端 CI。
 
 ## 代码与数据库
 

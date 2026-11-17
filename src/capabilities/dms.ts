@@ -103,12 +103,7 @@ export class DmsOperationError extends Error {
   readonly diagnostics: DmsDiagnostics;
   constructor(diagnostics: DmsDiagnostics, cause: unknown) {
     // Keep only owner-defined codes; SDK messages may contain private targets or payloads.
-    const code = cause instanceof Error ? cause.message : "";
-    const safeCode =
-      /^dms_mcp_(?:http_[45]\d\d|timeout|aborted|connection_(?:failed|cleanup_failed)|scope_resolve_(?:failed|unavailable|invalid_response)|invalid_cursor|execute_script_unavailable|tool_failed|too_many_tools|operation_cleanup_failed|result_too_large_use_export)$/.test(
-        code,
-      ) || code === "invalid_dms_mcp_target";
-    super(safeCode ? code : "dms_mcp_operation_failed", { cause });
+    super(cause instanceof DomainError ? cause.code : "dms_mcp_operation_failed", { cause });
     this.diagnostics = diagnostics;
   }
 }
@@ -116,7 +111,7 @@ export class DmsOperationError extends Error {
 function sameOriginFetch(origin: string, signal: AbortSignal, onHttpFailure: (failure: DmsHttpFailure) => void, request: typeof fetch) {
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const target = new URL(input instanceof Request ? input.url : input.toString());
-    if (target.protocol !== "https:" || target.origin !== origin) throw new Error("invalid_dms_mcp_target");
+    if (target.protocol !== "https:" || target.origin !== origin) throw new DomainError("invalid_dms_mcp_target", "internal");
     const callerSignal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
     const requestSignal = callerSignal ? AbortSignal.any([callerSignal, signal]) : signal;
     const response = await request(input, { ...init, redirect: "error", signal: requestSignal });
@@ -138,8 +133,8 @@ export async function connectDmsMcp(
   request: typeof fetch = fetch,
 ): Promise<DmsMcpSession> {
   const target = new URL(configured.url);
-  // A malformed stored target is local configuration drift, not an upstream refusal, so it stays unclassified.
-  if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash) throw new Error("invalid_dms_mcp_target");
+  // A malformed stored target is local configuration drift, not an upstream refusal.
+  if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash) throw new DomainError("invalid_dms_mcp_target", "internal");
   const headers = { Authorization: configured.authorization };
   let connection: { client: Client; closeTransport: () => Promise<void> } | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { assertIssueRoot, claimIssueRoot, issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
 import path from "node:path";
 import { generatedWorkFileSaver, IssueWorkFileStore, listIssueWorkFiles, openIssueWorkFile } from "../../src/workspace/work-files.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const key = "ISSUE-20261021-001";
 
@@ -281,6 +282,50 @@ test("Issue creation refuses a key still occupied by legacy files", async () => 
   }
 });
 
+test("work file listings stop reading oversized directories at the entry budget", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-directory-budget-"));
+  const maximum = issuePilotConfig.limits.sourceBrowser.directoryEntries;
+  const readAll = fs.readdir,
+    openDirectory = fs.opendir;
+  let examined = 0;
+  const readers: Awaited<ReturnType<typeof fs.opendir>>[] = [];
+  try {
+    await claimIssueRoot(root, key);
+    const work = await assertIssueRoot(root, key);
+    for (let index = 0; index < maximum + 100; index++) await writeFile(path.join(work, `${index}.txt`), "");
+    context.mock.method(fs, "readdir", async (...args: Parameters<typeof fs.readdir>) => {
+      const entries = await readAll(...args);
+      if (String(args[0]).startsWith("/proc/self/fd/")) examined += entries.length;
+      return entries;
+    });
+    context.mock.method(fs, "opendir", async (...args: Parameters<typeof fs.opendir>) => {
+      const reader = await openDirectory(...args);
+      if (String(args[0]).startsWith("/proc/self/fd/")) {
+        readers.push(reader);
+        const read = reader.read.bind(reader);
+        context.mock.method(reader, "read", async () => {
+          const entry = await read();
+          if (entry) examined++;
+          return entry;
+        });
+      }
+      return reader;
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(listIssueWorkFiles(root, key), { message: "issue_file_directory_too_large" });
+    assert.equal(examined, maximum + 1, "reject as soon as the limit is exceeded instead of reading the full directory");
+    for (const reader of readers) await assert.rejects(reader.read(), { code: "ERR_DIR_CLOSED" });
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (let index = maximum; index < maximum + 100; index++) await rm(path.join(work, `${index}.txt`));
+    assert.equal((await listIssueWorkFiles(root, key)).length, maximum, "an exact-limit directory remains readable");
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 for (const phase of ["before-open", "after-validation"] as const)
   test(`work file listing does not follow a directory replaced ${phase}`, async (context) => {
     const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-list-parent-race-"));
@@ -470,7 +515,7 @@ for (const operation of ["listing", "download"] as const)
     const primary = new Error(`fixture_${operation}_read_failed`),
       cleanup = new Error("fixture_close_failed");
     const open = fs.open,
-      readDirectory = fs.readdir,
+      readDirectory = fs.opendir,
       resolve = fs.realpath;
     let descriptor: number | undefined;
     try {
@@ -491,7 +536,7 @@ for (const operation of ["listing", "download"] as const)
         return handle;
       });
       if (operation === "listing")
-        context.mock.method(fs, "readdir", async (...args: Parameters<typeof fs.readdir>) => {
+        context.mock.method(fs, "opendir", async (...args: Parameters<typeof fs.opendir>) => {
           if (String(args[0]) === `/proc/self/fd/${descriptor}`) throw primary;
           return readDirectory(...args);
         });

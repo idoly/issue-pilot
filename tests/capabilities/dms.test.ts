@@ -85,6 +85,29 @@ function fixtureSession(overrides: Partial<DmsMcpSession> = {}) {
   return { calls, closes: () => closes, connect, connections };
 }
 
+for (const classified of [false, true])
+  test(`DMS diagnostics use owner classification instead of matching error text (classified=${classified})`, async () => {
+    const failure = classified
+      ? new DomainError("dms_mcp_too_many_tools", "upstream", { detail: "fixture-private-target", cause: new Error("fixture-private-payload") })
+      : new Error("dms_mcp_too_many_tools");
+    const fixture = fixtureSession({
+      async listTools() {
+        throw failure;
+      },
+    });
+    await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, fixture.connect), (error) => {
+      assert.ok(error instanceof DmsOperationError);
+      assert.equal(error.message, classified ? "dms_mcp_too_many_tools" : "dms_mcp_operation_failed");
+      assert.equal(error.cause, failure);
+      assert.equal(error.diagnostics.phase, "discovery");
+      assert.equal(error.diagnostics.sqlDispatchAttempted, false);
+      assert.doesNotMatch(error.message, /fixture-private/);
+      return true;
+    });
+    assert.equal(fixture.closes(), 1);
+    assert.equal(fixture.calls.length, 0);
+  });
+
 test("persists complete DMS results to a work file and returns an export summary", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-dms-export-"));
   await claimIssueRoot(root, "ISSUE-20261016-004");
@@ -716,7 +739,7 @@ test("preserves a caller cancellation while waiting to retry without Retry-After
 for (const phase of ["discovery", "execute"] as const)
   test(`measures a ${phase} timeout without repeating SQL`, async () => {
     let queries = 0;
-    const timeout = new Error("dms_mcp_timeout");
+    const timeout = new DomainError("dms_mcp_timeout", "upstream");
     const fixture = fixtureSession({
       async listTools() {
         if (phase === "discovery") throw timeout;

@@ -8,6 +8,7 @@ import type { CommandExecutor } from "../../src/process.ts";
 import { prepareSlsQuery, readSlsLogs } from "../../src/capabilities/sls.ts";
 import { capabilityInputSchemas, capabilityToolInputSchema, parseSlsScopeConfiguration } from "../../src/capabilities/registry.ts";
 import { compile } from "@earendil-works/pi-schema";
+import { DomainError } from "../../src/domain/errors.ts";
 
 const configured = { region: "cn-test", project: "srm-test", logstores: ["application_log"], accessKeyId: "fixture-key", accessKeySecret: "fixture-secret" };
 const base = { region: configured.region, project: configured.project, logstore: "application_log", from: 1_700_000_000, to: 1_700_003_600 };
@@ -258,9 +259,11 @@ for (const cancellation of ["caller", "deadline"] as const)
           },
         }),
         (error) => {
-          assert.ok(error instanceof AggregateError);
+          assert.ok(error instanceof DomainError);
           assert.equal(error.message, "sls_credential_cleanup_failed");
-          assert.deepEqual(error.errors, [reason, cleanup]);
+          assert.equal(error.category, "internal");
+          assert.ok(error.cause instanceof AggregateError);
+          assert.deepEqual(error.cause.errors, [reason, cleanup]);
           return true;
         },
       );
@@ -288,6 +291,29 @@ test("SLS does not expose raw CLI errors and classifies missing CLI without a fa
   );
 });
 
+test("SLS releases its credential directory once when successful query cleanup fails", async (context) => {
+  const remove = fs.rm;
+  const failure = Object.assign(new Error("fixture cleanup failure"), { code: "EACCES" });
+  const f = fixture([page([])]);
+  let attempts = 0;
+  context.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+    if (args[0] === path.dirname(f.calls[0]?.configPath ?? "")) {
+      attempts++;
+      throw failure;
+    }
+    return remove(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(readSlsLogs(base, configured, undefined, f.executor), { message: "sls_credential_cleanup_failed" });
+    assert.equal(attempts, 1, "the failure handler must not repeat an already attempted cleanup");
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    if (f.calls[0]) await rm(path.dirname(f.calls[0].configPath), { recursive: true, force: true });
+  }
+});
+
 test("a credential profile that cannot be removed is reported with its stable code instead of a generic failure", { skip: process.getuid?.() === 0 }, async () => {
   for (const failQuery of [false, true]) {
     let directory = "";
@@ -303,7 +329,8 @@ test("a credential profile that cannot be removed is reported with its stable co
       await assert.rejects(readSlsLogs(base, configured, undefined, executor), (error: unknown) => {
         assert.ok(error instanceof Error);
         assert.equal(error.message, "sls_credential_cleanup_failed");
-        if (failQuery) assert.ok(error instanceof AggregateError && error.errors.length === 2);
+        assert.ok(error instanceof DomainError && error.category === "internal");
+        if (failQuery) assert.ok(error.cause instanceof AggregateError && error.cause.errors.length === 2);
         return true;
       });
     } finally {

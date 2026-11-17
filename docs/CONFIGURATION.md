@@ -67,6 +67,8 @@
 
 API 的参数更新是带版本的完整覆盖，接入方应阅读[配置契约](ai/CONFIGURATION.md#runtime-parameters)，不要只发改动的一项而意外清空其他覆盖。
 
+Codemode 脚本由 Pi SDK 的进程级 worker 池统一调度，默认并发 2；宿主运行环境可通过 `PI_CODEMODE_MAX_WORKERS` 设置正整数容量，与页面上的工单并发分别生效。当前 SDK 排队上限为 60 秒，并计入脚本自身的超时预算；排队失败或取消的脚本不会执行工具。等待上限没有公开配置项。每个 worker 的脚本堆上限为 256 MiB，增加容量前应评估整机内存和实际负载。
+
 ### 工单语义搜索
 
 在「配置 → 参数 → 运行参数」中，将「工单搜索」选为「启用」，填写 Cloudflare Account ID 和具有 Workers AI Read 权限的 API Token，然后点击「保存参数」。未配置凭据时默认关闭。Token 只在后端保存，留空保留已存值；更换账号需填写新 Token。选为「关闭」后可清除已存 Token。

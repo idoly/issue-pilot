@@ -409,39 +409,7 @@ export class PiSessionRuntime {
       if (failures.length) throw new AggregateError(failures, "pi_runtime_cleanup_failed");
     };
     try {
-      const managed = await this.startWithRuntime(options, keyed, commands);
-      let stopping: Promise<void> | undefined,
-        stopped = false;
-      return {
-        ...managed,
-        // Spread invokes the inner accessor once; keep it live so mid-round sends can steer.
-        get streaming() {
-          return managed.streaming;
-        },
-        scopeChanged: false,
-        stop: () =>
-          stopped
-            ? Promise.resolve()
-            : (stopping ??= (async () => {
-                const failures: unknown[] = [];
-                try {
-                  try {
-                    await managed.stop();
-                  } catch (error) {
-                    failures.push(error);
-                  }
-                  try {
-                    await cleanup();
-                  } catch (error) {
-                    failures.push(error);
-                  }
-                  if (failures.length === 1) throw failures[0];
-                  if (failures.length) throw new AggregateError(failures, "pi_runtime_stop_failed");
-                } finally {
-                  stopped = true;
-                }
-              })()),
-      };
+      return await this.startWithRuntime(options, keyed, commands, cleanup);
     } catch (error) {
       try {
         await cleanup();
@@ -452,7 +420,7 @@ export class PiSessionRuntime {
     }
   }
 
-  private async startWithRuntime(options: StartPiSessionOptions, runtime: PiModelRuntime, commands: PreparedIssueCommand[]): Promise<ManagedPiSession> {
+  private async startWithRuntime(options: StartPiSessionOptions, runtime: PiModelRuntime, commands: PreparedIssueCommand[], closeRuntime: () => Promise<void>): Promise<ManagedPiSession> {
     const { context, workspaceRoot, runtime: configuration = {} } = options;
     await assertIssueHardlinks(workspaceRoot);
     const modelRuntime = await runtime.load();
@@ -592,6 +560,7 @@ export class PiSessionRuntime {
         stopped = false;
       return {
         session,
+        scopeChanged: false,
         get streaming() {
           return session.isStreaming;
         },
@@ -638,10 +607,22 @@ export class PiSessionRuntime {
           stopped
             ? Promise.resolve()
             : (stop ??= (async () => {
+                const failures: unknown[] = [];
                 try {
-                  watchdog.stop();
-                  unsubscribe();
-                  await abortAndDispose(session);
+                  try {
+                    watchdog.stop();
+                    unsubscribe();
+                    await abortAndDispose(session);
+                  } catch (error) {
+                    failures.push(error);
+                  }
+                  try {
+                    await closeRuntime();
+                  } catch (error) {
+                    failures.push(error);
+                  }
+                  if (failures.length === 1) throw failures[0];
+                  if (failures.length) throw new AggregateError(failures, "pi_runtime_stop_failed");
                 } finally {
                   stopped = true;
                 }

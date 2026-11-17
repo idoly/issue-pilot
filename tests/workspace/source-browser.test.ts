@@ -19,7 +19,7 @@ import { issueRepositoryStorePath, withSharedCheckout, WorktreeManager } from ".
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 import { openIssueWorkFile } from "../../src/workspace/work-files.ts";
 
-test("browses only registered Issue repository content", async () => {
+test("browses only registered Issue repository content", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "issue-pilot-source-browser-"));
   const database = await openApplicationDatabase(path.join(root, "issues.db"));
   try {
@@ -164,6 +164,39 @@ test("browses only registered Issue repository content", async () => {
     await truncate(tooLarge, issuePilotConfig.limits.sourceBrowser.fileBytes + 1);
     await assert.rejects(browser.file(issue!, "application", "generated/too-large.txt"), /source_file_too_large/);
     await rm(tooLarge);
+    for (const operation of ["read", "save"] as const) {
+      await context.test(`bounds ${operation} even when a source file grows after stat`, async (subtest) => {
+        const relative = "generated/growing.txt";
+        const target = path.join(repository, relative);
+        await writeFile(target, "initial");
+        const original = await browser.file(issue!, "application", relative);
+        const open = fsPromises.open;
+        subtest.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          if (String(args[0]).endsWith("/growing.txt")) {
+            const stat = handle.stat.bind(handle);
+            subtest.mock.method(handle, "stat", async () => {
+              const metadata = await stat();
+              await truncate(target, issuePilotConfig.limits.sourceBrowser.fileBytes + 1);
+              return metadata;
+            });
+          }
+          return handle;
+        });
+        syncBuiltinESMExports();
+        try {
+          await assert.rejects(
+            operation === "read" ? browser.file(issue!, "application", relative) : browser.writeFile(issue!, "application", relative, "replacement", original.sha256),
+            /source_file_too_large/,
+          );
+          assert.equal((await fsPromises.stat(target)).size, issuePilotConfig.limits.sourceBrowser.fileBytes + 1, "a rejected save must preserve the competing writer's file");
+        } finally {
+          subtest.mock.restoreAll();
+          syncBuiltinESMExports();
+          await rm(target);
+        }
+      });
+    }
     await browser.deletePath(issue!, "application", "generated", true);
     await assert.rejects(readFile(path.join(repository, "generated", "result.ts")), /ENOENT/);
     await browser.stage(issue!, "application", ["src/index.ts"]);

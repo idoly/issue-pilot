@@ -41,7 +41,6 @@ const defaults = deepFreeze({
 
 const limits = deepFreeze({
   filesystemNameBytes: 255,
-  codemode: { queueWaitMs: 120_000, queueEntries: 32 },
   // readBytes bounds the whole text file buffered for line paging; responseBytes bounds each returned page.
   mcpServer: {
     // Bound the encoded JSON before parsing; room for a full-size Base64 attachment and metadata.

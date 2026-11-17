@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
-import { link, lstat, open, readdir, realpath, rename, stat, unlink, type FileHandle } from "node:fs/promises";
+import { constants, type Dirent } from "node:fs";
+import { link, lstat, open, opendir, realpath, rename, stat, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -112,7 +112,16 @@ async function listWorkFiles(stateRoot: string, issueKey: string, relative: stri
   try {
     const pinned = `/proc/self/fd/${directory.fd}`;
     if ((await realpath(pinned)) !== target) throw domainError("invalid_issue_file_path");
-    const entries = await readdir(pinned, { withFileTypes: true });
+    const maximum = issuePilotConfig.limits.sourceBrowser.directoryEntries;
+    const entries: Dirent[] = [];
+    {
+      await using reader = await opendir(pinned);
+      let entry: Dirent | null;
+      while ((entry = await reader.read()) !== null) {
+        if (entries.length === maximum) throw domainError("issue_file_directory_too_large");
+        entries.push(entry);
+      }
+    }
     const listed = new Set(entries.map(({ name }) => name));
     const virtual: IssueWorkFile[] = [];
     for (const [prefix, repository] of access.repositories ?? []) {
@@ -120,7 +129,7 @@ async function listWorkFiles(stateRoot: string, issueKey: string, relative: stri
       if (repository.virtualUpdatedAt && path.posix.dirname(prefix) === path.posix.normalize(relative || ".") && !listed.has(name))
         virtual.push({ name, path: prefix, kind: "directory", size: 0, updatedAt: repository.virtualUpdatedAt });
     }
-    if (entries.length + virtual.length > issuePilotConfig.limits.sourceBrowser.directoryEntries) throw domainError("issue_file_directory_too_large");
+    if (entries.length + virtual.length > maximum) throw domainError("issue_file_directory_too_large");
     const results = await Promise.allSettled(
       entries
         .filter((entry) => entry.name.toLowerCase() !== ".git")

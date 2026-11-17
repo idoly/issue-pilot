@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { git } from "../helpers/git.ts";
 import { execFile, spawn } from "node:child_process";
-import fs, { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs, { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:net";
 import { homedir, tmpdir, userInfo } from "node:os";
@@ -24,14 +24,8 @@ import { IssueProjectManager } from "../../src/workspace/project.ts";
 const exec = promisify(execFile);
 
 test("bound Git push uses personal SSH and preserves target refs, rejecting other identities and unknown hosts", async (context) => {
-  const sshd = process.env.ISSUE_PILOT_TEST_SSHD ?? "/usr/sbin/sshd";
-  try {
-    await access(sshd);
-  } catch (error) {
-    if (process.env.ISSUE_PILOT_TEST_SSHD) throw error;
-    context.skip("openssh-server unavailable; run npm run test:ssh for the isolated fixture");
-    return;
-  }
+  const sshd = process.env.ISSUE_PILOT_TEST_SSHD;
+  if (!sshd) throw new Error("SSH fixture required; run npm run test:ssh");
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-ssh-transport-"));
   const identities: PersonalGitEnvironment[] = [];
   let daemon: ReturnType<typeof spawn> | undefined;

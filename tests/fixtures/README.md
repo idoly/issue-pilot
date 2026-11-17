@@ -12,7 +12,7 @@ Before replacement, check required format/dimensions and oversized-output behavi
 
 ## SSH service
 
-[ssh/Containerfile](ssh/Containerfile) is only for npm run test:ssh. Rootless Podman starts temporary OpenSSH while application/SRT code runs on the host. The test user matches the host UID/GID. Bind only loopback, mount only test-created temporary directories and generate keys at runtime. Do not mount real application state.
+[ssh/Containerfile](ssh/Containerfile) is only for npm run test:ssh. The [SSH acceptance suite](../integration/ssh-transport.acceptance.ts) requires the harness-provided ISSUE_PILOT_TEST_SSHD and stays outside npm test; it never auto-selects the host sshd or skips missing infrastructure. Rootless Podman starts temporary OpenSSH while application/SRT code runs on the host. The test user matches the host UID/GID. Bind only loopback, mount only test-created temporary directories and generate keys at runtime. Do not mount real application state.
 
 Coverage includes personal-key push/read, wrong-key rejection and unknown-host rejection. Stop daemons, dispose identity directories and remove temporary roots; containers use --rm. The local fixture image may be cached. Missing required transport infrastructure is not a passed integration test.
 

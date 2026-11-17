@@ -81,9 +81,11 @@ Preparation reads originals without automatic editable copies. Explicit editing 
 
 [work-files.ts](../../src/workspace/work-files.ts) atomically replaces query exports only after same-directory temporary writing and protocol close both succeed. Earlier failure retains old content, never automatically reruns SQL. Serialize same-path operations and permit cancellation while waiting.
 
-File/source APIs check paths, managed names, Git controls and actual opened locations, not arbitrary host paths. Clean only temporaries owned by the current operation. Retired publication/snapshot/download layers stay retired. Real outputs/work/attachments directories are ordinary paths, not legacy aliases.
+File/source APIs check paths, managed names, Git controls and actual opened locations, not arbitrary host paths. Work-file listings read incrementally through the pinned directory and reject on the first entry beyond the budget; virtual repository entries count toward the same limit. Clean only temporaries owned by the current operation. Retired publication/snapshot/download layers stay retired. Real outputs/work/attachments directories are ordinary paths, not legacy aliases.
 
 [source-browser.ts](../../src/workspace/source-browser.ts) creates files through exclusive temporaries and no-clobber publication. Competing creation cannot overwrite another result. source_create_cleanup_failed may leave a complete published target: reread before retrying. Saves require the previously read SHA-256; never remove conflict checking.
+
+Source previews and save preconditions share one bounded descriptor reader. Enforce the byte limit during reading, even when a file grows after stat; returned size and hash describe the actual bytes read. This is a read budget, not a filesystem snapshot.
 
 Preview, source, diff and MCP inline limits are separate from ordinary downloads and total durable history. Regression: [source-pagination.test.ts](../../tests/workspace/source-pagination.test.ts).
 
