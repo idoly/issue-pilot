@@ -73,7 +73,7 @@ const definitions = [
   {
     name: "issue_message",
     description:
-      "向指定工单的智能体发送补充信息、问题或继续处理要求。运行中进入引导/排队流程，空闲时继续处理，已解决工单拒绝。成功只表示已受理，随后读取 issue_get/issue_conversation 查看进展。建议每条新消息生成一个 messageId；响应不明时只能用相同 messageId 和相同内容重试，已受理的消息不会重复执行。",
+      "向指定工单的智能体发送补充信息、问题或继续处理要求。运行中进入引导/排队流程，空闲时继续处理，已解决工单拒绝。成功只表示已受理，随后读取 issue_get/issue_conversation 查看进展。建议每条新消息生成一个 messageId；响应不明时先核对会话和结果，不自动重发；确认可重试时复用相同 messageId 和内容。",
     inputSchema: obj({
       key,
       message: str({ minLength: 1, maxLength: issuePilotConfig.limits.agentMessageChars, description: "发送给工单智能体的文本" }),

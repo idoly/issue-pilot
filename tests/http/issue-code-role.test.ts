@@ -9,7 +9,7 @@ import { issues, subjects } from "../../src/db/schema.ts";
 import { DomainError } from "../../src/domain/errors.ts";
 import { ApiError } from "../../src/http/input.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
-import { createApiFixture, createIssue, createService } from "./fixture.ts";
+import { createApiFixture, createIssue, createService, issueEditVersion, issueMetadataPayload, issuePayload } from "./fixture.ts";
 
 const owner = issuePilotConfig.bootstrapUser.subject;
 
@@ -150,6 +150,51 @@ test("developers keep source mutations and dev Agent admission, and resolved Iss
   } finally {
     await app.close();
     database.close();
+    await f.cleanup();
+  }
+});
+
+test("a product user can edit a dev Issue and detach evidence without starting its Agent", async () => {
+  const f = await createApiFixture();
+  try {
+    const developer = { "x-issue-pilot-subject": owner };
+    await createService(f.app, "EditRole", ["test", "dev"]);
+    const evidence = await createIssue(f.app, "editrole", "test");
+    f.engine.running.clear();
+    const created = await f.app.inject({
+      method: "POST",
+      url: "/api/issues",
+      headers: developer,
+      payload: { ...issuePayload("editrole", "dev"), relatedIssueKeys: [evidence.id] },
+    });
+    assert.equal(created.statusCode, 201, created.body);
+    const { id: key } = created.json<{ id: string }>();
+    const id = f.engine.enqueued.at(-1);
+    f.engine.running.clear();
+    f.engine.enqueued.length = 0;
+    const subject = "edit-product@example.test";
+    const person = await f.app.inject({
+      method: "POST",
+      url: "/api/users",
+      headers: developer,
+      payload: { subject, name: "Product", email: subject, role: "product" },
+    });
+    assert.equal(person.statusCode, 201, person.body);
+    const url = `/api/issues/${key}`;
+    const product = { "x-issue-pilot-subject": subject };
+    const edit = async (headers: typeof product, title: string) =>
+      f.app.inject({ method: "PATCH", url, headers, payload: { ...issueMetadataPayload(title), expectedEditVersion: await issueEditVersion(f.app, key) } });
+
+    assert.equal((await edit(product, "Edited by product")).statusCode, 200);
+    const detached = await f.app.inject({ method: "PUT", url: `${url}/related-issues`, headers: product, payload: { relatedIssueKeys: [] } });
+    assert.equal(detached.statusCode, 204, detached.body);
+    assert.deepEqual(f.engine.enqueued, []);
+    const detail = (await f.app.inject({ url })).json();
+    assert.equal(detail.title, "Edited by product");
+    assert.deepEqual(detail.relatedIssues, []);
+    assert.equal((await edit(developer, "Edited by developer")).statusCode, 200);
+    assert.deepEqual(f.engine.enqueued, [id]);
+  } finally {
     await f.cleanup();
   }
 });

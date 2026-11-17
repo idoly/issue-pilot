@@ -933,7 +933,7 @@ describe("issue pilot workspace", () => {
     const options = await screen.findByRole("listbox");
     fireEvent.click(within(options).getByText(/ISSUE-20260810-038/));
     await waitFor(() => expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
-    fireEvent.click(within(dialog).getByText(/保存后当前 Agent session/));
+    fireEvent.click(within(dialog).getByRole("heading", { name: "编辑关联工单" }));
     expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038");
     fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
     await waitFor(() => expect(client.updateIssueRelatedIssues).toHaveBeenCalledWith("ISSUE-20260810-041", ["ISSUE-20260810-038"]));
@@ -958,7 +958,7 @@ describe("issue pilot workspace", () => {
     fireEvent.click(selector);
     fireEvent.click(within(await screen.findByRole("listbox")).getByText(/ISSUE-20260810-038/));
     await waitFor(() => expect(selector.closest(".ui-select")?.textContent).toContain("ISSUE-20260810-038"));
-    fireEvent.click(within(dialog).getByText(/保存后当前 Agent session/));
+    fireEvent.click(within(dialog).getByRole("heading", { name: "编辑关联工单" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "保存关联" }));
     expect((await within(dialog).findByRole("alert")).textContent).toContain("所选关联工单正在处理");
   });

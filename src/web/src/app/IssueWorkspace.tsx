@@ -2,6 +2,7 @@ import { Badge, Button, Input, Modal, Select, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
+import { canWriteIssueCode } from "../../../domain/contracts";
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
 import {
@@ -317,7 +318,9 @@ export function IssueWorkspace(props: {
       }
     }
   };
+  const mayRunAgent = () => canWriteIssueCode(currentUser(), environmentKind(props.issue.environmentKey));
   const retry = async () => {
+    if (!mayRunAgent()) return;
     const issueId = props.issue.id;
     const generation = issueGeneration;
     setRetrying(true);
@@ -563,7 +566,7 @@ export function IssueWorkspace(props: {
               重新打开
             </Button>
           </Show>
-          <Show when={props.issue.status !== "resolved" && props.issue.status !== "pending" && props.issue.workspace.retryable}>
+          <Show when={mayRunAgent() && props.issue.status !== "resolved" && props.issue.status !== "pending" && props.issue.workspace.retryable}>
             <Button
               class="issue-status-action"
               icon={<RefreshCw size={15} />}
@@ -586,7 +589,7 @@ export function IssueWorkspace(props: {
                 变更处理范围
               </Button>
             </Show>
-            <Show when={props.issue.status === "pending" && props.issue.workspace.retryable}>
+            <Show when={mayRunAgent() && props.issue.status === "pending" && props.issue.workspace.retryable}>
               <Button
                 icon={<RefreshCw size={15} />}
                 loading={retrying()}
@@ -774,7 +777,7 @@ export function IssueWorkspace(props: {
             </span>
             <RelatedIssueSelect candidates={selectableRelatedIssues()} value={relatedKeys()} loading={relatedLoading()} inputLabel="编辑关联工单" onChange={setRelatedKeys} />
           </label>
-          <p>保存后当前 Agent session 会关闭，并以所选工单的 metadata 和可用 Pi 对话重建只读上下文；只有具备本地开发分支的工单会附带代码快照，附件不会复制。</p>
+          <p>保存后将关闭当前会话。下次运行会使用所选工单的资料和可用对话作为只读上下文；有本地开发分支时也会提供代码快照。</p>
           <Show when={relatedError()}>
             <div class="create-error modal-form-error" role="alert">
               {relatedError()}

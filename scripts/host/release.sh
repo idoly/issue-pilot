@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
 # Coordinated backend + Web release for an Issue Pilot checkout.
 #
-# Source, dependencies and root configuration must already be in place. Build the Web bundle in a
-# separate worktree, never in this checkout. This script verifies the candidate revision, preflights
-# migrations on a consistent database copy, stops the old process, checkpoints only when migrations
-# will run, switches the Web generation, starts the new process, checks health and prunes old assets.
-# It never builds, never force-kills, never resets Git and never writes to the application data root.
+# Validate an independent candidate, stop the old process, then fast-forward the live checkout and
+# publish the verified Web generation. Reuse matching dependencies. Never force-kill or reset Git.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/host/release.sh --build <web-dist> --revision <sha> [options]
+Usage: scripts/host/release.sh --root <live-checkout> --candidate <verified-checkout> --revision <sha> [options]
 
-  --build <dir>              Verified src/web/dist from an independent build worktree (required).
-  --revision <sha>           Revision of this checkout; must equal git rev-parse HEAD (required).
-  --previous-revision <sha>  Revision that was running before this release; used to explain or
-                             perform a rollback after a failed start.
+  --candidate <dir>          Independent checkout with verified dependencies and Web build.
+  --revision <sha>           Expected HEAD of the candidate checkout.
   --checkpoint <dir>         Existing private 0700 checkpoint parent; required when this release
                              will apply database migrations. A verified checkpoint is created there
                              after workers stop.
-  --root <dir>               Application checkout (default: the repository containing this script).
+  --root <dir>               Live application checkout. Its current HEAD is the previous revision.
   -h, --help                 Show this help.
 
 Node and Python default to /usr/local/node/bin/node and /usr/bin/python3; override with NODE and
@@ -27,31 +22,28 @@ PYTHON. Port, data paths and the Web root are read from the checkout's root conf
 EOF
 }
 
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-build=
+root=
+candidate=
 revision=
-previous_revision=
 checkpoint_root=
 while (($#)); do
   case $1 in
-    --build) build=${2:?--build needs a directory}; shift 2 ;;
+    --candidate) candidate=${2:?--candidate needs a directory}; shift 2 ;;
     --revision) revision=${2:?--revision needs a revision}; shift 2 ;;
-    --previous-revision) previous_revision=${2:?--previous-revision needs a revision}; shift 2 ;;
     --checkpoint) checkpoint_root=${2:?--checkpoint needs a directory}; shift 2 ;;
     --root) root=${2:?--root needs a directory}; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
-if [[ -z $build || -z $revision ]]; then
-  echo "--build and --revision are required." >&2
+if [[ -z $root || -z $candidate || -z $revision ]]; then
+  echo "--root, --candidate and --revision are required." >&2
   usage >&2
   exit 2
 fi
 
 node_bin=${NODE:-/usr/local/node/bin/node}
 python_bin=${PYTHON:-/usr/bin/python3}
-runner="$root/scripts/host/runner.py"
 fail() { echo "$*" >&2; exit 1; }
 
 success=0
@@ -67,96 +59,83 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ -f $runner ]] || fail "Missing $runner; use the repository checkout as --root."
-[[ -d $build ]] || fail "Build directory does not exist: $build"
-build=$(cd "$build" && pwd -P)
-[[ -f $build/index.html && -f $build/.vite/manifest.json && -d $build/assets ]] ||
-  fail "Incomplete Web build: expected index.html, .vite/manifest.json and assets/ in $build"
+root=$(cd "$root" && pwd -P)
+candidate=$(cd "$candidate" && pwd -P)
+[[ $root != "$candidate" && $candidate != "$root/"* && $root != "$candidate/"* ]] ||
+  fail "Use a separate checkout outside the live application directory."
+runner="$candidate/scripts/host/runner.py"
+web_check="$candidate/scripts/prune-web-assets.ts"
+[[ -f $runner && -f $web_check ]] || fail "The candidate lacks the release tools."
 
-# 1. Revision preflight: the candidate build may only be installed on the checkout it was built from.
-git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || fail "$root is not a Git checkout."
-head=$(git -C "$root" rev-parse HEAD)
-expected=$(git -C "$root" rev-parse --verify --end-of-options "$revision^{commit}") ||
-  fail "Unknown revision: $revision"
-[[ $head == "$expected" ]] || fail "Checkout HEAD is $head, not the requested revision $expected."
-if [[ -n $(git -C "$root" status --porcelain) ]]; then
-  fail "Checkout has uncommitted changes; commit or remove them before releasing."
-fi
-if [[ -n $previous_revision ]]; then
-  previous=$(git -C "$root" rev-parse --verify --end-of-options "$previous_revision^{commit}") ||
-    fail "Unknown --previous-revision: $previous_revision"
-fi
+# Verify both checkouts without changing files the running process may still load.
+previous=$(git -C "$root" rev-parse HEAD)
+head=$(git -C "$candidate" rev-parse HEAD)
+expected=$(git -C "$candidate" rev-parse --verify --end-of-options "$revision^{commit}") ||
+  fail "Unknown candidate revision: $revision"
+[[ $head == "$expected" ]] || fail "Candidate HEAD is $head, not $expected."
+for checkout in "$root" "$candidate"; do
+  status=$(git -C "$checkout" status --porcelain)
+  [[ -z $status ]] || fail "Checkout has uncommitted changes: $checkout"
+done
+git -C "$root" merge-base --is-ancestor "$previous" "$head" ||
+  fail "Candidate must be available in the live repository and fast-forward its HEAD."
+# A dependency change needs a separately prepared coordinated install, not a live npm install.
+git -C "$root" diff --quiet "$previous" "$head" -- package.json package-lock.json patches/ scripts/apply-pi-sdk-patch.mjs ||
+  fail "Install inputs changed; prepare a coordinated dependency release before stopping the service."
+[[ -d $root/node_modules && -d $candidate/node_modules ]] || fail "The live checkout or candidate lacks dependencies."
+(
+  cd "$candidate"
+  "$node_bin" --experimental-strip-types --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    import { verifyRuntimeDependencyPatches } from "./src/http/dependency-patches.ts";
+    await verifyRuntimeDependencyPatches(pathToFileURL(process.argv[1] + "/"));
+  ' "$root"
+) || fail "The installed live dependencies failed patch verification."
 
-# 2. Root configuration: no hard-coded port or data paths.
-config=$($python_bin "$runner" --root "$root" --node "$node_bin" config)
-mapfile -t config_values < <($python_bin -c '
-import json, sys
-c = json.loads(sys.stdin.readline())
-for key in ("baseUrl", "webRoot", "stateRoot", "databaseFile"):
-    print(c[key])
-' <<<"$config")
-((${#config_values[@]} == 4)) || fail "Cannot read the root configuration from $root."
+# Config paths are checkout-relative unless explicitly absolute. This path does not move live state or ports.
+config=$("$python_bin" "$runner" --root "$root" --node "$node_bin" config)
+candidate_config=$("$python_bin" "$runner" --root "$candidate" --node "$node_bin" config)
+mapfile -t config_values < <("$python_bin" - "$root" "$candidate" "$config" "$candidate_config" <<'PYCODE'
+import json, pathlib, sys
+
+live, candidate = map(pathlib.Path, sys.argv[1:3])
+old, new = map(json.loads, sys.argv[3:5])
+for key in ("stateRoot", "databaseFile", "webRoot"):
+    path = pathlib.Path(new[key])
+    projected = live / path.relative_to(candidate) if path.is_relative_to(candidate) else path
+    if projected != pathlib.Path(old[key]):
+        raise SystemExit(f"Candidate changes {key}; coordinate this change separately.")
+if old["baseUrl"] != new["baseUrl"] or old["host"] != new["host"]:
+    raise SystemExit("Candidate changes the listener; coordinate this change separately.")
+for value in (old["baseUrl"], old["webRoot"], old["stateRoot"], old["databaseFile"], new["webRoot"], old["operationLock"]):
+    print(value)
+PYCODE
+)
+((${#config_values[@]} == 6)) || fail "Cannot verify the candidate root configuration."
 base_url=${config_values[0]}
 web_root=${config_values[1]}
 state_root=${config_values[2]}
 database_file=${config_values[3]}
-[[ -f $web_root/index.html && -f $web_root/.vite/manifest.json ]] ||
-  fail "The live Web generation is incomplete under $web_root; inspect it before releasing."
+build=${config_values[4]}
+[[ $build == "$candidate/"* && -d $build/assets ]] || fail "Missing independent candidate Web build."
 [[ -d $state_root && ! -L $state_root && -f $database_file && ! -L $database_file ]] ||
   fail "The configured state root or database is missing; refusing to stop the service."
-[[ -d $root/node_modules ]] || fail "Production dependencies are missing under $root."
 
-# 3. Build pairing helpers: prune must never see a page and manifest from different generations.
+"$node_bin" --experimental-strip-types "$web_check" "$build" --check-current
+"$node_bin" --experimental-strip-types "$web_check" "$web_root" --check-current
+
+# Hold the runner's lock across stop, checkout/Web switch and start.
+exec {release_lock}>>"${config_values[5]}"
+flock -n "$release_lock" || fail "Another start, stop or release operation is still running."
+running_revision=$("$python_bin" "$runner" --root "$root" --node "$node_bin" status |
+  "$python_bin" -c 'import json,sys; print(json.load(sys.stdin).get("revision") or "")')
+[[ -z $running_revision || $running_revision == "$previous" ]] || fail "Live HEAD differs from the running revision; inspect before release."
 work=$(mktemp -d "${TMPDIR:-/tmp}/issue-pilot-release.XXXXXXXX")
-cat >"$work/web-check.py" <<'PY'
-import json
-import pathlib
-import re
-import sys
-
-hashed = re.compile(r"-(?=[a-z_-]*[A-Z0-9])[A-Za-z0-9_-]{8}\.[a-z0-9]+$")
-
-
-def manifest_files(root, name):
-    path = root / name
-    try:
-        manifest = json.loads(path.read_text())
-    except (OSError, ValueError) as error:
-        raise SystemExit(f"Cannot read {name}: {error}")
-    files = set()
-    for chunk in manifest.values():
-        for file in [chunk.get("file"), *(chunk.get("css") or []), *(chunk.get("assets") or [])]:
-            if not file:
-                continue
-            if not re.fullmatch(r"assets/[^/]+", file):
-                raise SystemExit(f"{name} contains an unexpected path: {file}")
-            if not (root / file).is_file():
-                raise SystemExit(f"{name} references a missing file: {file}")
-            files.add(file)
-    return files
-
-
-def check(root, page_name, manifest_name):
-    root = pathlib.Path(root)
-    files = manifest_files(root, manifest_name)
-    page = (root / page_name).read_text()
-    for reference in re.findall(r'(?:src|href)="/(assets/[^"?#]+)"', page):
-        if hashed.fullmatch(reference) and reference not in files:
-            raise SystemExit(f"{page_name} references {reference}, which {manifest_name} does not list")
-
-
-if len(sys.argv) != 4:
-    raise SystemExit("usage: web-check.py <root> <page> <manifest>")
-check(sys.argv[1], sys.argv[2], sys.argv[3])
-PY
-$python_bin "$work/web-check.py" "$build" index.html .vite/manifest.json ||
-  fail "The candidate build is inconsistent; do not release it."
-
-# 4. Migration preflight on a consistent copy of the live database.
+# 4. Read the live journal; only pending migrations need a database copy.
 preflight_state="$work/preflight-state"
 mkdir -m 700 "$preflight_state"
 preflight_database="$preflight_state/database.sqlite"
-$python_bin - "$database_file" "$preflight_database" "$root/drizzle/meta/_journal.json" "$work/migrations.json" <<'PY'
+$python_bin - "$database_file" "$preflight_database" "$candidate/drizzle/meta/_journal.json" "$work/migrations.json" <<'PY'
 import contextlib
 import json
 import pathlib
@@ -169,20 +148,19 @@ journal = pathlib.Path(sys.argv[3])
 output = pathlib.Path(sys.argv[4])
 if not source.is_absolute() or not source.is_file() or source.is_symlink():
     raise SystemExit("database must be an existing regular file at an absolute path")
-target.touch(mode=0o600, exist_ok=False)
-with contextlib.closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as live:
-    with contextlib.closing(sqlite3.connect(target)) as saved:
-        live.backup(saved)
-        if saved.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
-            raise SystemExit("preflight database copy failed its integrity check")
-        try:
-            applied = saved.execute("SELECT max(created_at) FROM __drizzle_migrations").fetchone()[0] or 0
-            count = saved.execute("SELECT count(*) FROM __drizzle_migrations").fetchone()[0]
-        except sqlite3.OperationalError:
-            applied, count = 0, 0
 entries = json.loads(journal.read_text())["entries"]
-pending = [entry["tag"] for entry in entries if entry["when"] > applied]
-output.write_text(json.dumps({"applied": applied, "count": count, "journal": len(entries), "pending": pending}, indent=2) + "\n")
+with contextlib.closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as live:
+    applied = [row[0] for row in live.execute("SELECT created_at FROM __drizzle_migrations ORDER BY created_at")]
+    if applied != [entry["when"] for entry in entries[:len(applied)]]:
+        raise SystemExit("Live migration journal is not a prefix of the candidate journal.")
+    pending = [entry["tag"] for entry in entries[len(applied):]]
+    if pending:
+        target.touch(mode=0o600, exist_ok=False)
+        with contextlib.closing(sqlite3.connect(target)) as saved:
+            live.backup(saved)
+            if saved.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                raise SystemExit("preflight database copy failed its integrity check")
+output.write_text(json.dumps({"applied": len(applied), "journal": [entry["when"] for entry in entries], "pending": pending}) + "\n")
 PY
 pending_count=$($python_bin -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["pending"]))' "$work/migrations.json")
 pending_tags=$($python_bin -c 'import json,sys; print(", ".join(json.load(open(sys.argv[1]))["pending"]) or "-")' "$work/migrations.json")
@@ -195,7 +173,7 @@ if ((pending_count > 0)); then
   [[ $(stat -c %a "$checkpoint_root") == 700 ]] || fail "Checkpoint parent must be private mode 0700."
   # Prove the candidate migrations and their integrity checks on the copy before touching the service.
   if ! (
-    cd "$root"
+    cd "$candidate"
     env -i HOME="$HOME" PATH=/usr/bin:/bin NODE_ENV=production "$node_bin" --experimental-strip-types --input-type=module -e '
       import { migrateStateDatabase } from "./src/db/migrate.ts";
       await migrateStateDatabase(process.argv[1], process.argv[2]);
@@ -215,16 +193,16 @@ with sqlite3.connect(database) as saved:
         raise SystemExit("migrated preflight copy failed its integrity check")
     if saved.execute("PRAGMA foreign_key_check").fetchall():
         raise SystemExit("migrated preflight copy failed its foreign key check")
-    rows, latest = saved.execute("SELECT count(*), max(created_at) FROM __drizzle_migrations").fetchone()
+    applied = [row[0] for row in saved.execute("SELECT created_at FROM __drizzle_migrations ORDER BY created_at")]
     state = json.loads(open(journal).read())
-    if rows != state["journal"] or latest <= state["applied"]:
+    if applied != state["journal"]:
         raise SystemExit("preflight migrations did not apply the whole journal")
 print("Migration preflight passed on the database copy.")
 PY
 fi
 
-# 5. Stop the old process; the runner drains up to 1800 seconds and never force-kills.
-$python_bin "$runner" --root "$root" --node "$node_bin" stop
+# 5. Do not touch the live sources or assets unless the old process has drained and exited.
+"$python_bin" "$runner" --root "$root" --node "$node_bin" --lock-fd "$release_lock" stop
 
 # 6. Checkpoint only when this release will migrate, from the stopped consistent database.
 checkpoint=
@@ -259,12 +237,14 @@ PY
   echo "Checkpoint: $checkpoint"
 fi
 
-# 7. Web generation switch. Rerunning with the same build must not rotate again.
+# 7. Switch the checkout and Web after shutdown. Rerunning with the same build must not rotate again.
+[[ $(git -C "$root" rev-parse HEAD) == "$previous" ]] || fail "Live HEAD changed during release."
+[[ -z $(git -C "$root" status --porcelain) ]] || fail "Live checkout changed during release."
+git -C "$root" merge --ff-only "$head"
+[[ $(git -C "$root" rev-parse HEAD) == "$head" ]] || fail "Live HEAD did not reach the candidate."
 if cmp -s "$build/index.html" "$web_root/index.html" && cmp -s "$build/.vite/manifest.json" "$web_root/.vite/manifest.json"; then
   echo "Web generation already matches the build; skipping rotation."
 else
-  $python_bin "$work/web-check.py" "$web_root" index.html .vite/manifest.json ||
-    fail "The live page and manifest are inconsistent; refusing to rotate."
   cp -p "$web_root/index.html" "$web_root/index.previous.html"
   cp -p "$web_root/.vite/manifest.json" "$web_root/.vite/manifest.previous.json"
   mkdir -p "$web_root/assets"
@@ -275,78 +255,26 @@ else
   mv -f "$web_root/index.html.tmp" "$web_root/index.html"
 fi
 
-# 8. Start and wait for health (the runner waits at most 600 seconds and returns on readiness).
-if ! $python_bin "$runner" --root "$root" --node "$node_bin" start --revision "$head"; then
-  migrated=0
-  if ((pending_count > 0)); then
-    # A failure before database open may still allow rollback. Refuse only when the journal advanced
-    # or cannot be read; the checkpoint is the only recovery point after a migration.
-    before_count=$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["count"])' "$work/migrations.json")
-    after_count=$($python_bin - "$database_file" <<'PY'
-import sqlite3
-import sys
-
-try:
-    with sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True, timeout=3) as saved:
-        print(saved.execute("SELECT count(*) FROM __drizzle_migrations").fetchone()[0])
-except Exception:
-    raise SystemExit(1)
-PY
-) || after_count=""
-    if [[ -z $after_count ]] || ((after_count != before_count)); then migrated=1; fi
+# 8. Keep the checkout and Web generation coherent on failure. Refuse a partial rollback.
+if ! "$python_bin" "$runner" --root "$root" --node "$node_bin" --lock-fd "$release_lock" start --revision "$head"; then
+  if ! "$python_bin" "$runner" --root "$root" --node "$node_bin" --lock-fd "$release_lock" stop; then
+    fail "The failed process did not stop. Sources and Web retained; inspect the runner and logs before recovery."
   fi
-  if ((migrated)); then
-    cat >&2 <<EOF
-Start failed after this release advanced the database journal; REFUSING automatic rollback.
-New writes may already exist. Do not modify rows or rerun migrations.
-1. Preserve the failed process, its log (application.log in the host state directory) and checkpoint $checkpoint.
-2. Restore the checkpoint with the previous revision:
-   see docs/ai/STORAGE.md#restoring-a-checkpoint.
-3. Check the previous revision out explicitly, then run:
-   $python_bin $runner --root $root --node $node_bin start --revision <previous-revision>
-EOF
-    exit 1
+  echo "Start failed. Sources and Web are still paired at $head; previous revision: $previous." >&2
+  if [[ -n $checkpoint ]]; then
+    echo "A migration may have run. Preserve the database and $checkpoint; verify the journal before any rollback." >&2
   fi
-  echo "Start failed without migrations; rolling the Web generation back." >&2
-  $python_bin "$runner" --root "$root" --node "$node_bin" stop || true
-  if [[ -f $web_root/index.previous.html && -f $web_root/.vite/manifest.previous.json ]]; then
-    cp -p "$web_root/.vite/manifest.previous.json" "$web_root/.vite/manifest.json.tmp"
-    mv -f "$web_root/.vite/manifest.json.tmp" "$web_root/.vite/manifest.json"
-    cp -p "$web_root/index.previous.html" "$web_root/index.html.tmp"
-    mv -f "$web_root/index.html.tmp" "$web_root/index.html"
-  else
-    echo "No previous Web generation is available; keeping the current one." >&2
-  fi
-  if [[ -n $previous_revision ]] && [[ $(git -C "$root" rev-parse HEAD) != "$previous" ]]; then
-    cat >&2 <<EOF
-The Web generation rollback was attempted, but the checkout still points at the failed revision $(git -C "$root" rev-parse HEAD).
-This script does not reset or rewrite your checkout. Check out $previous explicitly, then run:
-  $python_bin $runner --root $root --node $node_bin start --revision $previous
-EOF
-    exit 1
-  fi
-  start_args=(start)
-  if [[ -n $previous_revision ]]; then
-    start_args+=(--revision "$previous")
-  else
-    echo "No --previous-revision was recorded; starting the current checkout after the Web rollback." >&2
-  fi
-  if ! $python_bin "$runner" --root "$root" --node "$node_bin" "${start_args[@]}"; then
-    echo "The previous Web generation did not start either; preserve the log and inspect the checkout." >&2
-  fi
-  exit 1
+  fail "Use the documented coordinated rollback after inspecting the failure."
 fi
 
-curl -fsS "$base_url/health" || fail "Health endpoint did not confirm the new process."
+curl -fsS --max-time 10 "$base_url/health" || fail "Health endpoint did not confirm the new process."
 echo
-$python_bin "$runner" --root "$root" --node "$node_bin" status
+"$python_bin" "$runner" --root "$root" --node "$node_bin" status
 
 # 9. Prune bundles that neither generation references; never pipe output (EPIPE aborts deletion).
 $node_bin --experimental-strip-types "$root/scripts/prune-web-assets.ts" "$web_root" >"$work/prune-dry-run.txt"
 sed -n '1p' "$work/prune-dry-run.txt"
 $node_bin --experimental-strip-types "$root/scripts/prune-web-assets.ts" "$web_root" --apply >"$work/prune-applied.txt"
 sed -n '1p' "$work/prune-applied.txt"
-$python_bin "$work/web-check.py" "$web_root" index.html .vite/manifest.json
-$python_bin "$work/web-check.py" "$web_root" index.previous.html .vite/manifest.previous.json
 echo "Both Web generations are intact; release complete at revision $head."
 success=1

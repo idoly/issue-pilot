@@ -145,19 +145,49 @@ export async function readIssueSessionHistory(database: Database, stateRoot: str
   return readSession(entry.file, issueRoot(stateRoot, issue.key));
 }
 
-/**
- * Receipt lookup follows the same validated reset chain as history, including compacted branches.
- * Explicit receipt reads fail when a predecessor cannot be validated: the record may sit in its
- * unreadable tail, so "unknown" would invite a resend. Admission deduplication passes
- * tolerateIncompleteHistory so a cut-off predecessor does not permanently block new input.
- */
+/** Only a cut-off final append is recoverable here. Never open this file through Pi or rewrite it. */
+async function readArchivedReceipt(file: string, sessionId: string, request: AgentMessageRequest) {
+  const { descriptor, metadata } = await ownSessionFile(() => openRegularSessionFile(file));
+  try {
+    const tail = Buffer.alloc(1);
+    const { bytesRead } = await descriptor.read(tail, 0, 1, metadata.size - 1);
+    const unterminated = bytesRead === 1 && tail[0] !== 0x0a;
+    const entries: Array<{ type: string; id?: unknown; customType?: unknown; data?: unknown }> = [];
+    let header = false;
+    let invalid = false;
+    for await (const raw of descriptor.readLines({ encoding: "utf8", autoClose: false, start: 0 })) {
+      if (invalid) throw new Error("agent_session_file_incomplete");
+      if (!raw.trim()) continue;
+      let record: unknown;
+      try {
+        record = JSON.parse(header ? raw : raw.replace(/^\uFEFF/, ""));
+      } catch {
+        if (!unterminated || !header) throw new Error("agent_session_file_incomplete");
+        invalid = true;
+        continue;
+      }
+      if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("agent_session_file_incomplete");
+      const entry = record as { type?: unknown; id?: unknown; customType?: unknown; data?: unknown };
+      if (!header) {
+        if (entry.type !== "session" || entry.id !== sessionId) throw new Error("agent_session_file_incomplete");
+        header = true;
+      } else if (entry.type === "custom") entries.push({ ...entry, type: "custom" });
+    }
+    if (!header) throw new Error("agent_session_file_incomplete");
+    return agentMessageReceipt(entries, request);
+  } finally {
+    await descriptor.close();
+  }
+}
+
+/** Search every validated reset generation. A partial last append cannot erase a complete admission record. */
 export async function readIssueMessageReceipt(
   database: Database,
   stateRoot: string,
   issue: { id: string; key: string },
   request: AgentMessageRequest,
   current?: SessionManager,
-  options: { tolerateIncompleteHistory?: boolean } = {},
+  options: { forAdmission?: boolean } = {},
 ) {
   const root = issueRoot(stateRoot, issue.key);
   await assertIssueRoot(stateRoot, issue.key);
@@ -165,20 +195,19 @@ export async function readIssueMessageReceipt(
     const file = current.getSessionFile();
     if (!file || !isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
     await ownSessionFile(() => assertSessionFileComplete(file));
-    const receipt = agentMessageReceipt(current, request);
+    const receipt = agentMessageReceipt(current.getEntries(), request);
     if (receipt) return receipt;
   }
+  let incomplete = false;
   for (const entry of await issueSessionHistory(database, stateRoot, issue)) {
     if (current?.getSessionId() === entry.sessionId) continue;
-    let manager: SessionManager;
-    try {
-      manager = await readSession(entry.file, root);
-    } catch (error) {
-      if (options.tolerateIncompleteHistory && error instanceof Error && error.message === "agent_session_file_incomplete") continue;
-      throw error;
-    }
-    const receipt = agentMessageReceipt(manager, request);
+    const recoverable = !entry.current && entry.incomplete;
+    const receipt = recoverable ? await readArchivedReceipt(entry.file, entry.sessionId, request) : agentMessageReceipt((await readSession(entry.file, root)).getEntries(), request);
     if (receipt) return receipt;
+    incomplete ||= recoverable;
   }
+  // A lookup must not tell an uncertain client its input was absent. A new admission can still
+  // proceed: a partial append could not have completed before dispatch.
+  if (incomplete && !options.forAdmission) throw new Error("agent_session_file_incomplete");
   return undefined;
 }

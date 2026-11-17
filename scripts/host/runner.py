@@ -29,6 +29,10 @@ if not stat.S_ISDIR(control_info.st_mode) or control_info.st_uid != os.getuid() 
     raise SystemExit(f"Host state directory must be a private 0700 directory owned by this user: {control}")
 pidfile = control / "process.json"
 logfile = control / "application.log"
+operation_lock = control / "operation.lock"
+launch_history = control / "launches.json"
+launch_window_seconds = 24 * 60 * 60
+max_launch_records = 1000  # More than any supported health-probe threshold.
 # Rotated logs are application.<UTC time>.log. Keeping several means a failed retry cannot overwrite
 # the log of the last run that actually became healthy.
 kept_logs = 5
@@ -39,6 +43,7 @@ parser.add_argument("--root", help="application checkout (default: the repositor
 parser.add_argument("--node", default=os.environ.get("ISSUE_PILOT_NODE", "/usr/local/node/bin/node"),
                     help="Node executable (default: $ISSUE_PILOT_NODE or /usr/local/node/bin/node)")
 parser.add_argument("--revision", help="expected git revision; start refuses a different checkout")
+parser.add_argument("--lock-fd", type=int, help=argparse.SUPPRESS)
 options = parser.parse_args()
 
 root = pathlib.Path(options.root).resolve() if options.root else pathlib.Path(__file__).resolve().parents[2]
@@ -49,10 +54,16 @@ if not (root / "src/http/production.ts").is_file():
 if os.getuid() != home.stat().st_uid or os.getuid() == 0:
     raise SystemExit("Run as the account that owns the home directory, without sudo.")
 
-lock = (control / "operation.lock").open("a")
-if options.action != "status":
+if options.action in ("start", "stop", "restart"):
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if options.lock_fd is None:
+            lock = operation_lock.open("a")
+            lock_fd = lock.fileno()
+        else:
+            lock_fd = options.lock_fd
+            if not os.path.samestat(os.fstat(lock_fd), operation_lock.stat()):
+                raise SystemExit("Release lock descriptor does not match this installation.")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise SystemExit("Another start/stop operation is still running.")
 
@@ -120,17 +131,31 @@ def proc(pid):
         return None
 
 
-def current():
+def read_record():
     if not pidfile.exists():
         return None
     saved = json.loads(pidfile.read_text())
     pid = saved["pid"]
     if not isinstance(pid, int) or pid <= 1:
         raise RuntimeError("Invalid PID record; inspect it before proceeding.")
+    return saved
+
+
+def current(saved=None):
+    saved = read_record() if saved is None else saved
+    if saved is None:
+        return None
+    pid = saved["pid"]
     if proc(pid) != saved["startTime"]:
         return None
-    actual = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
-    if actual != [a.encode() for a in command] or pathlib.Path(f"/proc/{pid}/cwd").resolve() != root:
+    try:
+        actual = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+        directory = pathlib.Path(f"/proc/{pid}/cwd").resolve(strict=True)
+    except FileNotFoundError:
+        if proc(pid) != saved["startTime"]:
+            return None
+        raise
+    if actual != [a.encode() for a in command] or directory != root:
         raise RuntimeError("PID record does not match this application; refusing to signal.")
     return saved
 
@@ -166,13 +191,14 @@ def group_busy(group):
 
 
 def stop():
-    saved = current()
+    saved = read_record()
     if saved:
-        if "stopRequestedAt" in saved:
+        running = current(saved)
+        if running and "stopRequestedAt" in saved:
             # An earlier stop timed out after signalling this same process. The application ignores repeated
             # SIGTERM anyway; not resending keeps the original shutdown start visible.
             print(f"Stop already requested at {saved['stopRequestedAt']}; waiting without resending SIGTERM.", flush=True)
-        else:
+        elif running:
             # pidfd prevents a PID reused between the identity check and the signal receiving SIGTERM.
             try:
                 fd = os.pidfd_open(saved["pid"])
@@ -214,13 +240,32 @@ def rotate_log():
         old.unlink(missing_ok=True)
 
 
+def recent_launches(now):
+    try:
+        events = json.loads(launch_history.read_text())
+    except FileNotFoundError:
+        return []
+    if not isinstance(events, list) or len(events) > max_launch_records or any(type(stamp) is not int for stamp in events):
+        raise RuntimeError("Invalid host launch history; inspect it before proceeding.")
+    return [stamp for stamp in events if now - launch_window_seconds < stamp <= now]
+
+
+def record_launch():
+    now = int(time.time())
+    events = [*recent_launches(now), now][-max_launch_records:]
+    temporary = launch_history.with_suffix(".tmp")
+    temporary.write_text(json.dumps(events) + "\n")
+    temporary.replace(launch_history)
+
+
 try:
     if options.action == "config":
-        print(json.dumps(load_config(), sort_keys=True))
+        print(json.dumps({**load_config(), "operationLock": str(operation_lock), "launches24h": len(recent_launches(int(time.time())))}, sort_keys=True))
     elif options.action == "status":
         saved = current()
         report = {"running": saved is not None, "pid": saved["pid"] if saved else None,
-                  "stopping": bool(saved and "stopRequestedAt" in saved), "log": str(logfile)}
+                  "stopping": bool(saved and "stopRequestedAt" in saved), "log": str(logfile),
+                  "revision": saved.get("revision") if saved else None}
         try:
             config = load_config()
             report.update(healthy=healthy(config), baseUrl=base_url(config), data=config["stateRoot"])
@@ -231,6 +276,8 @@ try:
         stop()
     else:
         if options.action == "start" and current():
+            if options.revision is not None:
+                raise RuntimeError("Already running; cannot verify a new launch at the requested revision.")
             print("Already running. Use status or restart.", flush=True)
             sys.exit(0)
         config = load_config()
@@ -238,6 +285,8 @@ try:
         validate_installation(config)
         if options.action == "restart":
             stop()
+        elif (saved := read_record()) and group_busy(saved["pid"]):
+            raise RuntimeError("A previous process group is still active; drain it with stop before starting.")
         # Never adopt or stop a process merely because it serves the port. The old process holds it until stopped.
         with socket.socket(socket.AF_INET6 if ":" in config["host"] else socket.AF_INET) as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -249,19 +298,21 @@ try:
         if revision is not None:
             env["ISSUE_PILOT_REVISION"] = revision
         rotate_log()
+        record_launch()
         with logfile.open("ab", buffering=0) as log:
             child = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
                                      stdout=log, stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
         start_time = proc(child.pid)
         if start_time is None:
             raise RuntimeError(f"Application exited immediately; inspect {logfile}")
-        saved = {"pid": child.pid, "startTime": start_time}
+        saved = {"pid": child.pid, "startTime": start_time, "revision": revision}
         write_record(saved)
         print(f"Started PID {child.pid} at {revision or 'unknown revision'}; waiting up to 600s for health. Log: {logfile}", flush=True)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             if child.poll() is not None:
-                pidfile.unlink(missing_ok=True)
+                if not group_busy(child.pid):
+                    pidfile.unlink(missing_ok=True)
                 raise RuntimeError(f"Application exited with status {child.returncode}; inspect {logfile}")
             if healthy(config) and current() == saved:
                 print(f"Healthy: {base_url(config)}", flush=True)

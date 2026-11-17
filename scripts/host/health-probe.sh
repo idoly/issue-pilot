@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cron-friendly health probe for a host-native Issue Pilot installation.
 # It reads /health, free disk on the state filesystem, available memory, the number of log
-# rotations in the last 24 hours and the current log size. It prints exactly one line and exits
+# launches in the last 24 hours and the current log size. It prints exactly one line and exits
 # non-zero when any threshold is breached. It never starts, stops, restarts or deletes anything.
 set -euo pipefail
 
@@ -13,7 +13,7 @@ Usage: scripts/host/health-probe.sh [options]
   --state-root <dir>        State directory for the disk check (default: root configuration).
   --min-free-mb <n>         Minimum free disk in MiB (default 2048 or $MIN_FREE_MB).
   --min-available-mb <n>    Minimum available memory in MiB (default 128 or $MIN_AVAILABLE_MB).
-  --max-restarts-24h <n>    Maximum rotated application logs in 24h (default 8 or $MAX_RESTARTS_24H).
+  --max-restarts-24h <n>    Maximum launch attempts in 24h, 0–999 (default 8 or $MAX_RESTARTS_24H).
   --max-log-mb <n>          Maximum current application log size in MiB (default 256 or $MAX_LOG_MB).
   --root <dir>              Application checkout (default: the repository containing this script).
   -h, --help                Show this help.
@@ -46,8 +46,9 @@ done
 node_bin=${NODE:-/usr/local/node/bin/node}
 python_bin=${PYTHON:-/usr/bin/python3}
 for value in "$min_free_mb" "$min_available_mb" "$max_restarts" "$max_log_mb"; do
-  [[ $value =~ ^[0-9]+$ ]] || { echo "Thresholds must be non-negative integers: $value" >&2; exit 2; }
+  [[ $value =~ ^(0|[1-9][0-9]{0,8})$ ]] || { echo "Invalid non-negative integer threshold: $value" >&2; exit 2; }
 done
+((max_restarts < 1000)) || { echo "Restart threshold must be below 1000." >&2; exit 2; }
 runner="$root/scripts/host/runner.py"
 state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 control="$state_home/issue-pilot-host"
@@ -66,17 +67,17 @@ fi
 mapfile -t config_values < <($python_bin -c '
 import json, sys
 c = json.loads(sys.stdin.readline())
-for key in ("baseUrl", "stateRoot"):
+for key in ("baseUrl", "stateRoot", "launches24h"):
     print(c[key])
 ' <<<"$config")
-((${#config_values[@]} == 2)) || breach config_malformed
+((${#config_values[@]} == 3)) || breach config_malformed
 url=${url:-${config_values[0]}}
 state_root=${state_root:-${config_values[1]}}
 
 health=ok
 if ! body=$(curl -fsS --max-time 5 "$url/health" 2>/dev/null); then
   health=failed
-elif ! $python_bin -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin) == {"ok": True} else 1)' <<<"$body"; then
+elif ! $python_bin -c 'import json, sys; raise SystemExit(0 if json.load(sys.stdin) == {"ok": True} else 1)' <<<"$body" 2>/dev/null; then
   health=failed
 fi
 
@@ -86,11 +87,8 @@ disk_free_mb=$(df -Pm "$state_root" 2>/dev/null | awk 'NR == 2 { print $4 }' || 
 available_mb=$(LC_ALL=C free -m 2>/dev/null | awk '$1 == "Mem:" { print $7 }' || true)
 [[ $available_mb =~ ^[0-9]+$ ]] || available_mb=0
 
-restarts_24h=0
-if [[ -d $control ]]; then
-  restarts_24h=$(find "$control" -maxdepth 1 -type f -name 'application.*.log' -mmin -1440 2>/dev/null | wc -l | tr -d ' ' || true)
-fi
-[[ $restarts_24h =~ ^[0-9]+$ ]] || restarts_24h=0
+restarts_24h=${config_values[2]}
+[[ $restarts_24h =~ ^[0-9]+$ ]] || breach config_malformed
 
 log_bytes=0
 if [[ -f $control/application.log ]]; then

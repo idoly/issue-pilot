@@ -34,6 +34,13 @@ test("prunes hashed Web assets outside the current and previous generations", as
     await writeFile(path.join(root, "assets", "editor-icons-5.40.0", "file-old-Hashlike1.svg"), "icon");
     for (const stable of ["app-icon.svg", "editor-icon-licenses.txt", "interface-licenses.txt"]) await writeFile(path.join(root, "assets", stable), stable);
     await generation(root, "", "new");
+    await prune(root, "--check-current");
+    const html = path.join(root, "index.html");
+    await writeFile(html, '<script type="module" src="/assets/index-otherXYZ.js"></script>');
+    await assert.rejects(prune(root, "--check-current"), /web_manifest_html_mismatch:index\.html/);
+    await writeFile(html, '<link rel="icon" href="/assets/missing.svg">');
+    await assert.rejects(prune(root, "--check-current"), /web_html_file_missing:index\.html/);
+    await generation(root, "", "new");
     await assert.rejects(prune(root), (error) => error instanceof Error && "stderr" in error && /web_manifest_unreadable:\.vite\/manifest\.previous\.json/.test(String(error.stderr)));
 
     await generation(root, ".previous", "mid");

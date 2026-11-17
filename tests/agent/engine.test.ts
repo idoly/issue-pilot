@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { claimIssueRoot } from "../../src/workspace/state.ts";
+import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
+import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 
 import { applicationParameterBounds } from "../../src/configuration/parameters.ts";
 import type { AgentReservation } from "../../src/agent/contracts.ts";
@@ -12,12 +13,19 @@ import { AgentEngine } from "../../src/agent/engine.ts";
 import { repositoryPreparationMode } from "../../src/workspace/project.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
-// Fake sessions still require the durable roots claimed by Issue creation.
+// The scheduling doubles keep their controlled branches, but admission still syncs an existing file.
 let unusedStateRoot: string;
+let sharedSessionFile: string;
 const fixtureIssueKey = "ISSUE-20261107-001";
+async function fixtureSessionFile(root: string, key = fixtureIssueKey) {
+  const directory = issueRoot(root, key);
+  return (await createPrivateSessionManager(directory, directory)).getSessionFile()!;
+}
+
 before(async () => {
   unusedStateRoot = await mkdtemp(join(tmpdir(), "issue-pilot-engine-unused-"));
   for (const key of [fixtureIssueKey, "ISSUE-20261103-001", "ISSUE-20261103-002", "ISSUE-20261103-003"]) await claimIssueRoot(unusedStateRoot, key);
+  sharedSessionFile = await fixtureSessionFile(unusedStateRoot);
 });
 after(async () => {
   await rm(unusedStateRoot, { recursive: true, force: true });
@@ -286,6 +294,7 @@ test("retains an accepted message without dispatching it after the Issue becomes
     streaming: false,
     session: {
       sessionManager: {
+        getSessionFile: () => sharedSessionFile,
         getBranch: () => [],
         appendCustomEntry() {
           recorded += 1;
@@ -330,6 +339,7 @@ test("persists streaming admissions before serialized dispatch, including uncert
     streaming: true,
     session: {
       sessionManager: {
+        getSessionFile: () => sharedSessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, value: { message: string }) {
           records.push(value.message);
@@ -365,6 +375,7 @@ test("does not steer a new message past an earlier message still queued for the 
   const database = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-001", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
   };
+  const sessionFile = await fixtureSessionFile(unusedStateRoot, "ISSUE-20261103-001");
   const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
   const steers: string[] = [];
@@ -384,6 +395,7 @@ test("does not steer a new message past an earlier message still queued for the 
     streaming: true,
     session: {
       sessionManager: {
+        getSessionFile: () => sessionFile,
         getBranch: () => [queued],
         appendCustomEntry(_type: string, data: { message: string }) {
           records.push(data.message);
@@ -407,6 +419,7 @@ test("queues slash commands sent while streaming for the next round instead of s
   const database = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-001", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
   };
+  const sessionFile = await fixtureSessionFile(unusedStateRoot, "ISSUE-20261103-001");
   const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
   const steers: string[] = [];
@@ -419,6 +432,7 @@ test("queues slash commands sent while streaming for the next round instead of s
     streaming: true,
     session: {
       sessionManager: {
+        getSessionFile: () => sessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string; delivery: { state: string } }) {
           records.push({ message: data.message, state: data.delivery.state });
@@ -443,6 +457,7 @@ test("a steer left undelivered when the round ends is taken back and queued inst
   const database = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-002", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
   };
+  const sessionFile = await fixtureSessionFile(unusedStateRoot, "ISSUE-20261103-002");
   const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
   const scheduled: Array<() => Promise<void>> = [];
@@ -459,6 +474,7 @@ test("a steer left undelivered when the round ends is taken back and queued inst
     },
     session: {
       sessionManager: {
+        getSessionFile: () => sessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string; delivery?: unknown }) {
           if (_type === "issue-pilot-user") records.push({ message: data.message, queued: data.delivery !== undefined });
@@ -490,6 +506,7 @@ test("does not clear another message from Pi's queue when taking back an undeliv
   const database = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-003", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
   };
+  const sessionFile = await fixtureSessionFile(unusedStateRoot, "ISSUE-20261103-003");
   const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
   internal.schedule = () => undefined;
@@ -501,7 +518,7 @@ test("does not clear another message from Pi's queue when taking back an undeliv
       return streaming;
     },
     session: {
-      sessionManager: { getBranch: () => [], appendCustomEntry: () => "entry" },
+      sessionManager: { getSessionFile: () => sessionFile, getBranch: () => [], appendCustomEntry: () => "entry" },
       getSteeringMessages: () => steering,
       clearQueue() {
         cleared += 1;
@@ -559,6 +576,7 @@ test("queues a waiting steering message when the preceding turn becomes idle", {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-steer-idle-"));
   await claimIssueRoot(root, fixtureIssueKey);
   const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
+  const sessionFile = await fixtureSessionFile(root);
   const engine = new AgentEngine(database as never, root);
   const internal = engine as unknown as {
     sessions: Map<string, unknown>;
@@ -582,6 +600,7 @@ test("queues a waiting steering message when the preceding turn becomes idle", {
     },
     session: {
       sessionManager: {
+        getSessionFile: () => sessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string }) {
           records.push(data.message);
@@ -634,6 +653,8 @@ test("retains the uncertain admission without replaying it after failed-round cl
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }),
     transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction),
   };
+  const replacementSessionFile = await fixtureSessionFile(root);
+  const previousSessionFile = await fixtureSessionFile(root);
   const engine = new AgentEngine(database as never, root);
   const internal = engine as unknown as {
     sessions: Map<string, unknown>;
@@ -666,6 +687,7 @@ test("retains the uncertain admission without replaying it after failed-round cl
     streaming: false,
     session: {
       sessionManager: {
+        getSessionFile: () => replacementSessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string }) {
           newRecords.push(data.message);
@@ -686,6 +708,7 @@ test("retains the uncertain admission without replaying it after failed-round cl
     streaming: true,
     session: {
       sessionManager: {
+        getSessionFile: () => previousSessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string }) {
           records.push(data.message);
@@ -754,6 +777,7 @@ test("isolates publisher failures after recording a streaming message", async ()
     streaming: true,
     session: {
       sessionManager: {
+        getSessionFile: () => sharedSessionFile,
         getBranch: () => [],
         appendCustomEntry() {
           recorded += 1;
@@ -780,6 +804,7 @@ test("refuses steering and closes the session when admission cannot be persisted
     streaming: true,
     session: {
       sessionManager: {
+        getSessionFile: () => sharedSessionFile,
         getBranch: () => [],
         appendCustomEntry() {
           throw new Error("record_failed");
@@ -872,6 +897,7 @@ test("reopens a session for a queued message after the preceding round failed", 
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "pending" }] }) }) }),
     transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction),
   };
+  const sessionFile = await fixtureSessionFile(root);
   const engine = new AgentEngine(database as never, root),
     recorded: string[] = [],
     reopened: Array<string | undefined> = [];
@@ -883,6 +909,7 @@ test("reopens a session for a queued message after the preceding round failed", 
     streaming: false,
     session: {
       sessionManager: {
+        getSessionFile: () => sessionFile,
         getBranch: () => [],
         appendCustomEntry(_type: string, data: { message: string }) {
           recorded.push(data.message);

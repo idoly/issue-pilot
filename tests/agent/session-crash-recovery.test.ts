@@ -84,12 +84,22 @@ for (const damage of ["missing-final-newline", "partial-append"] as const)
       );
 
       const engine = new AgentEngine(f.database.db, f.root);
-      (engine as unknown as { run(): Promise<void> }).run = async () => {};
+      let scheduled = 0;
+      (engine as unknown as { run(): Promise<void> }).run = async () => {
+        scheduled++;
+      };
       try {
-        // The record may be in the unreadable tail, so an explicit lookup must error instead of "unknown".
-        await assert.rejects(engine.messageReceipt(f.issue, f.request, async () => {}), { message: "agent_session_file_incomplete" });
+        assert.deepEqual(await engine.messageReceipt(f.issue, f.request, async () => {}), { state: "started" });
+        await engine.send(f.issue.id, "input accepted before the crash", undefined, [], undefined, f.request);
+        await assert.rejects(engine.send(f.issue.id, "changed input", undefined, [], undefined, f.request), { message: "agent_message_id_conflict" });
+        assert.equal(engine.isRunning(f.issue.id), false, "an archived receipt must never schedule its input again");
 
         const next = { id: "after-crash", subject };
+        // Absence in a damaged archive cannot resolve an uncertain response.
+        await assert.rejects(
+          engine.messageReceipt(f.issue, next, async () => {}),
+          { message: "agent_session_file_incomplete" },
+        );
         await engine.send(f.issue.id, "input after the reset", undefined, [], undefined, next);
         const [current] = await f.database.db.select().from(agentSessions).where(eq(agentSessions.issueId, f.issue.id));
         assert.equal(current!.sessionFile, binding.sessionFile);
@@ -98,6 +108,8 @@ for (const damage of ["missing-final-newline", "partial-append"] as const)
           [{ type: "issue_user", message: "input after the reset" }],
         );
         assert.deepEqual(await engine.messageReceipt(f.issue, next, async () => {}), { state: "queued" });
+        await engine.close();
+        assert.equal(scheduled, 1);
         // The unreadable predecessor is still untouched after the new admission.
         assert.deepEqual(await readFile(oldFile), damaged);
       } finally {

@@ -75,15 +75,10 @@ export function isIssueSessionPath(file: string, root: string): boolean {
 /**
  * SQLite binds a session file with FULL sync, so the file and its directory entry must be durable first.
  * Otherwise a power loss can leave the committed binding pointing at a truncated or missing transcript.
- * Only session creation/reset call this; it is never on the round path.
+ * Session creation and reset sync both; admission needs only the existing file.
  */
 export async function syncSessionFile(file: string): Promise<void> {
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  await flushSessionEntries(file);
   const directory = await open(path.dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
     await directory.sync();
@@ -178,6 +173,15 @@ export async function openRegularSessionFile(file: string) {
       throw new AggregateError([error, cleanup], "agent_session_file_close_failed");
     }
     throw error;
+  }
+}
+
+export async function flushSessionEntries(file: string): Promise<void> {
+  const { descriptor } = await openRegularSessionFile(file);
+  try {
+    await descriptor.sync();
+  } finally {
+    await descriptor.close();
   }
 }
 

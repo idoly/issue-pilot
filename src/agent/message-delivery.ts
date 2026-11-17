@@ -34,15 +34,16 @@ function deliveryState(value: unknown, allowRejected = true): DeliveryState {
 }
 
 /** One transition entry, validated in one place for receipts, pending work and cancellation. */
-function deliveryTransition(entry: { type: string; customType?: string; data?: unknown }): { entryId: string; state: DeliveryState } | undefined {
+function deliveryTransition(entry: { type: string; customType?: unknown; data?: unknown }): { entryId: string; state: DeliveryState } | undefined {
   if (entry.type !== "custom" || entry.customType !== deliveryType) return undefined;
   const data = object(entry.data);
   if (data.version !== 1 || typeof data.entryId !== "string") throw new Error("agent_message_state_invalid");
   return { entryId: data.entryId, state: deliveryState(data.state) };
 }
 
-export function agentMessageReceipt(manager: SessionManager, request: AgentMessageRequest) {
-  const entries = manager.getEntries();
+type ReceiptEntry = { type: string; id?: unknown; customType?: unknown; data?: unknown };
+
+export function agentMessageReceipt(entries: readonly ReceiptEntry[], request: AgentMessageRequest) {
   const entry = entries.find(
     (entry) =>
       entry.type === "custom" &&
@@ -53,7 +54,8 @@ export function agentMessageReceipt(manager: SessionManager, request: AgentMessa
       (entry.data.request as AgentMessageRequest)?.id === request.id &&
       (entry.data.request as AgentMessageRequest)?.subject === request.subject,
   );
-  if (!entry || entry.type !== "custom") return undefined;
+  if (!entry) return undefined;
+  if (typeof entry.id !== "string") throw new Error("agent_message_state_invalid");
   const data = object(entry.data);
   const delivery = data.delivery ? object(data.delivery) : undefined;
   // Legacy entries without a delivery snapshot are treated as already dispatched; transitions still override.

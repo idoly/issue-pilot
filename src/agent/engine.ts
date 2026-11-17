@@ -35,6 +35,7 @@ import type { RunEvent } from "./events.ts";
 import {
   createPrivateSessionManager,
   assertSessionFileComplete,
+  flushSessionEntries,
   gitIdentityEnvironment,
   isIssueSessionPath,
   PiSessionRuntime,
@@ -170,8 +171,6 @@ export class AgentEngine implements AgentController {
         if (!issue) throw new Error("issue_not_found");
         await authorize?.();
         if (request) {
-          // Admission dedup must still run for a new input after a reset left an unreadable predecessor;
-          // the explicit receipt lookup remains strict so an uncertain client never resends.
           const receipt = await this.findMessageReceipt({ id: issueId, key: issue.key }, request, true);
           if (receipt) {
             await authorize?.();
@@ -255,8 +254,8 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  private findMessageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, tolerateIncompleteHistory = false) {
-    return readIssueMessageReceipt(this.database, this.stateRoot, issue, request, this.sessions.get(issue.id)?.session.sessionManager, { tolerateIncompleteHistory });
+  private findMessageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, forAdmission = false) {
+    return readIssueMessageReceipt(this.database, this.stateRoot, issue, request, this.sessions.get(issue.id)?.session.sessionManager, { forAdmission });
   }
 
   async messageReceipt(issue: { id: string; key: string }, request: AgentMessageRequest, authorize: () => Promise<unknown>) {
@@ -798,7 +797,10 @@ export class AgentEngine implements AgentController {
     request?: AgentMessageRequest,
     state: "queued" | "started" = "queued",
   ): Promise<string> {
+    const file = manager.getSessionFile();
+    if (!file) throw new Error("agent_session_file_missing");
     const entryId = appendAgentMessage(manager, scope, message, images, request, state);
+    await flushSessionEntries(file);
     this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message, ...(images.length ? { images } : {}) } });
     return entryId;
   }
@@ -807,7 +809,11 @@ export class AgentEngine implements AgentController {
     await this.sessionQueue.run(issue.id, async () => {
       this.assertCurrentSession(issue.id, managed);
       await assertIssueRoot(this.stateRoot, issue.key);
-      startAgentMessage(managed.session.sessionManager, entryId, issue);
+      const manager = managed.session.sessionManager;
+      const file = manager.getSessionFile();
+      if (!file) throw new Error("agent_session_file_missing");
+      startAgentMessage(manager, entryId, issue);
+      await flushSessionEntries(file);
       const next = pendingAgentMessages(managed.session.sessionManager)[0];
       if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, undefined, next.images, next.id));
     });

@@ -677,7 +677,7 @@ for (const outcome of ["accepted", "late", "uncertain"] as const)
         async steer() {
           steers++;
           const persisted = SessionManager.open(manager.getSessionFile()!);
-          assert.equal(agentMessageReceipt(persisted, request)?.state, "started");
+          assert.equal(agentMessageReceipt(persisted.getEntries(), request)?.state, "started");
           assert.equal(sessionTranscript(persisted, issue.id).length, 1);
           if (outcome === "uncertain") throw new Error("remote_delivery_uncertain");
           if (outcome === "late") {
@@ -709,7 +709,8 @@ test("a developer-owner session keeps its personal Git identity when another sen
   const { root, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);
   const internal = engine as unknown as { personalSessions: Set<string>; sessions: Map<string, ManagedPiSession> };
-  const manager = SessionManager.inMemory();
+  const directory = issueRoot(root, issue.key);
+  const manager = await createPrivateSessionManager(directory, directory);
   const identities: GitCommitIdentity[] = [];
   internal.sessions.set(issue.id, {
     session: { sessionManager: manager } as unknown as AgentSession,

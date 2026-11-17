@@ -123,31 +123,22 @@ node --experimental-strip-types scripts/prune-web-assets.ts $target --apply
 
 ### 协调发布（后端与 Web）
 
-后端、运行脚本或无法证明在线兼容的 Web 变更使用 `scripts/host/release.sh`，不要在运行目录原地构建、安装依赖或手工拆分启停步骤。先在独立 worktree／checkout 完成依赖安装、构建和验证，再把候选 `src/web/dist` 作为 `--build`；源码、依赖和根配置先就位。
+在独立 worktree 完成安装、构建和验证，再从候选目录运行发布脚本。保留运行目录当前源码，脚本在旧进程排空并退出后才快进合并。此入口适用于可快进且安装输入、状态路径、监听地址不变的发布；涉及这些变更时单独准备并协调切换。
 
 ```bash
-cd /home/idoly/issue-pilot
-scripts/host/release.sh \
-  --build /absolute/path/to/release-checkout/src/web/dist \
-  --revision "$(git rev-parse HEAD)" \
-  --previous-revision <上一运行版本> \
+candidate=/absolute/path/to/release-checkout
+"$candidate/scripts/host/release.sh" \
+  --root /home/idoly/issue-pilot \
+  --candidate "$candidate" \
+  --revision "$(git -C "$candidate" rev-parse HEAD)" \
   --checkpoint /home/idoly/.local/state/issue-pilot-host/checkpoints
 ```
 
-脚本按顺序执行，任一步失败即停止：
+1. **预检**：两个 checkout 必须干净；候选提交必须能快进运行目录。校验候选构建及运行页面的清单、资源和已安装依赖。先确认活动工单和预约可以排空。
+2. **迁移**：先只读比较数据库与候选迁移日志。仅有待执行迁移时复制在线数据库做迁移预演，并在停机后生成经过验证的检查点。有迁移要求离线留证时（如 0082），先按[退役密钥离线留证](RUNBOOK.md#退役密钥离线留证)准备。
+3. **停机与切换**：持同一把宿主操作锁停止旧进程，确认退出后快进源码、保留上一代页面和清单，再切换候选 Web。相同页面和清单不重复轮换。
+4. **启动和清理**：启动时核对提交，健康检查通过后保留最近两代哈希资源。上线后核对首页、入口资源及受影响接口。
 
-1. **预检**：`--revision` 必须等于当前 checkout 的 `git rev-parse HEAD`，工作树无未提交改动；候选构建必须包含 `index.html`、`.vite/manifest.json` 和配套资源。端口、数据目录、数据库和 Web 根从根配置读取。
-2. **迁移预检**：用 SQLite backup 复制在线数据库到私有临时目录，比较 `drizzle/meta/_journal.json` 与 `__drizzle_migrations`；有未应用迁移时先在副本执行候选迁移并检查完整性、外键和日志推进。副本失败不会停止服务。有迁移时 `--checkpoint` 必须是已存在的绝对私有 0700 目录。
-3. **停止**：`scripts/host/runner.py stop` 最多排空 1800 秒；超时不重发 SIGTERM、不强杀。
-4. **检查点**：仅当有未应用迁移时，在停机后按[存储参考](ai/STORAGE.md#database-checkpoints)生成并验证一致检查点；常规发布跳过。有迁移要求离线留证时（如 0082 退役密钥），先按[退役密钥离线留证](RUNBOOK.md#退役密钥离线留证)停写、检查点并导出，再运行发布；本脚本生成的检查点不替代该步骤。
-5. **Web 轮换**：当前 `index.html` 与清单已与候选构建逐字节相同时跳过（可安全重跑）；否则核对页面与清单配对，把当前代保存为 `index.previous.html`／`.vite/manifest.previous.json`，补齐哈希资源后原子切换清单和页面。
-6. **启动与健康**：`runner.py start --revision <sha>` 最多等待 600 秒；通过后再次检查 `/health` 和 `status`。
-7. **清理**：先预演再 `--apply` 运行 `scripts/prune-web-assets.ts`，只删除两代清单都未引用的哈希文件。不要用 `head` 等提前关闭管道。
-
-回退规则：
-
-- 启动失败且未执行迁移：脚本恢复上一代 Web 后重启。若源码已更新，脚本不会 reset 或改写 checkout；先显式检出 `--previous-revision`，再按脚本提示启动。
-- 启动失败且执行了迁移：拒绝自动回退，保留进程、日志和检查点；按[恢复检查点](ai/STORAGE.md#restoring-a-checkpoint)恢复后启动上一版本。不要手工删行、重跑迁移或重复启动。
-- Web 代已经与候选构建相同时不做第二次轮换，因此同一发布可安全重试预检和清理。
+停机失败时保留运行文件。新版本启动失败时，脚本尝试停止新进程，保留同版本源码与 Web，不自动回退单一产物。需要回退时，先确认进程及子进程已退出，核对迁移日志和上线后写入情况；将确认可运行的旧源码、依赖、HTML 和清单一同恢复后再启动。迁移已执行时按[恢复检查点](ai/STORAGE.md#restoring-a-checkpoint)评估数据恢复，避免覆盖新写入。
 
 迁移、存储／Git 修复或异常恢复的发布仍需按[运维流程](RUNBOOK.md#按风险发布与重启)检查相关数据完整性。

@@ -12,10 +12,14 @@ let verified: Promise<void> | undefined;
 
 /** Cheap content check: every patched file must contain each nontrivial line the patch adds. */
 export function assertRuntimeDependencyPatches(): Promise<void> {
-  return (verified ??= verifyDependencyPatches(checkoutRoot, RUNTIME_PATCHES).catch((error: unknown) => {
+  return (verified ??= verifyRuntimeDependencyPatches(checkoutRoot).catch((error: unknown) => {
     verified = undefined;
     throw error;
   }));
+}
+
+export function verifyRuntimeDependencyPatches(root: URL): Promise<void> {
+  return verifyDependencyPatches(root, RUNTIME_PATCHES);
 }
 
 /** Exported for tests; the root is a checkout directory URL containing patches/ and the patched files. */

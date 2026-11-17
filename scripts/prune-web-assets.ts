@@ -1,5 +1,5 @@
 // Keeps the Web assets of the current and previous release generations and removes older hashed bundles.
-// Usage: node --experimental-strip-types scripts/prune-web-assets.ts [web-root] [--apply]
+// Usage: node --experimental-strip-types scripts/prune-web-assets.ts [web-root] [--apply | --check-current]
 // Without --apply this only lists what would be removed.
 import { lstat, readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
@@ -41,14 +41,22 @@ async function htmlReferences(root: string, name: string): Promise<string[]> {
   return [...html.matchAll(/(?:src|href)="\/(assets\/[^"?#]+)"/g)].map((match) => match[1]!);
 }
 
+async function validateGeneration(root: string, generation: (typeof generations)[number]): Promise<Set<string>> {
+  const files = await manifestFiles(root, generation.manifest);
+  for (const reference of await htmlReferences(root, generation.html)) {
+    if (isHashedWebAsset(reference) && !files.has(reference)) throw new Error(`web_manifest_html_mismatch:${generation.html}:${reference}`);
+    if (!files.has(reference)) {
+      const info = await lstat(path.join(root, reference)).catch(() => undefined);
+      if (!info?.isFile()) throw new Error(`web_html_file_missing:${generation.html}:${reference}`);
+    }
+  }
+  return files;
+}
+
 export async function planWebAssetPrune(root: string): Promise<{ keep: Set<string>; remove: string[] }> {
   const keep = new Set<string>();
   for (const generation of generations) {
-    const files = await manifestFiles(root, generation.manifest);
-    // The manifest must describe the page it is paired with, or a mistaken rotation would delete live bundles.
-    for (const reference of await htmlReferences(root, generation.html)) {
-      if (isHashedWebAsset(reference) && !files.has(reference)) throw new Error(`web_manifest_html_mismatch:${generation.html}:${reference}`);
-    }
+    const files = await validateGeneration(root, generation);
     for (const file of files) keep.add(file);
   }
   const remove: string[] = [];
@@ -63,9 +71,13 @@ export async function planWebAssetPrune(root: string): Promise<{ keep: Set<strin
 }
 
 async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: { apply: { type: "boolean", default: false } } });
-  if (positionals.length > 1) throw new Error("usage: prune-web-assets.ts [web-root] [--apply]");
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: { apply: { type: "boolean" }, "check-current": { type: "boolean" } } });
+  if (positionals.length > 1 || (values.apply && values["check-current"])) throw new Error("usage: prune-web-assets.ts [web-root] [--apply | --check-current]");
   const root = path.resolve(positionals[0] ?? applicationConfig.webRoot);
+  if (values["check-current"]) {
+    await validateGeneration(root, generations[0]!);
+    return;
+  }
   const { keep, remove } = await planWebAssetPrune(root);
   console.log(`${values.apply ? "Removing" : "Would remove"} ${remove.length} files; keeping ${keep.size} manifest files of two generations in ${root}`);
   for (const file of remove) {

@@ -148,7 +148,7 @@ node --experimental-strip-types scripts/migrate-development-git.ts \
 2. 只读确认范围：文件非空、首行是合法 session 头、只有末尾一行缺换行或 JSON 不完整；记录大小和 SHA-256，并把原文件复制到状态根之外受控位置留证（不在 `data/` 内新增备份）。
 3. 只有确认是“单条末尾残行”时才可截断到最后一个完整换行；截断前先留证并核对偏移。空文件、头部损坏、多行损坏或中间非法 JSON 一律保留现场，不截断、不重建。
 4. 恢复通过产品执行：开发人员在该工单编辑对话中重置会话（需空闲、未解决且 `expectedSessionId` 匹配）。当前版本重置只校验旧文件头部身份，可对残缺尾行直接重置；旧文件字节保持不变，新会话文件在绑定提交前已落盘。
-5. 重置后旧会话继续保留并标记不完整。显式查询该旧消息回执会报错而不是返回 unknown，表示它可能已执行，不要重发；新消息进入新会话。
+5. 重置后旧会话继续保留并标记不完整。仍可通过完整记录核对已受理消息；查不到回执时会报告历史不完整，先核对实际处理结果。新消息可以正常进入新会话。
 
 ## 发布或重开后工单卡住
 
@@ -187,16 +187,7 @@ node --experimental-strip-types scripts/migrate-development-git.ts \
 
 协调发布使用仓库脚本，预检、检查点、Web 轮换和回退规则见[部署指南](DEPLOYMENT.md#协调发布后端与-web)；不要在运行目录原地构建。
 
-```bash
-cd /home/idoly/issue-pilot
-scripts/host/release.sh \
-  --build /absolute/path/to/release-checkout/src/web/dist \
-  --revision "$(git rev-parse HEAD)" \
-  --previous-revision <上一运行版本> \
-  --checkpoint /home/idoly/.local/state/issue-pilot-host/checkpoints
-```
-
-健康探针用于 cron 巡检，不替代发布后的手工检查。它读取 `/health`、数据盘余量、可用内存、最近 24 小时的日志轮转数和当前日志大小；正常只输出一行并以 0 退出，任一越界以 1 退出。它只读状态，不启动、停止或清理任何进程与文件。
+健康探针用于 cron 巡检，不替代发布后的手工检查。它读取 `/health`、数据盘余量、可用内存、最近 24 小时由当前 runner 记录的启动次数和当前日志大小；正常只输出一行并以 0 退出，任一越界以 1 退出。它只读状态，不启动、停止或清理任何进程与文件。
 
 ```bash
 cd /home/idoly/issue-pilot
@@ -204,10 +195,10 @@ scripts/host/health-probe.sh
 # 可调阈值：--min-free-mb 2048 --min-available-mb 128 --max-restarts-24h 8 --max-log-mb 256
 ```
 
-用 `crontab -e` 为运行用户安装（每 5 分钟一次；cron 的非零退出按 `MAILTO` 发信）：
+用 `crontab -e` 为运行用户安装（每 5 分钟一次；下面的示例把输出写入本地日志）：
 
 ```cron
 */5 * * * * cd /home/idoly/issue-pilot && scripts/host/health-probe.sh >> /home/idoly/.local/state/issue-pilot-host/health-probe.log 2>&1
 ```
 
-`restarts_24h` 统计轮转日志数，发布重启也会计入，告警时先查应用日志和进程身份。探针日志按需人工截断，不要删除仍用于判断重启次数或故障现场的文件。
+`restarts_24h` 独立统计启动尝试，包含发布启动和失败启动，从部署新版 runner 后开始记录，告警时先查应用日志和进程身份。探针日志按需人工截断，不要删除仍用于判断重启次数或故障现场的文件。

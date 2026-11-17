@@ -25,6 +25,7 @@ import {
   subjects,
 } from "../db/schema.ts";
 import {
+  canWriteIssueCode,
   credentialOwnerSubject,
   ISSUE_PRIORITIES,
   ISSUE_WORK_MODES,
@@ -52,7 +53,18 @@ import {
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
-import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper, requireIssue, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import {
+  ensureCurrentSubject,
+  authorizeWorkMode,
+  issueEnvironmentKind,
+  requireAdmin,
+  requireCurrentUser,
+  requireDeveloper,
+  requireIssue,
+  runIssueExclusive,
+  serializePerson,
+  type ApiRouteContext,
+} from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
@@ -344,7 +356,8 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new ApiError(400, "issue_scope_update_not_allowed");
       return await runScopeExclusive(() =>
         runIssueExclusive(engine, [issue.id], async (reservation) => {
-          const editorSubject = await ensureCurrentSubject(database, request);
+          const editor = await requireCurrentUser(database, request);
+          const editorSubject = editor.subject;
           const currentIssue = await requireIssue(database, issue.key);
           const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
           const recipients = await database.db.select({ subject: issueCcRecipients.subject }).from(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
@@ -407,7 +420,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
           );
           if (resetSession) {
             events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
-          } else if (currentIssue.status !== "resolved") {
+          } else if (currentIssue.status !== "resolved" && canWriteIssueCode(editor, issueEnvironment.kind)) {
             reservation.enqueue(
               issue.id,
               issueMetadataUpdatePrompt({
@@ -441,7 +454,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       ]);
       const reservationIds = [issue.id, ...existingRelations.map(({ relatedIssueId }) => relatedIssueId), ...requestedRows.map(({ id }) => id)];
       await runIssueExclusive(engine, reservationIds, async (reservation) => {
-        await ensureCurrentSubject(database, request);
+        const editor = await requireCurrentUser(database, request);
         const currentIssue = await requireIssue(database, issue.key);
         const [[workspace], currentRelations] = await Promise.all([
           database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, currentIssue.id)).limit(1),
@@ -461,6 +474,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
         const currentIds = currentRelations.map(({ relatedIssueId }) => relatedIssueId).sort();
         const requestedIds = relatedIssues.map(({ id }) => id).sort();
         if (currentIds.length === requestedIds.length && currentIds.every((id, index) => id === requestedIds[index])) return;
+        const mayRunAgent = canWriteIssueCode(editor, await issueEnvironmentKind(database, currentIssue));
         await reservation.closeSession(currentIssue.id);
         await database.db.transaction(async (transaction) => {
           const currentIdSet = new Set(currentIds);
@@ -473,7 +487,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
           await transaction.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: now }).where(eq(issueWorkspaces.issueId, currentIssue.id));
           await transaction.update(issues).set({ updatedAt: now }).where(eq(issues.id, currentIssue.id));
         });
-        reservation.enqueue(currentIssue.id);
+        if (mayRunAgent) reservation.enqueue(currentIssue.id);
       });
     });
     return reply.code(204).send();
