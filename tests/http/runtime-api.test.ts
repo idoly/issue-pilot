@@ -43,8 +43,8 @@ for (const withSession of [false, true])
       }
       const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
       const configurations: AgentRuntimeConfiguration[] = [{ settings: { compaction: { enabled: false } } }, { settings: { compaction: { enabled: true } } }, {}];
-      for (const runtime of configurations) {
-        const saved = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, runtime } });
+      for (const [expectedRevision, runtime] of configurations.entries()) {
+        const saved = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, runtime, expectedRevision } });
         assert.equal(saved.statusCode, 200, saved.body);
         const response = await fetch(`${address}/api/issues/${key}/agent-stream`);
         assert.equal(response.status, 200);

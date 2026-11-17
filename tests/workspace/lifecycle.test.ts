@@ -23,7 +23,6 @@ import {
   agentSessions,
   environments,
   issueAttachments,
-  issueComments,
   issueRepositories,
   issueScopeTransitions,
   issues,
@@ -1360,7 +1359,6 @@ test("converts a ready test analysis to a development defect while preserving Is
       sha256: createHash("sha256").update(attachmentContent).digest("hex"),
       uploadedBy: "conversion-tester",
     });
-    await database.db.insert(issueComments).values({ issueId: issue!.id, authorSubject: "conversion-tester", body: "Keep this comment" });
 
     const conversionEngine = {
       closed: [] as string[],
@@ -1448,7 +1446,6 @@ test("converts a ready test analysis to a development defect while preserving Is
     assert.equal(await readFile(sessionFile, "utf8"), '{"type":"session"}\n');
     assert.equal(await readFile(attachmentFile, "utf8"), attachmentContent);
     assert.equal((await stat(attachmentFile)).mode & 0o777, 0o400);
-    assert.equal((await database.db.select().from(issueComments).where(eq(issueComments.issueId, issue!.id))).length, 1);
     assert.deepEqual(conversionEngine.closed, [issue!.id, issue!.id]);
     assert.deepEqual(conversionEngine.enqueued, [issue!.id]);
     await assert.rejects(lifecycle.convertIssueToDevelopment(issue!.id), (error: unknown) => error instanceof WorkspaceConversionRefusal && error.code === "issue_not_convertible_to_development");

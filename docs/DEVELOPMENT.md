@@ -23,6 +23,8 @@ npm run build
 
 `npm ci` 必须正常执行 postinstall 补丁校验。`npm run build` 只构建 Web，不生成后端 dist，也不启动服务。
 
+`package-lock.json` 的 `resolved` 统一使用 `https://registry.npmjs.org/`。本机 npm 配置了内网镜像时，npm 默认会把这些地址替换到镜像下载，integrity 不变。更新依赖后如果锁文件写入了镜像地址，提交前改回公共源地址。
+
 手工调试需要独立根配置和空数据库，按[部署](DEPLOYMENT.md#首次本地运行)准备后启动：
 
 ```bash

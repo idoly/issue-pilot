@@ -73,7 +73,16 @@ export class TestAgentController {
     }
   }
 
-  async send(issueId: string, message: string, gitIdentity?: GitCommitIdentity, images: ImageContent[] = [], authorize?: () => Promise<unknown>): Promise<void> {
+  readonly admissions: Array<{ id: string; subject: string } | undefined> = [];
+
+  async send(
+    issueId: string,
+    message: string,
+    gitIdentity?: GitCommitIdentity,
+    images: ImageContent[] = [],
+    authorize?: () => Promise<unknown>,
+    admission?: { id: string; subject: string },
+  ): Promise<void> {
     if (this.reservations.has(issueId)) throw new AgentBusyError();
     await authorize?.();
     if (this.databaseFile) {
@@ -86,6 +95,7 @@ export class TestAgentController {
       }
     }
     this.messages.push(message);
+    this.admissions.push(admission);
     this.gitIdentities.push(gitIdentity);
     this.images.push(images);
     this.enqueued.push(issueId);
@@ -213,7 +223,12 @@ export function issuePayload(serviceKey: string, environmentKey: EnvironmentKind
 }
 
 export async function createIssue(app: FastifyInstance, serviceKey: string, environmentKey: EnvironmentKind = "test", title = "Test issue") {
-  const response = await app.inject({ method: "POST", url: "/api/issues", payload: issuePayload(serviceKey, environmentKey, title) });
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/issues",
+    headers: { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject },
+    payload: issuePayload(serviceKey, environmentKey, title),
+  });
   assert.equal(response.statusCode, 201, response.body);
   return json(response);
 }

@@ -12,11 +12,13 @@ The application issues no login session. X-Issue-Pilot-Subject selects a DB user
 
 Session lists, history pages and complete query reads reauthorize inside the configuration scope after waiting. Complete query reads also reauthorize after session preparation. SSE reauthorizes after catalog/transcript preparation and before sending headers; a deactivated reader receives an ordinary error, not a successful replay. This admission check does not revoke an already established stream. Regression: [session-read-identity.test.ts](../../tests/http/session-read-identity.test.ts).
 
-Not every GET checks identity: examples include /api/issues, /api/issues/:key, /api/users, /api/catalog and /api/config. Assignee/reporter relations are not read access control. API/MCP private,no-store headers are not authorization or encryption.
+Not every GET checks identity: examples include /api/issues, /api/issues/:key, /api/users, /api/catalog and /api/config. Work-file list/download, attachment originals and Source reads require an active current user and reauthorize after the scope queue or shared-checkout wait. Assignee/reporter relations are not read access control. API/MCP private,no-store headers (selected by matched route, so query strings do not bypass them) are not authorization or encryption.
 
-Root `http.identity` (server-only, default "selectable") selects the Web identity mode; buildApi's identity option overrides it for tests. GET /api/me returns the person plus identityLocked (true for "gateway"). When locked, the Web hides the account switcher, never sends a page-selected subject header and forgets the remembered choice; it keeps the resolved subject only as a late-response guard. Requests issued before the first /api/me response may still carry a previously remembered subject, so the gateway must overwrite it. Server identity resolution is identical in both modes; the flag is not authentication.
+Root `http.identity` (server-only, default "selectable") selects the identity mode; buildApi's identity option overrides it for tests. GET /api/me returns the person plus identityLocked (true for "gateway"). When locked, the Web hides the account switcher, never sends a page-selected subject header and forgets the remembered choice; it keeps the resolved subject only as a late-response guard. Requests issued before the first /api/me response may still carry a previously remembered subject, so the gateway must overwrite it. The flag is not authentication.
 
-Native browser EventSource does not send the page-selected subject header. Without a trusted gateway identity binding, the server uses its implicit user selection. Protect SSE as well as ordinary fetches.
+In "selectable" mode a missing subject header selects the oldest active user. In "gateway" mode an onRequest hook in [api.ts](../../src/http/api.ts) rejects any /api/* or /mcp request (by matched route, otherwise path without query) whose X-Issue-Pilot-Subject is missing or empty with 401 {"error":"current_subject_required"}; there is no implicit selection. /health and Web assets are exempt.
+
+Native browser EventSource does not send the page-selected subject header. In "gateway" mode the gateway must inject the header into SSE requests too, or the stream is refused; in "selectable" mode the server uses its implicit user selection. Protect SSE as well as ordinary fetches.
 
 ## Requests and responses
 
@@ -26,7 +28,7 @@ Native browser EventSource does not send the page-selected subject header. Witho
 | --- | --- |
 | GET /health | {"ok":true} after a lock-free `SELECT 1` on the open database connection; 503 {"ok":false,"error":"database_unavailable"} when it fails. Fastify also answers 503 while closing. No model/external-service health guarantee |
 | GET /api/me, /api/catalog | Current user and service/environment catalog |
-| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging. Summaries (and the detail, which extends them) include reporterSubject and sorted ccSubjects, loaded by a correlated subquery in the same statement. The shared [summary projection](../../src/http/issue-summary.ts) includes the actual sorted CC list and the [internal detail counter](STORAGE.md#relations-and-identifiers) in the revision digest. Same-second edits and comments invalidate open details without reading descriptions, comment bodies or other detail rows in the poll. |
+| GET /api/issues | Full summaries from one SQLite statement, sorted by creation/key descending; no server filtering/paging. Summaries (and the detail, which extends them) include reporterSubject and sorted ccSubjects, loaded by a correlated subquery in the same statement. The shared [summary projection](../../src/http/issue-summary.ts) includes the actual sorted CC list and the [internal detail counter](STORAGE.md#relations-and-identifiers) in the revision digest. Same-second edits invalidate open details without reading descriptions or other detail rows in the poll. |
 | GET /api/issues/:key | Details, workspace (status, sourceAvailable, runtimeReady, lastError, retryable), attachments, repositories, relations and scope history from one SQLite read snapshot. Live Agent state and filesystem availability are sampled separately. |
 | POST /api/issues | 201, persisted and scheduled, not model completion |
 | PATCH /api/issues/:key | 200, complete metadata form, not arbitrary partial merge |
@@ -36,13 +38,15 @@ Native browser EventSource does not send the page-selected subject header. Witho
 | POST .../abort | 200 after current/queued cancellation cleanup |
 | POST .../retry | 202 when unresolved and reservation checks permit |
 | PATCH .../status | Manual pending → resolved or resolved → open; Web rereads after a transition conflict without repeating the write |
-| POST .../comments | 201 human comment; not sent to Agent |
 | DELETE /api/issues/:key | Admin permanent deletion, 204; not code release |
-| GET .../files?path=... | Directory entries; managed files list-only |
-| GET .../files/download?path=... | Authorized ordinary file download |
-| GET .../attachments/:attachmentId | Original verified for mode, size, hash and path |
+| GET .../files?path=... | Directory entries; managed files list-only; active current user |
+| GET .../files/download?path=... | Authorized ordinary file download; active current user |
+| GET .../attachments/:attachmentId | Original verified for mode, size, hash and path; active current user |
+| GET /api/workspaces/stats | Last sampled statistics without waiting. refresh=true requires an active current user and starts a full scan at most once per root `http.workspaceStatisticsRefreshIntervalMs` (30 s); earlier refreshes return 429 workspace_statistics_refresh_too_frequent |
 
-Configuration, users, repositories, MCP, capability switches, pins and statistics have separate owners. Do not infer bodies/permissions or impose one concurrency mechanism on all endpoints.
+Issue comments are retired: there is no comment write route, detail has no comments field and inbound MCP exposes none. [Migration 0081](../../drizzle/0081_drop_issue_comments.sql) dropped the issue_comments table and its rows.
+
+Configuration, users, repositories, MCP, capability switches, pins and statistics have separate owners. Do not infer bodies/permissions or impose one concurrency mechanism on all endpoints. Admin PUT /api/config/agent replaces the shared model, runtime and optional key update; it requires `expectedRevision` from GET /api/config `agent.revision`, checks it after Issue reservation but before closing sessions, and returns `{ ok: true, revision }`. A stale draft gets `configuration_changed`; the Web keeps it and offers a reload.
 
 Failure classification follows owner outcomes first. A constraint nested in AggregateError or SuppressedError cannot make a combined operation/cleanup failure a retryable conflict. The shared diagnostic reader traverses causes, aggregate members and suppressed failures; logging projects the outer error without exposing private nested messages or SQL parameters.
 
@@ -78,7 +82,7 @@ Attachments use multipart: issue holds complete JSON; files can carry uploads. I
 
 PATCH still requires title/priority. Omitted description/assigneeSubject/ccSubjects become empty/unassigned/empty list. removedAttachmentIds removes named originals; others remain. Service/environment/type/workMode/relations cannot be changed through ordinary editing.
 
-GET detail includes editVersion, a SHA-256 digest of metadata, scope, attachment IDs and CC subjects. The Web editor captures this version when opened and sends expectedEditVersion; background refresh never changes the draft's baseline. PATCH compares it inside the scope queue and Issue reservation before side effects, returning 409 issue_edit_conflict on mismatch. Agent progress, timestamps and comments do not invalidate the version. Conflicts retain the local draft and uploads until explicit reload succeeds; identity/navigation guards reject late reloads. expectedEditVersion is required for every edit, including multipart and save-with-reset requests; missing or malformed versions return 400 invalid_issue_edit_version. There is no unconditional-write path.
+GET detail includes editVersion, a SHA-256 digest of metadata, scope, attachment IDs and CC subjects. The Web editor captures this version when opened and sends expectedEditVersion; background refresh never changes the draft's baseline. PATCH compares it inside the scope queue and Issue reservation before side effects, returning 409 issue_edit_conflict on mismatch. Agent progress and timestamps do not invalidate the version. Conflicts retain the local draft and uploads until explicit reload succeeds; identity/navigation guards reject late reloads. expectedEditVersion is required for every edit, including multipart and save-with-reset requests; missing or malformed versions return 400 invalid_issue_edit_version. There is no unconditional-write path.
 
 resetSession:true preflights developer/unresolved/session checks and prepares the new session file. Metadata, attachment records, CC recipients and session binding commit in one SQLite transaction. Failure rolls back these records and removes only the prepared file; attachment originals retain their own rollback/finalize owner. After a confirmed save or outcome=committed error, the Web editor offers a read-only refresh without repeating uploads.
 
@@ -86,7 +90,7 @@ Owner: [issue-routes.ts](../../src/http/issue-routes.ts). Tests: [issue-api.test
 
 ## Messages, cancellation and retry
 
-Text uses {"message":"..."}, trimmed and nonempty, bounded by limits.agentMessageChars. Multipart images require one message field and repeated images files, declared PNG/JPEG/GIF/WebP. Root [agentImage limits](../../issue-pilot.config.ts) independently bound file bytes, total bytes and count; text is still required.
+Text uses {"message":"..."}, trimmed and nonempty, bounded by limits.agentMessageChars. Identity and X-Issue-Pilot-Message-Id are checked before the body (including multipart images) is read, and identity is checked again afterwards. Multipart images require one message field and repeated images files, declared PNG/JPEG/GIF/WebP. Root [agentImage limits](../../issue-pilot.config.ts) independently bound file bytes, total bytes and count; text is still required.
 
 Persist before dispatch/acknowledgment, pin sender and reauthorize after waits. X-Issue-Pilot-Message-Id accepts 1–128 ASCII letters, digits, underscores or hyphens; absent IDs are generated by the server. The Web composer generates its ID with Web Crypto randomness available on both HTTP and HTTPS. The existing JSONL admission stores the ID and sender. Repeating an admitted ID with identical text/images acknowledges it without execution; changed payloads return agent_message_id_conflict (409). Receipts cover the current session and its validated reset history. started is a conservative dispatch marker, not evidence of completion. unknown is inconclusive and never authorizes automatic replay. Resolved Issues reject new input but can acknowledge an existing receipt. In-flight sessions may accept steering/follow-up input. agent_message_outcome_unknown does not mean unsent; never automatically resend. Closing the page or stream does not cancel Engine work.
 
@@ -130,7 +134,7 @@ Prefix: /api/issues/:key/source/. First GET repositories for name/url/branch/acc
 | GET .../history | nextCursor; subsequent Revision/Offset headers |
 | POST .../stage, .../unstage, .../commit | Current writable dev repository; earlier access=write is not permanent permission |
 
-Headers include X-Issue-Pilot-Repository, X-Issue-Pilot-Path and X-Issue-Pilot-Sha256. Encode Source-specific values with encodeURIComponent; identity/Content-Type follow their own contracts. Mutations reauthorize after reservation and retain repository/Git checks.
+Headers include X-Issue-Pilot-Repository, X-Issue-Pilot-Path and X-Issue-Pilot-Sha256. Encode Source-specific values with encodeURIComponent; identity/Content-Type follow their own contracts. Reads require an active current user and reauthorize after the shared-checkout wait. Mutations reauthorize after reservation and retain repository/Git checks.
 
 Hash conflict is source_file_changed; read-only is source_read_only. Finalization failure may leave a complete target: reread before retrying. Owners: [source-browser-routes.ts](../../src/http/source-browser-routes.ts), [source-contracts.ts](../../src/workspace/source-contracts.ts).
 
@@ -150,13 +154,13 @@ GET .../agent-stream sends durable/current replay, then snapshot_ready, then liv
 
 Shutdown ends admitted streams. A request still preparing when shutdown starts cannot start a stream and receives 503 agent_stream_closing if still connected and otherwise valid.
 
-Reconnect is full replay, not Last-Event-ID continuation. Deduplicate durable entry/event IDs and replace totals with snapshots. Preserve backpressure and queue budgets; slow clients disconnect on overflow. Invalid frames invalidate the client connection; generation checks reject late old-stream events.
+Reconnect is full replay, not Last-Event-ID continuation. Deduplicate durable entry/event IDs and replace totals with snapshots. Preserve backpressure and queue budgets; slow clients disconnect on overflow. http.sseQueuedBytes bounds frames waiting behind the head frame (the next one to write); the head frame itself is exempt, so a single frame larger than the budget (for example pasted images up to agentImage.requestBytes) waits instead of disconnecting every viewer. Invalid frames invalidate the client connection; generation checks reject late old-stream events.
 
 A backpressured replay resumes on either drain or completion of the blocked write. ServerResponse can finish writing without emitting drain; waiting only for that event can strand replay before snapshot_ready and before heartbeats start. Late callbacks from earlier frames must not release a newer blocked write, and close/error must release replay waits.
 
 Tool text is bounded before HTTP serialization by web.agentToolOutputCharacters, retaining head/tail and displayTruncated; Web applies the same fallback. Do not modify originals or treat this as a bound on images, metadata or total transcript size. Owners: [agent-routes.ts](../../src/http/agent-routes.ts), [sse.ts](../../src/http/sse.ts), [event-display.ts](../../src/agent/event-display.ts).
 
-Events arriving during replay are projected before entering the display buffer. Its UTF-8 byte budget counts the projected event, including all remaining images/metadata, and retains each queued size for draining. Raw events remain unchanged for other observers. Projection failure closes the subscription and reports the error, as does queue overflow.
+Events arriving during replay are projected before entering the display buffer. Its UTF-8 byte budget counts the projected event, including all remaining images/metadata, and retains each queued size for draining. The oldest buffered event is exempt, as at the writer head. Raw events remain unchanged for other observers. Projection failure closes the subscription and reports the error, as does queue overflow.
 
 | Reader | Paging |
 | --- | --- |
@@ -177,6 +181,7 @@ Tools: services_list, users_list, issues_search, issue_get, issue_create, issue_
 - Raw JSON request budget is 32 MiB, enforced before parsing; tool-level budget failures can be isError. Do not split/repeat creation on failure.
 - Text defaults to 200 lines/page, max 1000; whole-file read budget 64 MiB and response budget 1 MiB. Non-inline responses do not authorize arbitrary host paths.
 - issues_search filters sorted summaries by key/title/service/environment/status, not description full text.
+- issue_message accepts an optional messageId (same 1–128 character rule) forwarded as X-Issue-Pilot-Message-Id. Retrying with the same ID and text acknowledges the admitted message without re-running it; without an ID every call is a new message.
 - Managed files are list-only; attachments retain original validation and work files retain storage authorization.
 
 Owner: [server.ts](../../src/mcp/server.ts). Tests: [application-mcp.test.ts](../../tests/http/application-mcp.test.ts), [application-mcp-create.test.ts](../../tests/http/application-mcp-create.test.ts).
@@ -195,7 +200,7 @@ Ordinary errors usually return {"error":"stable_code"}; framework routing errors
 | 500 missing/invalid root or session | Preserve state, inspect; do not recreate |
 | Rollback/finalize/post-commit failure | Do not assume complete rollback or safe retry |
 
-Ordinary creation and comments have no generic client idempotency key; Agent messages use the scoped admission IDs above. Lost responses do not prove no effect. Read Issues/conversations/files first. DingTalk source deduplication does not generalize to other mutations.
+Ordinary creation has no generic client idempotency key; Agent messages use the scoped admission IDs above. Lost responses do not prove no effect. Read Issues/conversations/files first. DingTalk source deduplication does not generalize to other mutations.
 
 Configuration revisions, source hashes and Git CAS protect different facts. Do not apply one retry/locking rule everywhere. Fixture tests do not prove comprehensive real-model/external-service safety.
 

@@ -68,6 +68,8 @@ export interface RemoveWorktreeBatchInput {
   mode: "hotfix" | "feature";
   worktrees: Array<Omit<RestoreWorktreeInput, "issueKey" | "mode" | "expectedCommit">>;
   finalize?: () => Promise<void>;
+  /** Release and scope removal publish and retain the branch tip (default). Permanent Issue deletion passes false. */
+  publish?: boolean;
 }
 
 export class WorktreeRemovalFailure extends Error {
@@ -302,8 +304,12 @@ export class WorktreeManager {
     });
   }
 
-  /** Release publishes the recorded branch only; the current checkout branch is never trusted as a substitute. */
-  async remove(url: string, workspacePath: string, expectedBranch: string): Promise<string> {
+  /**
+   * Release publishes the recorded branch only; the current checkout branch is never trusted as a substitute.
+   * Deletion (`publish` false) removes the worktree without publishing or retaining anything in the shared store;
+   * the private branch stays in the Issue root so a rollback can still restore it.
+   */
+  async remove(url: string, workspacePath: string, expectedBranch: string, publish = true): Promise<string> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
     return this.serialized(repositoryKey, async () => {
@@ -311,10 +317,12 @@ export class WorktreeManager {
       const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, url);
       await this.assertCleanLocked(resolvedWorkspace, cachePath, expectedBranch);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
-      const shared = resolve(this.repositoriesRoot, repositoryKey);
-      const published = await publishIssueBranch(shared, cachePath, expectedBranch, true);
-      if (published !== commit) throw new Error("working_branch_changed_during_release");
-      await this.retainSnapshotCommit(shared, commit);
+      if (publish) {
+        const shared = resolve(this.repositoriesRoot, repositoryKey);
+        const published = await publishIssueBranch(shared, cachePath, expectedBranch, true);
+        if (published !== commit) throw new Error("working_branch_changed_during_release");
+        await this.retainSnapshotCommit(shared, commit);
+      } else if ((await readIssueBranchCommit(cachePath, expectedBranch)) !== commit) throw new Error("working_branch_changed_during_release");
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
       } catch (error) {
@@ -463,7 +471,7 @@ export class WorktreeManager {
     try {
       for (const worktree of input.worktrees) {
         try {
-          const commit = await this.remove(worktree.url, worktree.workspacePath, worktree.workingBranch);
+          const commit = await this.remove(worktree.url, worktree.workspacePath, worktree.workingBranch, input.publish ?? true);
           removed.push({ worktree, commit });
         } catch (error) {
           if (error instanceof WorktreeRemovalFailure) removed.push({ worktree, commit: error.commit });
@@ -628,7 +636,9 @@ export class WorktreeManager {
     try {
       await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
     } catch (error) {
-      if (this.gitEnvironment.getStore()) throw new Error("personal_git_fetch_failed");
+      // Keep the Git failure (exit code/stderr, never the key, which stays in a private file) for diagnosis;
+      // logs go through errorDiagnostic, which reports only this stable code.
+      if (this.gitEnvironment.getStore()) throw new Error("personal_git_fetch_failed", { cause: error });
       throw error;
     }
     return cachePath;
@@ -729,6 +739,8 @@ export class WorktreeManager {
         // A repository previously removed from this Issue can be included again with its own history.
         const sharedStore = await this.updateCache(input, repositoryKey);
         await this.git(["-C", privateStore, "fetch", "--no-tags", sharedStore, `+${baseRef}:${baseRef}`]);
+        // The private store borrows the new baseline objects through alternates, as at creation; retain them in the shared store.
+        await this.retainSnapshotCommit(sharedStore, (await this.git(["-C", privateStore, "rev-parse", "--verify", `${baseRef}^{commit}`])).trim());
       }
       baseCommit = input.existingBaseCommit ?? (await this.git(["-C", privateStore, "merge-base", `refs/heads/${workingBranch}`, baseRef])).trim();
     } else {

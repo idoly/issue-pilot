@@ -918,7 +918,7 @@ export function IssueWorkspace(props: {
                     </div>
                   </Show>
                 </div>
-                <p>已有对话、附件和评论将保留；{plan().session.closeCurrent ? "当前 Agent session 将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
+                <p>已有对话和附件将保留；{plan().session.closeCurrent ? "当前 Agent session 将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
               </section>
             )}
           </Show>

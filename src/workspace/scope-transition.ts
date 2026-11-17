@@ -49,7 +49,7 @@ export interface ScopeTransitionPlan {
   };
   branch: string | null;
   session: { closeCurrent: boolean; preserveConversation: true };
-  preserved: ["attachments", "comments", "conversation"];
+  preserved: ["attachments", "conversation"];
   warnings: string[];
 }
 
@@ -168,7 +168,7 @@ export class IssueScopeTransitionManager {
       repositories: repositoryDiff(currentRepositories, targetRepositories, action === "migrate_development"),
       branch,
       session: { closeCurrent: action !== "none", preserveConversation: true },
-      preserved: ["attachments", "comments", "conversation"],
+      preserved: ["attachments", "conversation"],
       warnings,
     };
     return { planHash: hashPlan(planWithoutHash), ...planWithoutHash };

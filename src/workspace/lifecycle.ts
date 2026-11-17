@@ -742,6 +742,8 @@ export class WorkspaceLifecycleManager {
             mode: developmentWorktreeMode(issue.type),
             worktrees: active.map((repository) => ({ workspaceName: names.get(repository.url)!, url: repository.url, workingBranch: repository.workingBranch!, workspacePath: repository.localPath! })),
             finalize: commit,
+            // Deletion is not release: the private branch is deleted with the root and must not enter the shared store.
+            publish: false,
           });
         } else await commit();
         // After DB commit, do not restore a partly removed root or pretend the delete fully succeeded.

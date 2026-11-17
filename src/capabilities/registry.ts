@@ -2,6 +2,7 @@ import { bool, int, lit, obj, oneOf, opt, str, union, type Static, type Schema }
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import type { CapabilityConfiguration, CapabilityName, DmsScope, SlsScope } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
+import { record, strings, text } from "../domain/input.ts";
 
 const limits = issuePilotConfig.limits.capability;
 const SLS_REGION = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -12,23 +13,11 @@ export type CapabilityConfig<Key extends CapabilityName> = NonNullable<Capabilit
 export function fail(code: string): never {
   throw new DomainError(code, "bad_request");
 }
-export function inputRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid_request");
-  return value as Record<string, unknown>;
-}
-function requiredText(value: unknown, name: string, maximum = 10_000): string {
-  if (typeof value !== "string" || !value.trim() || value.length > maximum) fail(`invalid_${name}`);
-  return value.trim();
-}
-function stringList(value: unknown, name: string): string[] {
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.length > 0)) fail(`invalid_${name}`);
-  return value as string[];
-}
 export function parseDmsConnectionConfiguration(value: unknown): Pick<CapabilityConfig<"dms">, "url" | "authorization"> {
-  const input = inputRecord(value);
-  const authorization = requiredText(input.authorization, "dms_authorization");
+  const input = record(value);
+  const authorization = text(input.authorization, "dms_authorization");
   if (!/^Bearer [^\s]+$/.test(authorization)) fail("invalid_dms_authorization");
-  const configuredUrl = requiredText(input.url, "dms_url", 4096);
+  const configuredUrl = text(input.url, "dms_url", 4096);
   let url: URL;
   try {
     url = new URL(configuredUrl);
@@ -39,20 +28,20 @@ export function parseDmsConnectionConfiguration(value: unknown): Pick<Capability
   return { url: configuredUrl, authorization };
 }
 export function parseSlsConnectionConfiguration(value: unknown): Pick<CapabilityConfig<"sls">, "accessKeyId" | "accessKeySecret"> {
-  const input = inputRecord(value);
-  return { accessKeyId: requiredText(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: requiredText(input.accessKeySecret, "sls_access_key_secret") };
+  const input = record(value);
+  return { accessKeyId: text(input.accessKeyId, "sls_access_key_id", 500), accessKeySecret: text(input.accessKeySecret, "sls_access_key_secret") };
 }
 
 export function parseDmsScopeConfiguration(value: unknown): DmsScope {
-  const input = inputRecord(value);
+  const input = record(value);
   if (!Array.isArray(input.databases) || !input.databases.length || input.databases.length > limits.dms.databases) fail("invalid_dms_databases");
   const databases = input.databases.map((value) => {
-    const database = inputRecord(value);
+    const database = record(value);
     // Resolution is server-owned: the browser names the instance alias and schema, and DMS resolves the rest
     // with the acting user's credentials at query time. Client-supplied resolved metadata is ignored.
     return {
-      instanceAlias: requiredText(database.instanceAlias, "dms_instance_alias", 255),
-      schemaName: requiredText(database.schemaName, "dms_schema_name", 255),
+      instanceAlias: text(database.instanceAlias, "dms_instance_alias", 255),
+      schemaName: text(database.schemaName, "dms_schema_name", 255),
       instanceId: "",
       instanceHost: "",
       instancePort: "",
@@ -64,24 +53,30 @@ export function parseDmsScopeConfiguration(value: unknown): DmsScope {
 }
 
 function parseSlsTargetScope(input: Record<string, unknown>): Omit<SlsScope, "targets"> {
-  const region = requiredText(input.region, "sls_region", 63);
-  const project = requiredText(input.project, "sls_project", 63);
-  const logstores = [...new Set(stringList(input.logstores, "sls_logstores").map((entry) => requiredText(entry, "sls_logstore", 63)))];
+  const region = text(input.region, "sls_region", 63);
+  const project = text(input.project, "sls_project", 63);
+  const logstores = [...new Set(strings(input.logstores, "sls_logstores").map((entry) => text(entry, "sls_logstore", 63)))];
   if (!SLS_REGION.test(region) || !SLS_PROJECT.test(project) || !logstores.length || logstores.some((entry) => entry !== "*" && !SLS_LOGSTORE.test(entry))) fail("invalid_sls_scope");
   return { region, project, logstores };
 }
+function sameSlsTarget(left: Omit<SlsScope, "targets">, right: Omit<SlsScope, "targets">): boolean {
+  return left.region === right.region && left.project === right.project && left.logstores.length === right.logstores.length && left.logstores.every((entry, index) => entry === right.logstores[index]);
+}
 export function parseSlsScopeConfiguration(value: unknown): SlsScope {
-  const input = inputRecord(value);
+  const input = record(value);
   const scope = parseSlsTargetScope(input);
   const targets =
     input.targets === undefined
       ? undefined
       : (Array.isArray(input.targets) ? input.targets : fail("invalid_sls_scope")).map((value) => {
-          const target = inputRecord(value);
+          const target = record(value);
           if ("name" in target) fail("invalid_sls_scope");
           return parseSlsTargetScope(target);
         });
   if (targets && !targets.length) fail("invalid_sls_scope");
+  // Runtime reads only targets when present; the top level must restate targets[0] so both shapes agree.
+  // This parser runs only on configuration writes; stored rows are read without reparsing.
+  if (targets && !sameSlsTarget(scope, targets[0]!)) fail("sls_scope_targets_mismatch");
   return { ...scope, ...(targets ? { targets } : {}) };
 }
 
@@ -99,7 +94,7 @@ const dmsExportSchema = obj({
   }),
 });
 const dmsQueryProperties = {
-  script: str({ minLength: 1, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+  script: str({ minLength: 1, maxLength: limits.dms.scriptChars, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
   logic: opt(bool({ description: "Whether DMS should execute the statement as a logical database query." })),
 };
 export const capabilityInputSchemas = {

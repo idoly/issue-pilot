@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AgentStreamController } from "./agent-stream";
+import { AgentStreamController, reconnectDelay } from "./agent-stream";
 
 class ClosingErrorEventSource extends EventTarget {
   closeCalls = 0;
@@ -237,6 +237,53 @@ describe("AgentStreamController", () => {
 
       controller.dispose();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the jittered reconnect delay between half and the full exponential ceiling", () => {
+    expect(reconnectDelay(1000, 0, () => 0)).toBe(500);
+    expect(reconnectDelay(1000, 0, () => 1)).toBe(1000);
+    expect(reconnectDelay(1000, 3, () => 1)).toBe(8000);
+    expect(reconnectDelay(1000, 10, () => 1)).toBe(30_000);
+    expect(reconnectDelay(1000, 10_000, () => 0)).toBe(15_000);
+  });
+
+  it("backs off on consecutive failures and resets to the base after snapshot_ready", async () => {
+    vi.useFakeTimers();
+    const sources: ClosingErrorEventSource[] = [];
+    const controller = new AgentStreamController(
+      (id) => `/stream/${id}`,
+      1000,
+      45000,
+      { onConnection() {}, onError() {}, onSnapshot() {}, onEvent() {} },
+      (url) => {
+        const source = new ClosingErrorEventSource(url);
+        sources.push(source);
+        return source as unknown as EventSource;
+      },
+      () => 1,
+    );
+    const failAndExpectRetryAfter = async (delay: number) => {
+      const count = sources.length;
+      sources.at(-1)!.dispatchEvent(new Event("error"));
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(sources).toHaveLength(count);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sources).toHaveLength(count + 1);
+    };
+    try {
+      controller.connect("ISSUE-20261117-001");
+      await failAndExpectRetryAfter(1000);
+      await failAndExpectRetryAfter(2000);
+      await failAndExpectRetryAfter(4000);
+      sources.at(-1)!.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot() }));
+      await failAndExpectRetryAfter(1000);
+      await failAndExpectRetryAfter(2000);
+      controller.connect("ISSUE-20261117-002");
+      await failAndExpectRetryAfter(1000);
+    } finally {
+      controller.dispose();
       vi.useRealTimers();
     }
   });

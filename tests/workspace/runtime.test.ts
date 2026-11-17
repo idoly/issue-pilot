@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -88,6 +88,38 @@ test("missing durable Issue roots are not recreated by generated runtime recover
     await rm(path.join(root, ".issue-runtime.json"));
     await prepareIssueRuntime(state, key, [], "read");
     assert.equal(await readFile(path.join(root, "notes.txt"), "utf8"), "durable evidence");
+  } finally {
+    await rm(state, { recursive: true, force: true });
+  }
+});
+
+test("an absent generated link is rebuilt while a replaced link is refused", async () => {
+  const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-runtime-link-"));
+  const key = "ISSUE-20261117-901";
+  try {
+    const checkout = path.join(sharedCheckoutsRoot(state), "repository", "commit");
+    const other = path.join(sharedCheckoutsRoot(state), "repository", "other");
+    await mkdir(checkout, { recursive: true });
+    await mkdir(other, { recursive: true });
+    await claimIssueRoot(state, key);
+    const prepare = () => prepareIssueRuntime(state, key, [{ name: "backend", repositoryPath: checkout }], "read");
+    const root = await prepare();
+    const entry = path.join(root, "backend");
+
+    await rm(entry);
+    await prepare();
+    assert.equal(path.resolve(root, await readlink(entry)), checkout);
+    assert.equal((await lstat(path.join(root, ".issue-runtime.json"))).mode & 0o777, 0o600);
+
+    await rm(entry);
+    await symlink(path.relative(root, other), entry);
+    await assert.rejects(prepare(), { message: "issue_runtime_entry_changed" });
+    assert.equal(path.resolve(root, await readlink(entry)), other);
+
+    await rm(entry);
+    await writeFile(entry, "model-created file");
+    await assert.rejects(prepare(), { message: "issue_runtime_entry_changed" });
+    assert.equal(await readFile(entry, "utf8"), "model-created file");
   } finally {
     await rm(state, { recursive: true, force: true });
   }

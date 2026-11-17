@@ -12,19 +12,19 @@ test("enables codemode by default and persists all global modes through the exis
     await createService(f.app, "Codemode");
     await createIssue(f.app, "codemode");
     const id = f.engine.enqueued[0]!;
-    const blocked = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode: "only" } });
+    const blocked = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode: "only", expectedRevision: 0 } });
     assert.equal(blocked.statusCode, 409);
     assert.equal(blocked.json().error, "global_configuration_has_running_issues");
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).json().agent.codemode, "on");
     f.engine.running.clear();
-    for (const codemode of ["off", "on", "only"]) {
-      const result = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode } });
+    for (const [expectedRevision, codemode] of ["off", "on", "only"].entries()) {
+      const result = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode, expectedRevision } });
       assert.equal(result.statusCode, 200, result.body);
       assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).json().agent.codemode, codemode);
     }
     assert.ok(f.engine.closedSessions.includes(id));
     for (const codemode of [undefined, null, true, "invalid"]) {
-      const invalid = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode } });
+      const invalid = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, codemode, expectedRevision: 3 } });
       assert.equal(invalid.statusCode, 400, invalid.body);
       assert.equal(invalid.json().error, "invalid_agent_codemode");
     }

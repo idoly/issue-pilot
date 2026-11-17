@@ -3,7 +3,7 @@ import path from "node:path";
 import { errorChain, errorDiagnostic, hasErrorCode } from "../diagnostics.ts";
 import { constraintFailure } from "../db/constraints.ts";
 import multipart from "@fastify/multipart";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
 import { applicationConfig } from "../config.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -36,6 +36,7 @@ import { registerCapabilityRoutes } from "./capability-routes.ts";
 import { registerRepositoryRoutes } from "./repository-routes.ts";
 import { registerUserRoutes, type IdentityMode } from "./user-routes.ts";
 import { assertWebBuild, registerWebRoutes } from "./web-routes.ts";
+import { assertRuntimeDependencyPatches } from "./dependency-patches.ts";
 import { registerWorkspaceRoutes } from "./workspace-routes.ts";
 
 export type { AgentController } from "../agent/contracts.ts";
@@ -98,6 +99,12 @@ export function installShutdownHandlers(app: FastifyInstance, target: ShutdownTa
   };
 }
 
+/** API and inbound MCP requests by matched route (unmatched: path without query); Web assets and /health are outside. */
+function identityScoped(request: FastifyRequest): boolean {
+  const path = request.routeOptions.url ?? request.url.split("?", 1)[0]!;
+  return path === "/mcp" || path.startsWith("/api/");
+}
+
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? applicationConfig.stateRoot);
   const databaseFile = options.databaseFile ?? applicationConfig.databaseFile;
@@ -126,6 +133,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     })());
 
   try {
+    // Refuse to run an install whose postinstall dependency patches were skipped.
+    await assertRuntimeDependencyPatches();
     if (options.webRoot) await assertWebBuild(options.webRoot);
     // Bootstrap recovers persistent state, so claim the control socket first.
     stateLease = options.stateLease ?? new ApplicationStateLease(stateRoot);
@@ -201,10 +210,18 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       return reply.code(500).send({ error: "internal_error" });
     });
 
+    const identityMode = options.identity ?? applicationConfig.http.identity;
+    // A gateway deployment must bind every API, SSE and MCP request to an identity; implicit
+    // selection would silently act as the oldest active user. /health and Web assets stay open.
+    if (identityMode === "gateway")
+      app.addHook("onRequest", async (request, reply) => {
+        if (identityScoped(request) && !request.headers["x-issue-pilot-subject"]) return reply.code(401).send({ error: "current_subject_required" });
+      });
+
     // Every API and MCP response may carry identity-scoped data; one hook guarantees it for new routes.
     // SSE hijacks the socket and writes its own streaming cache headers.
     app.addHook("onSend", async (request, reply, payload) => {
-      if (request.url === "/mcp" || request.url.startsWith("/api/")) {
+      if (identityScoped(request)) {
         reply.header("Cache-Control", "private, no-store");
         reply.header("Pragma", "no-cache");
       }
@@ -224,7 +241,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         return reply.code(503).send({ ok: false, error: "database_unavailable" });
       }
     });
-    registerUserRoutes(routeContext, options.identity ?? applicationConfig.http.identity);
+    registerUserRoutes(routeContext, identityMode);
     registerRepositoryRoutes(routeContext);
     registerCapabilityRoutes(routeContext);
     registerMcpRoutes(routeContext);

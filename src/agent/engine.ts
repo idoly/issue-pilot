@@ -199,12 +199,13 @@ export class AgentEngine implements AgentController {
           this.assertNotReserved(issueId);
           await assertIssueRoot(this.stateRoot, issue.key);
           // Earlier messages still queued for a later round keep their order; never steer past them.
-          if (!this.isCurrentSession(issueId, managed) || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
+          // Pi refuses extension commands in steer before queueing them; run any "/" input as the next round instead.
+          if (userMessage.startsWith("/") || !this.isCurrentSession(issueId, managed) || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
             await scheduleMessage();
             return;
           }
           if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
-          const steered = userMessage.startsWith("/") ? userMessage : promptWithRuntimeTime(userMessage);
+          const steered = promptWithRuntimeTime(userMessage);
           const queuedBefore = managed.session.getSteeringMessages().length;
           // Persist admission and conservatively mark dispatch before Pi can accept side effects.
           let entryId: string;
@@ -439,11 +440,16 @@ export class AgentEngine implements AgentController {
         await operation();
       } catch (error) {
         if (controller.signal.aborted) {
-          // Cancellation is not a successful conclusion or a failed workspace; preserve the session.
+          // Cancellation is not a successful conclusion or a failed workspace; preserve a reusable dev session.
           if (error !== controller.signal.reason) this.reportError(error);
           try {
             const managed = this.sessions.get(issueId);
-            if (managed && managed.scopeChanged) await this.stopSession(issueId, managed);
+            if (managed) {
+              if (managed.retireAfterRound || managed.scopeChanged) await this.stopSession(issueId, managed);
+            } else if (this.personalGit.has(issueId) || this.checkoutLeases.has(issueId)) {
+              // Cancelled during preparation: release the personal SSH material and checkout pins now.
+              await this.stopSession(issueId);
+            }
             await this.database.transaction(async (transaction) => {
               await transaction
                 .update(issues)
@@ -508,13 +514,9 @@ export class AgentEngine implements AgentController {
     if (!issue) throw new Error("issue_not_found");
     if (issue.status === "resolved") throw new DomainError("resolved_issue_cannot_run_agent", "conflict");
     let currentMessage = latestMessage?.trim() || undefined;
-    // A file-backed manager opened for selection is reused when the round starts, so a long transcript is parsed once.
-    let reusableManager: SessionManager | undefined;
     if (messageEntryId || latestMessage === undefined) {
       const selected = await this.sessionQueue.run(issueId, async () => {
-        const live = this.sessions.has(issue.id);
         const manager = await this.sessionManagerLocked(issue, await assertIssueRoot(this.stateRoot, issue.key));
-        if (!live) reusableManager = manager;
         return selectAgentMessage(manager, issue, messageEntryId);
       });
       if (messageEntryId && !selected) return;
@@ -632,7 +634,8 @@ export class AgentEngine implements AgentController {
       },
     });
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
-      const manager = reusableManager ?? (await this.sessionManagerLocked(issue, workDirectory));
+      // Reopen after preparation: admissions made meanwhile appended to the file through another manager.
+      const manager = await this.sessionManagerLocked(issue, workDirectory);
       this.roundSignal(issue.id);
       const hadMessages = manager.buildSessionContext().messages.length > 0;
       const managed = await this.piRuntime.start({
@@ -654,6 +657,7 @@ export class AgentEngine implements AgentController {
         systemPrompt: agentSystemPrompt(context),
         onEvent: (event) => this.publishPiEvent(issue.id, event),
       });
+      managed.retireAfterRound = sharedRepositories;
       this.sessions.set(issue.id, managed);
       // sessionManagerLocked created or opened this file and is its sole binder; this round must not rebind it.
       if (!manager.getSessionFile()) throw new Error("failed_to_initialize_agent_session");
@@ -685,7 +689,7 @@ export class AgentEngine implements AgentController {
           relatedRoot: project.runtimeRoot,
           ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}),
         });
-    await this.promptRound(issue.id, managed, prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined, sharedRepositories);
+    await this.promptRound(issue.id, managed, prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined);
   }
 
   private async gitIdentity(subject: string): Promise<GitCommitIdentity> {
@@ -817,16 +821,16 @@ export class AgentEngine implements AgentController {
     await this.markRunning(issueId);
     this.assertCurrentSession(issueId, managed);
     if (messageEntryId && scope) await this.startQueuedMessage({ id: issueId, ...scope }, managed, messageEntryId);
-    await this.promptRound(issueId, managed, promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined, false);
+    await this.promptRound(issueId, managed, promptWithRuntimeTime(message), images, message.startsWith("/") ? message : undefined);
   }
 
   /** One round protocol for both a prepared session and a live session: prompt, verify, retire, finalize. */
-  private async promptRound(issueId: string, managed: ManagedPiSession, prompt: string, images: ImageContent[], command: string | undefined, retireAfterRound: boolean): Promise<void> {
+  private async promptRound(issueId: string, managed: ManagedPiSession, prompt: string, images: ImageContent[], command: string | undefined): Promise<void> {
     await managed.prompt(prompt, images, command, this.roundSignal(issueId));
     this.roundSignal(issueId);
     // A failure path elsewhere may have stopped this session mid-round; an aborted prompt is not a completed round.
     this.assertCurrentSession(issueId, managed);
-    if (retireAfterRound || managed.scopeChanged) await this.stopSession(issueId, managed);
+    if (managed.retireAfterRound || managed.scopeChanged) await this.stopSession(issueId, managed);
     await this.finalizeRun(issueId);
   }
 
@@ -895,6 +899,10 @@ export class AgentEngine implements AgentController {
     const failures: unknown[] = [];
     try {
       await managed?.stop();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
       checkoutLease?.close();
     } catch (error) {
       failures.push(error);

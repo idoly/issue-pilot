@@ -61,6 +61,8 @@ export interface ManagedPiSession {
   readonly streaming: boolean;
   /** Set when the Issue's service scope changed during the round; retire it when the round ends. */
   scopeChanged?: boolean;
+  /** Read-only rounds restore from durable history; retire the instance when its round completes or is cancelled. */
+  retireAfterRound?: boolean;
   setGitIdentity(identity: GitCommitIdentity): void;
   prompt(message: string, images?: ImageContent[], command?: string, signal?: AbortSignal): Promise<void>;
   stop(): Promise<void>;

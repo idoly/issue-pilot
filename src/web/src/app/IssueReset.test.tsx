@@ -52,7 +52,6 @@ const issue: IssueDetail = {
   relatedIssues: [],
   scopeTransitions: [],
   ccRecipients: [],
-  comments: [],
 };
 beforeEach(() => {
   state.update.mockResolvedValue(issue);

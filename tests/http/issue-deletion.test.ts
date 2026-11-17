@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
-import { issueComments, issuePins, issueRelations, issues, issueWorkspaces, repositories, subjects } from "../../src/db/schema.ts";
+import { issuePins, issueRelations, issues, issueWorkspaces, repositories, subjects } from "../../src/db/schema.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { issueRoot, pathExists } from "../../src/workspace/state.ts";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
@@ -25,7 +25,6 @@ for (const mode of ["success", "rollback", "referenced", "symlink"] as const) {
       await writeFile(path.join(root, "evidence.txt"), "durable work");
       const [admin] = await db.db.select().from(subjects);
       const headers = { "x-issue-pilot-subject": admin!.subject };
-      await db.db.insert(issueComments).values({ issueId: issue!.id, authorSubject: admin!.subject, body: "comment" });
       await db.db.insert(issuePins).values({ issueId: issue!.id, subject: admin!.subject });
       await db.db.insert(subjects).values({ subject: "ordinary", role: "product" });
       const forbidden = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}`, headers: { "x-issue-pilot-subject": "ordinary" } });
@@ -56,7 +55,7 @@ for (const mode of ["success", "rollback", "referenced", "symlink"] as const) {
       if (mode === "success") {
         assert.deepEqual(remaining, []);
         assert.equal(await pathExists(root), false);
-        for (const table of [issueComments, issuePins, issueWorkspaces]) assert.deepEqual(await db.db.select().from(table), []);
+        for (const table of [issuePins, issueWorkspaces]) assert.deepEqual(await db.db.select().from(table), []);
         assert.deepEqual(await readdir(path.join(f.root, "control", "deletions")), []);
         assert.equal((await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}`, headers })).statusCode, 404);
         assert.deepEqual((await db.client.execute("PRAGMA foreign_key_check")).rows, []);

@@ -75,7 +75,6 @@ beforeEach(() => {
     relatedIssues: [],
     scopeTransitions: [],
     ccRecipients: [],
-    comments: [],
   };
   api.list.mockImplementation(async () => [summary()]);
   api.detail.mockImplementation(async () => structuredClone(current));

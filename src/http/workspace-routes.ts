@@ -8,6 +8,9 @@ import { ISSUE_WORK_MODES, relatedIssueEntryName } from "../domain/contracts.ts"
 import { errorDiagnostic } from "../diagnostics.ts";
 import { ApiError, choice, record, text } from "./input.ts";
 import { authorizeWorkMode, requireCurrentUser, requireIssue, type ApiRouteContext } from "./route-context.ts";
+import type { IdentityRequest } from "../configuration/access.ts";
+import { DomainError } from "../domain/errors.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["workspaces"]["inspectIssue"]>>) {
   return {
@@ -24,8 +27,10 @@ function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["wor
 export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   const { app, database, workspaces, scopeTransitions, runScopeExclusive } = context;
 
-  const fileAccess = (issue: { id: string; key: string }) =>
+  const fileAccess = (issue: { id: string; key: string }, request: IdentityRequest) =>
     runScopeExclusive(async () => {
+      // The checkout lock and scope queue can outlive the reader's authorization.
+      await requireCurrentUser(database, request);
       // Assemble paths here; the file reader verifies the root and any selected repository.
       const repositories = await context.sourceBrowser.workFileRepositories(issue);
       const readRoots: Record<string, string> = {};
@@ -56,14 +61,16 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
   };
   // The query carries a work-file path; keep names out of request logs like the download route.
   app.get<{ Params: { key: string }; Querystring: { path?: string } }>("/api/issues/:key/files", { logLevel: "silent" }, async (request, _reply) => {
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path, true);
-    return withSharedCheckout(async () => listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue)));
+    return withSharedCheckout(async () => listIssueWorkFiles(context.stateRoot, issue.key, relative, await fileAccess(issue, request)));
   });
   app.get<{ Params: { key: string }; Querystring: { path: string } }>("/api/issues/:key/files/download", { logLevel: "silent" }, async (request, reply) => {
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     const relative = relativeWorkPath(request.query.path);
-    const file = await withSharedCheckout(async () => openIssueWorkFile(context.stateRoot, issue.key, relative, await fileAccess(issue)));
+    const file = await withSharedCheckout(async () => openIssueWorkFile(context.stateRoot, issue.key, relative, await fileAccess(issue, request)));
     reply.header("Content-Type", "application/octet-stream");
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("Content-Length", file.size);
@@ -71,8 +78,17 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     return reply.send(file.handle.createReadStream({ autoClose: true }));
   });
 
+  // An explicit refresh starts a full filesystem/Git scan; it needs a current user and a minimum interval.
+  let lastRefreshAt = Number.NEGATIVE_INFINITY;
   app.get<{ Querystring: { refresh?: string } }>("/api/workspaces/stats", async (request, _reply) => {
-    const { snapshot, ...state } = workspaces.readStats(request.query.refresh === "true");
+    const refresh = request.query.refresh === "true";
+    if (refresh) {
+      await requireCurrentUser(database, request);
+      const now = Date.now();
+      if (now - lastRefreshAt < issuePilotConfig.http.workspaceStatisticsRefreshIntervalMs) throw new DomainError("workspace_statistics_refresh_too_frequent", "rate_limited");
+      lastRefreshAt = now;
+    }
+    const { snapshot, ...state } = workspaces.readStats(refresh);
     return { ...state, snapshot: snapshot ? { ...snapshot, workspaces: snapshot.workspaces.map(serializeInspection) } : null };
   });
 

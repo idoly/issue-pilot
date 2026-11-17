@@ -9,6 +9,8 @@ import { test } from "node:test";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 import { DomainError } from "../../src/domain/errors.ts";
+import { capabilityInputSchemas, capabilityToolInputSchema } from "../../src/capabilities/registry.ts";
+import { compile } from "@earendil-works/pi-schema";
 import { DmsQueryRound, DmsOperationError, connectDmsMcp, queryDms, resolveDmsScope, type ConnectDmsMcp, type DmsMcpSession } from "../../src/capabilities/dms.ts";
 
 /** Routes protocol requests to a test upstream instead of the network. */
@@ -908,7 +910,15 @@ test("rejects writes, multiple statements, missing scope, and unavailable execut
   await assert.rejects(queryDms({ schema: "orders", script: "UPDATE suppliers SET active = 1" }, configured, undefined, fixture.connect), /database_query_must_be_read_only/);
   await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1; SELECT 2" }, configured, undefined, fixture.connect), /database_query_must_be_one_statement_without_comments/);
   await assert.rejects(queryDms({ schema: "unknown", script: "SELECT 1" }, configured, undefined, fixture.connect), /dms_database_not_authorized/);
+  const limit = issuePilotConfig.limits.capability.dms.scriptChars;
+  const oversized = "SELECT 1" + " ".repeat(limit) + "FROM orders";
+  await assert.rejects(queryDms({ schema: "orders", script: oversized }, configured, undefined, fixture.connect), /invalid_database_query/);
   assert.equal(fixture.connections.length, 0, "invalid queries must not consume a DMS handshake");
+  for (const schema of [capabilityInputSchemas.dms, capabilityToolInputSchema("dms", configured)]) {
+    const validator = compile(schema);
+    assert.equal(validator.check({ schema: "orders", script: "S".repeat(limit) }), true);
+    assert.equal(validator.check({ schema: "orders", script: oversized }), false);
+  }
 
   const unavailable = fixtureSession({
     async listTools() {

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@solidjs/testing-library";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import { createSignal } from "solid-js";
+import { Markdown } from "../ui/Markdown";
 import { IssueMarkdown, resolveIssueFileLink } from "./IssueMarkdown";
 
 const issue = {
@@ -67,5 +70,41 @@ describe("Issue file links", () => {
     setSelected({ ...issue, id: "ISSUE-20261021-002" });
     await waitFor(() => expect(view.container.querySelector("a")?.getAttribute("href")).toBe(`/api/issues/ISSUE-20261021-002/files/download?path=${encodeURIComponent("库存 #1.xlsx")}`));
     expect(view.container.textContent).toContain("下载");
+  });
+  it("reuses the cached parse and sanitized rendering when re-rendering Issue Markdown", () => {
+    const parse = vi.spyOn(marked, "parse"),
+      sanitize = vi.spyOn(DOMPurify, "sanitize");
+    try {
+      const plain = '**cached plain** <img src="x" onerror="alert(1)"> issue-markdown-cache-test';
+      const first = render(() => <IssueMarkdown issue={issue} source={plain} />);
+      const expected = first.container.innerHTML;
+      first.unmount();
+      const reference = render(() => <Markdown source={plain} />);
+      expect(reference.container.innerHTML).toBe(expected);
+      reference.unmount();
+      const second = render(() => <IssueMarkdown issue={{ ...issue, id: "ISSUE-20261021-002" }} source={plain} />);
+      expect(second.container.innerHTML).toBe(expected);
+      expect(second.container.querySelector("img")?.hasAttribute("onerror")).toBe(false);
+      second.unmount();
+      expect(parse).toHaveBeenCalledOnce();
+      expect(sanitize).toHaveBeenCalledOnce();
+
+      parse.mockClear();
+      sanitize.mockClear();
+      const linked = '[cached link](./库存.xlsx) <a href="./a.log" onclick="alert(1)">raw</a> issue-markdown-cache-test';
+      const views = ["ISSUE-20261021-001", "ISSUE-20261021-002"].map((id) => render(() => <IssueMarkdown issue={{ ...issue, id }} source={linked} />));
+      const hrefs = views.map((view) => Array.from(view.container.querySelectorAll("a"), (link) => link.getAttribute("href")));
+      expect(hrefs).toEqual([
+        [`/api/issues/ISSUE-20261021-001/files/download?path=${encodeURIComponent("库存.xlsx")}`, "/api/issues/ISSUE-20261021-001/files/download?path=a.log"],
+        [`/api/issues/ISSUE-20261021-002/files/download?path=${encodeURIComponent("库存.xlsx")}`, "/api/issues/ISSUE-20261021-002/files/download?path=a.log"],
+      ]);
+      for (const view of views) expect(view.container.querySelector("[onclick]")).toBeNull();
+      // Parsed once; sanitized once for the cached link-free form and once per Issue-specific rewrite.
+      expect(parse).toHaveBeenCalledOnce();
+      expect(sanitize).toHaveBeenCalledTimes(3);
+    } finally {
+      parse.mockRestore();
+      sanitize.mockRestore();
+    }
   });
 });

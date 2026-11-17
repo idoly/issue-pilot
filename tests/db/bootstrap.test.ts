@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { applicationConfig } from "../../src/config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
+import { openDatabase } from "../../src/db/client.ts";
 import { environments, issues, issueWorkspaces, serviceDeployments, services, subjects } from "../../src/db/schema.ts";
 
 const directories: string[] = [];
@@ -45,7 +46,7 @@ test("keeps application paths and workspace defaults in the project configuratio
   assert.equal(applicationConfig.parameters.capabilityConnectionMs, 10_000);
   assert.equal("database" in applicationConfig.limits.capability, false);
   assert.equal("dms" in applicationConfig.defaults, false);
-  assert.deepEqual(applicationConfig.limits.capability.dms, { databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 });
+  assert.deepEqual(applicationConfig.limits.capability.dms, { databases: 20, scriptChars: 64 * 1024, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 });
   assert.equal(applicationConfig.state.sqliteBusyTimeoutMs, 5_000);
   assert.equal(applicationConfig.regional.timeZone, "Asia/Shanghai");
   assert.equal(applicationConfig.web.host, "0.0.0.0");
@@ -150,6 +151,30 @@ test("reports a missing workspace in the explicit audit without preventing ordin
     () => execFileSync(process.execPath, ["--experimental-strip-types", "scripts/check-issue-state.ts", "--state-root", root], { stdio: "pipe" }),
     /issue_workspace_missing:ISSUE-20260809-003/,
   );
+});
+
+test("refuses to open a database whose committed rows violate foreign keys", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-bootstrap-foreign-keys-"));
+  directories.push(root);
+  const file = join(root, "issues.db");
+  await (await openApplicationDatabase(file)).close();
+  // Migrations run with foreign keys disabled; an orphan they leave behind must stop startup instead of persisting silently.
+  const raw = openDatabase(file);
+  try {
+    await raw.client.execute("PRAGMA foreign_keys = OFF");
+    await raw.client.execute({ sql: "INSERT INTO issue_pins (subject, issue_id, created_at) VALUES (?, 'missing-issue', 1)", args: [issuePilotConfig.bootstrapUser.subject] });
+  } finally {
+    raw.close();
+  }
+  await assert.rejects(openApplicationDatabase(file), /^Error: database_foreign_key_violation: 1 row\(s\) issue_pins#\d+->issues$/);
+
+  const repaired = openDatabase(file);
+  try {
+    await repaired.client.execute("DELETE FROM issue_pins WHERE issue_id = 'missing-issue'");
+  } finally {
+    repaired.close();
+  }
+  await (await openApplicationDatabase(file)).close();
 });
 
 test("closes the database client when bootstrap initialization fails", async () => {

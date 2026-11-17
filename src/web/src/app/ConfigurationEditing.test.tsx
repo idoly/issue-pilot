@@ -38,7 +38,7 @@ import { settle } from "../test-settle";
 const mysql = { host: "db.example.test", port: 3306, username: "reader", password: "fixture-old-secret", database: "orders" };
 function configuration(): Config {
   return {
-    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false },
+    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false, revision: 0 },
     agentModels: [],
     environments: [
       { key: "dev", name: "开发" },

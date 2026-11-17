@@ -174,7 +174,9 @@ export function subscribeBufferedAgentDisplayEvents(bus: AgentEventBus, issueId:
       try {
         bytes = Buffer.byteLength(JSON.stringify(event));
         pendingBytes += bytes;
-        if (pendingBytes > budget.maxPendingBytes) throw new Error("sse_queue_budget_exceeded");
+        // The oldest pending event is exempt, so one legitimately large frame (for example pasted images)
+        // cannot disconnect the viewer by itself; the budget bounds everything queued behind it.
+        if (pendingBytes - (pending[0]?.bytes ?? bytes) > budget.maxPendingBytes) throw new Error("sse_queue_budget_exceeded");
       } catch (error) {
         fail(error);
         return;

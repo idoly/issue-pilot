@@ -4,6 +4,9 @@
   "description": "A local-first issue management agent for Pi",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
   "keywords": [
     "issue-tracker",
     "ticket-agent"

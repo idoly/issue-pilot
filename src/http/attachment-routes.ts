@@ -8,11 +8,12 @@ import { errorCode, stableErrorReason } from "../diagnostics.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { openVerifiedAttachmentStream } from "../workspace/attachments.ts";
 import { ApiError } from "./input.ts";
-import { requireIssue, type ApiRouteContext } from "./route-context.ts";
+import { requireCurrentUser, requireIssue, type ApiRouteContext } from "./route-context.ts";
 
 export function registerAttachmentRoutes(context: ApiRouteContext): void {
   const { app, database, stateRoot } = context;
   app.get<{ Params: { key: string; attachmentId: string } }>("/api/issues/:key/attachments/:attachmentId", async (request, reply) => {
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
     const findAttachment = () =>
       database.db

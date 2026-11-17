@@ -145,7 +145,9 @@ for (const method of ["GET", "PUT"] as const) {
       },
     });
     hold = true;
-    const pending = Promise.resolve(method === "GET" ? fixture.app.inject({ method, url: "/api/config" }) : fixture.app.inject({ method, url: "/api/config/agent", payload: testAgent }));
+    const pending = Promise.resolve(
+      method === "GET" ? fixture.app.inject({ method, url: "/api/config" }) : fixture.app.inject({ method, url: "/api/config/agent", payload: { ...testAgent, expectedRevision: 0 } }),
+    );
     const deadline = new AbortController();
     let write: ReturnType<typeof createService> | undefined;
     try {
@@ -221,7 +223,7 @@ test("projects bootstrap user, environments, models, repositories, and deploymen
       config.environments.some((environment) => "id" in environment || "kind" in environment),
       false,
     );
-    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false });
+    assert.deepEqual(config.agent, { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false, revision: 0 });
     assert.deepEqual(Object.keys(config.agentModels[0]!).sort(), ["id", "provider", "thinkingLevels"]);
     const service = config.services[0]!;
     assert.equal(service.key, "alpha");
@@ -463,7 +465,7 @@ test("validates the global model and repository ownership independently", async 
       [{ provider: "enterprise-ai", model: "missing-model", thinkingLevel: "high", codemode: "off", runtime: {} }, "agent_model_not_available"],
       [{ provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "off", codemode: "off", runtime: {} }, "agent_thinking_level_not_supported"],
     ] as const) {
-      const response = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: agent });
+      const response = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...agent, expectedRevision: 0 } });
       assert.equal(response.statusCode, 400);
       assert.equal((await json(response)).error, expected);
     }
@@ -500,16 +502,33 @@ test("updates the single global model only after every affected Issue is idle", 
     await createService(fixture.app, "Alpha");
     await createIssue(fixture.app, "alpha");
     const issueId = fixture.engine.enqueued[0]!;
-    const blocked = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: testAgent });
+    const blocked = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, expectedRevision: 0 } });
     assert.equal(blocked.statusCode, 409);
     assert.equal((await json(blocked)).error, "global_configuration_has_running_issues");
 
     fixture.engine.running.delete(issueId);
-    const updated = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: testAgent });
+    // A missing revision is refused before any session is disposed.
+    for (const expectedRevision of [undefined, -1, "0"]) {
+      const invalid = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, expectedRevision } });
+      assert.equal(invalid.statusCode, 400, invalid.body);
+      assert.equal((await json(invalid)).error, "invalid_configuration_revision");
+    }
+    assert.equal(fixture.engine.closedSessions.includes(issueId), false);
+    const updated = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, expectedRevision: 0 } });
     assert.equal(updated.statusCode, 200, updated.body);
+    assert.deepEqual(await json(updated), { ok: true, revision: 1 });
     assert.ok(fixture.engine.closedSessions.includes(issueId));
     const config = (await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body))) as { agent: unknown };
-    assert.deepEqual(config.agent, { ...testAgent, apiKeyConfigured: false });
+    assert.deepEqual(config.agent, { ...testAgent, apiKeyConfigured: false, revision: 1 });
+
+    // A second administrator's draft read before that save cannot overwrite it or dispose sessions again.
+    fixture.engine.closedSessions.length = 0;
+    const stale = await fixture.app.inject({ method: "PUT", url: "/api/config/agent", payload: { ...testAgent, codemode: "only", expectedRevision: 0 } });
+    assert.equal(stale.statusCode, 409, stale.body);
+    assert.equal((await json(stale)).error, "configuration_changed");
+    assert.deepEqual(fixture.engine.closedSessions, []);
+    const unchanged = (await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body))) as { agent: unknown };
+    assert.deepEqual(unchanged.agent, { ...testAgent, apiKeyConfigured: false, revision: 1 });
   } finally {
     await fixture.cleanup();
   }

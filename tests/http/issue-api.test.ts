@@ -72,12 +72,11 @@ test("concurrent editors cannot overwrite metadata, CC or attachment changes wit
     assert.equal(f.engine.closedSessions.length, 1);
     const current = await detail();
     assert.notEqual(current.editVersion, initial.editVersion);
-    // Background progress/comments change timestamps, not the edited state.
+    // Background progress changes timestamps, not the edited state.
     await database.db
       .update(issues)
       .set({ updatedAt: new Date(1_000) })
       .where(eq(issues.key, String(created.id)));
-    await f.app.inject({ method: "POST", url: url + "/comments", payload: { body: "Concurrent comment" } });
     assert.equal((await detail()).editVersion, current.editVersion);
     const ccSubject = current.reporter.subject;
     assert.equal((await save(current.editVersion, { ccSubjects: [ccSubject] })).statusCode, 200);
@@ -313,7 +312,7 @@ test("allows production investigations to relate Issues without development bran
   }
 });
 
-test("serializes retries, status transitions, messages, and comments with one Issue reservation", async () => {
+test("serializes retries, status transitions and messages with one Issue reservation; comments are retired", async () => {
   const fixture = await createApiFixture();
   try {
     await createService(fixture.app, "Alpha");
@@ -354,20 +353,17 @@ test("serializes retries, status transitions, messages, and comments with one Is
     assert.equal((await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "blocked" } })).statusCode, 409);
     assert.equal((await fixture.app.inject({ method: "PATCH", url: `/api/issues/${issue.id}/status`, payload: { status: "open" } })).statusCode, 200);
 
-    const commentUser = await fixture.app.inject({ method: "POST", url: "/api/users", payload: { subject: "lyz5613@xianhengguoji.com", name: "刘宜展", email: "lyz5613@xianhengguoji.com" } });
-    assert.equal(commentUser.statusCode, 201);
-    const comment = await fixture.app.inject({
-      method: "POST",
-      url: `/api/issues/${issue.id}/comments`,
-      headers: { "x-issue-pilot-subject": "lyz5613@xianhengguoji.com" },
-      payload: { body: "A note" },
-    });
-    assert.equal(comment.statusCode, 201);
-    const detail = (await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` }).then((response) => JSON.parse(response.body))) as { comments: Array<{ author: string; body: string }> };
-    assert.deepEqual(
-      detail.comments.map(({ author, body }) => ({ author, body })),
-      [{ author: "刘宜展", body: "A note" }],
-    );
+    // Comments are retired: no write route, no detail field, and migration 0081 removed the table.
+    const history = openDatabase(fixture.databaseFile);
+    try {
+      const comment = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/comments`, payload: { body: "A note" } });
+      assert.equal(comment.statusCode, 404);
+      const detail = JSON.parse((await fixture.app.inject({ method: "GET", url: `/api/issues/${issue.id}` })).body) as Record<string, unknown>;
+      assert.equal(Object.hasOwn(detail, "comments"), false);
+      assert.deepEqual((await history.client.execute("SELECT name FROM sqlite_master WHERE name LIKE '%comment%'")).rows, []);
+    } finally {
+      await history.close();
+    }
     const message = await fixture.app.inject({ method: "POST", url: `/api/issues/${issue.id}/agent-messages`, payload: { message: "Check evidence" } });
     assert.equal(message.statusCode, 202);
     assert.equal(fixture.engine.messages.at(-1), "Check evidence");
@@ -603,7 +599,7 @@ test("lists reporter and CC subjects and refreshes the revision for CC changes w
       before.map(({ id, reporterSubject, assigneeSubject, ccSubjects }) => ({ id, reporterSubject, assigneeSubject, ccSubjects })),
       [
         { id: created.id, reporterSubject, assigneeSubject: null, ccSubjects: ["cc-one@example.test", "cc-two@example.test"] },
-        { id: plain.id, reporterSubject, assigneeSubject: null, ccSubjects: [] },
+        { id: plain.id, reporterSubject: String(plain.reporterSubject), assigneeSubject: null, ccSubjects: [] },
       ],
     );
 
@@ -628,7 +624,7 @@ test("lists reporter and CC subjects and refreshes the revision for CC changes w
   }
 });
 
-test("refreshes same-second description and comment changes without conflating detail freshness with the edit version", async (context) => {
+test("refreshes same-second description changes without conflating detail freshness with the edit version", async (context) => {
   context.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-15T15:00:00Z") });
   const f = await createApiFixture();
   try {
@@ -637,7 +633,7 @@ test("refreshes same-second description and comment changes without conflating d
     const issue = await createIssue(f.app, "freshness", "test", title);
     const url = `/api/issues/${issue.id}`;
     type Summary = { revision: string; updatedAt: string };
-    type Detail = Summary & { editVersion: string; description: string; comments: Array<{ body: string }> };
+    type Detail = Summary & { editVersion: string; description: string };
     const readDetail = async () => {
       const response = await f.app.inject(url);
       const list = await f.app.inject("/api/issues");
@@ -664,18 +660,6 @@ test("refreshes same-second description and comment changes without conflating d
     assert.equal(edited.description, description);
     assert.notEqual(edited.revision, initial.revision);
     assert.notEqual(edited.editVersion, initial.editVersion);
-
-    let previous = edited;
-    for (const body of ["First comment", "Second comment"]) {
-      const added = await f.app.inject({ method: "POST", url: url + "/comments", payload: { body } });
-      assert.equal(added.statusCode, 201, added.body);
-      const current = await readDetail();
-      assert.equal(current.updatedAt, initial.updatedAt);
-      assert.equal(current.editVersion, edited.editVersion);
-      assert.notEqual(current.revision, previous.revision);
-      assert.ok(current.comments.some((comment) => comment.body === body));
-      previous = current;
-    }
   } finally {
     await f.cleanup();
   }

@@ -157,13 +157,14 @@ test("bounds live events buffered during slow replay and detaches only the slow 
   const slow = subscribeBufferedAgentDisplayEvents(bus, "issue-1", { maxPendingBytes: bytes, onFailure: (error) => failures.push(error) });
   const stop = bus.subscribe("issue-1", ({ id }) => received.push(id));
   bus.publish(event("first"));
+  bus.publish(event("other")); // The oldest pending event is exempt; this one is exactly at the budget.
   assert.equal(failures.length, 0);
-  bus.publish(event("other"));
+  bus.publish(event("excess"));
   assert.equal(failures.length, 1);
   assert.match(String(failures[0]), /sse_queue_budget_exceeded/);
   slow.activate(() => assert.fail("closed subscription must not deliver its backlog"));
   bus.publish(event("third"));
-  assert.deepEqual(received, ["first", "other", "third"]);
+  assert.deepEqual(received, ["first", "other", "excess", "third"]);
   assert.equal(failures.length, 1);
   slow.unsubscribe();
   stop();
@@ -229,10 +230,26 @@ test("all SDK copies of query output use the display bound without changing mode
   assert.equal(result.structuredContent.records[0]!.text, text);
 });
 
+test("one pending display event larger than the budget is delivered on activation", () => {
+  const bus = new AgentEventBus(),
+    failures: unknown[] = [],
+    delivered: string[] = [];
+  const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1", { maxPendingBytes: 8 * 1024 * 1024, onFailure: (error) => failures.push(error) });
+  bus.publish({ id: "large", issueId: "issue-1", createdAt: "2026-11-09T00:00:00Z", event: { type: "issue_user", message: "x".repeat(9 * 1024 * 1024) } });
+  bus.publish({ id: "small", issueId: "issue-1", createdAt: "2026-11-09T00:00:00Z", event: { type: "issue_user", message: "small" } });
+  assert.deepEqual(failures, []);
+  subscription.activate((event) => delivered.push(event.id));
+  assert.deepEqual(delivered, ["large", "small"]);
+  subscription.unsubscribe();
+});
+
 test("unbounded tool metadata still consumes the replay buffer budget", () => {
   const bus = new AgentEventBus(),
     failures: unknown[] = [];
   const subscription = subscribeBufferedAgentDisplayEvents(bus, "issue-1", { maxPendingBytes: 1_024, onFailure: (error) => failures.push(error) });
+  // The oldest pending event is exempt from the budget; the metadata event queues behind it.
+  bus.publish({ id: "head", issueId: "issue-1", createdAt: "2026-11-09T00:00:00Z", event: { type: "issue_user", message: "head" } });
+  assert.deepEqual(failures, []);
   bus.publish({
     id: "metadata",
     issueId: "issue-1",

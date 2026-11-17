@@ -209,6 +209,72 @@ test("keeps admissions and executed rounds on the same branch during session sta
   }
 });
 
+test("starts Pi on the current session file after admissions during repository preparation", async (t) => {
+  const { root, database, issue } = await fixture();
+  const engine = new AgentEngine(database.db, root);
+  const internal = engine as unknown as { projectManager: IssueProjectManager; piRuntime: PiSessionRuntime };
+  let preparing!: () => void;
+  let release!: () => void;
+  const prepared = new Promise<void>((resolve) => {
+    preparing = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const prompts: string[] = [];
+  try {
+    await database.db.update(subjects).set({ role: "product" }).where(eq(subjects.subject, "admit-owner"));
+    await database.db.insert(globalAgentConfiguration).values({ id: 1, provider: "fixture", model: "fixture", thinkingLevel: "off", codemode: "off", runtime: {}, apiKey: "fixture-key" });
+    const work = issueRoot(root, issue.key);
+    const project: PreparedIssueProject = { runtimeRoot: work, repositories: [], relatedIssueKeys: [], readRoots: [], runtimeReady: true };
+    let preparations = 0;
+    t.mock.method(internal.projectManager, "prepare", async () => {
+      if (preparations++ === 0) {
+        preparing();
+        await gate;
+      }
+      return project;
+    });
+    t.mock.method(internal.piRuntime, "start", async (options: StartPiSessionOptions) => ({
+      session: { sessionManager: options.manager } as AgentSession,
+      streaming: false,
+      setGitIdentity() {},
+      async stop() {},
+      async prompt(message: string) {
+        prompts.push(message);
+        options.manager.appendMessage({ role: "user", content: message, timestamp: Date.now() });
+      },
+    }));
+    await engine.send(issue.id, "first");
+    await prepared;
+    // No live session exists while preparing, so this admission appends through another manager.
+    await engine.send(issue.id, "second");
+    release();
+    await engine.close();
+    const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id));
+    assert.ok(binding);
+    const manager = SessionManager.open(binding.sessionFile);
+    assert.equal(manager.getBranch().length, manager.getEntries().length);
+    assert.deepEqual(pendingAgentMessages(manager), []);
+    assert.deepEqual(
+      sessionTranscript(manager, issue.id).map((item) => item.event),
+      [
+        { type: "issue_user", message: "first" },
+        { type: "issue_user", message: "second" },
+      ],
+    );
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0]!, /first/);
+    assert.match(prompts[1]!, /second/);
+  } finally {
+    release();
+    await engine.close();
+    t.mock.restoreAll();
+    await database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("preserves a missing journal binding instead of silently starting another conversation", async () => {
   const { root, database, issue } = await fixture();
   const engine = new AgentEngine(database.db, root);

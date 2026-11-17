@@ -69,15 +69,7 @@ A review-only request authorizes findings, not edits or upgrades. Confirmed find
 
 ## Concurrency
 
-Keep Agent activity, Issue-set reservations, configuration scope, lifecycle, per-Issue inspection and repository queues distinct. Repository keys include state root and URL hash.
-
-```text
-configuration read: scope queue → SQLite read snapshot
-service/Issue scope write: scope queue → Issue reservation
-release/reopen: lifecycle queue → inspection queue → Issue reservation
-```
-
-Never reverse these orders or replace them with a global mutex. Reauthorize after relevant waits. SQLite rollback cannot restore files/Git; each owner must prepare, roll back and finalize its own medium.
+Keep the distinct queues and acquisition orders in [Architecture](docs/ai/ARCHITECTURE.md#concurrency); never reverse them or replace them with a global mutex. Reauthorize after relevant waits. SQLite rollback cannot restore files/Git; each owner must prepare, roll back and finalize its own medium.
 
 ## Verification and completion
 

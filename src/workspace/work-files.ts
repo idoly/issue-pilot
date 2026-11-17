@@ -290,7 +290,10 @@ export class IssueWorkFileStore {
   async generate<T>(fileName: string, producer: (append: (content: string | Uint8Array) => Promise<void>) => Promise<T>, signal?: AbortSignal): Promise<WorkFileMetadata & { result: T }> {
     const selected = workFileName(fileName);
     const target = path.join(this.directory, selected);
-    return writes.run(target, async () => {
+    let started = false;
+    const queued = writes.run(target, async () => {
+      started = true;
+      // A waiter cancelled before its turn keeps its queue slot but never runs the producer.
       signal?.throwIfAborted();
       await assertIssueRoot(this.stateRoot, this.issueKey);
       const temporary = path.join(this.directory, `.work-file-${randomUUID()}.tmp`);
@@ -317,6 +320,17 @@ export class IssueWorkFileStore {
       } finally {
         await cleanupWorkFile(handle, temporary, failures);
       }
+    });
+    if (!signal) return queued;
+    // Cancellation settles the caller while it is still waiting for an earlier same-path operation;
+    // once started, the operation owns its own cancellation and cleanup.
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        if (!started) reject(signal.reason);
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      queued.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
     });
   }
 }

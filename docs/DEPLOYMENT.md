@@ -58,9 +58,9 @@ Node 使用运行用户的私有编译缓存加快后续启动，默认位于 `~
 根配置 `http.identity` 决定页面能否选择账号：
 
 - `"selectable"`（默认）：右上角可切换任意启用账号，适合本机或受控内网。
-- `"gateway"`：身份由网关提供。页面隐藏账号切换，不再发送页面选择的 subject 头，并清除浏览器记住的选择。
+- `"gateway"`：身份由网关提供。页面隐藏账号切换，不再发送页面选择的 subject 头，并清除浏览器记住的选择。服务端拒绝缺少 `X-Issue-Pilot-Subject` 的 `/api/*` 和 `/mcp` 请求（401 `current_subject_required`），不再默认使用最早的启用账号；`/health` 和网页静态资源不受影响。
 
-改为 `"gateway"` 只影响页面行为，服务端身份解析不变，也不代替网关；网关仍须覆盖身份头。修改后需重启。
+`"gateway"` 不是认证，也不代替网关；网关必须为每个 API、下载、SSE 和 MCP 请求注入身份头并覆盖来访值。浏览器原生 EventSource（对话 SSE）不会带页面的头，只能由网关注入，否则对话流会被拒绝。修改后需重启。
 
 ## 首次本地运行
 
@@ -79,7 +79,7 @@ npm run build
 node --experimental-strip-types src/http/production.ts
 ```
 
-`npm ci` 必须执行补丁校验。API 首次启动会升级、初始化数据库；不用先运行 `db:migrate`。没有 `npm start`，Web build 也不会启动服务。
+`npm ci` 必须执行补丁校验。服务启动时还会核对 Pi SDK 和 zod 的运行时补丁内容，缺失时拒绝启动并提示 `dependency_patch_not_applied`（例如用了 `--ignore-scripts`）；此时重新执行 `npm ci` 或 `node scripts/apply-pi-sdk-patch.mjs`。API 首次启动会升级、初始化数据库；不用先运行 `db:migrate`。没有 `npm start`，Web build 也不会启动服务。
 
 数据路径由根配置确定，不受当前 shell 目录影响；没有 state/database 环境变量覆盖，也不创建旧 `.issue-pilot` 兼容目录。
 

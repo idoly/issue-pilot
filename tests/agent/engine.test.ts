@@ -206,10 +206,10 @@ for (const [sessionFails, gitFails] of [
   [true, false],
   [false, true],
 ])
-  test(`retains session and Git cleanup failures (${sessionFails}, ${gitFails})`, async () => {
+  test(`retains session and Git cleanup failures and always closes the checkout lease (${sessionFails}, ${gitFails})`, async () => {
     const root = await mkdtemp(join(tmpdir(), "issue-pilot-engine-cleanup-"));
     const engine = new AgentEngine({} as never, root);
-    const internal = engine as unknown as { sessions: Map<string, unknown>; personalGit: Map<string, unknown> };
+    const internal = engine as unknown as { sessions: Map<string, unknown>; personalGit: Map<string, unknown>; checkoutLeases: Map<string, unknown> };
     const sessionError = new Error("fixture_session_stop_failed"),
       gitError = new Error("fixture_git_cleanup_failed");
     const calls: string[] = [];
@@ -217,6 +217,11 @@ for (const [sessionFails, gitFails] of [
       async stop() {
         calls.push("session");
         if (sessionFails) throw sessionError;
+      },
+    });
+    internal.checkoutLeases.set("issue-1", {
+      close() {
+        calls.push("lease");
       },
     });
     internal.personalGit.set("issue-1", {
@@ -238,11 +243,12 @@ for (const [sessionFails, gitFails] of [
           return true;
         },
       );
-      assert.deepEqual(calls, ["session", "git"]);
+      assert.deepEqual(calls, ["session", "lease", "git"]);
       assert.equal(internal.sessions.has("issue-1"), false);
       assert.equal(internal.personalGit.has("issue-1"), false);
+      assert.equal(internal.checkoutLeases.has("issue-1"), false);
       await engine.runExclusive(["issue-1"], (reservation) => reservation.closeSession("issue-1"));
-      assert.deepEqual(calls, ["session", "git"]);
+      assert.deepEqual(calls, ["session", "lease", "git"]);
     } finally {
       await engine.close();
       await rm(root, { recursive: true, force: true });
@@ -397,6 +403,42 @@ test("does not steer a new message past an earlier message still queued for the 
   assert.equal(scheduled.length, 1);
 });
 
+test("queues slash commands sent while streaming for the next round instead of steering them", async () => {
+  const database = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-001", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
+  };
+  const engine = new AgentEngine(database as never, unusedStateRoot);
+  const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
+  const steers: string[] = [];
+  const records: Array<{ message: string; state: string }> = [];
+  const scheduled: Array<() => Promise<void>> = [];
+  internal.schedule = (_issueId, operation) => {
+    scheduled.push(operation);
+  };
+  internal.sessions.set("issue-1", {
+    streaming: true,
+    session: {
+      sessionManager: {
+        getBranch: () => [],
+        appendCustomEntry(_type: string, data: { message: string; delivery: { state: string } }) {
+          records.push({ message: data.message, state: data.delivery.state });
+          return "queued-command";
+        },
+      },
+      getSteeringMessages: () => [],
+      async steer(message: string) {
+        steers.push(message);
+      },
+    },
+    async stop() {},
+  });
+  await engine.send("issue-1", "/compact");
+  assert.deepEqual(steers, []);
+  // Never marked started, so a retry cannot report an unsent command as delivered.
+  assert.deepEqual(records, [{ message: "/compact", state: "queued" }]);
+  assert.equal(scheduled.length, 1);
+});
+
 test("a steer left undelivered when the round ends is taken back and queued instead of reported as sent", async () => {
   const database = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-002", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
@@ -438,9 +480,9 @@ test("a steer left undelivered when the round ends is taken back and queued inst
     },
     async stop() {},
   });
-  await engine.send("issue-1", "/skill:late");
+  await engine.send("issue-1", "late input");
   assert.equal(cleared, 1);
-  assert.deepEqual(records, [{ message: "/skill:late", queued: true }]);
+  assert.deepEqual(records, [{ message: "late input", queued: true }]);
   assert.equal(scheduled.length, 1);
 });
 

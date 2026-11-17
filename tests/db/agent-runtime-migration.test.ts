@@ -28,9 +28,10 @@ test("adds an empty runtime configuration without changing the global model or c
     );
     const original = (await db.client.execute("SELECT * FROM global_agent_configuration")).rows[0]!;
     await migrate(db.db, { migrationsFolder: path.resolve("drizzle") });
-    const { runtime, api_key: apiKey, ...retained } = (await db.client.execute("SELECT * FROM global_agent_configuration")).rows[0]!;
+    const { runtime, api_key: apiKey, revision, ...retained } = (await db.client.execute("SELECT * FROM global_agent_configuration")).rows[0]!;
     assert.deepEqual(JSON.parse(String(runtime)), {});
     assert.equal(apiKey, "");
+    assert.equal(revision, 0);
     assert.deepEqual(retained, original);
     assert.equal((await db.client.execute("PRAGMA integrity_check")).rows[0]!.integrity_check, "ok");
     assert.equal((await db.client.execute("PRAGMA foreign_key_check")).rows.length, 0);

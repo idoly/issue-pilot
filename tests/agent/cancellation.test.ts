@@ -104,7 +104,73 @@ test("cancellation state-write failure is reported to the caller and releases th
   }
 });
 
-test("running cancellation calls Pi abort, preserves the live session, drains before accepting new work and reauthorizes", async () => {
+for (const retireAfterRound of [false, true]) {
+  // run() marks read-only (prod/test) sessions for retirement; dev sessions stay reusable.
+  const outcome = retireAfterRound ? "retires a read-only session" : "preserves a reusable dev session";
+  test(`running cancellation calls Pi abort, ${outcome}, drains before accepting new work and reauthorizes`, async () => {
+    const f = await createApiFixture();
+    const db = openDatabase(f.databaseFile);
+    const errors: unknown[] = [];
+    const engine = new AgentEngine(db.db, f.root, undefined, (error) => errors.push(error));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let aborted = 0,
+      stopped = 0;
+    const internal = engine as unknown as { sessions: Map<string, unknown>; run(id: string): Promise<void>; roundSignal(id: string): AbortSignal };
+    let started = false;
+    internal.run = async (id) => {
+      started = true;
+      await gate;
+      internal.roundSignal(id);
+    };
+    try {
+      await createService(f.app, "Running");
+      await createIssue(f.app, "running", "test");
+      const [issue] = await db.db.select().from(issues);
+      const managed = {
+        session: {
+          clearQueue() {},
+          async abort() {
+            aborted++;
+            release();
+          },
+        },
+        async stop() {
+          stopped++;
+        },
+        retireAfterRound,
+      };
+      internal.sessions.set(issue!.id, managed);
+      engine.enqueue(issue!.id);
+      await waitFor(() => started);
+      await assert.rejects(
+        engine.abort(issue!.id, async () => {
+          throw new Error("inactive");
+        }),
+        /inactive/,
+      );
+      assert.equal(aborted, 0);
+      await engine.abort(issue!.id);
+      assert.equal(aborted, 1);
+      assert.equal(stopped, retireAfterRound ? 1 : 0);
+      assert.equal(internal.sessions.get(issue!.id), retireAfterRound ? undefined : managed);
+      assert.equal(engine.getRunState(issue!.id), "idle");
+      assert.deepEqual(errors, []);
+      const [current] = await db.db.select().from(issues).where(eq(issues.id, issue!.id));
+      assert.equal(current!.status, "open");
+      await engine.runExclusive([issue!.id], async () => undefined);
+    } finally {
+      release();
+      await engine.close();
+      db.close();
+      await f.cleanup();
+    }
+  });
+}
+
+test("cancelling during preparation releases the personal SSH environment and checkout lease", async () => {
   const f = await createApiFixture();
   const db = openDatabase(f.databaseFile);
   const errors: unknown[] = [];
@@ -113,50 +179,44 @@ test("running cancellation calls Pi abort, preserves the live session, drains be
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let aborted = 0,
-    stopped = 0;
-  const internal = engine as unknown as { sessions: Map<string, unknown>; run(id: string): Promise<void>; roundSignal(id: string): AbortSignal };
+  const closed: string[] = [];
+  const internal = engine as unknown as {
+    personalGit: Map<string, unknown>;
+    checkoutLeases: Map<string, unknown>;
+    run(id: string): Promise<void>;
+    roundSignal(id: string): AbortSignal;
+  };
   let started = false;
   internal.run = async (id) => {
+    // run() records these before preparation and before any session exists.
+    internal.personalGit.set(id, {
+      env: {},
+      async close() {
+        closed.push("git");
+      },
+    });
+    internal.checkoutLeases.set(id, {
+      close() {
+        closed.push("lease");
+      },
+    });
     started = true;
     await gate;
     internal.roundSignal(id);
   };
   try {
-    await createService(f.app, "Running");
-    await createIssue(f.app, "running", "test");
+    await createService(f.app, "Preparing");
+    await createIssue(f.app, "preparing", "test");
     const [issue] = await db.db.select().from(issues);
-    const managed = {
-      session: {
-        clearQueue() {},
-        async abort() {
-          aborted++;
-          release();
-        },
-      },
-      async stop() {
-        stopped++;
-      },
-    };
-    internal.sessions.set(issue!.id, managed);
     engine.enqueue(issue!.id);
     await waitFor(() => started);
-    await assert.rejects(
-      engine.abort(issue!.id, async () => {
-        throw new Error("inactive");
-      }),
-      /inactive/,
-    );
-    assert.equal(aborted, 0);
-    await engine.abort(issue!.id);
-    assert.equal(aborted, 1);
-    assert.equal(stopped, 0);
-    assert.equal(internal.sessions.get(issue!.id), managed);
-    assert.equal(engine.getRunState(issue!.id), "idle");
+    const stopping = engine.abort(issue!.id);
+    release();
+    await stopping;
+    assert.deepEqual(closed, ["lease", "git"]);
+    assert.equal(internal.personalGit.has(issue!.id), false);
+    assert.equal(internal.checkoutLeases.has(issue!.id), false);
     assert.deepEqual(errors, []);
-    const [current] = await db.db.select().from(issues).where(eq(issues.id, issue!.id));
-    assert.equal(current!.status, "open");
-    await engine.runExclusive([issue!.id], async () => undefined);
   } finally {
     release();
     await engine.close();

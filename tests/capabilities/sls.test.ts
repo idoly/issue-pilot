@@ -83,8 +83,8 @@ test("target wildcard schemas and execution keep independent logstore permission
     ...parseSlsScopeConfiguration({
       ...configured,
       targets: [
-        { region: "cn-other", project: "other-project", logstores: ["*"] },
         { region: configured.region, project: configured.project, logstores: ["application_log"] },
+        { region: "cn-other", project: "other-project", logstores: ["*"] },
       ],
     }),
   };

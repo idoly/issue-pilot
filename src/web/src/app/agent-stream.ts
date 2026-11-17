@@ -48,6 +48,15 @@ interface AgentStreamCallbacks {
 
 type EventSourceFactory = (url: string) => EventSource;
 
+/** Upper bound for the reconnect delay; consecutive failures double the configured base up to this cap. */
+const maxReconnectMs = 30_000;
+
+/** Exponential backoff with jitter in [ceiling / 2, ceiling], so the first retry never exceeds the configured base. */
+export function reconnectDelay(baseMs: number, failures: number, random: () => number = Math.random): number {
+  const ceiling = Math.min(Math.max(baseMs, maxReconnectMs), baseMs * 2 ** Math.min(failures, 30));
+  return Math.round(ceiling / 2 + (ceiling / 2) * random());
+}
+
 export class AgentStreamController {
   private stream: EventSource | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -55,6 +64,8 @@ export class AgentStreamController {
   private generation = 0;
   private issueId = "";
   private disposed = false;
+  // Consecutive failures for this Issue since its last accepted snapshot; reconnects keep it, snapshot_ready or another Issue resets it.
+  private failures = 0;
 
   constructor(
     private readonly streamUrl: (issueId: string) => string,
@@ -62,10 +73,12 @@ export class AgentStreamController {
     private readonly staleMs: number,
     private readonly callbacks: AgentStreamCallbacks,
     private readonly createEventSource: EventSourceFactory = (url) => new EventSource(url),
+    private readonly random: () => number = Math.random,
   ) {}
 
   connect(issueId: string): void {
     if (this.disposed) return;
+    if (this.issueId !== issueId) this.failures = 0;
     this.issueId = issueId;
     const generation = ++this.generation;
     this.closeStream();
@@ -87,10 +100,12 @@ export class AgentStreamController {
       this.closeStream(source);
       this.callbacks.onConnection(false);
       this.callbacks.onError(reason);
+      const delay = reconnectDelay(this.reconnectMs, this.failures, this.random);
+      this.failures += 1;
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = undefined;
         if (!this.disposed && this.issueId === issueId) this.connect(issueId);
-      }, this.reconnectMs);
+      }, delay);
     };
     const touch = () => {
       this.clearStaleTimer();
@@ -112,6 +127,7 @@ export class AgentStreamController {
         const snapshot = parseSnapshot(event.data);
         this.callbacks.onSnapshot(snapshot, { entries: replay.snapshot(), activity: replayActivity, queue: replayQueue, agentStarted: replayAgentStarted }, generation);
         replayComplete = true;
+        this.failures = 0;
         this.callbacks.onConnection(true);
         this.callbacks.onError("");
       } catch {

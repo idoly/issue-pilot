@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { createApiFixture, workspaceStatistics } from "./fixture.ts";
 
 test("workspace statistics expose a sampled snapshot and explicit refresh bypasses it", async (context) => {
@@ -26,11 +27,12 @@ test("workspace statistics expose a sampled snapshot and explicit refresh bypass
   }
 });
 
-test("an unreadable Issue subtree preserves the last complete workspace statistics", { skip: process.getuid?.() === 0 }, async () => {
+test("an unreadable Issue subtree preserves the last complete workspace statistics", { skip: process.getuid?.() === 0 }, async (context) => {
   const { chmod, mkdir } = await import("node:fs/promises");
   const path = await import("node:path");
   const { createIssue, createService } = await import("./fixture.ts");
   const { issueRoot } = await import("../../src/workspace/state.ts");
+  context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const fixture = await createApiFixture();
   const locked = { path: "" };
   try {
@@ -54,6 +56,8 @@ test("an unreadable Issue subtree preserves the last complete workspace statisti
     assert.equal(state.error, "workspace_statistics_failed");
     assert.deepEqual(state.snapshot, complete);
     await chmod(locked.path, 0o700);
+    // Explicit refreshes are spaced by the configured interval.
+    context.mock.timers.tick(issuePilotConfig.http.workspaceStatisticsRefreshIntervalMs);
     const recovered = await workspaceStatistics(fixture.app, true);
     assert.equal(recovered.totalBytes, complete.totalBytes);
   } finally {

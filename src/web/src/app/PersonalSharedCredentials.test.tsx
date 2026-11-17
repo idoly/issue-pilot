@@ -21,6 +21,7 @@ const agent = {
   codemode: "on" as const,
   runtime: { networkAllowedDomains: ["maven.aliyun.com:443"] },
   apiKeyConfigured: true,
+  revision: 4,
 };
 vi.mock("./ApplicationResources", () => ({
   useApplicationResources: () => ({
@@ -65,8 +66,8 @@ beforeEach(() => {
   state.saveDms.mockResolvedValue({ configured: true, url: "https://new.example.test/sse", revision: 6 });
   state.loadSls.mockResolvedValue({ configured: true, revision: 7 });
   state.saveSls.mockResolvedValue({ configured: false, revision: 8 });
-  state.saveAgent.mockResolvedValue({ ok: true });
-  state.refresh.mockResolvedValue({ agent: { ...agent, runtime: {}, apiKeyConfigured: true }, agentModels: [], environments: [], services: [] });
+  state.saveAgent.mockResolvedValue({ ok: true, revision: 6 });
+  state.refresh.mockResolvedValue({ agent: { ...agent, runtime: {}, apiKeyConfigured: true, revision: 5 }, agentModels: [], environments: [], services: [] });
 });
 afterEach(() => {
   cleanup();
@@ -125,6 +126,7 @@ test("the shared API key reuses the model dialog and keeps the global runtime se
       thinkingLevel: "high",
       codemode: "on",
       runtime: agent.runtime,
+      expectedRevision: 4,
       apiKey: { mode: "replace", value: "shared-key" },
     }),
   );
@@ -138,6 +140,21 @@ test("the shared API key reuses the model dialog and keeps the global runtime se
   await waitFor(() =>
     expect(state.savePersonal).toHaveBeenCalledWith({ expectedRevision: 2, model: { mode: "replace", provider: "personal", model: "personal-model", thinkingLevel: "low", codemode: "off" } }),
   );
+});
+
+test("a stale shared model keeps the draft and reloads the configuration before another save", async () => {
+  state.saveAgent.mockRejectedValueOnce(new Error("configuration_changed"));
+  const dialog = await openGroup(0);
+  await fireEvent.input(within(dialog).getByLabelText("API Key"), { target: { value: "shared-key" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  const reload = await within(dialog).findByRole("button", { name: "重新加载" });
+  expect(within(dialog).getByLabelText("API Key")).toHaveProperty("value", "shared-key");
+  expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", true);
+  expect(state.refresh).not.toHaveBeenCalled();
+  fireEvent.click(reload);
+  await waitFor(() => expect(state.refresh).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(state.saveAgent).toHaveBeenCalledTimes(1);
 });
 
 test("non-admins see no shared switch and never read shared credential status", async () => {
@@ -226,7 +243,7 @@ for (const outcome of ["success", "failure"] as const)
     state.saveAgent.mockImplementationOnce(
       () =>
         new Promise((resolve, reject) => {
-          finish = outcome === "success" ? () => resolve({ ok: true }) : () => reject(new Error("old_model_save_failed"));
+          finish = outcome === "success" ? () => resolve({ ok: true, revision: 6 }) : () => reject(new Error("old_model_save_failed"));
         }),
     );
     const dialog = await openGroup(0);
@@ -242,7 +259,7 @@ for (const outcome of ["success", "failure"] as const)
     state.saveAgent.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          finishNext = () => resolve({ ok: true });
+          finishNext = () => resolve({ ok: true, revision: 7 });
         }),
     );
     fireEvent.click(within(reopened).getByRole("button", { name: "保存" }));

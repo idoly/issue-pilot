@@ -15,7 +15,9 @@ export interface OrderedSseWriter {
 }
 
 export function createOrderedSseWriter(target: SseTarget, onWriteFailure: (error: unknown) => void = () => undefined, maxQueuedBytes = issuePilotConfig.http.sseQueuedBytes): OrderedSseWriter {
-  const queue: string[] = [];
+  const queue: Array<{ payload: string; bytes: number }> = [];
+  // The budget excludes the head frame, which may exceed it on its own so that a single legitimately
+  // large frame (for example pasted images) cannot disconnect every viewer.
   let queuedBytes = 0;
   const drainWaiters = new Set<() => void>();
   const resolveDrain = () => {
@@ -60,8 +62,8 @@ export function createOrderedSseWriter(target: SseTarget, onWriteFailure: (error
           close();
           break;
         }
-        const next = queue[consumed++]!;
-        queuedBytes -= Buffer.byteLength(next);
+        const { payload: next, bytes } = queue[consumed++]!;
+        queuedBytes -= bytes;
         let accepted: boolean;
         let completed = false;
         let resume: (() => void) | undefined;
@@ -100,11 +102,13 @@ export function createOrderedSseWriter(target: SseTarget, onWriteFailure: (error
   };
   const write = (payload: string) => {
     if (closed) return;
-    queue.push(payload);
-    queuedBytes += Buffer.byteLength(payload);
+    const bytes = Buffer.byteLength(payload);
+    queue.push({ payload, bytes });
+    queuedBytes += bytes;
     pump();
-    // The transport owns a directly written frame. Bound only frames waiting behind backpressure.
-    if (queuedBytes > maxQueuedBytes) fail(new Error("sse_queue_budget_exceeded"));
+    // The transport owns a directly written frame. Bound only frames waiting behind backpressure,
+    // excluding the head frame that is written next.
+    if (queue.length && queuedBytes - queue[0]!.bytes > maxQueuedBytes) fail(new Error("sse_queue_budget_exceeded"));
   };
   const drain = () =>
     closed || (!queue.length && !removeDrainListener)

@@ -69,15 +69,17 @@ test("separate store instances share destination serialization and queued cancel
         secondSettled = true;
       },
     );
-    controller.abort(reason);
     await new Promise((resolve) => {
       setImmediate(resolve);
     });
     assert.equal(secondSettled, false);
-    release();
-    await writing;
+    controller.abort(reason);
+    // The cancelled waiter settles while the first producer still holds the destination.
     await assert.rejects(queued, (error) => error === reason);
     await observed;
+    assert.equal(secondSettled, true);
+    release();
+    await writing;
     assert.equal(secondStarted, false);
     assert.equal((await readFile(path.join(first.directory, "result.txt"))).toString(), "first");
   } finally {
@@ -243,9 +245,9 @@ test("same-name generation serializes and queued cancellation never starts its p
       controller.signal,
     );
     controller.abort(reason);
+    await assert.rejects(second, (error) => error === reason);
     release();
     await first;
-    await assert.rejects(second, (error) => error === reason);
     assert.equal(calls, 0);
     assert.equal((await readFile(path.join(store.directory, "result.json"))).toString(), "first");
   } finally {

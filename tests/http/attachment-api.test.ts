@@ -155,6 +155,7 @@ for (const closeFails of [false, true])
       const response = Object.assign(new EventEmitter(), { writableFinished: false, destroyed: false });
       const request = {
         params: { key: issue.id, attachmentId: attachment.id },
+        headers: {},
         raw,
         log: {
           error(...args: unknown[]) {

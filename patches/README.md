@@ -2,7 +2,7 @@
 
 Maintenance reference. [Development](../docs/DEVELOPMENT.md) · [Agent contracts](../docs/ai/README.md)
 
-The lockfile fixes package versions. [postinstall](../scripts/apply-pi-sdk-patch.mjs) checks versions and forward/reverse patch context using Git; drift fails rather than being ignored. Run npm ci with the patch files in an independent checkout. Source edits do not update live node_modules.
+The lockfile fixes package versions. [postinstall](../scripts/apply-pi-sdk-patch.mjs) checks versions and forward/reverse patch context using Git; drift fails rather than being ignored. At startup [buildApi](../src/http/api.ts) also checks that the installed Pi and zod files contain every added line of their patches ([dependency-patches.ts](../src/http/dependency-patches.ts)), so an install that skipped scripts refuses to start with dependency_patch_not_applied. Run npm ci with the patch files in an independent checkout. Source edits do not update live node_modules.
 
 ## Pi output persistence
 

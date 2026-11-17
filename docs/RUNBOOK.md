@@ -23,6 +23,7 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 | 新进程启动 | 查看数据库初始化（Opened application database）耗时；普通重启不扫描历史工单或共享 Git 快照。上一次启动的日志在同目录的 `application.<UTC 时间>.log`（保留 5 份） |
 | 等待健康 | 每轮检查，通过即返回；600 秒是上限，不是固定延迟 |
 | 超时或发现未知进程 | 保留现场，先查身份和日志，不重复启动、不按端口杀进程 |
+| 日志出现 `database_foreign_key_violation` | 迁移后外键检查发现孤立行（信息列出“表#rowid->父表”），服务在监听前停止。不要手工删除这些行或关闭检查；保留数据库和日志，停止写入者核对涉及的行，按[存储参考](ai/STORAGE.md#database-checkpoints)从迁移前检查点恢复后再处理 |
 
 应用由本机脚本管理，没有 systemd service。启动失败不删除租约 socket 或目录来“解锁”。详细身份检查和收尾边界见[启动与关闭](ai/ARCHITECTURE.md#startup-and-shutdown)。
 
@@ -49,18 +50,7 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 
 先检查是否收到 `message`、`snapshot_ready` 和后续心跳。如果回放停在中途，服务端 socket 缓冲已清空、socket `needDrain=false`，但 HTTP response `needDrain=true` 且发送器仍等待 `drain`，应检查 SSE 写入完成通知。回放未结束时，快照和心跳都可能尚未发送；仅凭状态码或重连次数不能归因于网络、WebSocket 或历史体积。如果快照已到达但页面仍为空白，应继续检查浏览器异常和当前连接的快照是否应用。
 
-修复 [`fd3d895`](https://github.com/idoly/issue-pilot/commit/fd3d895f8ad09009eca5166d87086e9a2b2d3ede) 在写入完成回调或 `drain` 到来时恢复回放，避免只等待未触发的事件。发送顺序、队列预算、迟到回调隔离和断线清理的约束见 [SSE 技术合同](ai/HTTP.md#async-execution-sse-and-paging)，回归入口为 [sse.test.ts](../tests/http/sse.test.ts)。
-
-该修复的现场样本为 `ISSUE-20261104-015`：直连和 Windows 转发均曾停在 37 条事件、140885 字节，缺少快照与心跳。已核对的验证结果如下；这是该提交的验收记录，不代表后续版本自动通过。
-
-| 验证 | 结果 |
-| --- | --- |
-| 新旧代码对照 | 修复版 13/13 通过；基线原有 9 项通过，新增 4 项全部等待超时 |
-| 全量检查 | 后端 812/812、前端 366/366；类型、格式、lint、构建和差异检查通过；生产依赖审计 0 漏洞 |
-| 直连与 Windows 转发 | 10 次重连全部收到快照，耗时 16–32 毫秒；6 条连接各保持 55 秒，均收到快照和 3 次心跳，无提前断开 |
-| Chromium 经 Windows 转发 | 55 秒内 1 条事件流连接、1 次快照、3 次心跳，27 条消息正常显示，无 JavaScript 异常或流错误提示 |
-
-上述现场验收不覆盖此前 `ISSUE-20261106-008` 的全部空白症状。遇到类似现象仍应核对停滞阶段，不把所有 45 秒超时都视为同一故障。
+修复 [`fd3d895`](https://github.com/idoly/issue-pilot/commit/fd3d895f8ad09009eca5166d87086e9a2b2d3ede) 在写入完成回调或 `drain` 到来时恢复回放，避免只等待未触发的事件。发送顺序、队列预算、迟到回调隔离和断线清理的约束见 [SSE 技术合同](ai/HTTP.md#async-execution-sse-and-paging)，回归入口为 [sse.test.ts](../tests/http/sse.test.ts)。遇到类似现象应核对停滞阶段，不把所有 45 秒超时都视为同一故障。
 
 ## 按风险发布与重启
 
@@ -112,6 +102,15 @@ node --experimental-strip-types scripts/migrate-development-git.ts \
 ## 工单删除失败边界
 
 管理员 API 删除是永久删除，不是代码回收；页面没有删除入口。即使返回 500 或断线，也可能已经部分生效。不要反复删除、手动清空目录或重建记录；按[存储参考](ai/STORAGE.md#deletion-and-cross-medium-failure)检查准确的暂存位置和事务阶段。
+
+## 首次开发准备中断
+
+首次准备开发代码时，如果进程在 `git worktree add` 之后、数据库保存仓库记录之前退出，重试会返回 `workspace_path_already_exists`。系统不会自动接管这个目录，需要停止写入后人工确认：
+
+1. 只读查询数据库，确认该工单该仓库没有 `issue_repositories.local_path` 记录。
+2. `workspaces/<key>/<仓库名>` 是 `workspaces/<key>/.issue-git/<仓库哈希>` 私有仓登记的工作树，当前分支是该工单的 `hotfix-`/`feature-` 分支，没有超出基线的提交，`git status --porcelain --ignored` 输出为空。
+
+全部符合时，只移除这个工作树登记：`git -C <私有仓> worktree remove <工作区>`。保留私有仓和分支，再重新准备，系统会沿用已有的私有分支。任一项不符（有改动、多出提交、分支或指针不一致）时保留现场，不要删除目录、重置分支或改数据库。
 
 ## 空间清理
 

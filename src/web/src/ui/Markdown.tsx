@@ -6,7 +6,14 @@ import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
 const maximumCachedEntries = sharedConfig.web.markdownCacheEntries;
 const maximumCachedCharacters = sharedConfig.web.markdownCacheCharacters;
-const htmlCache = new Map<string, { html: string; weight: number }>();
+// html is the sanitized rendering. linked keeps the unsanitized marked output only when it contains an href,
+// so callers that rewrite links can start from it without parsing again; link-free sources need no rewrite.
+interface CachedMarkdown {
+  html: string;
+  linked: string | null;
+  weight: number;
+}
+const htmlCache = new Map<string, CachedMarkdown>();
 let cachedCharacters = 0;
 
 // Issue and agent text may contain raw HTML. Keep rendering inert: no forms or controls to spoof,
@@ -37,41 +44,57 @@ const sanitize = (html: string) => {
   return template.innerHTML;
 };
 
-function renderMarkdown(source: string): string {
+const parse = (source: string) => marked.parse(source, { async: false }) as string;
+
+function renderMarkdown(source: string): CachedMarkdown {
   const cached = htmlCache.get(source);
   if (cached) {
     htmlCache.delete(source);
     htmlCache.set(source, cached);
-    return cached.html;
+    return cached;
   }
-  const html = sanitize(marked.parse(source, { async: false }) as string);
-  const weight = source.length + html.length;
-  if (weight > maximumCachedCharacters) return html;
-  while (htmlCache.size >= maximumCachedEntries || cachedCharacters + weight > maximumCachedCharacters) {
-    const oldest = htmlCache.entries().next().value as [string, { html: string; weight: number }] | undefined;
+  const parsed = parse(source);
+  const html = sanitize(parsed);
+  const linked = /href/i.test(parsed) ? parsed : null;
+  const entry = { html, linked, weight: source.length + html.length + (linked?.length ?? 0) };
+  if (entry.weight > maximumCachedCharacters) return entry;
+  while (htmlCache.size >= maximumCachedEntries || cachedCharacters + entry.weight > maximumCachedCharacters) {
+    const oldest = htmlCache.entries().next().value as [string, CachedMarkdown] | undefined;
     if (!oldest) break;
     htmlCache.delete(oldest[0]);
     cachedCharacters -= oldest[1].weight;
   }
-  htmlCache.set(source, { html, weight });
-  cachedCharacters += weight;
-  return html;
+  htmlCache.set(source, entry);
+  cachedCharacters += entry.weight;
+  return entry;
+}
+
+/** Rewrites links in unsanitized marked output; sanitization always runs afterwards on the result. */
+function renderLinked(parsed: string, resolveLink: (href: string) => string | null | undefined): string {
+  const template = document.createElement("template");
+  template.innerHTML = parsed;
+  for (const link of template.content.querySelectorAll("a[href]")) {
+    const href = resolveLink(link.getAttribute("href")!);
+    if (href === null) link.replaceWith(...Array.from(link.childNodes));
+    else if (href !== undefined) {
+      link.setAttribute("href", href);
+      link.setAttribute("download", "");
+    }
+  }
+  return sanitize(template.innerHTML);
 }
 
 export function Markdown(props: { source: string; cache?: boolean; resolveLink?: (href: string) => string | null | undefined }) {
   const html = createMemo(() => {
-    if (!props.resolveLink) return props.cache === false ? sanitize(marked.parse(props.source, { async: false }) as string) : renderMarkdown(props.source);
-    const template = document.createElement("template");
-    template.innerHTML = marked.parse(props.source, { async: false }) as string;
-    for (const link of template.content.querySelectorAll("a[href]")) {
-      const href = props.resolveLink(link.getAttribute("href")!);
-      if (href === null) link.replaceWith(...Array.from(link.childNodes));
-      else if (href !== undefined) {
-        link.setAttribute("href", href);
-        link.setAttribute("download", "");
-      }
+    const resolveLink = props.resolveLink;
+    if (props.cache === false) {
+      const parsed = parse(props.source);
+      return resolveLink ? renderLinked(parsed, resolveLink) : sanitize(parsed);
     }
-    return sanitize(template.innerHTML);
+    // The parse and the sanitized link-free rendering are cached by source; only content that actually
+    // contains links is rewritten for the current resolver and sanitized again.
+    const entry = renderMarkdown(props.source);
+    return resolveLink && entry.linked !== null ? renderLinked(entry.linked, resolveLink) : entry.html;
   });
   return <div class="markdown markdown-body" innerHTML={html()} />;
 }

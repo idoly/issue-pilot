@@ -69,6 +69,9 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
       "0076_issue_data_publication",
       "0077_workspace_release_state",
       "0078_issue_detail_revision",
+      "0079_global_agent_revision",
+      "0080_closed_domain_guards",
+      "0081_drop_issue_comments",
     ],
   );
   const previousJournal = {
@@ -144,7 +147,14 @@ test("preserves issue, CC, and session data when removing unused metadata", asyn
     assert.deepEqual((await client.execute("select config from service_deployments")).rows, [{ config: "{}" }]);
     assert.deepEqual(
       (await client.execute("select name from sqlite_master where type = 'trigger' and name like '%deployment%' order by name")).rows.map((row) => row.name),
-      ["issues_deployment_required_insert", "issues_deployment_required_update", "service_deployments_issues_restrict_delete", "service_deployments_issues_restrict_update"],
+      [
+        "issues_deployment_required_insert",
+        "issues_deployment_required_update",
+        "service_deployments_included_issues_restrict_delete",
+        "service_deployments_included_issues_restrict_update",
+        "service_deployments_issues_restrict_delete",
+        "service_deployments_issues_restrict_update",
+      ],
     );
     assert.deepEqual(
       (await client.execute("select name from sqlite_master where type = 'trigger' and name like '%resolution_state%' order by name")).rows.map((row) => row.name),
@@ -450,7 +460,6 @@ test("creates a private SQLite database with JSON, dates, transactions, and fore
         "global_agent_configuration",
         "issue_attachments",
         "issue_cc_recipients",
-        "issue_comments",
         "issue_key_sequences",
         "issue_pilot_sessions",
         "issue_pins",

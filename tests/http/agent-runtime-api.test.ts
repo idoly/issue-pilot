@@ -18,12 +18,13 @@ test("saves Pi settings while resources remain a read-only file catalog", async 
     assert.deepEqual(initial.json().agent.runtime, {});
     await createService(f.app, "Runtime");
     await createIssue(f.app, "runtime");
-    const blocked = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, runtime } });
+    const blocked = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, runtime, expectedRevision: 0 } });
     assert.equal(blocked.statusCode, 409, blocked.body);
     assert.deepEqual((await f.app.inject({ method: "GET", url: "/api/config" })).json().agent.runtime, {});
     f.engine.running.clear();
-    const saved = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, runtime } });
+    const saved = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, runtime, expectedRevision: 0 } });
     assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(saved.json().revision, 1);
     assert.deepEqual((await f.app.inject({ method: "GET", url: "/api/config" })).json().agent.runtime, runtime);
     for (const value of [
       { settings: { defaultModel: "other" } },
@@ -33,12 +34,15 @@ test("saves Pi settings while resources remain a read-only file catalog", async 
       { extensions: ["/other"] },
       { prompts: ["/other"] },
     ]) {
-      const invalid = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, runtime: value } });
+      const invalid = await f.app.inject({ method: "PUT", url: "/api/config/agent", headers, payload: { ...testAgent, runtime: value, expectedRevision: 1 } });
       assert.equal(invalid.statusCode, 400, invalid.body);
     }
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "viewer", name: "Viewer", email: "viewer@example.test", role: "product" } });
     assert.equal((await f.app.inject({ method: "GET", url: "/api/config/agent/resources", headers: { "x-issue-pilot-subject": "viewer" } })).statusCode, 403);
-    assert.equal((await f.app.inject({ method: "PUT", url: "/api/config/agent", headers: { "x-issue-pilot-subject": "viewer" }, payload: { ...testAgent, runtime } })).statusCode, 403);
+    assert.equal(
+      (await f.app.inject({ method: "PUT", url: "/api/config/agent", headers: { "x-issue-pilot-subject": "viewer" }, payload: { ...testAgent, runtime, expectedRevision: 1 } })).statusCode,
+      403,
+    );
   } finally {
     await f.cleanup();
   }

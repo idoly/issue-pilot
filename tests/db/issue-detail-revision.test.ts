@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { migrate } from "drizzle-orm/libsql/migrator";
 
 import { openDatabase } from "../../src/db/client.ts";
 import { migrateBefore } from "./migration-fixture.ts";
@@ -28,7 +27,8 @@ test("upgrades existing Issue details and versions only committed changes to the
       "write",
     );
     const { client } = database;
-    await migrate(database.db, { migrationsFolder: path.resolve("drizzle") });
+    // 0081 later drops issue_comments; this test covers the 0078 contract while comments still existed.
+    await migrateBefore(database, path.join(root, "before-comment-removal"), "0081_drop_issue_comments");
     let revision = 0;
     const assertState = async () => {
       assert.deepEqual((await client.execute("SELECT id, detail_revision, updated_at FROM issues ORDER BY id")).rows, [

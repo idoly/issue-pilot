@@ -73,8 +73,12 @@ const definitions = [
   {
     name: "issue_message",
     description:
-      "向指定工单的智能体发送补充信息、问题或继续处理要求。运行中进入引导/排队流程，空闲时继续处理，已解决工单拒绝。成功只表示已受理，随后读取 issue_get/issue_conversation 查看进展；响应不明时先核对对话，不自动重复发送。",
-    inputSchema: obj({ key, message: str({ minLength: 1, maxLength: issuePilotConfig.limits.agentMessageChars, description: "发送给工单智能体的文本" }) }),
+      "向指定工单的智能体发送补充信息、问题或继续处理要求。运行中进入引导/排队流程，空闲时继续处理，已解决工单拒绝。成功只表示已受理，随后读取 issue_get/issue_conversation 查看进展。建议每条新消息生成一个 messageId；响应不明时只能用相同 messageId 和相同内容重试，已受理的消息不会重复执行。",
+    inputSchema: obj({
+      key,
+      message: str({ minLength: 1, maxLength: issuePilotConfig.limits.agentMessageChars, description: "发送给工单智能体的文本" }),
+      messageId: opt(str({ pattern: "^[a-zA-Z0-9_-]{1,128}$", description: "调用方生成的消息 ID（1–128 个字母、数字、下划线或连字符）；重试同一条消息时复用，内容不同会被拒绝" })),
+    }),
   },
   {
     name: "issue_conversation",
@@ -128,7 +132,7 @@ const bounded = (value: unknown) => {
 function createApplicationMcpServer(context: ApiRouteContext, request: Pick<FastifyRequest, "headers">) {
   const server = new Server({ name: "issue-pilot", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } });
   const headers = typeof request.headers["x-issue-pilot-subject"] === "string" ? { "x-issue-pilot-subject": request.headers["x-issue-pilot-subject"] } : {};
-  const api = async (url: string, payload?: Input, attachments: McpAttachment[] = []) => {
+  const api = async (url: string, payload?: Input, attachments: McpAttachment[] = [], extraHeaders: Record<string, string> = {}) => {
     let multipart: { payload: Buffer; headers: Record<string, string> } | undefined;
     if (attachments.length) {
       let totalBytes = 0;
@@ -156,7 +160,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       const encoded = new Request("http://localhost", { method: "POST", body: form });
       multipart = { payload: Buffer.from(await encoded.arrayBuffer()), headers: { ...headers, "content-type": encoded.headers.get("content-type")! } };
     }
-    const response = await context.app.inject({ method: payload ? "POST" : "GET", url, headers, ...(multipart ?? (payload ? { payload } : {})) });
+    const response = await context.app.inject({ method: payload ? "POST" : "GET", url, headers: { ...headers, ...extraHeaders }, ...(multipart ?? (payload ? { payload } : {})) });
     if (response.statusCode >= 400) {
       let code = "mcp_api_failed";
       try {
@@ -186,7 +190,8 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
     }
     if (name === "dingtalk_import") return JSON.parse((await api("/api/dingtalk/import", { priority: "p2", startAgent: false, ...input })).body);
     if (name === "issue_message") {
-      await api(`/api/issues/${encodeURIComponent(key)}/agent-messages`, { message: input.message });
+      // The HTTP admission owner validates the ID and deduplicates retries of an admitted message.
+      await api(`/api/issues/${encodeURIComponent(key)}/agent-messages`, { message: input.message }, [], typeof input.messageId === "string" ? { "x-issue-pilot-message-id": input.messageId } : {});
       return { key, accepted: true, next: ["issue_get", "issue_conversation"] };
     }
     if (name === "work_files") return page(JSON.parse((await api(`/api/issues/${encodeURIComponent(key)}/files${input.path ? `?path=${encodeURIComponent(String(input.path))}` : ""}`)).body), input);

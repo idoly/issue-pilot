@@ -11,8 +11,10 @@ test("the shared API key is saved with the global model, hidden, bound to its pr
   const f = await createApiFixture();
   const db = openDatabase(f.databaseFile);
   try {
-    const put = (payload: Record<string, unknown>, selected = headers) => f.app.inject({ method: "PUT", url: "/api/config/agent", headers: selected, payload });
     const agent = async () => (await f.app.inject({ method: "GET", url: "/api/config", headers })).json().agent as Record<string, unknown>;
+    // Each save carries the revision of a fresh read, as the editor does.
+    const put = async (payload: Record<string, unknown>, selected = headers) =>
+      f.app.inject({ method: "PUT", url: "/api/config/agent", headers: selected, payload: { expectedRevision: (await agent()).revision, ...payload } });
     const stored = async () => (await db.db.select().from(globalAgentConfiguration))[0]!.apiKey;
     assert.equal((await agent()).apiKeyConfigured, false);
 

@@ -162,6 +162,7 @@ export const globalAgentConfiguration = sqliteTable(
     codemode: text("codemode", { enum: AGENT_CODEMODE_MODES }).notNull().default("on"),
     runtime: json<AgentRuntimeConfiguration>("runtime").notNull().default({}),
     apiKey: text("api_key").notNull().default(""),
+    revision: integer("revision").notNull().default(0),
     ...timestamps,
   },
   (table) => [check("global_agent_configuration_singleton", sql`${table.id} = 1`), check("global_agent_codemode_valid", sql`${table.codemode} IN ('off','on','only')`)],
@@ -433,22 +434,6 @@ export const retiredIssueAttachments = sqliteTable(
     sha256: text("sha256").notNull(),
   },
   (table) => [index("retired_issue_attachments_issue_idx").on(table.issueId)],
-);
-
-export const issueComments = sqliteTable(
-  "issue_comments",
-  {
-    id: id(),
-    issueId: text("issue_id")
-      .notNull()
-      .references(() => issues.id, { onDelete: "cascade" }),
-    authorSubject: text("author_subject").notNull(),
-    body: text("body").notNull(),
-    createdAt: date("created_at")
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [index("issue_comments_issue_idx").on(table.issueId, table.createdAt)],
 );
 
 export const agentSessions = sqliteTable("issue_pilot_sessions", {

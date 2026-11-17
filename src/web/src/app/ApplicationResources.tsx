@@ -7,7 +7,7 @@ import { errorText } from "./error-text";
 
 const emptyCatalog = (): ConfigCatalog => ({ environments: [], services: [] });
 const emptyConfiguration = (): Config => ({
-  agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {}, apiKeyConfigured: false },
+  agent: { provider: "", model: "", thinkingLevel: "off", codemode: "on", runtime: {}, apiKeyConfigured: false, revision: 0 },
   environments: [],
   services: [],
   agentModels: [],

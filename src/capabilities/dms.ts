@@ -272,7 +272,7 @@ function isReadOnlyTool(tool: DmsMcpTool): boolean {
 function executeScriptArguments(input: CapabilityInputs["dms"], databaseId: string): Record<string, unknown> {
   return {
     database_id: databaseId,
-    script: validateReadOnlySql(input.script, Number.MAX_SAFE_INTEGER),
+    script: validateReadOnlySql(input.script, issuePilotConfig.limits.capability.dms.scriptChars),
     ...(input.logic === undefined ? {} : { logic: input.logic }),
   };
 }

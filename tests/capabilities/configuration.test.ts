@@ -24,6 +24,13 @@ test("validates SLS credentials and exact scopes without accepting custom target
   const targets = [scope, { ...scope, logstores: ["gateway"] }];
   assert.deepEqual(parseSlsScopeConfiguration({ ...scope, targets }), { ...scope, targets });
   assert.throws(() => parseSlsScopeConfiguration({ ...scope, targets: [{ name: "prod", ...scope }] }), /invalid_sls_scope/);
+  // The top level must restate targets[0]; runtime reads only targets, so a divergent top level is rejected on write.
+  for (const first of [
+    { ...scope, logstores: ["gateway"] },
+    { ...scope, region: "cn-other" },
+    { ...scope, project: "orders-other" },
+  ])
+    assert.throws(() => parseSlsScopeConfiguration({ ...scope, targets: [first, scope] }), /sls_scope_targets_mismatch/);
   for (const invalid of [
     { ...scope, logstores: [] },
     { ...scope, project: "INVALID" },

@@ -30,7 +30,6 @@ vi.mock("../data/client", async (importOriginal) => {
     collaboratingServices: [],
     relatedIssues: [],
     scopeTransitions: [],
-    comments: [] as Array<{ id: string; author: string; body: string; createdAt: string }>,
     ccRecipients: [],
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" },
     environmentKey: "test",
@@ -51,7 +50,7 @@ vi.mock("../data/client", async (importOriginal) => {
     { subject: "second-user", name: "刘宜展", email: "lyz@example.test", role: "developer", active: true, createdAt: now, updatedAt: now },
   ];
   const configuration: import("../data/client").Config = {
-    agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false },
+    agent: { provider: "enterprise-ai", model: "engineering-model", thinkingLevel: "medium", codemode: "on", runtime: {}, apiKeyConfigured: false, revision: 0 },
     agentModels: [{ provider: "enterprise-ai", id: "engineering-model", thinkingLevels: ["low", "medium", "high"] }],
     environments: [
       { key: "test", name: "测试" },
@@ -293,7 +292,7 @@ vi.mock("../data/client", async (importOriginal) => {
         repositories: { retained: [{ name: "orders", url: selected.repositories[0]!.url, baseBranch: selected.repositories[0]!.baseBranch }], added: [], removed: [] },
         branch: target.workMode === "development_fix" ? `hotfix-${id.toLowerCase()}` : null,
         session: { closeCurrent: true, preserveConversation: true as const },
-        preserved: ["attachments", "comments", "conversation"] as ["attachments", "comments", "conversation"],
+        preserved: ["attachments", "conversation"] as ["attachments", "conversation"],
         warnings: [],
       };
     }),
@@ -625,6 +624,55 @@ describe("issue pilot workspace", () => {
     window.history.forward();
     await screen.findByRole("heading", { name: target.title });
     expect(new URLSearchParams(window.location.search).get("issue")).toBe(target.id);
+  });
+
+  test("opens a created follow-up as its own history entry and reveals it in a containing queue scope", async () => {
+    const client = await import("../data/client");
+    const base = (await client.getIssue("ISSUE-20260810-042"))!;
+    const source = { ...base, status: "open" as const, agentRunning: false, workspaceStatus: "ready" as const, environmentKey: "dev", type: "defect_fix" as const };
+    // The follow-up is assigned to someone else, so the default assigned scope cannot show it.
+    const followUp = {
+      ...base,
+      id: "ISSUE-20261117-001",
+      revision: "ISSUE-20261117-001:1",
+      title: "正式跟进的结算问题",
+      status: "open" as const,
+      agentRunning: false,
+      assigneeSubject: "second-user",
+      reporterSubject: "fixture-user",
+      ccSubjects: [],
+    };
+    const existing = (await client.listIssues()).map((item) => (item.id === source.id ? source : item));
+    const listIssues = vi.mocked(client.listIssues).getMockImplementation()!,
+      getIssue = vi.mocked(client.getIssue).getMockImplementation()!;
+    let created = false;
+    vi.mocked(client.listIssues).mockImplementation(async () => structuredClone(created ? [...existing, followUp] : existing));
+    vi.mocked(client.getIssue).mockImplementation(async (id: string) => structuredClone(id === source.id ? source : id === followUp.id ? followUp : await getIssue(id)));
+    vi.mocked(client.createIssue).mockImplementationOnce(async () => {
+      created = true;
+      return structuredClone(followUp);
+    });
+    window.history.replaceState(null, "", `/?issue=${source.id}`);
+    try {
+      render(() => <App initialView="issues" />);
+      await screen.findByRole("heading", { name: source.title });
+      await waitFor(() => expect(queueScope().textContent).toContain("分配给我"));
+      fireEvent.click(await screen.findByRole("button", { name: "创建正式跟进" }));
+      const dialog = await screen.findByRole("dialog", { name: "创建正式跟进工单" });
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "创建并关联" })).toHaveProperty("disabled", false));
+      fireEvent.click(within(dialog).getByRole("button", { name: "创建并关联" }));
+      await screen.findByRole("heading", { name: followUp.title });
+      expect(new URLSearchParams(window.location.search).get("issue")).toBe(followUp.id);
+      await waitFor(() => expect(queueScope().textContent).toContain("我报告的"));
+      const row = (await within(screen.getByLabelText("工单队列")).findByText(followUp.id)).closest('[role="listitem"]');
+      expect(row?.getAttribute("aria-current")).toBe("true");
+      window.history.back();
+      await screen.findByRole("heading", { name: source.title });
+      expect(new URLSearchParams(window.location.search).get("issue")).toBe(source.id);
+    } finally {
+      vi.mocked(client.listIssues).mockImplementation(listIssues);
+      vi.mocked(client.getIssue).mockImplementation(getIssue);
+    }
   });
 
   test("keeps the current Issue and draft when browser back is declined", async () => {
@@ -1131,7 +1179,6 @@ describe("issue pilot workspace", () => {
     expect(switchAccount).toHaveBeenCalledOnce();
     switchAccount.mockRestore();
     await waitFor(() => expect(screen.getByText("ISSUE-20260810-038")).toBeTruthy());
-    expect(screen.queryByLabelText("添加评论或备注")).toBeNull();
     const retryButton = await waitFor(() => screen.getByRole("button", { name: "重试处理" }));
     fireEvent.click(retryButton);
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试处理" })).toBeNull());

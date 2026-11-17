@@ -18,7 +18,7 @@ Agent-authored SQL deliverables avoid variables, temporary tables and explicit t
 
 HTTP 201/202 does not mean model completion. Persist input and bind the session inside the per-Issue scope; preparation failures must not lose admitted messages. Pin the request sender and reauthorize after steering/session waits without switching identity.
 
-Running-session input is durably admitted with a conservative started marker before steering. A sole undelivered steer can return to queued only after Pi removes it; the same entry is reused, never appended as another message. Request IDs and sender identity live in this admission entry, not a second delivery database. Receipt lookup and sends share the per-Issue admission queue. Receipt reads hold off session mutations and shutdown without reporting Agent activity. Earlier pending inputs cannot be bypassed. Queued work must not use a disposed or replaced instance.
+Running-session input is durably admitted with a conservative started marker before steering. A sole undelivered steer can return to queued only after Pi removes it; the same entry is reused, never appended as another message. Request IDs and sender identity live in this admission entry, not a second delivery database. Receipt lookup and sends share the per-Issue admission queue. Receipt reads hold off session mutations and shutdown without reporting Agent activity. Earlier pending inputs cannot be bypassed. Pi refuses extension commands in steer, so `/` input during streaming is queued for the next round instead. Queued work must not use a disposed or replaced instance.
 
 [message-delivery.ts](../../src/agent/message-delivery.ts) owns durable delivery metadata:
 
@@ -36,7 +36,7 @@ agent_message_outcome_unknown is not permission to resend. Never replay an old s
 
 Abort reauthorizes, marks current/queued rounds cancelled, drains input admission and waits for Pi abort/cleanup. Repeated aborts share the operation; conflicting reservations/new work are rejected while cleanup is active.
 
-Cancellation retains sessions and admitted input. It does not roll back completed file or remote effects, and cancelled input is not automatically restored by retry. Preserve state/diagnostics on failure instead of marking success. Model idle timeout measures continuous absence of model updates, resets on updates and pauses during tools; it is not a round deadline.
+Cancellation retains reusable dev sessions and admitted input; read-only (prod/test) and scope-changed sessions retire as they would after a completed round. Cancelling during preparation releases the personal SSH environment and checkout lease. It does not roll back completed file or remote effects, and cancelled input is not automatically restored by retry. Preserve state/diagnostics on failure instead of marking success. Model idle timeout measures continuous absence of model updates, resets on updates and pauses during tools; it is not a round deadline.
 
 Owners: [engine.ts](../../src/agent/engine.ts), [pi-session.ts](../../src/agent/pi-session.ts). Regression: [cancellation.test.ts](../../tests/agent/cancellation.test.ts). Web Esc only initiates cancellation; it is not authorization.
 
@@ -50,7 +50,7 @@ Before reading a bound session validate a nonempty regular JSONL, valid header/r
 
 The binding must name a private `.session-` file directly under its own Issue root. Summary and transcript validation share `openRegularSessionFile` in [pi-session.ts](../../src/agent/pi-session.ts): refuse special files without blocking on a FIFO and check the opened descriptor's path to reject symlinks in the parent directories as well as at the file. Reset writes its link as the first entry after the header; summary listing stops at that first entry and never follows later reset-shaped conversation records. This avoids scanning large tool outputs merely to list sessions. Full validation samples and parses through one descriptor; its bounded append cache changes only after successful validation, so a rejected session-ID rewrite remains rejected on retry while cached. This cache is an optimization, not a durable identity ledger or protection against every concurrent external rewrite; Pi subsequently opens the validated path.
 
-Read-only rounds close instances at completion and restore from durable history next round; idle dev instances may be reused. The application defaults Pi cache warming to streaming; warming between rounds requires explicit configuration. Failure cleanup stays serialized and cannot overwrite a newer round. Aggregate abort/shutdown/dispose and storage cleanup errors.
+Read-only rounds close instances at completion or cancellation and restore from durable history next round; idle dev instances may be reused. The application defaults Pi cache warming to streaming; warming between rounds requires explicit configuration. Failure cleanup stays serialized and cannot overwrite a newer round. Aggregate abort/shutdown/dispose and storage cleanup errors.
 
 ## Conversation Git
 
@@ -68,7 +68,7 @@ Explicit user authorization remains necessary for commit/push. Before commit, re
 
 Use HTTPS SSE MCP with the selected owner's complete personal or shared group. Accept configured instanceAlias/schema intent, never model-supplied arbitrary hosts/databaseIds.
 
-Before connecting, enforce read-only SQL checks against writes, multiple statements, comments, locks and known side effects. These checks are not a proof for every SQL extension; the remote account must itself be read-only.
+Before connecting, enforce the root `limits.capability.dms.scriptChars` script budget (64 KiB, also the tool schema maxLength) and read-only SQL checks against writes, multiple statements, comments, locks and known side effects. These checks are not a proof for every SQL extension; the remote account must itself be read-only.
 
 Root defaults are 120 seconds per execution and 12 seconds for first handshake. At most two handshakes: only first-handshake timeout or bounded Retry-After 429 permits retry; never retry 401/403. Backoff and retry share the budget. Discovery/execution failure does not reconnect/replay; dispatched SQL is not automatically queried again.
 
@@ -78,7 +78,7 @@ Diagnostic codes come from DomainError owners, without a second message whitelis
 
 ### SLS
 
-Use aliyun sls GetLogsV2. Authorize exact region/project/logstore, even when configuration permits a wildcard. CLI uses 0600 temporary credentials, HTTPS and disabled automatic retries; never mutate the host profile or place keys in argv.
+Use aliyun sls GetLogsV2. Authorize exact region/project/logstore, even when configuration permits a wildcard. When a scope lists targets, execution uses only targets; configuration writes require the top-level region/project/logstores to equal targets[0] (sls_scope_targets_mismatch otherwise). Stored rows are not reparsed on read. CLI uses 0600 temporary credentials, HTTPS and disabled automatic retries; never mutate the host profile or place keys in argv.
 
 Accept only Complete. Page ordinary logs by offset; SQL analysis retains its query limits and returns its analysis result page. A later-page failure, budget failure or incomplete result is not successful partial evidence. Return source and time.
 

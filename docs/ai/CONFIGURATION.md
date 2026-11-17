@@ -14,7 +14,7 @@ AI reference. [Index](README.md) · [Human configuration guide](../CONFIGURATION
 
 bootstrapUser inserts only into an empty user table; changing it does not rename existing users. Bootstrap synchronizes default environment names. SQLite remains authoritative; deployment model overrides and retired YAML import/export must not return.
 
-Service, repository and user edits, personal credentials and shared DMS/SLS credential updates require a nonnegative safe-integer expectedRevision from their current read projection. Missing or invalid revisions return invalid_configuration_revision (400); stale revisions return configuration_changed (409), before writes or session disposal. Creation does not require a revision. Keep drafts on conflict and reread before merging; never omit the revision or pair an old draft with a newer revision to force a save. Owner: [domain/input.ts](../../src/domain/input.ts).
+Service, repository and user edits, personal credentials, shared DMS/SLS credential updates and the shared model group (PUT /api/config/agent; GET /api/config returns agent.revision) require a nonnegative safe-integer expectedRevision from their current read projection. Missing or invalid revisions return invalid_configuration_revision (400); stale revisions return configuration_changed (409), before writes or session disposal. Creation does not require a revision. Keep drafts on conflict and reread before merging; never omit the revision or pair an old draft with a newer revision to force a save. Owner: [domain/input.ts](../../src/domain/input.ts).
 
 ## Operator model catalog
 
@@ -74,7 +74,7 @@ Personal SSH uses -F /dev/null, IdentityAgent=none and BatchMode; SSH config ali
 - Ordinary configuration GET removes credentials. Developer-only selected descriptions/MCP editors expose only their documented fields; native DMS Authorization and SLS keys remain hidden.
 - Connection secrets never enter prompts, tool input, argv, diagnostics or ordinary logs. Explicitly requested authorized business tokens from DMS/SLS may be returned with source/time; they do not expand query scope.
 - Unchanged UI secrets are retained by omitting fields/requests. API empty strings do not mean retain. Clearing is explicit; replacement requires a complete group. Changed DMS URL requires Authorization again; changed model provider cannot retain another provider's key.
-- Shared models live in global_agent_configuration, personal models in user_credentials, shared DMS/SLS in application_settings with separate revisions, not deployments.
+- Shared models live in global_agent_configuration (its own revision covers model, runtime and key), personal models in user_credentials, shared DMS/SLS in application_settings with separate revisions, not deployments.
 - Credential/model writes reserve affected Issues and close old sessions; active work conflicts. [impact.ts](../../src/configuration/impact.ts) owns which Issues each service, capability, repository URL, user or global change affects; its rules may over-approximate but must not narrow. Parameter updates use a different path and must not become a global session rebuild.
 
 Owners: [user-routes.ts](../../src/http/user-routes.ts), [configuration-routes.ts](../../src/http/configuration-routes.ts), [read.ts](../../src/configuration/read.ts).

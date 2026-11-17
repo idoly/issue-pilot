@@ -3,7 +3,7 @@ import { OperationError } from "../operation-error.ts";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { eq } from "drizzle-orm";
-import { loadGlobalAgentConfiguration, loadSharedAgentApiKey, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { loadGlobalAgentConfiguration, loadGlobalAgentRevision, loadSharedAgentApiKey, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
 import {
   installApplicationParameters,
   loadApplicationParameterState,
@@ -122,12 +122,15 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
         engine,
         affected.map((row) => row.id),
         async (reservation) => {
+          // Concurrent admins edit one singleton; a stale draft is refused before any session is disposed.
+          const expectedRevision = await loadGlobalAgentRevision(database.db);
+          checkRevision(input.expectedRevision, expectedRevision);
           // A preserved key stays bound to its provider; switching providers requires a new key or an explicit clear.
           if (apiKey === undefined && (await loadGlobalAgentConfiguration(database.db)).provider !== configuration.provider && (await loadSharedAgentApiKey(database.db)))
             throw new ApiError(400, "agent_api_key_required");
           for (const row of affected) await reservation.closeSession(row.id);
-          await database.db.transaction((transaction) => saveGlobalAgentConfiguration(transaction, configuration, apiKey));
-          return { ok: true };
+          const revision = await database.db.transaction((transaction) => saveGlobalAgentConfiguration(transaction, configuration, expectedRevision, apiKey));
+          return { ok: true, revision };
         },
         "global_configuration_has_running_issues",
       );

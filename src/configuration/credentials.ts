@@ -1,4 +1,5 @@
-import { fail, inputRecord, parseDmsScopeConfiguration, parseSlsScopeConfiguration } from "../capabilities/registry.ts";
+import { fail, parseDmsScopeConfiguration, parseSlsScopeConfiguration } from "../capabilities/registry.ts";
+import { record } from "../domain/input.ts";
 import { CAPABILITY_KEYS, type CapabilityName, type StoredDeploymentConfig } from "../domain/contracts.ts";
 import { CAPABILITY_CREDENTIAL_FIELDS, type ProjectedCapabilityConfiguration } from "./contracts.ts";
 export function projectCapabilityConfiguration(configuration: StoredDeploymentConfig): ProjectedCapabilityConfiguration {
@@ -12,7 +13,7 @@ export function projectCapabilityConfiguration(configuration: StoredDeploymentCo
   return projected as ProjectedCapabilityConfiguration;
 }
 function resolveCapabilityConfiguration(key: CapabilityName, value: unknown): NonNullable<StoredDeploymentConfig[CapabilityName]> {
-  const input = inputRecord(value);
+  const input = record(value);
   const fields = CAPABILITY_CREDENTIAL_FIELDS[key] as readonly string[];
   if (fields.some((field) => field in input)) fail("credential_fields_not_allowed");
   if (Object.hasOwn(input, "credentialUpdate")) fail(`service_${key}_credentials_not_allowed`);

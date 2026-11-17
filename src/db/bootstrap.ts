@@ -10,6 +10,20 @@ import { environments, subjects } from "./schema.ts";
 
 export async function migrateDatabase(database: DatabaseConnection): Promise<void> {
   await migrate(database.db, { migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url)) });
+  await assertForeignKeys(database);
+}
+
+/**
+ * libSQL applies migrations with foreign_keys=off and commits before returning, so a migration can leave rows that
+ * no later statement reports. Check on every open, not only after a migration ran: the journal has already advanced
+ * when this fails, and a check limited to new migrations would let the next start proceed silently. The check is one
+ * indexed pass over the child tables of this configuration/Issue database (conversations live in JSONL).
+ */
+async function assertForeignKeys(database: DatabaseConnection): Promise<void> {
+  const { rows } = await database.client.execute("PRAGMA foreign_key_check");
+  if (!rows.length) return;
+  const sample = rows.slice(0, 20).map((row) => `${String(row.table)}#${String(row.rowid)}->${String(row.parent)}`);
+  throw new Error(`database_foreign_key_violation: ${rows.length} row(s) ${sample.join(", ")}${rows.length > sample.length ? ", ..." : ""}`);
 }
 
 async function recoverInterruptedIssues(database: DatabaseConnection): Promise<void> {

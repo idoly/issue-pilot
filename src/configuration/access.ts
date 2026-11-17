@@ -12,6 +12,8 @@ export interface IdentityRequest {
 type IdentityDatabase = { db: DatabaseReader };
 
 // Share implicit selection, including an in-flight lookup; authorization always reloads the user.
+// Implicit selection exists only in "selectable" mode: in "gateway" mode the HTTP boundary (api.ts)
+// rejects API and MCP requests without a subject header before any route reaches this owner.
 const defaultRequestSubjects = new WeakMap<object, Promise<string>>();
 
 export async function requireCurrentUser(database: IdentityDatabase, request?: IdentityRequest) {

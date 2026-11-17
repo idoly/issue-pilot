@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { globalAgentConfiguration } from "../db/schema.ts";
@@ -67,11 +67,20 @@ export async function ensureGlobalAgentConfiguration(database: Database, modelCa
   });
 }
 
-export async function saveGlobalAgentConfiguration(database: Pick<Database, "update">, configuration: AgentConfiguration, apiKey?: string): Promise<void> {
+/** Shared model edits carry this revision; it advances with every saved change to the singleton. */
+export async function loadGlobalAgentRevision(database: Pick<Database, "select">): Promise<number> {
+  const [configuration] = await database.select({ revision: globalAgentConfiguration.revision }).from(globalAgentConfiguration).where(eq(globalAgentConfiguration.id, 1)).limit(1);
+  if (!configuration) throw new Error("global_agent_configuration_missing");
+  return configuration.revision;
+}
+
+/** Saves only over the expected revision and returns the next one; callers check it first, before disposing sessions. */
+export async function saveGlobalAgentConfiguration(database: Pick<Database, "update">, configuration: AgentConfiguration, expectedRevision: number, apiKey?: string): Promise<number> {
   const [updated] = await database
     .update(globalAgentConfiguration)
-    .set({ ...configuration, ...(apiKey === undefined ? {} : { apiKey }), updatedAt: new Date() })
-    .where(eq(globalAgentConfiguration.id, 1))
-    .returning({ id: globalAgentConfiguration.id });
-  if (!updated) throw new Error("global_agent_configuration_missing");
+    .set({ ...configuration, ...(apiKey === undefined ? {} : { apiKey }), revision: expectedRevision + 1, updatedAt: new Date() })
+    .where(and(eq(globalAgentConfiguration.id, 1), eq(globalAgentConfiguration.revision, expectedRevision)))
+    .returning({ revision: globalAgentConfiguration.revision });
+  if (!updated) throw new DomainError("configuration_changed", "conflict");
+  return updated.revision;
 }

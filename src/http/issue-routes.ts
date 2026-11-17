@@ -14,7 +14,6 @@ import {
   environments,
   issueAttachments,
   issueCcRecipients,
-  issueComments,
   issueKeySequences,
   issuePins,
   issueRelations,
@@ -58,7 +57,7 @@ import { ensureCurrentSubject, authorizeWorkMode, requireAdmin, requireDeveloper
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
 const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
 
-/** Version only the edited state; Agent progress and new comments must not invalidate a draft. */
+/** Version only the edited state; Agent progress must not invalidate a draft. */
 function issueEditVersion(issue: typeof issues.$inferSelect, attachments: readonly { id: string }[], ccSubjects: readonly string[]): string {
   return createHash("sha256")
     .update(
@@ -497,11 +496,11 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
   });
 
   app.get<{ Params: { key: string } }>("/api/issues/:key", async (request, _reply) => {
-    const { issue, summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relatedIssueRows, scopeHistory, collaboratingServices } = await readSnapshot(
+    const { issue, summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, relatedIssueRows, scopeHistory, collaboratingServices } = await readSnapshot(
       database.db,
       async (reader) => {
         const issue = await requireIssue({ db: reader }, request.params.key);
-        const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relatedIssueRows, scopeHistory, collaboratingServices] = await Promise.all([
+        const [summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, relatedIssueRows, scopeHistory, collaboratingServices] = await Promise.all([
           readIssueSummary(issue.id, reader),
           reader.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
           reader.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id)),
@@ -509,12 +508,6 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
           reader.select({ person: subjects }).from(issueCcRecipients).innerJoin(subjects, eq(issueCcRecipients.subject, subjects.subject)).where(eq(issueCcRecipients.issueId, issue.id)),
           reader.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)),
           reader.select().from(subjects).where(eq(subjects.subject, issue.reporterSubject)),
-          reader
-            .select({ comment: issueComments, person: subjects })
-            .from(issueComments)
-            .innerJoin(subjects, eq(issueComments.authorSubject, subjects.subject))
-            .where(eq(issueComments.issueId, issue.id))
-            .orderBy(asc(issueComments.createdAt)),
           issueSummaryQuery(reader)
             .innerJoin(issueRelations, eq(issueRelations.relatedIssueId, issues.id))
             .where(eq(issueRelations.issueId, issue.id))
@@ -522,7 +515,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
           scopeTransitions.history(issue.id, reader),
           participatingServices(reader, issue),
         ]);
-        return { issue, summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, commentRows, relatedIssueRows, scopeHistory, collaboratingServices };
+        return { issue, summary, repositoryRows, attachmentRows, workspaceRows, ccRows, sessionRows, reporterRows, relatedIssueRows, scopeHistory, collaboratingServices };
       },
     );
     const workspace = workspaceRows[0];
@@ -566,23 +559,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       },
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),
-      comments: commentRows.map(({ comment, person }) => ({ id: comment.id, author: person.displayName ?? person.subject, body: comment.body, createdAt: comment.createdAt.toISOString() })),
     };
-  });
-
-  app.post<{ Params: { key: string } }>("/api/issues/:key/comments", async (request, reply) => {
-    const issue = await requireIssue(database, request.params.key);
-    const input = record(request.body);
-    const authorSubject = await ensureCurrentSubject(database, request);
-    const comment = await database.db.transaction(async (transaction) => {
-      const [createdComment] = await transaction
-        .insert(issueComments)
-        .values({ issueId: issue.id, authorSubject, body: text(input.body, "comment", 50_000) })
-        .returning();
-      await transaction.update(issues).set({ updatedAt: new Date() }).where(eq(issues.id, issue.id));
-      return createdComment!;
-    });
-    return reply.code(201).send({ id: comment.id, author: authorSubject, body: comment.body, createdAt: comment.createdAt.toISOString() });
   });
 
   return { createIssue, resolveCreationScope };

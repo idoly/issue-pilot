@@ -178,7 +178,8 @@ test("bounds queued UTF-8 bytes and releases waits after a slow client exceeds t
   const writer = createOrderedSseWriter(response, (error) => failures.push(error), 6);
   writer.write("first");
   const drained = writer.drain();
-  writer.write("中文"); // Six bytes, exactly at the budget.
+  writer.write("head"); // The next frame to write is exempt from the budget.
+  writer.write("中文"); // Six bytes behind it, exactly at the budget.
   assert.equal(failures.length, 0);
   writer.write("x");
   await drained;
@@ -188,6 +189,24 @@ test("bounds queued UTF-8 bytes and releases waits after a slow client exceeds t
   writer.write("must-not-write");
   assert.deepEqual(response.payloads, ["first"]);
   for (const event of ["drain", "close", "error"]) assert.equal(response.listenerCount(event), 0);
+});
+
+test("a single queued frame larger than the budget waits instead of disconnecting the viewer", async () => {
+  const response = new FakeResponse();
+  response.blockNextWrite = true;
+  const failures: unknown[] = [];
+  const writer = createOrderedSseWriter(response, (error) => failures.push(error), 8 * 1024 * 1024);
+  writer.write("data: blocked\n\n");
+  const image = `data: ${"x".repeat(9 * 1024 * 1024)}\n\n`;
+  writer.write(image);
+  writer.write("event: heartbeat\ndata: {}\n\n");
+  assert.deepEqual(failures, []);
+  response.emit("drain");
+  await writer.drain();
+  assert.equal(response.payloads.length, 3);
+  assert.equal(response.payloads[1], image);
+  assert.deepEqual(failures, []);
+  response.emit("close");
 });
 
 test("paced replay can exceed the total queue budget without disconnecting", async () => {

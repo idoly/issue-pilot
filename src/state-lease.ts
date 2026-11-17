@@ -42,7 +42,11 @@ export class ApplicationStateLease {
     });
     if (metadata) {
       if (!this.recoverStaleSocket) throw new Error("application_state_lease_exists");
-      if (!metadata.isSocket() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) throw new Error("application_control_socket_invalid");
+      // The socket is chmodded to 0600 only after listen, so a crash in between leaves a stale socket with the
+      // umask mode. Its private (0700, same owner) control directory already protects it; accept any mode.
+      const directory = await lstat(control);
+      if (!directory.isDirectory() || directory.uid !== process.getuid?.() || (directory.mode & 0o7777) !== 0o700) throw new Error("application_control_directory_invalid");
+      if (!metadata.isSocket() || metadata.uid !== process.getuid?.()) throw new Error("application_control_socket_invalid");
       const active = await new Promise<boolean>((resolve, reject) => {
         const socket = createConnection(this.socketPath);
         const timer = setTimeout(() => {

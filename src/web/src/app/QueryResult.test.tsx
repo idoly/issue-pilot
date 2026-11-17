@@ -548,7 +548,6 @@ describe("SLS result view", () => {
         updatedAt: entry.startedAt,
         repositories: [],
         attachments: [],
-        comments: [],
         environmentKey: "dev",
         revision: "ISSUE-20261114-001:1",
         createdAt: entry.startedAt,

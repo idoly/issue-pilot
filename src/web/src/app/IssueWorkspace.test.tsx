@@ -72,7 +72,6 @@ const issue: IssueDetail = {
   relatedIssues: [],
   scopeTransitions: [],
   ccRecipients: [],
-  comments: [],
 };
 function plan(current: boolean): IssueScopeTransitionPlan {
   return {
@@ -84,7 +83,7 @@ function plan(current: boolean): IssueScopeTransitionPlan {
     repositories: { retained: [], removed: [], added: [{ name: current ? "current-plan-repository" : "stale-plan-repository", url: "https://example.test/repo.git", baseBranch: "main" }] },
     branch: null,
     session: { closeCurrent: true, preserveConversation: true },
-    preserved: ["attachments", "comments", "conversation"],
+    preserved: ["attachments", "conversation"],
     warnings: [],
   };
 }
@@ -178,10 +177,8 @@ it("shows related Issue handler, status, service and environment with a navigabl
   expect(open).toHaveBeenCalledWith(related.id);
 });
 
-it("omits comments and places attachments immediately after the Issue header", () => {
+it("places attachments immediately after the Issue header", () => {
   render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
-  expect(screen.queryByRole("heading", { name: "评论与备注" })).toBeNull();
-  expect(screen.queryByLabelText("添加评论或备注")).toBeNull();
   const header = document.querySelector(".issue-header")!;
   expect(header.nextElementSibling?.getAttribute("aria-labelledby")).toBe("attachments-title");
 });

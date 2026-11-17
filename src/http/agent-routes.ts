@@ -328,11 +328,14 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   });
 
   app.post<{ Params: { key: string } }>("/api/issues/:key/agent-messages", async (request, reply) => {
+    // Refuse an invalid identity or message ID before reading a possibly large multipart body.
+    await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
-    const { message, images } = await readAgentMessage(request);
-    const person = await requireCurrentUser(database, request);
     const id = request.headers["x-issue-pilot-message-id"] ?? crypto.randomUUID();
     if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new ApiError(400, "invalid_agent_message_id");
+    const { message, images } = await readAgentMessage(request);
+    // Reading the body can outlive the sender's authorization.
+    const person = await requireCurrentUser(database, request);
     await engine.send(issue.id, message, personGitIdentity(person), images, () => requireCurrentUser(database, request), { id, subject: person.subject });
     return reply.code(202).send();
   });

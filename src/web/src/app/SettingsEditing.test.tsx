@@ -82,7 +82,7 @@ beforeEach(() => {
   state.removeRepository.mockResolvedValue(undefined);
   state.refreshPeople.mockResolvedValue([]);
   state.refreshConfiguration.mockResolvedValue({
-    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false },
+    agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false, revision: 0 },
     agentModels: [],
     environments: [],
     services: [],

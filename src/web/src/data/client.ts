@@ -122,14 +122,14 @@ export interface ManagedUser extends Person {
   createdAt: string;
   updatedAt: string;
 }
-export interface ManagedUserInput {
+interface ManagedUserInput {
   subject: string;
   name: string;
   email: string;
   role: UserRole;
   isAdmin?: boolean;
 }
-export interface ManagedUserUpdate {
+interface ManagedUserUpdate {
   name?: string;
   email?: string;
   active?: boolean;
@@ -148,14 +148,14 @@ export interface SharedDmsCredentialStatus {
   revision: number;
   url: string;
 }
-export type SharedDmsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; url: string; authorization: string } | { mode: "clear" });
+type SharedDmsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; url: string; authorization: string } | { mode: "clear" });
 export const loadSharedDmsCredentials = () => request<SharedDmsCredentialStatus>("/api/config/shared-dms-credentials");
 export const updateSharedDmsCredentials = (input: SharedDmsCredentialUpdate) => jsonRequest<SharedDmsCredentialStatus>("/api/config/shared-dms-credentials", "PUT", input);
 export interface SharedSlsCredentialStatus {
   configured: boolean;
   revision: number;
 }
-export type SharedSlsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" });
+type SharedSlsCredentialUpdate = { expectedRevision: number } & ({ mode: "replace"; accessKeyId: string; accessKeySecret: string } | { mode: "clear" });
 export const loadSharedSlsCredentials = () => request<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials");
 export const updateSharedSlsCredentials = (input: SharedSlsCredentialUpdate) => jsonRequest<SharedSlsCredentialStatus>("/api/config/shared-sls-credentials", "PUT", input);
 export interface PersonalCredentialStatus {
@@ -168,8 +168,8 @@ export interface PersonalCredentialStatus {
 }
 export const loadPersonalCredentials = () => request<PersonalCredentialStatus>("/api/me/credentials");
 export const updatePersonalCredentials = (input: PersonalCredentialUpdate) => jsonRequest<PersonalCredentialStatus>("/api/me/credentials", "PUT", input);
-export type AgentConfigurationUpdate = AgentConfiguration & { apiKey?: { mode: "replace"; value: string } | { mode: "clear" } };
-export const updateAgentConfiguration = (input: AgentConfigurationUpdate) => jsonRequest<{ ok: true }>("/api/config/agent", "PUT", input);
+export type AgentConfigurationUpdate = AgentConfiguration & { expectedRevision: number; apiKey?: { mode: "replace"; value: string } | { mode: "clear" } };
+export const updateAgentConfiguration = (input: AgentConfigurationUpdate) => jsonRequest<{ ok: true; revision: number }>("/api/config/agent", "PUT", input);
 export const loadManagedUsers = (signal?: AbortSignal) => request<ManagedUser[]>("/api/users/manage", signal ? { signal } : undefined);
 export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
 export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(`/api/users/${encodeURIComponent(subject)}`, "PATCH", input);
@@ -199,14 +199,7 @@ export interface IssueExecutionItem extends IssueListItem {
   resolvedAt: string | null;
 }
 
-export interface IssueComment {
-  id: string;
-  author: string;
-  body: string;
-  createdAt: string;
-}
-
-export interface IssueScopeTransitionHistoryItem {
+interface IssueScopeTransitionHistoryItem {
   id: string;
   action: "rebind_read_only" | "convert_to_development" | "migrate_development";
   from: { service: { key: string; name: string }; workMode: IssueWorkMode };
@@ -229,7 +222,6 @@ export interface IssueDetail extends IssueExecutionItem {
   scopeTransitions: IssueScopeTransitionHistoryItem[];
   ccRecipients: Person[];
   reporter?: Person;
-  comments: IssueComment[];
 }
 
 export interface IssueScopeTransitionPlan {
@@ -245,7 +237,7 @@ export interface IssueScopeTransitionPlan {
   };
   branch: string | null;
   session: { closeCurrent: boolean; preserveConversation: true };
-  preserved: ["attachments", "comments", "conversation"];
+  preserved: ["attachments", "conversation"];
   warnings: string[];
 }
 
@@ -257,13 +249,13 @@ export interface WorkspaceStats {
   workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
 }
 
-export interface WorkspaceStatsState {
+interface WorkspaceStatsState {
   snapshot: WorkspaceStats | null;
   sampling: boolean;
   error: string | null;
 }
 
-export interface IssueMetadataInput {
+interface IssueMetadataInput {
   title: string;
   description: string;
   priority: IssuePriority;
@@ -271,7 +263,7 @@ export interface IssueMetadataInput {
   ccSubjects: string[];
 }
 
-export interface IssueCreateInput extends IssueMetadataInput {
+interface IssueCreateInput extends IssueMetadataInput {
   workMode: IssueWorkMode;
   serviceKey: string;
   relatedIssueKeys?: string[];

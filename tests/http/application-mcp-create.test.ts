@@ -39,6 +39,14 @@ test("MCP creation delegates to the standard transaction, attributes the reporte
     assert.equal(parsed(message).accepted, true);
     assert.equal(f.engine.messages.at(-1), "补充：请先检查日志，再给结论。");
     assert.equal(f.engine.gitIdentities.at(-1)?.name, issuePilotConfig.bootstrapUser.name);
+    // A caller-supplied ID travels to the admission owner, which deduplicates retries of an admitted message.
+    const identified = await client.callTool({ name: "issue_message", arguments: { key: issue.id, message: "带编号的补充", messageId: "mcp-retry_1" } });
+    assert.ok(!identified.isError, JSON.stringify(identified));
+    assert.deepEqual(f.engine.admissions.at(-1), { id: "mcp-retry_1", subject: issuePilotConfig.bootstrapUser.subject });
+    const sentBeforeInvalidId = f.engine.messages.length;
+    const invalidId = await client.callTool({ name: "issue_message", arguments: { key: issue.id, message: "x", messageId: "not valid!" } });
+    assert.equal(invalidId.isError, true);
+    assert.equal(f.engine.messages.length, sentBeforeInvalidId);
     const empty = await client.callTool({ name: "issue_message", arguments: { key: issue.id, message: " " } });
     assert.equal(empty.isError, true);
     events.publish({ id: "current-run-start", issueId: f.engine.enqueued[0]!, createdAt: new Date().toISOString(), event: { type: "agent_start" } });

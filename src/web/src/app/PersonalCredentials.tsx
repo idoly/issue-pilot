@@ -138,7 +138,9 @@ export function PersonalCredentials() {
     try {
       if (shared()) {
         const apiKeyUpdate = selection ? (apiKey ? { apiKey: { mode: "replace" as const, value: apiKey } } : {}) : { apiKey: { mode: "clear" as const } };
-        await updateAgentConfiguration({ ...(selection ?? sharedModel()), runtime: configuration().agent.runtime, ...apiKeyUpdate });
+        // Runtime settings and the revision come from the same projection, so a stale snapshot is refused rather than restored.
+        const { runtime, revision } = configuration().agent;
+        await updateAgentConfiguration({ ...(selection ?? sharedModel()), runtime, expectedRevision: revision, ...apiKeyUpdate });
         await refreshConfiguration().catch(() => undefined);
         if (request.isCurrent()) close();
         return;
@@ -146,17 +148,14 @@ export function PersonalCredentials() {
       const credentials = status();
       if (!credentials) return;
       const model: NonNullable<PersonalCredentialUpdate["model"]> = selection ? { mode: "replace", ...selection, ...(apiKey ? { apiKey } : {}) } : { mode: "clear" };
-      let value: Awaited<ReturnType<typeof updatePersonalCredentials>>;
-      try {
-        value = await updatePersonalCredentials({ expectedRevision: credentials.revision, model });
-      } catch (error) {
-        if (request.isCurrent() && error instanceof Error && error.message === "configuration_changed") setConflict(true);
-        throw error;
-      }
+      const value = await updatePersonalCredentials({ expectedRevision: credentials.revision, model });
       if (request.isCurrent()) {
         setStatus(value);
         close();
       }
+    } catch (error) {
+      if (request.isCurrent() && error instanceof Error && error.message === "configuration_changed") setConflict(true);
+      throw error;
     } finally {
       request.finish();
     }
@@ -224,7 +223,10 @@ export function PersonalCredentials() {
     }
   };
   const reloadCredentials = () => {
+    // The shared model group is part of the application configuration, not the credential status.
+    const sharedModelTarget = shared() && selected() === "model";
     close();
+    if (sharedModelTarget) void refreshConfiguration().catch(() => undefined);
     void load(isAdmin());
   };
   const title = (group: Group | null) => {

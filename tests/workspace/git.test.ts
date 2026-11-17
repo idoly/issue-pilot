@@ -746,3 +746,71 @@ test("a failed first preparation discards the worktree, branch and private store
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("deletion removal neither publishes nor retains the private branch and can still roll back", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-delete-unpublished-"));
+  try {
+    const remote = join(root, "source"),
+      state = join(root, "state");
+    await git(["init", "-b", "main", remote]);
+    await git(["-C", remote, "commit", "--allow-empty", "-m", "baseline"]);
+    const manager = new WorktreeManager(state);
+    const issueKey = "ISSUE-20261117-902";
+    await claimIssueRoot(state, issueKey);
+    const prepared = await manager.prepare({ issueKey, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" });
+    const branch = prepared.workingBranch!;
+    await git(["-C", prepared.workspacePath, "commit", "--allow-empty", "-m", "private change"]);
+    const tip = await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]);
+    const shared = repositoryStorePath(state, remote);
+    const input = {
+      issueKey,
+      mode: "hotfix" as const,
+      worktrees: [{ workspaceName: "repo", url: remote, workingBranch: branch, workspacePath: prepared.workspacePath }],
+      publish: false,
+    };
+    const assertUnpublished = async () => {
+      await assert.rejects(git(["-C", shared, "show-ref", "--exists", `refs/heads/${branch}`]), { code: 2 });
+      await assert.rejects(git(["-C", shared, "show-ref", "--exists", retainedSnapshotRef(tip)]), { code: 2 });
+    };
+
+    const failure = new Error("database failed");
+    await assert.rejects(manager.removeBatch({ ...input, finalize: async () => Promise.reject(failure) }), (error) => error === failure);
+    assert.equal(await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]), tip);
+    assert.equal(await git(["-C", prepared.workspacePath, "branch", "--show-current"]), branch);
+    await assertUnpublished();
+
+    await manager.removeBatch(input);
+    await assert.rejects(access(prepared.workspacePath), { code: "ENOENT" });
+    await assertUnpublished();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("re-including a repository retains its refreshed baseline in the shared store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-reinclude-retain-"));
+  try {
+    const remote = join(root, "source"),
+      state = join(root, "state");
+    await git(["init", "-b", "main", remote]);
+    await git(["-C", remote, "commit", "--allow-empty", "-m", "baseline"]);
+    const manager = new WorktreeManager(state);
+    const issueKey = "ISSUE-20261117-903";
+    await claimIssueRoot(state, issueKey);
+    const input = { issueKey, workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" as const };
+    const first = await manager.prepare(input);
+    const shared = repositoryStorePath(state, remote);
+    await git(["-C", shared, "show-ref", "--exists", retainedSnapshotRef(first.baseCommit)]);
+    await manager.remove(remote, first.workspacePath, first.workingBranch!);
+
+    await git(["-C", remote, "commit", "--allow-empty", "-m", "advanced baseline"]);
+    const advanced = await git(["-C", remote, "rev-parse", "HEAD"]);
+    await assert.rejects(git(["-C", shared, "show-ref", "--exists", retainedSnapshotRef(advanced)]), { code: 2 });
+    const again = await manager.prepare(input);
+    assert.equal(again.workingBranch, first.workingBranch);
+    assert.equal(await git(["-C", again.cachePath, "rev-parse", "refs/remotes/origin/main"]), advanced);
+    assert.equal(await git(["-C", shared, "show-ref", "--hash", retainedSnapshotRef(advanced)]), advanced);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

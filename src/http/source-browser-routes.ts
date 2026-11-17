@@ -39,8 +39,13 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
       };
       reply.raw.once("close", closed);
       try {
+        await requireCurrentUser(database, request);
         const issue = await requireIssue(database, request.params.key);
-        return await withSharedCheckout(() => operation(issue, request, controller.signal));
+        return await withSharedCheckout(async () => {
+          // The shared checkout lock can outlive the reader's authorization.
+          await requireCurrentUser(database, request);
+          return operation(issue, request, controller.signal);
+        });
       } catch (error) {
         if (controller.signal.aborted) {
           reply.hijack();

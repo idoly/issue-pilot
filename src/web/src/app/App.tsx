@@ -419,9 +419,8 @@ function AppWorkspace(props: { initialView?: AppView }) {
                         }}
                         onCreatedFollowUp={(issueKey) => {
                           void issueList.refresh();
-                          if (!mayNavigate()) return;
-                          setKeepExternalSelection(false);
-                          setSelectedId(issueKey);
+                          // A new history entry keeps Back on the source Issue; the reveal shows the follow-up in a containing scope.
+                          openIssueLink(issueKey);
                         }}
                       />
                     </>

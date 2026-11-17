@@ -83,7 +83,7 @@ const limits = deepFreeze({
     resultBytes: 1024 * 1024,
     dingtalk: { tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512 },
     mcp: { tools: 200 },
-    dms: { databases: 20, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 },
+    dms: { databases: 20, scriptChars: 64 * 1024, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 },
     sls: {
       pageResults: 100,
       queryChars: 4096,
@@ -117,6 +117,8 @@ export const issuePilotConfig = /* @__PURE__ */ deepFreeze({
     sseHeartbeatMs: 15_000,
     sseRecentEventIds: 4_096,
     sseQueuedBytes: 8 * 1024 * 1024,
+    // Minimum spacing between explicit workspace statistics refreshes (each one is a full filesystem/Git scan).
+    workspaceStatisticsRefreshIntervalMs: 30_000,
     // Graceful stop waits for in-flight requests; stalled connections are destroyed after this.
     shutdownGraceMs: 30_000,
   },

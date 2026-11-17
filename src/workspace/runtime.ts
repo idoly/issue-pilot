@@ -98,7 +98,11 @@ function entryName(name: string): string {
   if (!/^[a-z0-9._-]+$/i.test(name) || [".", "..", ".git", manifestName].includes(name.toLowerCase())) throw new Error("invalid_runtime_repository_name");
   return name;
 }
-async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; modesMatch: boolean } | undefined> {
+/**
+ * Generated links are not write-protected inside the Issue sandbox, so an absent link is rebuildable and reported in
+ * `missingLinks`. A replaced link (other target or type) and any absent or changed generated file are still refused.
+ */
+async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; modesMatch: boolean; missingLinks: Set<string> } | undefined> {
   const file = path.join(root, manifestName),
     metadata = await absent(file);
   if (!metadata) return undefined;
@@ -112,10 +116,15 @@ async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; mod
   )
     throw new Error("invalid_issue_runtime_manifest");
   let modesMatch = (metadata.mode & 0o7777) === 0o600;
+  const missingLinks = new Set<string>();
   for (const entry of entries) {
     entryName(entry.name);
     const selected = path.join(root, entry.name),
       metadata = await absent(selected);
+    if (!metadata && entry.kind === "link") {
+      missingLinks.add(entry.name);
+      continue;
+    }
     if (!metadata) throw new Error("issue_runtime_entry_missing");
     if (
       entry.kind === "link"
@@ -125,7 +134,7 @@ async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; mod
       throw new Error("issue_runtime_entry_changed");
     if (entry.kind === "file" && (metadata.mode & 0o7777) !== 0o400) modesMatch = false;
   }
-  return { entries, modesMatch };
+  return { entries, modesMatch, missingLinks };
 }
 /** A repository name may be absent or occupied by a verified, previously generated link. */
 export async function inspectReleasedRepositories(stateRoot: string, issueKey: string, repositories: RecordedRepository[], names: ReadonlyMap<string, string>): Promise<Map<string, string>> {
@@ -195,11 +204,13 @@ export async function prepareIssueRuntime(
   }
   const manifest = await loadRuntime(root);
   const previous = manifest?.entries ?? [];
+  const missingLinks = manifest?.missingLinks ?? new Set<string>();
   const previousByName = new Map(previous.map((entry) => [entry.name, entry]));
   const entries: RuntimeEntry[] = desired.map(({ name, kind, content }) => ({ name, kind, value: kind === "link" ? content : digest(content) }));
   for (const entry of entries) if (!previousByName.has(entry.name) && (await absent(path.join(root, entry.name)))) throw new Error("issue_runtime_path_collision");
   if (
     manifest?.modesMatch &&
+    !missingLinks.size &&
     previous.length === entries.length &&
     entries.every(({ name, kind, value }) => {
       const entry = previousByName.get(name);
@@ -223,6 +234,8 @@ export async function prepareIssueRuntime(
       else await writeFile(temporary, entry.content, { mode: 0o400, flag: "wx" });
     }
     for (const entry of previous) {
+      // An absent generated link has nothing to back up; a path that reappeared since inspection fails the no-clobber link below.
+      if (missingLinks.has(entry.name)) continue;
       const original = path.join(root, entry.name),
         backup = path.join(root, `.runtime-old-${operation}-${backups.length}`);
       await rename(original, backup);

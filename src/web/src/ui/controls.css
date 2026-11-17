@@ -88,14 +88,12 @@
 .ui-button-round {
   border-radius: 9999px;
 }
-.ui-button:disabled,
-.ui-switch:disabled {
+.ui-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .ui-button:focus-visible,
 .ui-select-selector:focus-visible,
-.ui-switch:focus-visible,
 .ui-segmented button:focus-visible {
   outline: 2px solid var(--ui-primary);
   outline-offset: 2px;
@@ -254,29 +252,6 @@
 }
 .ui-badge-status-text {
   font: 12px / 16px var(--ui-font);
-}
-.ui-switch {
-  width: 40px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 9999px;
-  background: #aab6af;
-  cursor: pointer;
-}
-.ui-switch > span {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 200ms var(--ui-ease);
-}
-.ui-switch[aria-checked="true"] {
-  background: var(--ui-primary);
-}
-.ui-switch[aria-checked="true"] > span {
-  transform: translateX(16px);
 }
 .ui-segmented {
   display: inline-flex;
@@ -571,7 +546,6 @@
   .ui-button,
   .ui-input-affix-wrapper,
   .ui-textarea-wrapper,
-  .ui-switch > span,
   .ui-segmented button,
   .ui-select-selector {
     transition: none;
