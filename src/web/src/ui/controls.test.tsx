@@ -23,7 +23,7 @@ describe("local UI controls", () => {
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     await screen.findByRole("listbox");
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    await waitFor(() => expect(trigger.getAttribute("aria-activedescendant")).toMatch(/option-1$/));
+    await waitFor(() => expect(trigger.getAttribute("aria-activedescendant")).toBe(screen.getByRole("option", { name: "Beta" }).id));
     fireEvent.keyDown(trigger, { key: "Enter" });
     await waitFor(() => expect(trigger.textContent).toContain("Beta"));
     expect(screen.queryByRole("listbox")).toBeNull();
@@ -52,15 +52,18 @@ describe("local UI controls", () => {
       </div>
     ));
     fireEvent.click(screen.getByRole("combobox", { name: "成员" }));
-    fireEvent.input(await screen.findByRole("searchbox"), { target: { value: "Bob" } });
+    fireEvent.input(await screen.findByRole("combobox", { name: "搜索 成员" }), { target: { value: "Bob" } });
     await waitFor(() => expect(screen.queryByRole("option", { name: "Alice" })).toBeNull());
     fireEvent.click(screen.getByRole("option", { name: "Bob" }));
     await waitFor(() => expect(value()).toEqual(["bob"]));
     expect(screen.getByRole("listbox")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "外部" }));
+    const outside = screen.getByRole("button", { name: "外部" });
+    fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
+    fireEvent.click(outside);
     await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "移除 bob" }));
     await waitFor(() => expect(value()).toEqual([]));
+    expect(screen.queryByRole("listbox")).toBeNull();
     view.unmount();
   });
 
@@ -79,16 +82,41 @@ describe("local UI controls", () => {
       />
     ));
     fireEvent.click(screen.getByRole("combobox", { name: "成员" }));
-    const search = await screen.findByRole("searchbox");
+    const search = await screen.findByRole("combobox", { name: "搜索 成员" });
     // Focus is in the filter input, so it must expose the listbox and the active option.
     expect(search.getAttribute("aria-controls")).toBe(screen.getByRole("listbox").id);
     expect(search.getAttribute("aria-activedescendant")).toBe(screen.getByRole("option", { name: "Alice" }).id);
-    const activeBefore = screen.getByRole("combobox", { name: "成员" }).getAttribute("aria-activedescendant");
+    const activeBefore = search.getAttribute("aria-activedescendant");
     const event = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
     search.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
-    expect(screen.getByRole("combobox", { name: "成员" }).getAttribute("aria-activedescendant")).toBe(activeBefore);
+    expect(search.getAttribute("aria-activedescendant")).toBe(activeBefore);
     view.unmount();
+  });
+
+  it("does not commit a different value by typing on a closed trigger and closes when loading begins", async () => {
+    const [loading, setLoading] = createSignal(false, { ownedWrite: true });
+    const change = vi.fn<(value: string) => void>();
+    render(() => (
+      <Select
+        aria-label="选择"
+        value="a"
+        loading={loading()}
+        options={[
+          { value: "a", label: "Alpha" },
+          { value: "b", label: "Beta" },
+        ]}
+        onChange={change}
+      />
+    ));
+    const trigger = screen.getByRole("combobox", { name: "选择" });
+    fireEvent.keyDown(trigger, { key: "b" });
+    expect(change).not.toHaveBeenCalled();
+    fireEvent.click(trigger);
+    await screen.findByRole("listbox");
+    setLoading(true);
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(change).not.toHaveBeenCalled();
   });
 
   it("keeps disabled options and loading controls inactive", async () => {
@@ -163,7 +191,7 @@ describe("local UI controls", () => {
     const change = vi.fn<(value: string) => void>();
     render(() => <Select aria-label="选择" showSearch options={options()} onChange={change} />);
     fireEvent.click(screen.getByRole("combobox"));
-    const input = await screen.findByRole("searchbox");
+    const input = await screen.findByRole("combobox", { name: "搜索 选择" });
     const deltaOption = () => screen.getByRole("option", { name: "Delta" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
     await waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe(deltaOption().id));

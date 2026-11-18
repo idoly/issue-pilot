@@ -196,9 +196,10 @@ try {
   assert.ok(await isFocused(assignee), "clearing returns focus to the trigger");
   const cc = issueEditor.getByRole("combobox", { name: "编辑工单抄送人", exact: true });
   await cc.click();
-  const ccFilter = issueEditor.getByRole("searchbox", { name: "搜索 编辑工单抄送人", exact: true });
+  const ccFilter = issueEditor.getByRole("combobox", { name: "搜索 编辑工单抄送人", exact: true });
   const ccList = issueEditor.getByRole("listbox", { name: "编辑工单抄送人", exact: true });
-  assert.ok(await isFocused(ccFilter), "the searchable dropdown focuses its filter");
+  // The native popover enters the top layer before its search field receives focus.
+  await page.waitForFunction((input) => input === document.activeElement, await ccFilter.elementHandle());
   const firstCc = ccList.getByRole("option").first();
   await firstCc.waitFor();
   assert.equal(await firstCc.getAttribute("aria-selected"), "false");
@@ -211,6 +212,9 @@ try {
   assert.equal(await firstCc.getAttribute("aria-selected"), "true", "ordinary Enter selects the highlighted option");
   await page.keyboard.press("Backspace");
   assert.equal(await firstCc.getAttribute("aria-selected"), "false");
+  await firstCc.click();
+  await cc.getByRole("button", { name: /^移除 / }).click();
+  assert.equal(await firstCc.getAttribute("aria-selected"), "false", "removing a chip must not toggle the dropdown");
   await page.keyboard.press("Escape");
   await ccList.waitFor({ state: "hidden" });
   assert.ok(await isFocused(cc), "Escape closes only the searchable dropdown and restores its trigger");
@@ -798,6 +802,18 @@ try {
   const serviceTabs = page.getByRole("tablist", { name: "服务列表", exact: true });
   const serviceActions = page.getByRole("group", { name: "服务操作", exact: true });
   await serviceTabs.getByRole("tab", { name: "demo-namespace-19-servers", exact: true }).waitFor({ state: "attached" });
+  const serviceCategory = page.getByRole("tablist", { name: "配置分类" }).getByRole("tab", { name: "服务", exact: true });
+  await serviceCategory.focus();
+  await page.keyboard.press("Tab");
+  assert.ok(await isFocused(serviceTabs.getByRole("tab", { selected: true })), "Tab leaves the settings categories and enters the selected service");
+  await page.keyboard.press("End");
+  const endTab = serviceTabs.getByRole("tab").last();
+  assert.ok(await isFocused(endTab));
+  assert.equal(await endTab.getAttribute("aria-selected"), "true");
+  await page.keyboard.press("Tab");
+  assert.ok(await isFocused(serviceActions.getByRole("button", { name: "添加", exact: true })), "the actions are after, not inside, the service tablist");
+  await page.keyboard.press("Shift+Tab");
+  assert.ok(await isFocused(endTab), "backward tabbing re-enters on the selected service");
   for (const width of [1280, 700, 520]) {
     await page.setViewportSize({ width, height: 800 });
     const tabBounds = await serviceTabs.boundingBox();

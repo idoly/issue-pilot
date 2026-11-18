@@ -1,4 +1,5 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
+import { navigateTabList } from "../ui/tab-navigation";
 import { ApplicationParametersView } from "./ApplicationParameters";
 import { ConfigurationView } from "./ConfigurationView";
 import { useApplicationResources } from "./ApplicationResources";
@@ -32,7 +33,7 @@ export function SettingsView() {
   );
   return (
     <main class="settings-view">
-      <nav class="settings-tabs" role="tablist" aria-label="配置分类">
+      <nav class="settings-tabs" role="tablist" aria-label="配置分类" onKeyDown={navigateTabList}>
         <For each={settingsPanels}>
           {(panel) => (
             <button
@@ -41,6 +42,7 @@ export function SettingsView() {
               id={`settings-tab-${panel.key}`}
               aria-controls={visitedPanels().includes(panel.key) ? `settings-panel-${panel.key}` : undefined}
               aria-selected={selectedPanel() === panel.key ? "true" : "false"}
+              tabindex={selectedPanel() === panel.key ? 0 : -1}
               class={selectedPanel() === panel.key ? "selected" : ""}
               onClick={() => selectPanel(panel.key)}
             >

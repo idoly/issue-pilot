@@ -132,6 +132,20 @@ test("keeps service Tabs separate from actions with many long labels", async () 
   fireEvent.click(last);
   await waitFor(() => expect(last.getAttribute("aria-selected")).toBe("true"));
   expect(select).toHaveBeenCalledWith("service-19");
+  const first = within(tabs).getByRole("tab", { name: next.services[0]!.name });
+  last.focus();
+  fireEvent.keyDown(last, { key: "ArrowRight" });
+  await waitFor(() => expect(first.getAttribute("aria-selected")).toBe("true"));
+  expect(document.activeElement).toBe(first);
+  expect(
+    within(tabs)
+      .getAllByRole("tab")
+      .filter((tab) => tab.tabIndex === 0),
+  ).toEqual([first]);
+  fireEvent.keyDown(first, { key: "ArrowLeft" });
+  await waitFor(() => expect(last.getAttribute("aria-selected")).toBe("true"));
+  expect(document.activeElement).toBe(last);
+  expect(select.mock.calls.map(([key]) => key)).toEqual(["service-19", "service-0", "service-19"]);
   const actions = screen.getByRole("group", { name: "服务操作" });
   expect(within(actions).getByRole("button", { name: "添加" })).toBeTruthy();
   expect(within(actions).getByRole("button", { name: "编辑" })).toBeTruthy();

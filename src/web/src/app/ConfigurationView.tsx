@@ -1,4 +1,5 @@
 import { Button, Input, Modal, Select, Skeleton, TextArea } from "../ui";
+import { navigateTabList } from "../ui/tab-navigation";
 import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, Show, snapshot, Switch, untrack } from "solid-js";
 
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
@@ -783,7 +784,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       <section class="service-panel" hidden={!configurationLoaded()}>
         <div class="service-toolbar">
           <div class="service-toolbar-inner">
-            <div class="service-tab-list" role="tablist" aria-label="服务列表">
+            <div class="service-tab-list" role="tablist" aria-label="服务列表" onKeyDown={navigateTabList}>
               <For each={configuration().services}>
                 {(service) => (
                   <button
@@ -791,6 +792,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
                     role="tab"
                     title={service.name}
                     aria-selected={selectedServiceKey() === service.key ? "true" : "false"}
+                    tabindex={selectedServiceKey() === service.key ? 0 : -1}
                     class={selectedServiceKey() === service.key ? "selected" : ""}
                     onClick={() => {
                       setSelectedServiceKey(service.key);
