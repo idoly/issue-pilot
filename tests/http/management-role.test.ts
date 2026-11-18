@@ -7,7 +7,6 @@ import { openDatabase } from "../../src/db/client.ts";
 import { subjects } from "../../src/db/schema.ts";
 import { registerMcpRoutes } from "../../src/http/mcp-routes.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import { createApiFixture } from "./fixture.ts";
 
 const owner = issuePilotConfig.bootstrapUser.subject;
@@ -126,9 +125,7 @@ test("reauthorizes global management after a queued MCP import", async () => {
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) =>
-    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-  );
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     const pending = app
       .inject({ method: "POST", url: "/api/mcp-services/import", headers: admin, payload: { mcpServers: { queued: { url: "https://mcp.example.test/mcp" } } } })

@@ -10,7 +10,6 @@ import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, subjects } from "../../src/db/schema.ts";
 import { registerAgentRoutes } from "../../src/http/agent-routes.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import { SerialQueue } from "../../src/serial.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { createApiFixture, createIssue, createService, modelCatalog } from "./fixture.ts";
@@ -54,9 +53,7 @@ for (const channel of ["list", "history", "query", "SSE"] as const)
           },
         },
       });
-      app.setErrorHandler((error, _request, reply) =>
-        reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-      );
+      app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
       let response: Response | undefined;
       let pending: Promise<Response> | undefined;
       try {

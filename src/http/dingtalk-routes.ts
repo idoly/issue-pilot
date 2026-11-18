@@ -1,3 +1,4 @@
+import { DomainError } from "../domain/errors.ts";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { applicationParameters } from "../configuration/parameters.ts";
@@ -8,7 +9,7 @@ import { connectMcp, type McpConnector, type McpSession } from "../mcp/client.ts
 import { DingtalkError, dingtalkIssueRecord, dingtalkAttachments, parseDingtalkTable, readDingtalkFields, readDingtalkRecord, resolveDingtalkColumns } from "../mcp/dingtalk.ts";
 import type { DingtalkImportResponse, DingtalkSourceResponse } from "../mcp/dingtalk-contracts.ts";
 import { downloadDingtalkAttachments } from "./dingtalk-attachments.ts";
-import { ApiError, choice, closedRecord, text } from "./input.ts";
+import { choice, closedRecord, text } from "./input.ts";
 import type { IssueCreationScopeResolver, IssueCreator } from "./issue-routes.ts";
 import { authorizeWorkMode, requireCurrentUser, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
@@ -30,7 +31,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       } catch (error) {
         // A cancellation must not hide incomplete cleanup of the response or staged files.
         if (error instanceof Error && ["dingtalk_attachment_cleanup_failed", "dingtalk_connection_close_failed"].includes(error.message)) throw error;
-        if (signal.aborted) throw new ApiError(408, "dingtalk_request_cancelled_or_timed_out");
+        if (signal.aborted) throw new DomainError("dingtalk_request_cancelled_or_timed_out", "timeout");
         throw error;
       } finally {
         request.raw.removeListener("aborted", abort);
@@ -78,10 +79,10 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
         priority = choice(input.priority, "priority", ISSUE_PRIORITIES),
         serviceKey = text(input.serviceKey, "service_key", 100);
       await authorizeWorkMode(database, request, workMode);
-      if (input.startAgent !== undefined && typeof input.startAgent !== "boolean") throw new ApiError(400, "invalid_start_agent");
+      if (input.startAgent !== undefined && typeof input.startAgent !== "boolean") throw new DomainError("invalid_start_agent", "bad_request");
       const state = await settings(request);
       const assigneeSubject = input.assigneeSubject === undefined ? state.user.subject : input.assigneeSubject === null ? null : text(input.assigneeSubject, "assignee_subject", 255);
-      if (!state.server) throw new ApiError(400, "dingtalk_mcp_not_configured");
+      if (!state.server) throw new DomainError("dingtalk_mcp_not_configured", "bad_request");
       const result = async (status: "existing" | "created", issueKey: string, assigneeSubject: string | null): Promise<DingtalkImportResponse> => {
         const [assignee] = assigneeSubject ? await database.db.select().from(subjects).where(eq(subjects.subject, assigneeSubject)).limit(1) : [];
         return { user: serializePerson(state.user), status, issueKey, ...(assignee ? { assignee: serializePerson(assignee) } : {}) };
@@ -105,10 +106,10 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       try {
         const fields = await readDingtalkFields(session, table),
           columns = resolveDingtalkColumns(fields, state.preferences.fields ?? {});
-        if (!columns.title) throw new ApiError(400, "dingtalk_columns_required");
+        if (!columns.title) throw new DomainError("dingtalk_columns_required", "bad_request");
         const row = await readDingtalkRecord(session, table, columns),
           data = dingtalkIssueRecord(row, columns);
-        if (!data.creatable) throw new ApiError(400, "dingtalk_record_invalid");
+        if (!data.creatable) throw new DomainError("dingtalk_record_invalid", "bad_request");
         const manualMatches = await runScopeExclusive(async () => {
           await authorizeWorkMode(database, request, workMode);
           const scope = await resolveCreationScope(workMode, serviceKey);
@@ -127,7 +128,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
             )
             .limit(2);
         });
-        if (manualMatches.length > 1) throw new ApiError(409, "dingtalk_manual_match_ambiguous");
+        if (manualMatches.length > 1) throw new DomainError("dingtalk_manual_match_ambiguous", "conflict");
         if (manualMatches[0]) outcome = await result("existing", manualMatches[0].key, manualMatches[0].assigneeSubject);
         else {
           signal.throwIfAborted();

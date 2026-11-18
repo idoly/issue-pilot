@@ -5,22 +5,12 @@ import { choice, text } from "../domain/input.ts";
 
 export { checkRevision, choice, closedRecord, optionalText, record, strings, text } from "../domain/input.ts";
 
-/** A route's own request-shape or transport-state refusal; owner failures use DomainError categories instead. */
-export class ApiError extends Error {
-  readonly statusCode: number;
-
-  constructor(statusCode: number, message: string) {
-    super(message);
-    this.statusCode = statusCode;
-  }
-}
-
 /**
  * True when the global error handler already publishes this failure's category, outcome or operational code.
  * A route that names its own fallback for unexpected failures must not rename these.
  */
 export function isClassifiedFailure(error: unknown): boolean {
-  return error instanceof ApiError || isClassifiedOwnerFailure(error);
+  return isClassifiedOwnerFailure(error);
 }
 
 // Shared and personal model groups accept only provider/model/thinking combinations offered by the model catalog.

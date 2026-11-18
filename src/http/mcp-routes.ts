@@ -7,7 +7,7 @@ import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configur
 import { errorDiagnostic } from "../diagnostics.ts";
 import { constraintFailure } from "../db/constraints.ts";
 import { DomainError } from "../domain/errors.ts";
-import { ApiError, isClassifiedFailure, record } from "./input.ts";
+import { isClassifiedFailure, record } from "./input.ts";
 import { requireAdmin, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({
@@ -22,7 +22,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
   const { app, database, engine, runScopeExclusive } = context;
   const requireService = async (id: string) => {
     const row = (await loadMcpConnections(database.db)).find((connection) => connection.id === id);
-    if (!row) throw new ApiError(404, "mcp_service_not_found");
+    if (!row) throw new DomainError("mcp_service_not_found", "not_found");
     return row;
   };
   const mutate = async <T>(operation: () => Promise<T>) => {
@@ -42,7 +42,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
       // Connection names are unique; the database boundary reports which constraint failed.
       if (constraintFailure(error)?.code === "conflict") throw new DomainError("mcp_name_conflict", "conflict", { cause: error });
       app.log.error(errorDiagnostic(error));
-      throw new ApiError(500, "mcp_configuration_save_failed");
+      throw new DomainError("mcp_configuration_save_failed", "internal");
     }
   };
   app.get("/api/mcp-services", async (_request, _reply) => {
@@ -98,7 +98,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     return runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const current = await requireService(request.params.id);
-      if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service");
+      if (current.deploymentId) throw new DomainError("mcp_managed_by_service", "conflict");
       const input = "mcpServers" in record(request.body) ? parseMcpImport(request.body, current)[0]! : parseMcpConfiguration(request.body, current);
       if (Object.entries(input).every(([key, value]) => (key === "stdio" ? JSON.stringify(current.stdio) === JSON.stringify(value) : current[key as keyof typeof input] === value)))
         return project(current);
@@ -120,7 +120,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
     await runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const current = await requireService(request.params.id);
-      if (current.deploymentId) throw new ApiError(409, "mcp_managed_by_service");
+      if (current.deploymentId) throw new DomainError("mcp_managed_by_service", "conflict");
       await mutate(() => database.db.delete(mcpServices).where(eq(mcpServices.id, current.id)));
     });
     return reply.code(204).send();
@@ -137,7 +137,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
       // The MCP owner classifies its stable mcp_* failures as upstream; those are logged once by the global handler.
       if (error instanceof DomainError && error.category === "upstream") throw error;
       app.log.error({ code: "mcp_connection_failed" }, "mcp_connection_test_failed");
-      throw new ApiError(502, "mcp_connection_failed");
+      throw new DomainError("mcp_connection_failed", "upstream");
     }
   });
 }

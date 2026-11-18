@@ -1,3 +1,4 @@
+import { DomainError } from "../domain/errors.ts";
 import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration } from "../capabilities/registry.ts";
 import { and, asc, desc, eq } from "drizzle-orm";
 
@@ -14,7 +15,7 @@ import {
 } from "../configuration/user-credentials.ts";
 import { CAPABILITY_KEYS, USER_ROLES, hasPersonalGitIdentity, managedUserChangeRequiresAdministrator, type AgentModelSelection, type UserRole } from "../domain/contracts.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, ApiError, checkRevision, choice, closedRecord, isClassifiedFailure, record, text } from "./input.ts";
+import { agentModelSelection, checkRevision, choice, closedRecord, isClassifiedFailure, record, text } from "./input.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 import type { CurrentUser, ManagedUser } from "./contracts.ts";
@@ -23,7 +24,7 @@ export type IdentityMode = typeof issuePilotConfig.http.identity;
 
 function userSubject(value: unknown): string {
   const subject = text(value, "user_subject", 255).toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._@+-]*$/.test(subject)) throw new ApiError(400, "invalid_user_subject");
+  if (!/^[a-z0-9][a-z0-9._@+-]*$/.test(subject)) throw new DomainError("invalid_user_subject", "bad_request");
   return subject;
 }
 
@@ -33,17 +34,17 @@ function userName(value: unknown): string {
 
 function userEmail(value: unknown): string {
   const email = text(value, "user_email", 254).toLowerCase();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new ApiError(400, "invalid_user_email");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DomainError("invalid_user_email", "bad_request");
   return email;
 }
 
 function userActive(value: unknown): boolean {
-  if (typeof value !== "boolean") throw new ApiError(400, "invalid_user_active");
+  if (typeof value !== "boolean") throw new DomainError("invalid_user_active", "bad_request");
   return value;
 }
 
 function userAdmin(value: unknown): boolean {
-  if (typeof value !== "boolean") throw new ApiError(400, "invalid_user_admin");
+  if (typeof value !== "boolean") throw new DomainError("invalid_user_admin", "bad_request");
   return value;
 }
 
@@ -93,8 +94,8 @@ export function registerUserRoutes(
     app.put(url, { logLevel: "silent" }, async (request, _reply) => {
       await requireAdmin(database, request);
       const input = closedRecord(request.body, ["mode", "expectedRevision", ...fields], `invalid_shared_${kind}_credentials`);
-      if (input.mode === "clear" && fields.some((field) => input[field] !== undefined)) throw new ApiError(400, `invalid_shared_${kind}_credentials`);
-      if (input.mode !== "clear" && input.mode !== "replace") throw new ApiError(400, "invalid_credential_update");
+      if (input.mode === "clear" && fields.some((field) => input[field] !== undefined)) throw new DomainError(`invalid_shared_${kind}_credentials`, "bad_request");
+      if (input.mode !== "clear" && input.mode !== "replace") throw new DomainError("invalid_credential_update", "bad_request");
       const update = input.mode === "clear" ? clearSharedCredentialUpdate(kind) : parseSharedCredentialUpdate(kind, input);
       return runScopeExclusive(async () => {
         await requireAdmin(database, request);
@@ -128,7 +129,7 @@ export function registerUserRoutes(
     // Personal model groups are open to every role; SSH identities serve development Issues only.
     if (input.git) await requireDeveloper(database, request);
     if (Object.keys(input).some((key) => !["model", "git", "production", "expectedRevision"].includes(key)) || (!input.model && !input.git && !input.production))
-      throw new ApiError(400, "invalid_user_credentials");
+      throw new DomainError("invalid_user_credentials", "bad_request");
     let modelUpdate: { selection: AgentModelSelection; apiKey?: string } | null | undefined;
     if (input.model) {
       const model = record(input.model);
@@ -136,7 +137,7 @@ export function registerUserRoutes(
       else if (model.mode === "replace" && Object.keys(model).every((key) => ["mode", "provider", "model", "thinkingLevel", "codemode", "apiKey"].includes(key))) {
         modelUpdate = { selection: agentModelSelection(model, await modelCatalog.list()) };
         if (model.apiKey !== undefined) modelUpdate.apiKey = text(model.apiKey, "model_api_key", 10_000);
-      } else throw new ApiError(400, "invalid_credential_update");
+      } else throw new DomainError("invalid_credential_update", "bad_request");
     }
     const result = await changeUser(
       subject,
@@ -157,7 +158,7 @@ export function registerUserRoutes(
         else if (modelUpdate) {
           // A preserved key stays bound to its provider; a new group or provider requires a new key.
           const apiKey = modelUpdate.apiKey ?? (values.modelCredentials?.provider === modelUpdate.selection.provider ? values.modelCredentials.apiKey : undefined);
-          if (!apiKey) throw new ApiError(400, "agent_api_key_required");
+          if (!apiKey) throw new DomainError("agent_api_key_required", "bad_request");
           values.modelCredentials = { ...modelUpdate.selection, apiKey };
         }
         if (input.git) {
@@ -165,12 +166,12 @@ export function registerUserRoutes(
           if (git.mode === "clear") values.gitPrivateKey = "";
           else if (git.mode === "replace" && git.type === "ssh") {
             values.gitPrivateKey = text(git.privateKey, "git_private_key", 50_000) + "\n";
-            if (!/^(?:-----BEGIN (?:OPENSSH|RSA|EC) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----)/.test(values.gitPrivateKey)) throw new ApiError(400, "invalid_git_private_key");
-          } else throw new ApiError(400, "invalid_credential_update");
+            if (!/^(?:-----BEGIN (?:OPENSSH|RSA|EC) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----)/.test(values.gitPrivateKey)) throw new DomainError("invalid_git_private_key", "bad_request");
+          } else throw new DomainError("invalid_credential_update", "bad_request");
         }
         if (input.production) {
           const production = record(input.production);
-          if (Object.keys(production).some((key) => !["dms", "sls"].includes(key)) || (!production.dms && !production.sls)) throw new ApiError(400, "invalid_production_credentials");
+          if (Object.keys(production).some((key) => !["dms", "sls"].includes(key)) || (!production.dms && !production.sls)) throw new DomainError("invalid_production_credentials", "bad_request");
           if (production.dms) {
             const dms = record(production.dms);
             if (dms.mode === "clear") {
@@ -180,7 +181,7 @@ export function registerUserRoutes(
               const value = parseDmsConnectionConfiguration(dms);
               values.productionDmsUrl = value.url;
               values.productionDmsAuthorization = value.authorization;
-            } else throw new ApiError(400, "invalid_credential_update");
+            } else throw new DomainError("invalid_credential_update", "bad_request");
           }
           if (production.sls) {
             const sls = record(production.sls);
@@ -191,7 +192,7 @@ export function registerUserRoutes(
               const value = parseSlsConnectionConfiguration(sls);
               values.productionSlsAccessKeyId = value.accessKeyId;
               values.productionSlsAccessKeySecret = value.accessKeySecret;
-            } else throw new ApiError(400, "invalid_credential_update");
+            } else throw new DomainError("invalid_credential_update", "bad_request");
           }
         }
         await closeSessions();
@@ -206,7 +207,7 @@ export function registerUserRoutes(
     ).catch((error) => {
       if (isClassifiedFailure(error)) throw error;
       app.log.error(errorDiagnostic(error));
-      throw new ApiError(500, "user_credentials_save_failed");
+      throw new DomainError("user_credentials_save_failed", "internal");
     });
     return result;
   });
@@ -259,7 +260,7 @@ export function registerUserRoutes(
       ...(input.role === undefined ? {} : { role: choice(input.role, "user_role", USER_ROLES) }),
       ...(input.isAdmin === undefined ? {} : { isAdmin: userAdmin(input.isAdmin) }),
     };
-    if (!Object.keys(update).length) throw new ApiError(400, "invalid_user_update");
+    if (!Object.keys(update).length) throw new DomainError("invalid_user_update", "bad_request");
     return changeUser(
       subject,
       async () => {
@@ -271,19 +272,19 @@ export function registerUserRoutes(
       async (closeSessions) => {
         // Reject stale or missing targets before closing sessions; the transaction rechecks under the reservation.
         const [preflight] = await database.db.select({ revision: subjects.revision }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
-        if (!preflight) throw new ApiError(404, "user_not_found");
+        if (!preflight) throw new DomainError("user_not_found", "not_found");
         checkRevision(input.expectedRevision, preflight.revision);
         await closeSessions();
         return database.db.transaction(async (transaction) => {
           const [existing] = await transaction.select().from(subjects).where(eq(subjects.subject, subject)).limit(1);
-          if (!existing) throw new ApiError(404, "user_not_found");
+          if (!existing) throw new DomainError("user_not_found", "not_found");
           checkRevision(input.expectedRevision, existing.revision);
           const active = update.active ?? existing.active;
           const nextRole = update.role ?? existing.role;
           const isAdmin = update.isAdmin ?? existing.isAdmin;
           if (existing.active && !active) {
             const activeUsers = await transaction.select({ subject: subjects.subject }).from(subjects).where(eq(subjects.active, true)).limit(2);
-            if (activeUsers.length < 2) throw new ApiError(409, "last_active_user");
+            if (activeUsers.length < 2) throw new DomainError("last_active_user", "conflict");
           }
           if (existing.active && existing.isAdmin && (!active || !isAdmin)) {
             const administrators = await transaction
@@ -291,7 +292,7 @@ export function registerUserRoutes(
               .from(subjects)
               .where(and(eq(subjects.isAdmin, true), eq(subjects.active, true)))
               .limit(2);
-            if (!administrators.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+            if (!administrators.some(({ subject: id }) => id !== subject)) throw new DomainError("last_active_admin", "conflict");
           }
           if (existing.active && existing.role === "developer" && (!active || nextRole !== "developer")) {
             const developers = await transaction
@@ -299,7 +300,7 @@ export function registerUserRoutes(
               .from(subjects)
               .where(and(eq(subjects.role, "developer"), eq(subjects.active, true)))
               .limit(2);
-            if (!developers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_developer");
+            if (!developers.some(({ subject: id }) => id !== subject)) throw new DomainError("last_active_developer", "conflict");
           }
           // Changing management access requires both developer and isAdmin.
           if (existing.active && existing.isAdmin && existing.role === "developer" && (!active || !isAdmin || nextRole !== "developer")) {
@@ -308,7 +309,7 @@ export function registerUserRoutes(
               .from(subjects)
               .where(and(eq(subjects.isAdmin, true), eq(subjects.role, "developer"), eq(subjects.active, true)))
               .limit(2);
-            if (!managers.some(({ subject: id }) => id !== subject)) throw new ApiError(409, "last_active_admin");
+            if (!managers.some(({ subject: id }) => id !== subject)) throw new DomainError("last_active_admin", "conflict");
           }
           const [updated] = await transaction
             .update(subjects)

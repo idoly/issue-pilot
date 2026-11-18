@@ -3,18 +3,17 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { personGitIdentity } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { withSharedCheckout } from "../workspace/git.ts";
-import { ApiError } from "./input.ts";
 import { requireCurrentUser, requireDeveloperUser, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 const sourceFileBodyLimit = issuePilotConfig.limits.sourceBrowser.fileBytes;
 
 function headerValue(value: string | string[] | undefined, required = false): string {
   if (value === undefined && !required) return "";
-  if (typeof value !== "string" || (required && !value)) throw new ApiError(400, "invalid_source_request");
+  if (typeof value !== "string" || (required && !value)) throw new DomainError("invalid_source_request", "bad_request");
   try {
     return decodeURIComponent(value);
   } catch {
-    throw new ApiError(400, "invalid_source_request");
+    throw new DomainError("invalid_source_request", "bad_request");
   }
 }
 
@@ -23,7 +22,7 @@ function booleanHeader(value: string | string[] | undefined, fallback: boolean):
   const decoded = headerValue(value, true);
   if (decoded === "true") return true;
   if (decoded === "false") return false;
-  throw new ApiError(400, "invalid_source_request");
+  throw new DomainError("invalid_source_request", "bad_request");
 }
 
 type SourceRequest = FastifyRequest<{ Params: { key: string } }>;
@@ -62,9 +61,9 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
   const relativePath = (request: SourceRequest, required = false) => headerValue(request.headers["x-issue-pilot-path"], required);
   const line = (request: SourceRequest) => {
     const value = headerValue(request.headers["x-issue-pilot-line"], true);
-    if (!/^[1-9][0-9]*$/.test(value)) throw new ApiError(400, "invalid_source_request");
+    if (!/^[1-9][0-9]*$/.test(value)) throw new DomainError("invalid_source_request", "bad_request");
     const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed)) throw new ApiError(400, "invalid_source_request");
+    if (!Number.isSafeInteger(parsed)) throw new DomainError("invalid_source_request", "bad_request");
     return parsed;
   };
 
@@ -91,12 +90,12 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
       bodyLimit: sourceFileBodyLimit,
     },
     async (request, _reply) => {
-      if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
+      if (typeof request.body !== "string") throw new DomainError("invalid_source_request", "bad_request");
       return mutate(request, (issue) => sourceBrowser.writeFile(issue, repository(request), relativePath(request, true), request.body, headerValue(request.headers["x-issue-pilot-sha256"], true)));
     },
   );
   app.post<{ Params: { key: string }; Body: string }>("/api/issues/:key/source/file", { logLevel: "silent", bodyLimit: sourceFileBodyLimit }, (request) => {
-    if (typeof request.body !== "string") throw new ApiError(400, "invalid_source_request");
+    if (typeof request.body !== "string") throw new DomainError("invalid_source_request", "bad_request");
     return mutate(request, (issue) => sourceBrowser.createFile(issue, repository(request), relativePath(request, true), request.body));
   });
   app.post<{ Params: { key: string } }>("/api/issues/:key/source/directory", { logLevel: "silent" }, (request) =>
@@ -118,7 +117,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
   );
   const gitPaths = (request: GitRequest) => {
     const paths = request.body?.paths;
-    if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) throw new ApiError(400, "invalid_source_request");
+    if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) throw new DomainError("invalid_source_request", "bad_request");
     return paths as string[];
   };
   for (const [action, operation] of [
@@ -142,7 +141,7 @@ export function registerSourceBrowserRoutes(context: Pick<ApiRouteContext, "app"
     const revision = headerValue(request.headers["x-issue-pilot-revision"]),
       offset = headerValue(request.headers["x-issue-pilot-offset"]);
     if (!revision && !offset) return undefined;
-    if (!/^[1-9][0-9]*$/.test(offset)) throw new ApiError(400, "invalid_source_history_cursor");
+    if (!/^[1-9][0-9]*$/.test(offset)) throw new DomainError("invalid_source_history_cursor", "bad_request");
     return { revision, offset: Number(offset) };
   };
   register("history", (issue, request, signal) => sourceBrowser.history(issue, repository(request), relativePath(request), historyCursor(request), signal));

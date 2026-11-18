@@ -1,4 +1,4 @@
-export type DomainErrorCategory = "bad_request" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "rate_limited" | "internal" | "upstream";
+export type DomainErrorCategory = "bad_request" | "forbidden" | "not_found" | "conflict" | "payload_too_large" | "rate_limited" | "timeout" | "unavailable" | "internal" | "upstream";
 
 const statusByCategory: Record<DomainErrorCategory, number> = {
   bad_request: 400,
@@ -7,9 +7,37 @@ const statusByCategory: Record<DomainErrorCategory, number> = {
   conflict: 409,
   payload_too_large: 413,
   rate_limited: 429,
+  timeout: 408,
+  unavailable: 503,
   internal: 500,
   upstream: 502,
 };
+
+/** HTTP route errors carry their status; one mapping keeps the category the only transport-neutral fact. */
+export function categoryForStatus(status: number): DomainErrorCategory {
+  switch (status) {
+    case 400:
+      return "bad_request";
+    case 403:
+      return "forbidden";
+    case 404:
+      return "not_found";
+    case 409:
+      return "conflict";
+    case 413:
+      return "payload_too_large";
+    case 429:
+      return "rate_limited";
+    case 408:
+      return "timeout";
+    case 503:
+      return "unavailable";
+    case 502:
+      return "upstream";
+    default:
+      return "internal";
+  }
+}
 
 /**
  * Owner-level failure with a stable code and one transport-neutral category.

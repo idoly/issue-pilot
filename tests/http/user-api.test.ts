@@ -5,7 +5,6 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
 import { subjects } from "../../src/db/schema.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import { registerUserRoutes } from "../../src/http/user-routes.ts";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -220,9 +219,7 @@ test("rejects a user change when the actor loses the developer role while queued
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) =>
-    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-  );
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     await fixture.app.inject({ method: "POST", url: "/api/users", headers: bootstrapHeaders, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });
     await createService(fixture.app, "Queued auth");

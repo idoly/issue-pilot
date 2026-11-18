@@ -1,3 +1,4 @@
+import { DomainError } from "../domain/errors.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createIssueRecord, type DingtalkImportClaim } from "../issues/create.ts";
 import { updateIssueRecord } from "../issues/edit.ts";
@@ -42,7 +43,7 @@ import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { classifyRepositoryState, hasRepositoryView, issueRoot, pathExists } from "../workspace/state.ts";
 import { type PendingAttachment, readMultipartAttachment, removePendingAttachments, resolveSecureAttachmentFile, serializeAttachment } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
-import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
+import { choice, optionalText, record, strings, text } from "./input.ts";
 import type { IssueDetail, IssueExecutionItem } from "./contracts.ts";
 import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
 import {
@@ -92,7 +93,7 @@ async function readIssueInput(stateRoot: string, request: FastifyRequest): Promi
     }
     return { input: record(JSON.parse(text(issueField, "issue", 100_000))), attachments };
   } catch (error) {
-    const failure = error instanceof SyntaxError ? new ApiError(400, "invalid_issue") : error;
+    const failure = error instanceof SyntaxError ? new DomainError("invalid_issue", "bad_request") : error;
     await removePendingAttachments(attachments, [failure]);
     throw failure;
   }
@@ -132,12 +133,12 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       .select({ subject: subjects.subject })
       .from(subjects)
       .where(and(inArray(subjects.subject, requestedSubjects), eq(subjects.active, true)));
-    if (matchingSubjects.length !== requestedSubjects.length) throw new ApiError(400, "invalid_subject");
+    if (matchingSubjects.length !== requestedSubjects.length) throw new DomainError("invalid_subject", "bad_request");
   };
   // Development credentials belong to the owner (assignee, else reporter), who must be an active developer.
   const requireDevelopmentOwner = async (subject: string): Promise<void> => {
     const [owner] = await database.db.select({ role: subjects.role, active: subjects.active }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (owner?.role !== "developer" || !owner.active) throw new ApiError(400, "issue_developer_owner_required");
+    if (owner?.role !== "developer" || !owner.active) throw new DomainError("issue_developer_owner_required", "bad_request");
   };
   const parseIssueMetadataInput = async (input: Record<string, unknown>) => {
     const assigneeSubject = optionalText(input.assigneeSubject, 255);
@@ -154,13 +155,13 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
   const resolveCreationScope = async (workMode: IssueWorkMode, serviceKey: string) => {
     const scope = issueScopeForWorkMode(workMode);
     const environment = await findEnvironmentByKind(scope.environmentKind);
-    if (!environment) throw new ApiError(400, "invalid_work_mode");
+    if (!environment) throw new DomainError("invalid_work_mode", "bad_request");
     const serviceDeployment = await findServiceDeployment(serviceKey, environment.id);
-    if (!serviceDeployment) throw new ApiError(400, "invalid_service_for_work_mode");
+    if (!serviceDeployment) throw new DomainError("invalid_service_for_work_mode", "bad_request");
     return { type: scope.issueType, environment, serviceId: serviceDeployment.service.id, service: { key: serviceDeployment.service.key, name: serviceDeployment.service.name } };
   };
   const parseCreateIssueInput = async (input: Record<string, unknown>) => {
-    if (Object.hasOwn(input, "environmentKey") || Object.hasOwn(input, "type")) throw new ApiError(400, "issue_create_scope_contract_invalid");
+    if (Object.hasOwn(input, "environmentKey") || Object.hasOwn(input, "type")) throw new DomainError("issue_create_scope_contract_invalid", "bad_request");
     const workMode = choice(input.workMode, "work_mode", ISSUE_WORK_MODES);
     return {
       ...(await parseIssueMetadataInput(input)),
@@ -170,23 +171,23 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
   };
   const parseRelatedIssueKeys = (input: Record<string, unknown>) => {
     const rawKeys = strings(input.relatedIssueKeys ?? [], "related_issue_keys");
-    if (rawKeys.length > issuePilotConfig.limits.relatedIssues) throw new ApiError(400, "related_issue_limit_exceeded");
+    if (rawKeys.length > issuePilotConfig.limits.relatedIssues) throw new DomainError("related_issue_limit_exceeded", "bad_request");
     const keys = [...new Set(rawKeys.map((key) => parseIssueKey(key.trim())).filter((key): key is string => Boolean(key)))];
-    if (keys.length !== rawKeys.length) throw new ApiError(400, "invalid_related_issues");
+    if (keys.length !== rawKeys.length) throw new DomainError("invalid_related_issues", "bad_request");
     return keys;
   };
   const validateRelatedIssues = async (keys: string[]) => {
     if (!keys.length) return [];
     const relatedRows = await database.db.select().from(issues).where(inArray(issues.key, keys));
     const byKey = new Map(relatedRows.map((issue) => [issue.key, issue]));
-    if (byKey.size !== keys.length) throw new ApiError(400, "invalid_related_issues");
+    if (byKey.size !== keys.length) throw new DomainError("invalid_related_issues", "bad_request");
     return keys.map((key) => byKey.get(key)!);
   };
   const parseRelatedIssues = (input: Record<string, unknown>) => validateRelatedIssues(parseRelatedIssueKeys(input));
   const serializeIssueSummaryRow = (row: IssueSummaryRow): IssueExecutionItem => serializeIssueSummary(row, engine.getRunState(row.issue.id));
   const readIssueSummary = async (issueId: string, reader?: DatabaseReader) => {
     const row = (await issueSummaryQuery(reader ?? database.db).where(eq(issues.id, issueId)))[0];
-    if (!row) throw new ApiError(404, "issue_not_found");
+    if (!row) throw new DomainError("issue_not_found", "not_found");
     return serializeIssueSummaryRow(row);
   };
   app.get("/api/issues", async () => {
@@ -208,7 +209,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
 
   app.put<{ Params: { key: string } }>("/api/issues/:key/pin", async (request, reply) => {
     const [issue, subject] = await Promise.all([requireIssue(database, request.params.key), ensureCurrentSubject(database, request)]);
-    if (issue.assigneeSubject !== subject) throw new ApiError(409, "issue_not_assigned_to_current_user");
+    if (issue.assigneeSubject !== subject) throw new DomainError("issue_not_assigned_to_current_user", "conflict");
     await database.db.insert(issuePins).values({ subject, issueId: issue.id }).onConflictDoNothing();
     return reply.code(204).send();
   });
@@ -303,13 +304,13 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     const failures: unknown[] = [];
     try {
       const expectedEditVersion = input.expectedEditVersion;
-      if (typeof expectedEditVersion !== "string" || !/^[0-9a-f]{64}$/.test(expectedEditVersion)) throw new ApiError(400, "invalid_issue_edit_version");
-      if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new ApiError(400, "invalid_reset_session");
+      if (typeof expectedEditVersion !== "string" || !/^[0-9a-f]{64}$/.test(expectedEditVersion)) throw new DomainError("invalid_issue_edit_version", "bad_request");
+      if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new DomainError("invalid_reset_session", "bad_request");
       // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
       const resetSession = input.resetSession === true;
       if (resetSession) await requireDeveloper(database, request);
       const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
-      if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new ApiError(400, "issue_scope_update_not_allowed");
+      if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new DomainError("issue_scope_update_not_allowed", "bad_request");
       return await runScopeExclusive(() =>
         runIssueExclusive(engine, [issue.id], async (reservation) => {
           const editor = await requireCurrentUser(database, request);
@@ -325,22 +326,22 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
               recipients.map(({ subject }) => subject),
             )
           )
-            throw new ApiError(409, "issue_edit_conflict");
+            throw new DomainError("issue_edit_conflict", "conflict");
           if (resetSession) {
             await requireDeveloper(database, request);
-            if (currentIssue.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
+            if (currentIssue.status === "resolved") throw new DomainError("resolved_issue_cannot_reset_session", "conflict");
           }
           const currentSession = resetSession ? (await issueSessionHistory(database.db, stateRoot, currentIssue))[0] : undefined;
-          if (resetSession && !currentSession) throw new ApiError(409, "agent_session_not_found");
+          if (resetSession && !currentSession) throw new DomainError("agent_session_not_found", "conflict");
           const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
             database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
             database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, currentIssue.serviceId)).limit(1),
             parseIssueMetadataInput(input),
           ]);
-          if (!issueEnvironment || !issueService) throw new ApiError(409, "issue_scope_not_found");
+          if (!issueEnvironment || !issueService) throw new DomainError("issue_scope_not_found", "conflict");
           const removedAttachmentIdSet = new Set(removedAttachmentIds);
           const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
-          if (removedAttachments.length !== removedAttachmentIds.length) throw new ApiError(404, "attachment_not_found");
+          if (removedAttachments.length !== removedAttachmentIds.length) throw new DomainError("attachment_not_found", "not_found");
           if (requiresDeveloperOwner(issueEnvironment.kind))
             await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
           const attachmentRoot = issueRoot(stateRoot, issue.key);
@@ -409,8 +410,8 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
         const currentKeys = new Set(currentRelations.map(({ key }) => key));
         const onlyRemoves = requestedKeys.every((key) => currentKeys.has(key));
         const refusal = relatedIssueUpdateRefusal({ status: currentIssue.status, workspace }, { onlyRemoves });
-        if (refusal) throw new ApiError(409, refusal);
-        if (requestedKeys.includes(currentIssue.key)) throw new ApiError(400, "invalid_related_issues");
+        if (refusal) throw new DomainError(refusal, "conflict");
+        if (requestedKeys.includes(currentIssue.key)) throw new DomainError("invalid_related_issues", "bad_request");
         const relatedIssues = await validateRelatedIssues(requestedKeys);
         const currentIds = currentRelations.map(({ relatedIssueId }) => relatedIssueId).sort();
         const requestedIds = relatedIssues.map(({ id }) => id).sort();
@@ -435,10 +436,10 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     return runIssueExclusive(engine, [issue.id], async (reservation) => {
       await ensureCurrentSubject(database, request);
       const currentIssue = await requireIssue(database, issue.key);
-      if (currentIssue.status !== "pending") throw new ApiError(409, "invalid_issue_status_transition");
+      if (currentIssue.status !== "pending") throw new DomainError("invalid_issue_status_transition", "conflict");
       await reservation.closeSession(issue.id);
       const updatedIssue = await transitionIssue(database.db, issue.id, { from: ["pending"], to: "resolved", resolvedAt: new Date() });
-      if (!updatedIssue) throw new ApiError(409, "invalid_issue_status_transition");
+      if (!updatedIssue) throw new DomainError("invalid_issue_status_transition", "conflict");
       return readIssueSummary(updatedIssue.id);
     });
   });

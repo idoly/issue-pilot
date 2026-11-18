@@ -1,7 +1,8 @@
+import { DomainError } from "../domain/errors.ts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { IssueSearchSettings } from "../search/contracts.ts";
 import { IssueSearchIndex } from "../search/issue-index.ts";
-import { ApiError, closedRecord, text } from "./input.ts";
+import { closedRecord, text } from "./input.ts";
 import { loadIssueSearchSettings } from "../search/settings.ts";
 import { requireAdmin, requireCurrentUser, type ApiRouteContext } from "./route-context.ts";
 
@@ -25,10 +26,10 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
     await authorize();
     const state = await settings();
     // A socket that closed before listener registration must not start a provider request.
-    if (request.raw.aborted || reply.raw.destroyed) throw new ApiError(408, "issue_search_cancelled");
-    if (!state.enabled) throw new ApiError(503, "issue_search_disabled");
-    if (!state.accountId || !state.apiToken) throw new ApiError(503, "issue_search_credentials_required");
-    if (closing || active.size >= 4 || (refresh && refreshing)) throw new ApiError(409, "issue_search_busy");
+    if (request.raw.aborted || reply.raw.destroyed) throw new DomainError("issue_search_cancelled", "timeout");
+    if (!state.enabled) throw new DomainError("issue_search_disabled", "unavailable");
+    if (!state.accountId || !state.apiToken) throw new DomainError("issue_search_credentials_required", "unavailable");
+    if (closing || active.size >= 4 || (refresh && refreshing)) throw new DomainError("issue_search_busy", "conflict");
     const controller = new AbortController();
     const abort = () => {
       if (!reply.raw.writableEnded) controller.abort();
@@ -39,7 +40,7 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
     const verify = async () => {
       controller.signal.throwIfAborted();
       await authorize();
-      if ((await settings()).revision !== state.revision) throw new ApiError(409, "configuration_changed");
+      if ((await settings()).revision !== state.revision) throw new DomainError("configuration_changed", "conflict");
       controller.signal.throwIfAborted();
     };
     try {
@@ -47,7 +48,7 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
       await verify();
       return result;
     } catch (error) {
-      if (controller.signal.aborted && error === controller.signal.reason) throw new ApiError(408, "issue_search_cancelled");
+      if (controller.signal.aborted && error === controller.signal.reason) throw new DomainError("issue_search_cancelled", "timeout");
       throw error;
     } finally {
       reply.raw.removeListener("close", abort);
@@ -62,7 +63,7 @@ export function registerIssueSearchRoutes(context: Pick<ApiRouteContext, "app" |
   });
   app.post("/api/issue-search/refresh", { bodyLimit: 4096 }, (request, reply) => {
     const input = closedRecord(request.body, ["after"], "invalid_issue_search_cursor");
-    if (input.after !== undefined && (typeof input.after !== "string" || !/^[0-9a-f-]{36}$/i.test(input.after))) throw new ApiError(400, "invalid_issue_search_cursor");
+    if (input.after !== undefined && (typeof input.after !== "string" || !/^[0-9a-f-]{36}$/i.test(input.after))) throw new DomainError("invalid_issue_search_cursor", "bad_request");
     const after = input.after as string | undefined;
     return run(request, reply, true, (state, signal, verify) => index.refresh(state, after, signal, verify));
   });

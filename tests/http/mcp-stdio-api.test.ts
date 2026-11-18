@@ -10,7 +10,6 @@ import { openDatabase } from "../../src/db/client.ts";
 import { mcpServices, subjects } from "../../src/db/schema.ts";
 import { registerMcpRoutes } from "../../src/http/mcp-routes.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const server = fileURLToPath(new URL("../helpers/mcp-stdio-server.mjs", import.meta.url));
@@ -138,9 +137,7 @@ test("reauthorizes a queued connection test before starting a local process", { 
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) =>
-    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-  );
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     await f.app.inject({ method: "POST", url: "/api/users", headers, payload: { subject: "other-developer", name: "Other", email: "other@example.test", role: "developer" } });
     const created = await f.app.inject({

@@ -8,7 +8,6 @@ import Fastify from "fastify";
 import { eq } from "drizzle-orm";
 import { userCredentials, subjects } from "../../src/db/schema.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import { registerUserRoutes } from "../../src/http/user-routes.ts";
 import { requireCurrentUser, requireDeveloper } from "../../src/http/route-context.ts";
 
@@ -278,9 +277,7 @@ test("does not save another user's credentials when the default identity changes
       return operation();
     },
   });
-  app.setErrorHandler((error, _request, reply) =>
-    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-  );
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     const created = await f.app.inject({
       method: "POST",

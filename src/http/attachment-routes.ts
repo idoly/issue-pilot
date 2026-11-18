@@ -1,3 +1,4 @@
+import { DomainError } from "../domain/errors.ts";
 import type { ReadStream } from "node:fs";
 import { create as contentDisposition } from "content-disposition";
 
@@ -7,7 +8,6 @@ import { issueAttachments } from "../db/schema.ts";
 import { errorCode, stableErrorReason } from "../diagnostics.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { openVerifiedAttachmentStream } from "../workspace/attachments.ts";
-import { ApiError } from "./input.ts";
 import { requireCurrentUser, requireIssue, type ApiRouteContext } from "./route-context.ts";
 
 export function registerAttachmentRoutes(context: ApiRouteContext): void {
@@ -22,7 +22,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
         .where(and(eq(issueAttachments.issueId, issue.id), eq(issueAttachments.id, request.params.attachmentId)))
         .limit(1);
     const [attachment] = await findAttachment();
-    if (!attachment) throw new ApiError(404, "attachment_not_found");
+    if (!attachment) throw new DomainError("attachment_not_found", "not_found");
 
     const controller = new AbortController();
     const cancel = () => {
@@ -57,7 +57,7 @@ export function registerAttachmentRoutes(context: ApiRouteContext): void {
       }
       // An edit can retire the object after the first lookup but before the descriptor is verified.
       if (!stream && (errorCode(error) === "ENOENT" || (error instanceof Error && error.message === "insecure_issue_attachment_file")) && !(await findAttachment()).length)
-        throw new ApiError(404, "attachment_not_found");
+        throw new DomainError("attachment_not_found", "not_found");
       throw error;
     }
   });

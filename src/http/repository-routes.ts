@@ -1,8 +1,9 @@
+import { DomainError } from "../domain/errors.ts";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { issuesAffectedByRepositoryChange } from "../configuration/impact.ts";
 import { assertDevelopmentRepositoryUrls } from "../configuration/service-deployments.ts";
 import { repositories, serviceRepositories, services, serviceDeployments, environments } from "../db/schema.ts";
-import { ApiError, checkRevision, record, text } from "./input.ts";
+import { checkRevision, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import type { ManagedRepository } from "./contracts.ts";
 
@@ -11,18 +12,18 @@ function repositoryInput(body: unknown) {
   const name = text(input.name, "repository_name", 200);
   const url = text(input.url, "repository_url", 2048);
   const group = typeof input.group === "string" ? input.group.trim().toLowerCase() : "";
-  if (!group || group.length > 64 || /\p{Cc}/u.test(group)) throw new ApiError(400, "invalid_repository_group");
-  if (/\s|\0/.test(url)) throw new ApiError(400, "invalid_repository_url");
+  if (!group || group.length > 64 || /\p{Cc}/u.test(group)) throw new DomainError("invalid_repository_group", "bad_request");
+  if (/\s|\0/.test(url)) throw new DomainError("invalid_repository_url", "bad_request");
   if (url.startsWith("https://") || url.startsWith("ssh://")) {
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
-      throw new ApiError(400, "invalid_repository_url");
+      throw new DomainError("invalid_repository_url", "bad_request");
     }
     if (!parsed.hostname || parsed.password || parsed.search || parsed.hash || parsed.pathname === "/" || (url.startsWith("https://") && parsed.username))
-      throw new ApiError(400, "invalid_repository_url");
-  } else if (!/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+:[^\s\0]+$/.test(url)) throw new ApiError(400, "invalid_repository_url");
+      throw new DomainError("invalid_repository_url", "bad_request");
+  } else if (!/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+:[^\s\0]+$/.test(url)) throw new DomainError("invalid_repository_url", "bad_request");
   return { name, url, group };
 }
 
@@ -60,7 +61,7 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const [existing] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
-      if (!existing) throw new ApiError(404, "repository_not_found");
+      if (!existing) throw new DomainError("repository_not_found", "not_found");
       checkRevision(record(request.body).expectedRevision, existing.revision);
       if (existing.url === input.url) {
         if (existing.name === input.name && existing.group === input.group) return { ok: true };
@@ -114,9 +115,9 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
     await runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const [row] = await database.db.select().from(repositories).where(eq(repositories.id, request.params.id)).limit(1);
-      if (!row) throw new ApiError(404, "repository_not_found");
+      if (!row) throw new DomainError("repository_not_found", "not_found");
       const [binding] = await database.db.select({ id: serviceRepositories.id }).from(serviceRepositories).where(eq(serviceRepositories.url, row.url)).limit(1);
-      if (binding) throw new ApiError(409, "repository_is_used_by_services");
+      if (binding) throw new DomainError("repository_is_used_by_services", "conflict");
       await database.db.delete(repositories).where(eq(repositories.id, row.id));
     });
     return reply.code(204).send();

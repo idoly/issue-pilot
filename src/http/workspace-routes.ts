@@ -6,7 +6,7 @@ import { issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES, relatedIssueEntryName } from "../domain/contracts.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { ApiError, choice, record, text } from "./input.ts";
+import { choice, record, text } from "./input.ts";
 import { authorizeWorkMode, requireCurrentUser, requireIssue, type ApiRouteContext } from "./route-context.ts";
 import type { IdentityRequest } from "../configuration/access.ts";
 import { DomainError } from "../domain/errors.ts";
@@ -57,7 +57,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     });
   const relativeWorkPath = (value: unknown, optional = false): string => {
     if (value === undefined && optional) return "";
-    if (typeof value !== "string" || value.length > 4096 || (!optional && !value.length)) throw new ApiError(400, "invalid_issue_file_path");
+    if (typeof value !== "string" || value.length > 4096 || (!optional && !value.length)) throw new DomainError("invalid_issue_file_path", "bad_request");
     return value;
   };
   // The query carries a work-file path; keep names out of request logs like the download route.
@@ -119,7 +119,7 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     const target = transitionTarget(input);
     const expectedIssueUpdatedAt = text(input.expectedIssueUpdatedAt, "expected_issue_updated_at", 100);
     const expectedPlanHash = text(input.expectedPlanHash, "expected_plan_hash", 100);
-    if (!/^sha256:[0-9a-f]{64}$/.test(expectedPlanHash) || !Number.isFinite(new Date(expectedIssueUpdatedAt).getTime())) throw new ApiError(400, "invalid_scope_transition_expectation");
+    if (!/^sha256:[0-9a-f]{64}$/.test(expectedPlanHash) || !Number.isFinite(new Date(expectedIssueUpdatedAt).getTime())) throw new DomainError("invalid_scope_transition_expectation", "bad_request");
     const actorSubject = await authorizeWorkMode(database, request, target.workMode);
     const changed = await runScopeExclusive(async () => {
       await authorizeWorkMode(database, request, target.workMode);

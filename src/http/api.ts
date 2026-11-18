@@ -25,7 +25,6 @@ import { registerAgentRoutes } from "./agent-routes.ts";
 import { registerAttachmentRoutes } from "./attachment-routes.ts";
 import { registerConfigurationRoutes } from "./configuration-routes.ts";
 import { DomainError, OPERATIONAL_FAILURE_CODES } from "../domain/errors.ts";
-import { ApiError } from "./input.ts";
 import { registerDingtalkRoutes } from "./dingtalk-routes.ts";
 import type { McpConnector } from "../mcp/client.ts";
 import { registerIssueRoutes } from "./issue-routes.ts";
@@ -217,7 +216,6 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         app.log.error(errorDiagnostic(error));
         return reply.code(500).send({ error: operationError.message, outcome: operationError.outcome });
       }
-      if (error instanceof ApiError) return reply.code(error.statusCode).send({ error: error.message });
       // A rollback or cleanup failure dominates the constraint error wrapped in its AggregateError: the state was not
       // cleanly settled, so reporting a retryable conflict (or keeping the failure out of the log) would mislead.
       if (!(error instanceof DomainError))

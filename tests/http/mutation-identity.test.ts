@@ -13,7 +13,6 @@ import { createPrivateSessionManager, type GitCommitIdentity, type ManagedPiSess
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces, subjects } from "../../src/db/schema.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import type { KeyedSerialQueue } from "../../src/serial.ts";
 import { WorkspaceLifecycleManager } from "../../src/workspace/lifecycle.ts";
@@ -231,9 +230,7 @@ test("source mutations reauthorize after reservation and commit with the current
       },
     } as never,
   });
-  app.setErrorHandler((error, _request, reply) =>
-    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-  );
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     await createService(f.app, "SourceIdentity");
     const issue = await createIssue(f.app, "sourceidentity");
@@ -325,7 +322,7 @@ test("lifecycle operations preserve authorization errors before loading or chang
   const f = await createApiFixture();
   const database = openDatabase(f.databaseFile);
   const manager = new WorkspaceLifecycleManager(database.db, f.root, f.engine);
-  const denied = new ApiError(403, "developer_role_required");
+  const denied = new DomainError("developer_role_required", "forbidden");
   let authorizations = 0;
   const authorize = async () => {
     authorizations++;

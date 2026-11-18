@@ -16,7 +16,7 @@ import { agentSessions, issues } from "../db/schema.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import { canWriteIssueCode, personGitIdentity, type AccessHolder, type EnvironmentKind } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
-import { ApiError, record, text } from "./input.ts";
+import { record, text } from "./input.ts";
 import { issueSummaryQuery, serializeIssueSummary } from "./issue-summary.ts";
 import { issueEnvironmentKind, requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
@@ -24,7 +24,7 @@ import { createOrderedSseWriter } from "./sse.ts";
 const agentImageMediaTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 function agentMessageText(value: unknown): string {
-  if (typeof value === "string" && value.length > issuePilotConfig.limits.agentMessageChars) throw new ApiError(400, "agent_message_too_long");
+  if (typeof value === "string" && value.length > issuePilotConfig.limits.agentMessageChars) throw new DomainError("agent_message_too_long", "bad_request");
   return text(value, "agent_message", issuePilotConfig.limits.agentMessageChars);
 }
 
@@ -36,24 +36,24 @@ async function readAgentMessage(request: FastifyRequest): Promise<{ message: str
   let totalBytes = 0;
   for await (const part of request.parts()) {
     if (part.type === "field") {
-      if (part.fieldname !== "message" || message !== undefined) throw new ApiError(400, "invalid_agent_message");
+      if (part.fieldname !== "message" || message !== undefined) throw new DomainError("invalid_agent_message", "bad_request");
       message = agentMessageText(part.value);
       continue;
     }
-    if (part.fieldname !== "images" || !agentImageMediaTypes.has(part.mimetype) || images.length >= limits.files) throw new ApiError(400, "invalid_agent_image");
+    if (part.fieldname !== "images" || !agentImageMediaTypes.has(part.mimetype) || images.length >= limits.files) throw new DomainError("invalid_agent_image", "bad_request");
     const chunks: Buffer[] = [];
     let fileBytes = 0;
     for await (const chunk of part.file) {
       const content = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       fileBytes += content.length;
       totalBytes += content.length;
-      if (fileBytes > limits.fileBytes || totalBytes > limits.requestBytes) throw new ApiError(413, "agent_image_limit_exceeded");
+      if (fileBytes > limits.fileBytes || totalBytes > limits.requestBytes) throw new DomainError("agent_image_limit_exceeded", "payload_too_large");
       chunks.push(content);
     }
-    if (part.file.truncated) throw new ApiError(413, "agent_image_limit_exceeded");
+    if (part.file.truncated) throw new DomainError("agent_image_limit_exceeded", "payload_too_large");
     images.push({ type: "image", mimeType: part.mimetype, data: Buffer.concat(chunks).toString("base64") });
   }
-  if (!message) throw new ApiError(400, "invalid_agent_message");
+  if (!message) throw new DomainError("invalid_agent_message", "bad_request");
   return { message, images };
 }
 
@@ -85,7 +85,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     });
     // A readonly transcript uses the same private-entry projection as the live conversation.
     const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new ApiError(400, "invalid_offset");
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new DomainError("invalid_offset", "bad_request");
     const transcript = sessionTranscript(manager, issue.id),
       page = transcript.slice(offset, offset + 50).map(agentDisplayEvent);
     return { events: page, nextOffset: offset + page.length < transcript.length ? offset + page.length : null };
@@ -112,9 +112,9 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       runIssueExclusive(engine, [issue.id], async (reservation) => {
         const actor = await requireDeveloper(database, request);
         const current = await requireIssue(database, issue.key);
-        if (current.status === "resolved") throw new ApiError(409, "resolved_issue_cannot_reset_session");
+        if (current.status === "resolved") throw new DomainError("resolved_issue_cannot_reset_session", "conflict");
         const history = await issueSessionHistory(database.db, stateRoot, current);
-        if (history[0]?.sessionId !== expectedSessionId) throw new ApiError(409, "agent_session_changed");
+        if (history[0]?.sessionId !== expectedSessionId) throw new DomainError("agent_session_changed", "conflict");
         await reservation.closeSession(issue.id);
         const reset = await resetIssueSession(database.db, stateRoot, current, actor, expectedSessionId);
         events.publish({ id: crypto.randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
@@ -142,7 +142,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       const actor = await requireCurrentUser(database, request);
       requireAgentCodeAccess(actor, await issueEnvironmentKind(database, currentIssue));
       // The engine can start any unresolved Issue; the detail view offers the same retry for pending ones.
-      if (currentIssue.status === "resolved") throw new ApiError(409, "issue_not_retryable");
+      if (currentIssue.status === "resolved") throw new DomainError("issue_not_retryable", "conflict");
       reservation.enqueue(issue.id);
     });
     return reply.code(202).send({ ok: true });
@@ -157,7 +157,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     for (const end of [...activeStreams]) end();
   });
   app.get<{ Params: { key: string } }>("/api/issues/:key/agent-stream", async (request, reply) => {
-    if (closing) throw new ApiError(503, "agent_stream_closing");
+    if (closing) throw new DomainError("agent_stream_closing", "unavailable");
     // Validate an explicitly selected identity. Browser EventSource sends no subject header, so the
     // default active user applies; an inactive explicit subject is refused here like other routes.
     await requireCurrentUser(database, request);
@@ -232,7 +232,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         },
       });
       const [current] = await issueSummaryQuery(database.db).where(eq(issues.id, issue.id)).limit(1);
-      if (!current) throw new ApiError(404, "issue_not_found");
+      if (!current) throw new DomainError("issue_not_found", "not_found");
       // Catalog loading and transcript validation can outlive the reader's authorization.
       // Refuse before sending SSE headers; the request keeps its initially selected identity.
       await requireCurrentUser(database, request);
@@ -241,8 +241,8 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
         return;
       }
       // Preparation can overlap preClose; only a stream registered before that hook may start.
-      if (closing) throw new ApiError(503, "agent_stream_closing");
-      if (sessionReset) throw new ApiError(409, "agent_session_changed");
+      if (closing) throw new DomainError("agent_stream_closing", "unavailable");
+      if (sessionReset) throw new DomainError("agent_session_changed", "conflict");
       stopWatchingReset?.();
       stopWatchingReset = undefined;
       reply.hijack();
@@ -331,7 +331,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   app.get<{ Params: { key: string; id: string } }>("/api/issues/:key/agent-messages/:id", async (request) => {
     const person = await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
-    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(request.params.id)) throw new ApiError(400, "invalid_agent_message_id");
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(request.params.id)) throw new DomainError("invalid_agent_message_id", "bad_request");
     return runScopeExclusive(() => engine.messageReceipt(issue, { id: request.params.id, subject: person.subject }, () => requireCurrentUser(database, request)));
   });
 
@@ -341,7 +341,7 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     const issue = await requireIssue(database, request.params.key);
     requireAgentCodeAccess(initial, await issueEnvironmentKind(database, issue));
     const id = request.headers["x-issue-pilot-message-id"] ?? crypto.randomUUID();
-    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new ApiError(400, "invalid_agent_message_id");
+    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new DomainError("invalid_agent_message_id", "bad_request");
     const { message, images } = await readAgentMessage(request);
     // Reading the body, admission waits and steering can outlive the sender's authorization and role, so the
     // engine's reauthorize callback reloads both the person and the Issue environment before admitting.

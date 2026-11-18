@@ -7,7 +7,6 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { issues, subjects } from "../../src/db/schema.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import { registerSourceBrowserRoutes } from "../../src/http/source-browser-routes.ts";
 import { createApiFixture, createIssue, createService, issueEditVersion, issueMetadataPayload, issuePayload } from "./fixture.ts";
 
@@ -36,9 +35,7 @@ for (const explicit of [false, true])
         },
       } as never,
     });
-    app.setErrorHandler((error, _request, reply) =>
-      reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-    );
+    app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
     try {
       await createService(f.app, "CodeRoleDev", ["dev"]);
       await createService(f.app, "CodeRoleTest", ["test"]);
@@ -116,9 +113,7 @@ test("developers keep source mutations and dev Agent admission, and resolved Iss
       },
     } as never,
   });
-  app.setErrorHandler((error, _request, reply) =>
-    reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-  );
+  app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
   try {
     await createService(f.app, "CodeRoleOwner", ["dev"]);
     const dev = await createIssue(f.app, "coderoleowner", "dev");

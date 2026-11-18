@@ -7,7 +7,6 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { subjects } from "../../src/db/schema.ts";
 import { DomainError } from "../../src/domain/errors.ts";
-import { ApiError } from "../../src/http/input.ts";
 import type { ApiRouteContext } from "../../src/http/route-context.ts";
 import { registerWorkspaceRoutes } from "../../src/http/workspace-routes.ts";
 import { SourceBrowser } from "../../src/workspace/source-browser.ts";
@@ -70,9 +69,7 @@ test("work-file reads reauthorize after the scope queue wait", { timeout: 10_000
         return operation();
       },
     } as unknown as ApiRouteContext);
-    app.setErrorHandler((error, _request, reply) =>
-      reply.code(error instanceof ApiError || error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }),
-    );
+    app.setErrorHandler((error, _request, reply) => reply.code(error instanceof DomainError ? error.statusCode : 500).send({ error: error instanceof Error ? error.message : "internal_error" }));
     const pending = app.inject({ method: "GET", url: `/api/issues/${issue.id}/files`, headers: { "x-issue-pilot-subject": reader } });
     await entered;
     await database.db.update(subjects).set({ active: false }).where(eq(subjects.subject, reader));

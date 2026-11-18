@@ -1,3 +1,4 @@
+import { DomainError } from "../domain/errors.ts";
 import { resolveDmsScope } from "../capabilities/dms.ts";
 import { OperationError } from "../operation-error.ts";
 import { randomUUID } from "node:crypto";
@@ -19,7 +20,7 @@ import { issuesAffectedByGlobalChange, issuesAffectedByServiceChange } from "../
 import { loadSharedCapabilityCredentials, selectDmsCredentials } from "../configuration/user-credentials.ts";
 import { userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, ApiError, checkRevision, closedRecord, isClassifiedFailure, optionalText, record, text } from "./input.ts";
+import { agentModelSelection, checkRevision, closedRecord, isClassifiedFailure, optionalText, record, text } from "./input.ts";
 import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "../search/settings.ts";
 import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "../configuration/service-deployments.ts";
@@ -54,7 +55,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const service = await findServiceByKey(request.params.key);
-      if (!service) throw new ApiError(404, "service_not_found");
+      if (!service) throw new DomainError("service_not_found", "not_found");
       const deployments = await database.db
         .select({ environmentKey: environments.key, config: serviceDeployments.config })
         .from(serviceDeployments)
@@ -68,12 +69,12 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       await requireDeveloper(database, request);
       try {
         const value = await loadServiceConfigurationDescription(database.db, request.params.key);
-        if (!value) throw new ApiError(404, "service_not_found");
+        if (!value) throw new DomainError("service_not_found", "not_found");
         return value;
       } catch (error) {
         if (isClassifiedFailure(error)) throw error;
         app.log.error(errorDiagnostic(error));
-        throw new ApiError(500, "service_configuration_description_failed");
+        throw new DomainError("service_configuration_description_failed", "internal");
       }
     });
   });
@@ -83,7 +84,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
     try {
       const connection = await runScopeExclusive(async () => {
         const actor = await requireDeveloper(database, request);
-        if (Object.keys(input).some((key) => !["instanceAlias", "schemaName"].includes(key))) throw new ApiError(400, "invalid_dms_scope_request");
+        if (Object.keys(input).some((key) => !["instanceAlias", "schemaName"].includes(key))) throw new DomainError("invalid_dms_scope_request", "bad_request");
         const [personal] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, actor)).limit(1);
         const shared = await loadSharedCapabilityCredentials(database.db);
         return selectDmsCredentials(personal, shared.dms);
@@ -94,7 +95,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       // silent, so record only the unclassified TLS/DNS/SDK failure it replaces with an opaque code.
       if (isClassifiedFailure(error)) throw error;
       app.log.error({ code: "dms_scope_resolve_failed" }, "dms_scope_resolve_failed");
-      throw new ApiError(502, "dms_scope_resolve_failed");
+      throw new DomainError("dms_scope_resolve_failed", "upstream");
     }
   });
   app.get("/api/catalog", async (_request, _reply) => {
@@ -112,7 +113,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       const update = record(input.apiKey);
       if (update.mode === "replace" && Object.keys(update).length === 2) apiKey = text(update.value, "agent_api_key", 10_000);
       else if (update.mode === "clear" && Object.keys(update).length === 1) apiKey = "";
-      else throw new ApiError(400, "invalid_credential_update");
+      else throw new DomainError("invalid_credential_update", "bad_request");
     }
     const configuration = { ...agentModelSelection(input, await modelCatalog.list()), runtime: parseAgentRuntime(input.runtime) };
     return runScopeExclusive(async () => {
@@ -127,7 +128,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
           checkRevision(input.expectedRevision, expectedRevision);
           // A preserved key stays bound to its provider; switching providers requires a new key or an explicit clear.
           if (apiKey === undefined && (await loadGlobalAgentConfiguration(database.db)).provider !== configuration.provider && (await loadSharedAgentApiKey(database.db)))
-            throw new ApiError(400, "agent_api_key_required");
+            throw new DomainError("agent_api_key_required", "bad_request");
           for (const row of affected) await reservation.closeSession(row.id);
           const revision = await database.db.transaction((transaction) => saveGlobalAgentConfiguration(transaction, configuration, expectedRevision, apiKey));
           return { ok: true, revision };
@@ -149,7 +150,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
     runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const input = closedRecord(request.body, ["expectedRevision", "overrides", "issueSearch"], "invalid_application_parameters");
-      if (input.expectedRevision === undefined) throw new ApiError(400, "invalid_application_parameters");
+      if (input.expectedRevision === undefined) throw new DomainError("invalid_application_parameters", "bad_request");
       const overrides = parseApplicationParameterOverrides(input.overrides);
       const { parameters, previousValues, search } = await database.db.transaction(async (transaction) => {
         const current = await loadApplicationParameterState(transaction);
@@ -185,7 +186,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       } catch (error) {
         if (isClassifiedFailure(error)) throw error;
         app.log.error(errorDiagnostic(error));
-        throw new ApiError(500, "agent_resources_inspection_failed");
+        throw new DomainError("agent_resources_inspection_failed", "internal");
       }
     });
   });
@@ -223,7 +224,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
     runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const service = await findServiceByKey(request.params.key);
-      if (!service) throw new ApiError(404, "service_not_found");
+      if (!service) throw new DomainError("service_not_found", "not_found");
       const input = record(request.body);
       checkRevision(input.expectedRevision, service.revision);
       const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input });
@@ -248,10 +249,10 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
     await runScopeExclusive(async () => {
       await requireDeveloper(database, request);
       const service = await findServiceByKey(request.params.key);
-      if (!service) throw new ApiError(404, "service_not_found");
+      if (!service) throw new DomainError("service_not_found", "not_found");
       const primary = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id)).limit(1);
       const extra = await database.db.select().from(issueServiceScopes).where(eq(issueServiceScopes.serviceId, service.id)).limit(1);
-      if (primary.length || extra.length) throw new ApiError(409, "service_is_used_by_issues");
+      if (primary.length || extra.length) throw new DomainError("service_is_used_by_issues", "conflict");
       const affected = await issuesAffectedByServiceChange(database.db, service.id);
       await runIssueExclusive(
         engine,
