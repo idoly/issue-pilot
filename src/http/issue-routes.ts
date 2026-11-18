@@ -1,6 +1,7 @@
-import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createIssueRecord, type DingtalkImportClaim } from "../issues/create.ts";
+import { updateIssueRecord } from "../issues/edit.ts";
+import { updateIssueRelations } from "../issues/relations.ts";
 import { transitionIssue } from "../issues/status.ts";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
@@ -39,18 +40,7 @@ import {
 } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { classifyRepositoryState, hasRepositoryView, issueRoot, pathExists } from "../workspace/state.ts";
-import {
-  finalizeRetiredAttachments,
-  type PendingAttachment,
-  readMultipartAttachment,
-  removePendingAttachments,
-  removeWrittenAttachments,
-  resolveSecureAttachmentFile,
-  retireAttachments,
-  serializeAttachment,
-  publishPendingAttachments,
-  insertPublishedAttachments,
-} from "../workspace/attachments.ts";
+import { type PendingAttachment, readMultipartAttachment, removePendingAttachments, resolveSecureAttachmentFile, serializeAttachment } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
 import type { IssueDetail, IssueExecutionItem } from "./contracts.ts";
@@ -356,34 +346,19 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
           const attachmentRoot = issueRoot(stateRoot, issue.key);
           await Promise.all(removedAttachments.map(({ objectKey, size }) => resolveSecureAttachmentFile(attachmentRoot, objectKey, size)));
           await reservation.closeSession(issue.id);
-          const writtenObjectKeys: string[] = [];
-          let attachmentDtos: Array<ReturnType<typeof serializeAttachment>> = [];
-          try {
-            const publishedAttachments = await publishPendingAttachments(stateRoot, issue.key, pendingAttachments, writtenObjectKeys);
-            let createdAttachments: Awaited<ReturnType<typeof insertPublishedAttachments>> = [];
-            const save = async (transaction: Parameters<Parameters<typeof database.db.transaction>[0]>[0]) => {
-              await transaction
-                .update(issues)
-                .set({ title: issueValues.title, description: issueValues.description, priority: issueValues.priority, assigneeSubject: issueValues.assigneeSubject, updatedAt: new Date() })
-                .where(eq(issues.id, issue.id));
-              await transaction.delete(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
-              if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: issue.id, subject: recipient })));
-              await retireAttachments(transaction, issue.id, removedAttachments);
-              createdAttachments = await insertPublishedAttachments(transaction, issue.id, editorSubject, publishedAttachments);
-            };
-            if (resetSession) await resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId, save);
-            else await database.db.transaction(save);
-            attachmentDtos = [...currentAttachments.filter((attachment) => !removedAttachmentIdSet.has(attachment.id)).map(serializeAttachment), ...createdAttachments];
-          } catch (error) {
-            const rollbackErrors: unknown[] = [];
-            await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
-            if (rollbackErrors.length) throw new OperationError("issue_update_rollback_failed", "unknown", { cause: new AggregateError([error, ...rollbackErrors], "issue_update_rollback_failed") });
-            throw error;
-          }
-          // A committed retirement is never rolled back. The next successful edit retries any recorded cleanup failures.
-          await finalizeRetiredAttachments(database.db, attachmentRoot, issue.id).catch((error: unknown) =>
-            request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"),
-          );
+          const createdAttachments = await updateIssueRecord({
+            database: database.db,
+            stateRoot,
+            issue,
+            values: issueValues,
+            editorSubject,
+            removedAttachments,
+            addedAttachments: pendingAttachments,
+            persist: (save) =>
+              resetSession ? resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId, save).then(() => undefined) : database.db.transaction(save),
+            onFinalizeError: (error) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"),
+          });
+          const attachmentDtos = [...currentAttachments.filter((attachment) => !removedAttachmentIdSet.has(attachment.id)).map(serializeAttachment), ...createdAttachments];
           if (resetSession) {
             events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
           } else if (currentIssue.status !== "resolved" && canWriteIssueCode(editor, issueEnvironment.kind)) {
@@ -442,17 +417,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
         if (currentIds.length === requestedIds.length && currentIds.every((id, index) => id === requestedIds[index])) return;
         const mayRunAgent = canWriteIssueCode(editor, await issueEnvironmentKind(database, currentIssue));
         await reservation.closeSession(currentIssue.id);
-        await database.db.transaction(async (transaction) => {
-          const currentIdSet = new Set(currentIds);
-          const requestedIdSet = new Set(requestedIds);
-          const removedIds = currentIds.filter((id) => !requestedIdSet.has(id));
-          const addedIssues = relatedIssues.filter(({ id }) => !currentIdSet.has(id));
-          if (removedIds.length) await transaction.delete(issueRelations).where(and(eq(issueRelations.issueId, currentIssue.id), inArray(issueRelations.relatedIssueId, removedIds)));
-          if (addedIssues.length) await transaction.insert(issueRelations).values(addedIssues.map((relatedIssue) => ({ issueId: currentIssue.id, relatedIssueId: relatedIssue.id })));
-          const now = new Date();
-          await transaction.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: now }).where(eq(issueWorkspaces.issueId, currentIssue.id));
-          await transaction.update(issues).set({ updatedAt: now }).where(eq(issues.id, currentIssue.id));
-        });
+        await updateIssueRelations(database.db, currentIssue.id, currentIds, requestedIds);
         if (mayRunAgent) reservation.enqueue(currentIssue.id);
       });
     });

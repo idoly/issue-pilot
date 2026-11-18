@@ -39,6 +39,7 @@ SQLite, JSONL, Git, attachments and work files jointly retain facts. There is no
 | Round preparation (workspace, evidence, credentials, tools, prompt context) | [round-preparation.ts](../../src/agent/round-preparation.ts) |
 | Issue creation: key claim, root claim, attachment publication, one transaction and rollback | [issues/create.ts](../../src/issues/create.ts) |
 | Issue status writes: one guarded transition; callers own their stable refusal codes | [issues/status.ts](../../src/issues/status.ts) |
+| Issue edit persistence (attachments, recipients, rollback) and related-Issue sets | [issues/edit.ts](../../src/issues/edit.ts), [issues/relations.ts](../../src/issues/relations.ts) |
 | Pi sessions, model isolation and resources | [pi-session.ts](../../src/agent/pi-session.ts), [model-runtime.ts](../../src/agent/model-runtime.ts), [pi-runtime.ts](../../src/configuration/pi-runtime.ts) |
 | Opening a bound session file (path rule, completeness, Pi resolution) | [session-file.ts](../../src/agent/session-file.ts) |
 | Agent method per work mode (investigation, defect fix, feature development) | [playbooks.ts](../../src/agent/playbooks.ts) |
