@@ -116,7 +116,7 @@ test("preserves unmanaged Issue state and checks shared snapshots without changi
   const activeKey = "issue-20260807-001";
   const unmanagedKey = "issue-20260807-002";
   const unmanagedWorkspaceFile = path.join(root, "workspaces", unmanagedKey, "uncommitted.txt");
-  const unmanagedAttachment = path.join(root, "issues", unmanagedKey, "attachments", "evidence.txt");
+  const unmanagedAttachment = path.join(root, "workspaces", unmanagedKey, "attachments", "evidence.txt");
   const checkoutRoot = sharedCheckoutsRoot(root);
   try {
     await Promise.all([
@@ -137,13 +137,13 @@ test("preserves unmanaged Issue state and checks shared snapshots without changi
     const checkoutInode = (await stat(checkout)).ino;
 
     const checkoutRootInode = (await stat(checkoutRoot)).ino;
-    await assert.rejects(assertIssueStateLayout(root, ["ISSUE-20260807-001"]), /unmanaged_issue_state:issues\/issue-20260807-002,workspaces\/issue-20260807-002/);
+    await assert.rejects(assertIssueStateLayout(root, ["ISSUE-20260807-001"]), /unmanaged_issue_state:workspaces\/issue-20260807-002/);
     assert.equal(await readFile(unmanagedWorkspaceFile, "utf8"), "preserve workspace\n");
     assert.equal(await readFile(unmanagedAttachment, "utf8"), "preserve attachment\n");
     assert.equal((await stat(path.join(root, "workspaces", activeKey, "operator-evidence"))).isDirectory(), true);
     assert.equal((await stat(checkoutRoot)).isDirectory(), true);
 
-    await Promise.all([rm(path.join(root, "workspaces", unmanagedKey), { recursive: true }), rm(path.join(root, "issues", unmanagedKey), { recursive: true })]);
+    await rm(path.join(root, "workspaces", unmanagedKey), { recursive: true });
     await assertIssueStateLayout(root, ["ISSUE-20260807-001"]);
     await WorktreeManager.assertSharedState(root);
     assert.equal((await stat(path.join(root, "workspaces", activeKey, "repository"))).isDirectory(), true);

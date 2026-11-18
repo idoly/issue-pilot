@@ -57,7 +57,7 @@ async function validateGitFiles(directory: string): Promise<void> {
   }
 }
 
-async function validateGitConfiguration(store: string, expectedUrl?: string, legacyShared = false): Promise<void> {
+async function validateGitConfiguration(store: string, expectedUrl?: string): Promise<void> {
   // A planted include, filter, fsmonitor or hook must never execute in the trusted application.
   const file = path.join(store, "config");
   if (!(await lstat(file)).isFile()) throw new Error("workspace_git_configuration_invalid");
@@ -68,16 +68,6 @@ async function validateGitConfiguration(store: string, expectedUrl?: string, leg
       value = entry.slice(split + 1);
     if (split < 0) throw new Error("workspace_git_configuration_invalid");
     const tracking = /^branch\.(.+)\.(remote|merge)$/.exec(key);
-    // Historical shared repositories carry baseline tracking and operator/IDE settings. None are copied to the private store.
-    if (
-      legacyShared &&
-      ((tracking?.[2] === "merge" && value.startsWith("refs/heads/")) ||
-        (/^branch\..+\.vscode-merge-base$/.test(key) && value.startsWith("origin/")) ||
-        (key === "core.logallrefupdates" && ["true", "false"].includes(value)) ||
-        (key === "core.hookspath" && /^[a-zA-Z0-9/._-]+$/.test(value)) ||
-        ((key === "user.name" || key === "user.email") && !value.includes("\n")))
-    )
-      continue;
     const valid =
       key === "core.repositoryformatversion"
         ? ["0", "1"].includes(value)
@@ -230,43 +220,6 @@ async function initializePrivateStore(
   if (packed.code) throw new Error("workspace_git_object_preservation_failed", { cause: new Error(packed.stderr) });
 }
 
-export type LegacyIssueBranch = { sharedStore: string; privateStore: string; branch: string; commit: string; base: string; workspace?: string };
-
-/** Inspect a reviewed legacy binding without running Git in its worktree or changing any refs. */
-export async function inspectLegacyIssueBranch(input: LegacyIssueBranch, url: string): Promise<void> {
-  const { sharedStore, branch, commit, base, workspace } = input;
-  const objects = path.join(sharedStore, "objects");
-  if (!(await lstat(objects)).isDirectory() || (await realpath(objects)) !== objects) throw new Error("workspace_git_store_invalid");
-  await validateGitConfiguration(sharedStore, url, true);
-  if ((await readIssueBranchCommit(sharedStore, branch)) !== commit) throw new Error("legacy_issue_branch_changed");
-  if ((await git(["-C", sharedStore, "cat-file", "-t", base])) !== "commit" || (await git(["-C", sharedStore, "cat-file", "-t", commit])) !== "commit") throw new Error("legacy_issue_commit_invalid");
-  if (workspace) {
-    const metadata = await linkedWorktreeMetadata(sharedStore, workspace);
-    await validateGitFiles(metadata);
-    await validateIssueWorktreeBinding(sharedStore, workspace, branch);
-  } else if ((await git(["-C", sharedStore, "worktree", "list", "--porcelain", "-z"])).split("\0").includes(`branch refs/heads/${branch}`)) {
-    throw new Error("legacy_released_branch_has_worktree");
-  }
-}
-
-/** Install a released Issue store without creating a worktree or modifying the shared ref. */
-export async function preserveReleasedIssueBranch(input: LegacyIssueBranch): Promise<void> {
-  const { sharedStore, privateStore, branch, commit, base } = input;
-  const temporary = await privateStoreStagingPath(privateStore);
-  try {
-    await initializePrivateStore(sharedStore, temporary, branch, commit, base);
-    if ((await readIssueBranchCommit(sharedStore, branch)) !== commit) throw new Error("legacy_issue_branch_changed");
-    await rename(temporary, privateStore);
-  } catch (error) {
-    try {
-      await rm(temporary, { recursive: true, force: true });
-    } catch (cleanup) {
-      throw new AggregateError([error, cleanup], "workspace_git_isolation_rollback_failed");
-    }
-    throw error;
-  }
-}
-
 /** Create a new branch directly in its private store. No shared branch or worktree is created. */
 export async function createPrivateIssueBranch(sharedStore: string, privateStore: string, branch: string, base: string): Promise<void> {
   const temporary = await privateStoreStagingPath(privateStore);
@@ -296,7 +249,7 @@ async function privateStoreStagingPath(privateStore: string): Promise<string> {
 }
 
 /** Move a validated linked worktree's mutable Git state into its Issue. No shared write grant is needed. */
-export async function isolateIssueWorktree(sharedStore: string, privateStore: string, workspace: string, branch: string, base: string, expectedCommit?: string): Promise<void> {
+export async function isolateIssueWorktree(sharedStore: string, privateStore: string, workspace: string, branch: string, base: string): Promise<void> {
   const pointerFile = path.join(workspace, ".git");
   const pointer = await readGitPointer(pointerFile);
   if (!pointer.startsWith("gitdir: ")) throw new Error("workspace_git_binding_invalid");
@@ -308,7 +261,6 @@ export async function isolateIssueWorktree(sharedStore: string, privateStore: st
   }
   await validateIssueWorktreeBinding(sharedStore, workspace, branch);
   const commit = await readIssueBranchCommit(sharedStore, branch);
-  if (expectedCommit !== undefined && commit !== expectedCommit) throw new Error("legacy_issue_branch_changed");
   const temporary = await privateStoreStagingPath(privateStore);
   let installed = false,
     switched = false;
@@ -316,10 +268,6 @@ export async function isolateIssueWorktree(sharedStore: string, privateStore: st
     await initializePrivateStore(sharedStore, temporary, branch, commit, base, workspace);
     await mkdir(path.join(temporary, "worktrees"), { recursive: true });
     await cp(metadata, path.join(temporary, "worktrees", path.basename(metadata)), { recursive: true, errorOnExist: true, force: false });
-    if (expectedCommit !== undefined) {
-      if ((await readIssueBranchCommit(sharedStore, branch)) !== expectedCommit) throw new Error("legacy_issue_branch_changed");
-      await validateIssueWorktreeBinding(sharedStore, workspace, branch);
-    }
     await rename(temporary, privateStore);
     installed = true;
     await writeFile(path.join(privateMetadata, "commondir"), "../..\n");

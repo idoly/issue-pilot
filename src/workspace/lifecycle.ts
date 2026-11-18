@@ -21,7 +21,7 @@ import { SerialQueue } from "../serial.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows, type ExpectedRepository } from "./project.ts";
 import { inspectReleasedRepositories } from "./runtime.ts";
-import { assertIssueLayoutCurrent, assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, gitRoot, issueRoot, pathExists } from "./state.ts";
+import { assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, gitRoot, issueRoot, pathExists } from "./state.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -901,7 +901,6 @@ export class WorkspaceLifecycleManager {
     if (!issueRow) throw new Error("issue_not_found");
     const { workspace } = issueRow;
     if (!workspace) throw new Error(`issue_workspace_missing:${issueRow.issue.key}`);
-    await assertIssueLayoutCurrent(this.stateRoot, issueRow.issue.key);
     return { ...issueRow, workspace };
   }
 

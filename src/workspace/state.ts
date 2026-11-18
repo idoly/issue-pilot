@@ -1,5 +1,5 @@
 import { OperationError } from "../operation-error.ts";
-import { access, lstat, mkdir, opendir, readdir, realpath, rmdir } from "node:fs/promises";
+import { access, lstat, mkdir, readdir, realpath, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
@@ -46,25 +46,6 @@ export function issueRoot(stateRoot: string, issueKey: string): string {
   return path.join(workspacesRoot(stateRoot), issueSegment(issueKey));
 }
 
-/** Old layout is never used as a source of runtime paths. */
-export function legacyIssueRoot(stateRoot: string, issueKey: string): string {
-  return path.resolve(stateRoot, "issues", issueSegment(issueKey));
-}
-
-export async function assertIssueLayoutCurrent(stateRoot: string, issueKey: string): Promise<void> {
-  const legacy = legacyIssueRoot(stateRoot, issueKey);
-  const directory = await opendir(legacy).catch((error: unknown) => {
-    if (isMissing(error)) return undefined;
-    throw error;
-  });
-  if (!directory) return;
-  try {
-    if ((await realpath(legacy)) !== legacy || (await directory.read()) !== null) throw new Error("issue_layout_migration_required");
-  } finally {
-    await directory.close();
-  }
-}
-
 /** Unknown durable paths are preserved evidence: a conflict for the caller, with the paths kept as diagnostic detail. */
 function unmanagedIssueState(detail: string): DomainError {
   return new DomainError("unmanaged_issue_state", "conflict", { detail });
@@ -78,18 +59,11 @@ export async function assertIssueRoot(stateRoot: string, issueKey: string): Prom
     throw error;
   });
   if (!metadata.isDirectory() || (await realpath(root)) !== root) throw new Error("invalid_issue_root");
-  await assertIssueLayoutCurrent(stateRoot, issueKey);
   return root;
 }
 
 export async function claimIssueRoot(stateRoot: string, issueKey: string): Promise<void> {
   const root = issueRoot(stateRoot, issueKey);
-  const legacy = legacyIssueRoot(stateRoot, issueKey);
-  const oldRoot = await lstat(legacy).catch((error: unknown) => {
-    if (isMissing(error)) return undefined;
-    throw error;
-  });
-  if (oldRoot) throw unmanagedIssueState(`issues/${path.basename(legacy)}`);
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
   if ((await realpath(path.dirname(root))) !== path.dirname(root)) throw new Error("invalid_issue_root");
   try {
@@ -171,19 +145,8 @@ export async function assertManagedIssueWorkspaceLayout(workspaceRoot: string, l
 export async function assertIssueStateLayout(stateRoot: string, issueKeys: string[]): Promise<void> {
   const active = new Set(issueKeys.map((key) => normalizeIssueKey(key).toLowerCase()));
   const unmanaged: string[] = [];
-  const legacy = await directoryEntries(path.resolve(stateRoot, "issues"));
-  for (const [category, entries] of [
-    ["workspaces", await directoryEntries(workspacesRoot(stateRoot))],
-    ["issues", legacy],
-  ] as const) {
-    for (const entry of entries ?? []) {
-      if (entry.isDirectory() && !active.has(entry.name.toLowerCase())) unmanaged.push(`${category}/${entry.name}`);
-    }
+  for (const entry of (await directoryEntries(workspacesRoot(stateRoot))) ?? []) {
+    if (entry.isDirectory() && !active.has(entry.name.toLowerCase())) unmanaged.push(`workspaces/${entry.name}`);
   }
   if (unmanaged.length) throw unmanagedIssueState(unmanaged.sort().join(","));
-  // The ordinary layout has no legacy parent. Still probe recorded names if it exists,
-  // including non-directory entries so ENOTDIR and permission errors remain visible.
-  if (legacy) {
-    for (const key of issueKeys) await assertIssueLayoutCurrent(stateRoot, key);
-  }
 }

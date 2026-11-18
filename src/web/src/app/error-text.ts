@@ -25,6 +25,9 @@ const messages: ErrorTexts = {
   invalid_repository_url: "请填写有效的 HTTPS 或 SSH 仓库地址。",
   invalid_repository_group: "请填写 1 至 64 个字符的分组名称，不能包含控制字符。",
   repository_is_used_by_services: "仓库仍被服务使用，请先解除关联。",
+  repository_required: "请至少选择一个关联仓库。",
+  invalid_service_deployment: "环境部署配置包含无法识别的字段，请刷新页面后重新提交。",
+  deployment_save_failed: "环境部署保存失败，请重新加载确认当前配置后重试；如持续出现请联系管理员。",
   service_is_used_by_issues: "已有工单属于该服务，不能删除。工单记录需要保留该服务。",
   deployment_is_used_by_issues: "已有工单属于要移除的环境部署，不能移除。请保留该环境部署后再保存。",
   service_has_running_issues: "相关环境有运行中的工单，请稍后重试。",
@@ -81,6 +84,11 @@ const messages: ErrorTexts = {
   related_issue_context_unavailable: "本工单或所选关联工单的工作区尚未就绪，请等待准备完成后重试。",
   related_issue_update_not_allowed: "已解决的工单不能修改关联，请先重开。",
   invalid_related_issues: "所选关联工单无效，请重新选择。",
+  attachment_not_found: "附件不存在或已被删除，请刷新工单后重试。",
+  issue_work_file_not_found: "工单文件不存在或已被删除，请刷新文件列表后重试。",
+
+  // Code browser
+  source_file_changed: "文件已被其他操作修改；你的草稿已保留，请重新读取后合并。",
 
   // Scope transitions
   scope_transition_plan_stale: "工单或配置已变化，预检已失效，请重新预检。",
@@ -101,6 +109,9 @@ const messages: ErrorTexts = {
   agent_session_file_missing: "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。",
   issue_root_missing: "工单目录缺失，消息未接收。请保留草稿并联系管理员恢复原目录。",
   invalid_issue_root: "工单目录异常，消息未接收。请保留草稿并联系管理员检查目录。",
+  issue_workspace_missing: "工单工作区记录缺失，请联系管理员检查。",
+  issue_not_running: "处理结束时工单已不在处理中，结果未能登记。已有对话和文件已保留，请刷新后核对结果。",
+  issue_scope_changed: "工单已解决或处理范围已变更，操作已停止。请刷新后按最新范围重试。",
   resolved_issue_cannot_run_agent: "工单已解决，请先重开后再发送。",
   agent_event_connection_failed: "事件连接中断，正在自动重连",
   agent_event_protocol_error: "收到无法识别的 Agent 事件",

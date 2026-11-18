@@ -47,7 +47,7 @@ import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
 import { agentSessions, applicationSettings, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, isDevelopmentEnvironment, personGitIdentity, requiresDeveloperOwner, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, isDevelopmentEnvironment, issueWorkMode, personGitIdentity, requiresDeveloperOwner, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { AgentBusyError, type AgentController, type AgentReservation } from "./contracts.ts";
 import { createAgentSessionContext } from "./context.ts";
@@ -692,7 +692,7 @@ export class AgentEngine implements AgentController {
         gitIdentity: commitIdentity,
         modelApiKey: model.apiKey,
         workFiles: new IssueWorkFileStore(this.stateRoot, issue.key),
-        systemPrompt: agentSystemPrompt(context, { environmentKind, mcpTools: mcpConfigurations.length > 0 }),
+        systemPrompt: agentSystemPrompt(context, { environmentKind, mcpTools: mcpConfigurations.length > 0, workMode: issueWorkMode(environmentKind, issue.type) }),
         onEvent: (event) => this.publishPiEvent(issue.id, event),
       });
       managed.retireAfterRound = sharedRepositories;

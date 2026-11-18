@@ -90,7 +90,7 @@ export function ApplicationParametersView() {
         setConflict(false);
       }
     } catch (cause) {
-      if (request.isCurrent()) setError(errorMessage(cause));
+      if (request.isCurrent()) setError(errorText(cause));
     } finally {
       if (request.isCurrent()) setLoading(false);
       request.finish();

@@ -22,7 +22,7 @@ import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces, serviceRepositories } from "../../src/db/schema.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
 import { WorktreeManager } from "../../src/workspace/git.ts";
-import { issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
+import { issueRoot } from "../../src/workspace/state.ts";
 import { registerTestRepositories } from "../helpers/repositories.ts";
 
 class StartupEngine implements AgentController {
@@ -139,10 +139,7 @@ test("serves recorded Issue code after restart without fetching or rebuilding hi
     await writeFile(unrelatedManifest, "preserve invalid manifest");
     await database.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: false }).where(eq(issueWorkspaces.issueId, other!.id));
     await writeFile(path.join(issueRoot(fixture.root, other!.key), ".session-fixture.jsonl"), "");
-    const legacy = legacyIssueRoot(fixture.root, other!.key);
     const unmanaged = issueRoot(fixture.root, "ISSUE-20260807-999");
-    await mkdir(legacy, { recursive: true });
-    await writeFile(path.join(legacy, "old-work.txt"), "preserve legacy files");
     await mkdir(unmanaged);
     await writeFile(path.join(unmanaged, "unmanaged.txt"), "preserve unmanaged files");
     const [before] = await database.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, record!.id));
@@ -157,10 +154,6 @@ test("serves recorded Issue code after restart without fetching or rebuilding hi
     assert.equal(unprepared.statusCode, 200, unprepared.body);
     assert.equal(unprepared.json().workspace.sourceAvailable, false);
     assert.equal(unprepared.json().workspace.retryable, true);
-    const legacyFiles = await app.inject(`/api/issues/${other!.key}/files`);
-    assert.equal(legacyFiles.statusCode, 500);
-    assert.deepEqual(legacyFiles.json(), { error: "issue_layout_migration_required" });
-    assert.equal(await readFile(path.join(legacy, "old-work.txt"), "utf8"), "preserve legacy files");
     assert.equal(await readFile(path.join(unmanaged, "unmanaged.txt"), "utf8"), "preserve unmanaged files");
     const readCode = () =>
       app!.inject({

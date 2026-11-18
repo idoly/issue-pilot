@@ -19,7 +19,6 @@ import {
   createSourceFile,
   deleteSourcePath,
   discardSourcePaths,
-  errorMessage,
   loadSourceBlame,
   loadSourceCommit,
   loadSourceCommitFile,
@@ -43,6 +42,7 @@ import {
   type SourceSearchMatch,
   type SourceTreeEntry,
 } from "../data/client";
+import { errorText } from "./error-text";
 
 const SourceText = lazy(async () => ({ default: (await import("./SourceText")).SourceText }));
 const SourceDiff = lazy(async () => ({ default: (await import("./SourceDiff")).SourceDiff }));
@@ -76,7 +76,7 @@ function Directory(props: { issueKey: string; repository: string; path: string; 
           if (tree.truncated) setError("目录条目超过上限，请进入子目录查看");
         })
         .catch((cause) => {
-          if (!request.signal.aborted) setError(errorMessage(cause));
+          if (!request.signal.aborted) setError(errorText(cause));
         })
         .finally(() => {
           if (!request.signal.aborted) setLoading(false);
@@ -371,7 +371,7 @@ export default function CodeBrowser(props: {
     setFileLoading(false);
     setPanelLoading(false);
   };
-  const report = (cause: unknown) => setError(errorMessage(cause) === "source_file_changed" ? "文件已被其他操作修改；你的草稿已保留，请重新读取后合并。" : errorMessage(cause));
+  const report = (cause: unknown) => setError(errorText(cause));
 
   const loadPanel = async (nextView = view(), name = repository()) => {
     historyController?.abort();
@@ -396,7 +396,7 @@ export default function CodeBrowser(props: {
       if (status.status === "fulfilled") {
         setChanges(status.value.rows);
         setChangesError(status.value.truncated ? "变更条目超过上限，请缩小范围" : "");
-      } else setChangesError(errorMessage(status.reason));
+      } else setChangesError(errorText(status.reason));
       if (history.status === "fulfilled") {
         if (commits()[0]?.hash !== history.value.commits[0]?.hash || commits().length <= history.value.commits.length) {
           setCommits(history.value.commits);
@@ -531,7 +531,7 @@ export default function CodeBrowser(props: {
         setChanges(result.rows);
       setChangesError(result.truncated ? "变更条目超过上限，请缩小范围" : "");
     } catch (cause) {
-      if (owner === scope && !request.signal.aborted) setChangesError(errorMessage(cause));
+      if (owner === scope && !request.signal.aborted) setChangesError(errorText(cause));
     } finally {
       if (changesController === request) changesController = undefined;
     }

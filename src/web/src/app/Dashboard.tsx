@@ -4,6 +4,7 @@ import { createMemo, For, Show } from "solid-js";
 import { isIssueActive, type IssueExecutionItem } from "../data/client";
 import { ChevronRight, RefreshCw } from "../ui/icons";
 import { useApplicationResources } from "./ApplicationResources";
+import { errorText } from "./error-text";
 import { environmentName, executionState, localDateTime, relativeTime } from "./model";
 
 function attentionRank(issue: IssueExecutionItem): number {
@@ -42,7 +43,7 @@ export function Dashboard(props: { issues: IssueExecutionItem[]; loading: boolea
       >
         <Show when={props.loadError}>
           <div class="dashboard-error" role="alert">
-            {props.loadError}
+            {errorText(props.loadError)}
           </div>
         </Show>
         <Show when={!props.loadError || props.issues.length > 0}>

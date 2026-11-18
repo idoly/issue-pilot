@@ -89,3 +89,41 @@ test("injects the runtime time and gates repository and related-Issue workspace 
   assert.match(writable, /unless the user explicitly asks you to commit or push them/);
   assert.match(writable, /workspace stage, unstage, commit or push/);
 });
+
+test("selects the work-mode playbook and states the verification ladder", () => {
+  const prompt = (workMode: "production_analysis" | "test_analysis" | "development_fix" | "development_feature" | undefined, environmentKind: "prod" | "test" | "dev" = workMode?.startsWith("development") ? "dev" : "prod") =>
+    agentSystemPrompt({ ...baseContext, environmentKey: environmentKind }, { environmentKind, mcpTools: false, workMode });
+
+  const analysis = prompt("production_analysis");
+  assert.match(analysis, /Problem-solving method:/);
+  assert.match(analysis, /Trace a causal chain from that entry point to the symptom/);
+  assert.match(analysis, /Investigation method:/);
+  assert.match(analysis, /This Issue is read-only for code and data/);
+  assert.doesNotMatch(analysis, /Change impact checklist|Defect fix method|Feature development method/);
+  assert.equal(prompt("test_analysis").includes("Investigation method:"), true);
+
+  const fix = prompt("development_fix");
+  assert.match(fix, /Defect fix method:/);
+  assert.match(fix, /Change impact checklist/);
+  assert.match(fix, /The root cause must explain every observed symptom/);
+  assert.doesNotMatch(fix, /Investigation method:|Feature development method/);
+
+  const feature = prompt("development_feature");
+  assert.match(feature, /Feature development method:/);
+  assert.match(feature, /behavior contract before coding/);
+  assert.match(feature, /Change impact checklist/);
+  assert.doesNotMatch(feature, /Defect fix method/);
+
+  // A stored environment/type pair without a work mode stays read-only and says so.
+  const unmapped = prompt(undefined, "dev");
+  assert.match(unmapped, /read-only outside the explicitly available tools/);
+  assert.match(unmapped, /Problem-solving method:/);
+
+  for (const value of [analysis, fix, feature]) {
+    assert.match(value, /Verification policy:/);
+    assert.match(value, /node --check/);
+    assert.match(value, /python3 -m py_compile/);
+    assert.match(value, /mvn -o compile/);
+    assert.match(value, /Report exactly which checks you ran/);
+  }
+});

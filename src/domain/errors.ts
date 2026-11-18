@@ -85,7 +85,6 @@ export const OPERATIONAL_FAILURE_CODES: ReadonlySet<string> = new Set([
   "dingtalk_connection_close_failed",
   "issue_root_missing",
   "invalid_issue_root",
-  "issue_layout_migration_required",
   "issue_workspace_missing",
   "issue_service_not_found",
   "agent_session_file_incomplete",

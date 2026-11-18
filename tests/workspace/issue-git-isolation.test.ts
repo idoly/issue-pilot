@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import fs, { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,9 +10,8 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services } from "../../src/db/schema.ts";
-import { issueRepositoryStorePath, repositoryStorePath, retainedSnapshotRef, WorktreeManager } from "../../src/workspace/git.ts";
+import { repositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
 import { isolateIssueWorktree, publishIssueBranch, publishedIssueBranchFile } from "../../src/workspace/issue-git.ts";
-import { ApplicationStateLease } from "../../src/state-lease.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 import { git } from "../helpers/git.ts";
 
@@ -91,85 +90,8 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${released.workingBranch}`]), mirrorTip);
     await assert.rejects(git(["-C", shared, "show-ref", "--exists", `refs/heads/${own.workingBranch}`]), { code: 2 });
     assert.equal(await git(["-C", legacyPath, "branch", "--show-current"]), legacyBranch);
-
-    await writeFile(path.join(legacyPath, "dirty.txt"), "staged");
-    await git(["-C", legacyPath, "add", "dirty.txt"]);
-    await writeFile(path.join(legacyPath, "dirty.txt"), "unstaged");
-    await writeFile(path.join(legacyPath, "untracked.txt"), "untracked");
-    const status = await git(["-C", legacyPath, "status", "--porcelain"]);
-    const pointerFile = path.join(legacyPath, ".git");
-    const pointer = await readFile(pointerFile, "utf8");
-    const legacyStore = issueRepositoryStorePath(state, legacyKey, source);
-    const manifest = path.join(root, "manifest.json");
-    const migrate = (...args: string[]) => exec(process.execPath, ["--experimental-strip-types", "scripts/migrate-development-git.ts", "--state-root", state, "--manifest", manifest, ...args]);
-    const legacyEntry = { issue: legacyKey, repository: path.basename(shared), branch: legacyBranch, sharedCommit: own.baseCommit };
-    const releasedEntry = { issue: releasedKey, repository: path.basename(shared), branch: released.workingBranch, sharedCommit: mirrorTip };
-    const approvedReleased = { ...releasedEntry, releasedEvidence: "Fixture release record includes this exact commit" };
-    const setManifest = (...entries: object[]) => writeFile(manifest, JSON.stringify(entries));
-    const noWrites = async () => {
-      assert.equal(await readFile(pointerFile, "utf8"), pointer);
-      await assert.rejects(lstat(legacyStore), { code: "ENOENT" });
-      await assert.rejects(lstat(released.cachePath), { code: "ENOENT" });
-    };
-    await setManifest(legacyEntry, releasedEntry);
-    await assert.rejects(migrate("--apply"), /released_branch_evidence_required/);
-    await noWrites();
-    await setManifest(legacyEntry, { ...approvedReleased, sharedCommit: own.baseCommit });
-    await assert.rejects(migrate("--apply"), /legacy_issue_branch_changed/);
-    await noWrites();
-    await setManifest(legacyEntry, approvedReleased);
-    await git(["-C", shared, "config", "core.fsmonitor", "legacy-untrusted-command"]);
-    await assert.rejects(migrate("--apply"), /workspace_git_configuration_invalid/);
-    await noWrites();
-    await git(["-C", shared, "config", "--unset", "core.fsmonitor"]);
-    const dryRun = JSON.parse((await migrate()).stdout);
-    assert.equal(dryRun.mode, "dry-run");
-    assert.deepEqual(
-      dryRun.entries.map((entry: { action: string }) => entry.action),
-      ["isolate-worktree", "preserve-released"],
-    );
-    await noWrites();
-    const lease = new ApplicationStateLease(state);
-    await lease.start();
-    try {
-      await assert.rejects(migrate("--apply"), /application_state_lease_exists/);
-      await noWrites();
-    } finally {
-      await lease.close();
-    }
-    // Branch drift requires inspection even when the recorded shared ref still matches the manifest.
-    const metadata = path.resolve(legacyPath, pointer.slice(8).trim());
-    await git(["-C", shared, "branch", "revert-fixture", own.baseCommit]);
-    await writeFile(path.join(metadata, "HEAD"), "ref: refs/heads/revert-fixture\n");
-    await assert.rejects(migrate("--apply"), /workspace_branch_does_not_match_issue_policy/);
-    await noWrites();
-    assert.equal(await git(["-C", legacyPath, "branch", "--show-current"]), "revert-fixture");
-    await writeFile(path.join(metadata, "HEAD"), `ref: refs/heads/${legacyBranch}\n`);
-
-    const databaseBefore = await readFile(path.join(state, "issues.db"));
-    const apply = await migrate("--apply");
-    assert.equal(apply.stdout.match(/"status":"migrated"/g)?.length, 2);
-    assert.equal(await git(["-C", legacyPath, "status", "--porcelain"]), status);
-    assert.equal(await git(["-C", legacyPath, "show", ":dirty.txt"]), "staged");
-    assert.equal(await readFile(path.join(legacyPath, "dirty.txt"), "utf8"), "unstaged");
-    assert.equal(await readFile(path.join(legacyPath, "untracked.txt"), "utf8"), "untracked");
-    assert.equal(await git(["-C", shared, "rev-parse", `refs/heads/${released.workingBranch}`]), mirrorTip);
-    assert.equal(await git(["-C", released.cachePath, "show", `${mirrorTip}:release-only.txt`]), "reviewed released change");
-    await assert.rejects(lstat(released.workspacePath), { code: "ENOENT" });
-    assert.deepEqual(await readFile(path.join(state, "issues.db")), databaseBefore);
-    const repeat = JSON.parse((await migrate("--apply")).stdout);
-    assert.deepEqual(
-      repeat.entries.map((entry: { action: string }) => entry.action),
-      ["already-private", "already-private"],
-    );
-    // Simulate shared ref loss and GC in the fixture. Issue-owned data still resolves locally.
-    await git(["-C", shared, "update-ref", "-d", `refs/heads/${released.workingBranch}`]);
-    await git(["-C", shared, "update-ref", "-d", retainedSnapshotRef(mirrorTip)]);
-    await git(["-C", shared, "reflog", "expire", "--expire=now", "--all"]);
-    await git(["-C", shared, "gc", "--prune=now"]);
-    await assert.rejects(git(["-C", shared, "cat-file", "-t", mirrorTip]));
-    assert.equal(await git(["-C", released.cachePath, "show", `${mirrorTip}:release-only.txt`]), "reviewed released change");
-    assert.equal(await git(["-C", legacyPath, "show", ":dirty.txt"]), "staged");
+    // The legacy worktree is evidence: none of the audit checks or reads modified it.
+    assert.equal(await git(["-C", legacyPath, "status", "--porcelain"]), "");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

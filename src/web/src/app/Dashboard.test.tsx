@@ -106,3 +106,11 @@ describe("Dashboard refresh failures", () => {
     expect(document.querySelector(".dashboard-attention-item time")?.getAttribute("datetime")).toBe("2026-11-02T00:00:00.000Z");
   });
 });
+
+describe("Dashboard load errors", () => {
+  it("shows a known error code as its Chinese message instead of the raw code", () => {
+    render(() => <Dashboard issues={[]} loading={false} loadError="database_unavailable" refreshing={false} onRefresh={() => {}} onSelectIssue={() => {}} />);
+    expect(screen.getByRole("alert").textContent).not.toContain("database_unavailable");
+    expect(screen.getByRole("alert").textContent).toContain("数据库");
+  });
+});

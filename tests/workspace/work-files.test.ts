@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { syncBuiltinESMExports } from "node:module";
 import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { assertIssueRoot, claimIssueRoot, issueRoot, legacyIssueRoot } from "../../src/workspace/state.ts";
+import { assertIssueRoot, claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 import path from "node:path";
 import { generatedWorkFileSaver, IssueWorkFileStore, listIssueWorkFiles, openIssueWorkFile } from "../../src/workspace/work-files.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -265,20 +265,6 @@ test("Issue creation claims an empty working directory and preserves an unknown 
     await assert.rejects(claimIssueRoot(root, key), /unmanaged_issue_state:workspaces/);
     assert.equal(await readFile(path.join(target, "evidence.txt"), "utf8"), "preserve");
     await assert.rejects(readFile(path.join(issueRoot(root, key), "anything")), { code: "ENOENT" });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("Issue creation refuses a key still occupied by legacy files", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-legacy-claim-"));
-  try {
-    const legacy = legacyIssueRoot(root, key);
-    await mkdir(legacy, { recursive: true });
-    await writeFile(path.join(legacy, "evidence.txt"), "preserve");
-    await assert.rejects(claimIssueRoot(root, key), /unmanaged_issue_state:issues/);
-    await assert.rejects(stat(issueRoot(root, key)), { code: "ENOENT" });
-    assert.equal(await readFile(path.join(legacy, "evidence.txt"), "utf8"), "preserve");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

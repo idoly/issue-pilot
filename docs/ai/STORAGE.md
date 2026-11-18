@@ -73,7 +73,7 @@ Tests: [state.test.ts](../../tests/workspace/state.test.ts), [message-admission.
 
 ## Issue state audit
 
-Ordinary startup does not compare all Issue records with filesystem entries. Creation still refuses a target occupied in the current or legacy layout. Root validation and lifecycle mutations refuse legacy contents for the selected Issue. No operation adopts or removes unowned directories as a result of the audit.
+Ordinary startup does not compare all Issue records with filesystem entries. Creation still refuses a target occupied in `workspaces/`, and root validation and lifecycle mutations refuse unrepresented contents for the selected Issue. No operation adopts or removes unowned directories as a result of the audit.
 
 [check-issue-state.ts](../../scripts/check-issue-state.ts) opens SQLite read-only and checks required Workspace rows, resolution state, release-marker/repository agreement and directory ownership. Use the [runbook](../RUNBOOK.md#工单状态审计) command when investigating storage drift, with writers stopped for a consistent comparison. Add `--shared-git` to also audit every shared snapshot. `--development-git` selects a separate audit of recorded development branches, private stores and reciprocal worktree bindings. It reports mirror differences and exits nonzero for unresolved bindings. A released shared ref without a private store or worktree does not establish the authoritative source. The audit does not publish refs, switch bindings or recover missing data. Operations that use a root or Git binding also check it on access. The migration that adds indexed recovery validates existing Issue relations before applying it; this migration can take time proportional to the database size once.
 
@@ -204,11 +204,3 @@ After migration, live storage/Git repair or abnormal recovery, verify relevant i
 Preserve unknown/unrepresented directories, quarantine, failed staging and changed worktrees. Existing recovery archives need provenance and cross-medium consistency; a DB or branch alone is not a complete recovery point. This does not authorize accumulating new full-state snapshots.
 
 Documentation archives are not required. Their removal does not authorize deleting durable business history, immutable migration SQL, fixtures or operational recovery evidence.
-
-## Offline layout migration
-
-[scripts/migrate-flat-issue-layout.ts](../../scripts/migrate-flat-issue-layout.ts) remains an offline tool for explicitly identified old state. It is not part of normal startup, release or cleanup. Do not delete the implementation merely because current documentation drops historical archives.
-
-Only after authorization, stopping writers, verifying source/modes/hashes/bindings and rehearsing the operation in isolation, generate a plan with an explicit --state-root. --apply performs preflight, immutable schema upgrades and owned file/binding changes under the state lease. Never delete a lease socket to proceed.
-
-File rollback cannot undo schema upgrades. Preserve plan/quarantine on failure; flat_layout_committed_finalize_failed means bindings committed but cleanup failed. Do not blindly repeat. The tool does not rewrite JSONL or create runtime path aliases. Verify relevant DB/file/Git consistency before restarting. Tests: [flat-layout-cli.test.ts](../../tests/workspace/flat-layout-cli.test.ts).
