@@ -1,66 +1,38 @@
-import { Badge, Button, Input, Modal, Select, Tag } from "../ui";
+import { Badge, Button, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
 import { canWriteIssueCode } from "../../../domain/contracts";
-import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { CheckCircle2, Code2, Download, Eye, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
-import {
-  canChangeIssueScope,
-  canModifyIssueCode,
-  canResetIssueSession,
-  canUseIssueWorkMode,
-  applyIssueScopeTransition,
-  attachmentUrl,
-  createIssue,
-  getIssue,
-  isIssueActive,
-  isWorkspaceBusy,
-  issueWorkMode,
-  planIssueScopeTransition,
-  relatedIssueUpdateRefusal,
-  retryIssue,
-  RequestError,
-  updateIssue,
-  updateIssueRelatedIssues,
-  updateIssueStatus,
-  type IssueDetail,
-  type IssuePriority,
-  type IssueScopeTransitionPlan,
-  type IssueWorkMode,
-} from "../data/client";
+import { canChangeIssueScope, canModifyIssueCode, attachmentUrl, isIssueActive, relatedIssueUpdateRefusal, retryIssue, updateIssueStatus, type IssueDetail } from "../data/client";
 import { IssueSessionControls } from "./IssueSessionControls";
 import { IssueFiles } from "./IssueFiles";
 import { IssueMarkdown } from "./IssueMarkdown";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPreview } from "./AttachmentPreview";
-import { AttachmentPicker, DescriptionField, RelatedIssueSelect, selectedChoice } from "./IssueForm";
+import { FollowUpDialog } from "./FollowUpDialog";
+import { IssueEditDialog } from "./IssueEditDialog";
+import { RelatedIssuesDialog } from "./RelatedIssuesDialog";
+import { ScopeTransitionDialog } from "./ScopeTransitionDialog";
+
 import { attachmentPreviewKind } from "./file-preview";
-import { errorText, type ErrorTexts } from "./error-text";
+import { errorText } from "./error-text";
 import type { IssueListResource } from "./issue-list";
-import { createLatestTask } from "../data/latest";
 import {
   attachmentDisplayName,
-  availableWorkModes,
   environmentKind,
   environmentName,
   executionBadge,
   executionState,
   fileSize,
   localDateTime,
-  personLabel,
   priorityColor,
-  priorityOptions,
   servicesForWorkMode,
   typeLabel,
   workModeLabel,
 } from "./model";
 
 type IssueAttachment = IssueDetail["attachments"][number];
-
-const editErrors: ErrorTexts = { issue_already_running: "工单正在处理，请等待处理结束后再保存。" };
-// Saving relations reserves this Issue and every selected related Issue.
-const relatedSaveErrors: ErrorTexts = { issue_already_running: "本工单或所选关联工单正在处理，请等待处理结束后再保存关联。" };
 
 function IssueFileRow(props: { fileName: string; label?: string; thumbnail?: string | undefined; detail: string; href: string; icon: JSX.Element; onPreview: (() => void) | undefined }) {
   const [thumbnailFailed, setThumbnailFailed] = createSignal(false, { ownedWrite: true });
@@ -109,220 +81,43 @@ export function IssueWorkspace(props: {
   onCreatedFollowUp: (issueKey: string) => void;
   onEditDirtyChange?: (dirty: boolean) => void;
 }) {
-  const { catalog, people, currentUser, peopleError } = useApplicationResources();
+  const { catalog, currentUser } = useApplicationResources();
   const [editOpen, setEditOpen] = createSignal(false, { ownedWrite: true });
-  const [editBase, setEditBase] = createSignal<IssueDetail | null>(null, { ownedWrite: true });
-  const [editConflict, setEditConflict] = createSignal(false, { ownedWrite: true });
-  const [editTitle, setEditTitle] = createSignal("", { ownedWrite: true });
-  const [editDescription, setEditDescription] = createSignal("", { ownedWrite: true });
-  const [editPriority, setEditPriority] = createSignal<IssuePriority>("p2", { ownedWrite: true });
-  const [editAssignee, setEditAssignee] = createSignal<string | null>(null, { ownedWrite: true });
-  const [editCc, setEditCc] = createSignal<string[]>([], { ownedWrite: true });
-  const [editAttachments, setEditAttachments] = createSignal<File[]>([], { ownedWrite: true });
-  const [removedAttachmentIds, setRemovedAttachmentIds] = createSignal<string[]>([], { ownedWrite: true });
-  const [editSaving, setEditSaving] = createSignal(false, { ownedWrite: true });
-  const [editResetting, setEditResetting] = createSignal(false, { ownedWrite: true });
-  const [editCommitted, setEditCommitted] = createSignal("", { ownedWrite: true });
-  const [editError, setEditError] = createSignal("", { ownedWrite: true });
   const [retrying, setRetrying] = createSignal(false, { ownedWrite: true });
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
   const [statusSaving, setStatusSaving] = createSignal(false, { ownedWrite: true });
   const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
   const [scopeOpen, setScopeOpen] = createSignal(false, { ownedWrite: true });
-  const [scopeMode, setScopeMode] = createSignal<IssueWorkMode>("production_analysis", { ownedWrite: true });
-  const [scopeService, setScopeService] = createSignal("", { ownedWrite: true });
-  const [scopePlan, setScopePlan] = createSignal<IssueScopeTransitionPlan | null>(null, { ownedWrite: true });
-  const [scopePlanning, setScopePlanning] = createSignal(false, { ownedWrite: true });
-  const [scopeApplying, setScopeApplying] = createSignal(false, { ownedWrite: true });
-  const [scopeError, setScopeError] = createSignal("", { ownedWrite: true });
   const [followUpOpen, setFollowUpOpen] = createSignal(false, { ownedWrite: true });
-  const [followUpTitle, setFollowUpTitle] = createSignal("", { ownedWrite: true });
-  const [followUpDescription, setFollowUpDescription] = createSignal("", { ownedWrite: true });
-  const [followUpService, setFollowUpService] = createSignal("", { ownedWrite: true });
-  const [followUpSaving, setFollowUpSaving] = createSignal(false, { ownedWrite: true });
-  const [followUpError, setFollowUpError] = createSignal("", { ownedWrite: true });
   const [relatedOpen, setRelatedOpen] = createSignal(false, { ownedWrite: true });
-  const [relatedKeys, setRelatedKeys] = createSignal<string[]>([], { ownedWrite: true });
-  const [relatedLoading, setRelatedLoading] = createSignal(false, { ownedWrite: true });
-  const [relatedSaving, setRelatedSaving] = createSignal(false, { ownedWrite: true });
-  const [relatedError, setRelatedError] = createSignal("", { ownedWrite: true });
+  let openRelated: (() => void) | undefined, openFollowUp: (() => void) | undefined, openScope: (() => void) | undefined, openEdit: ((issue: IssueDetail) => void) | undefined;
   const [previewAttachment, setPreviewAttachment] = createSignal<IssueAttachment | null>(null, { ownedWrite: true });
   const [descriptionExpanded, setDescriptionExpanded] = createSignal(false, { ownedWrite: true });
   const descriptionNeedsCollapse = () => props.issue.description.length > 180 || props.issue.description.split("\n").length > 4;
+  const issueKind = () => environmentKind(props.issue.environmentKey);
+  // Active work conflicts with edits and related-Issue changes even when the server's rules pass.
+  const issueActive = () => isIssueActive({ agentRunning: props.issue.agentRunning, workspaceStatus: props.issue.workspace.status });
   let issueGeneration = 0;
-  const scopePlanTask = createLatestTask(),
-    relatedTask = createLatestTask();
   onCleanup(() => {
     issueGeneration++;
-    scopePlanTask.cancel();
-    relatedTask.cancel();
   });
   createEffect(
     () => ({ issueId: props.issue.id, subject: currentUser()?.subject, role: currentUser()?.role }),
     (context, previous) => {
       if (!previous || (context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role)) return;
       issueGeneration += 1;
-      scopePlanTask.cancel();
-      relatedTask.cancel();
       setEditOpen(false);
-      setEditBase(null);
-      setEditConflict(false);
-      setEditAttachments([]);
-      setRemovedAttachmentIds([]);
-      setEditSaving(false);
-      setEditResetting(false);
-      setEditCommitted("");
-      setEditError("");
       setRetrying(false);
       setRetryError("");
       setStatusSaving(false);
       setStatusError("");
       setScopeOpen(false);
-      setScopePlan(null);
-      setScopePlanning(false);
-      setScopeApplying(false);
-      setScopeError("");
       setFollowUpOpen(false);
-      setFollowUpSaving(false);
-      setFollowUpError("");
       setRelatedOpen(false);
-      setRelatedKeys([]);
-      setRelatedLoading(false);
-      setRelatedSaving(false);
-      setRelatedError("");
       setPreviewAttachment(null);
       setDescriptionExpanded(false);
     },
   );
-  // Navigation away discards the edit dialog; the host warns while these fields differ from the Issue.
-  const editDirty = () => {
-    const base = editBase();
-    return Boolean(
-      editOpen() &&
-      !editCommitted() &&
-      base &&
-      (editTitle().trim() !== base.title ||
-        editDescription().trim() !== base.description ||
-        editPriority() !== base.priority ||
-        editAssignee() !== base.assigneeSubject ||
-        editCc().join("\0") !== base.ccRecipients.map((person) => person.subject).join("\0") ||
-        editAttachments().length > 0 ||
-        removedAttachmentIds().length > 0),
-    );
-  };
-  createEffect(editDirty, (dirty) => {
-    props.onEditDirtyChange?.(dirty);
-  });
-  onCleanup(() => props.onEditDirtyChange?.(false));
-  const initializeEditor = (issue: IssueDetail) => {
-    setEditBase(issue);
-    setEditConflict(false);
-    setEditTitle(issue.title);
-    setEditDescription(issue.description);
-    setEditPriority(issue.priority);
-    setEditAssignee(issue.assigneeSubject);
-    setEditCc(issue.ccRecipients.map((person) => person.subject));
-    setEditAttachments([]);
-    setRemovedAttachmentIds([]);
-    setEditError("");
-  };
-  const openEditor = () => {
-    if (!editCommitted()) initializeEditor(props.issue);
-    setEditOpen(true);
-  };
-  const reloadEditDraft = async () => {
-    if (editSaving()) return;
-    const generation = issueGeneration;
-    setEditSaving(true);
-    try {
-      const latest = await getIssue(props.issue.id);
-      if (generation === issueGeneration) initializeEditor(latest);
-    } catch (error) {
-      if (generation === issueGeneration) setEditError(`读取失败：${errorText(error)}。草稿仍保留。`);
-    } finally {
-      if (generation === issueGeneration) setEditSaving(false);
-    }
-  };
-  const issueKind = () => environmentKind(props.issue.environmentKey);
-  // Active work conflicts with the edit/reset reservation even when the server's reset rule passes.
-  const issueActive = () => isIssueActive({ agentRunning: props.issue.agentRunning, workspaceStatus: props.issue.workspace.status });
-  const resetDisabled = () =>
-    !canResetIssueSession({ actorRole: currentUser()?.role ?? "product", status: props.issue.status, agentRunning: props.issue.agentRunning }) || isWorkspaceBusy(props.issue.workspace.status);
-  const closeEditor = () => {
-    setEditAttachments([]);
-    setRemovedAttachmentIds([]);
-    setEditOpen(false);
-  };
-  // Esc, × and Cancel reopen from the Issue, so dismissing a dirty draft needs explicit consent.
-  const dismissEditor = () => {
-    if (editSaving() || (editDirty() && !window.confirm("编辑内容尚未保存，是否放弃这些修改？"))) return;
-    closeEditor();
-  };
-  const markEditCommitted = (message: string) => {
-    setEditCommitted(message);
-    setRemovedAttachmentIds([]);
-    setEditAttachments([]);
-  };
-  const refreshSavedIssue = async (generation: number) => {
-    setEditError("");
-    try {
-      await props.onUpdated();
-      if (issueGeneration === generation) {
-        closeEditor();
-        setEditCommitted("");
-      }
-    } catch (error) {
-      if (issueGeneration === generation) setEditError(`但刷新失败：${errorText(error)}`);
-    }
-  };
-  const retryEditRefresh = async () => {
-    if (editSaving() || !editCommitted()) return;
-    const generation = issueGeneration;
-    setEditSaving(true);
-    try {
-      await refreshSavedIssue(generation);
-    } finally {
-      if (issueGeneration === generation) setEditSaving(false);
-    }
-  };
-  const saveIssue = async (reset = false) => {
-    const base = editBase();
-    if (!base || editSaving() || editCommitted() || !editTitle().trim() || (reset && resetDisabled())) return;
-    const issueId = props.issue.id;
-    const generation = issueGeneration;
-    const input = {
-      title: editTitle().trim(),
-      description: editDescription().trim(),
-      priority: editPriority(),
-      assigneeSubject: editAssignee(),
-      ccSubjects: [...editCc()],
-      expectedEditVersion: base.editVersion,
-    };
-    const removals = [...removedAttachmentIds()];
-    const additions = [...editAttachments()];
-    setEditSaving(true);
-    setEditResetting(reset);
-    setEditError("");
-    try {
-      // Save and reset are one reservation on the server; sending them separately would queue a metadata round first.
-      await updateIssue(issueId, input, removals, additions, reset);
-      if (issueGeneration !== generation) return;
-      markEditCommitted(reset ? "工单已保存并重置" : "工单已保存");
-      await refreshSavedIssue(generation);
-    } catch (error) {
-      if (issueGeneration !== generation) return;
-      if (error instanceof RequestError && error.outcome === "committed") markEditCommitted("工单已保存，后续清理失败，请重新读取");
-      else if (error instanceof Error && error.message === "issue_edit_conflict") {
-        setEditConflict(true);
-        setEditError("工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。");
-      } else setEditError(errorText(error, editErrors));
-    } finally {
-      if (issueGeneration === generation) {
-        setEditSaving(false);
-        setEditResetting(false);
-      }
-    }
-  };
   const mayRunAgent = () => canWriteIssueCode(currentUser(), environmentKind(props.issue.environmentKey));
   const retry = async () => {
     if (!mayRunAgent()) return;
@@ -363,102 +158,7 @@ export function IssueWorkspace(props: {
       if (issueGeneration === generation) setStatusSaving(false);
     }
   };
-  const currentWorkMode = () => {
-    const kind = issueKind();
-    return kind && issueWorkMode(kind, props.issue.type);
-  };
-  // Code-changing Issues only migrate between services within their own work mode.
-  const availableScopeModes = createMemo(() => {
-    const kind = issueKind();
-    return availableWorkModes(currentUser()?.role, catalog().services).filter(({ value }) => !kind || !canModifyIssueCode(kind) || value === currentWorkMode());
-  });
-  const availableScopeServices = createMemo(() => servicesForWorkMode(catalog().services, scopeMode()));
-  const resetScopePlan = () => {
-    scopePlanTask.cancel();
-    setScopePlanning(false);
-    setScopePlan(null);
-    setScopeError("");
-  };
-  const openScopeTransition = (workMode = currentWorkMode() ?? "production_analysis") => {
-    setScopeMode(workMode);
-    setScopeService(props.issue.service.key);
-    resetScopePlan();
-    setScopeOpen(true);
-  };
-  const requestScopePlan = async () => {
-    if (!scopeService()) return;
-    const issueId = props.issue.id;
-    const request = scopePlanTask.begin();
-    setScopePlanning(true);
-    setScopeError("");
-    try {
-      const plan = await planIssueScopeTransition(issueId, { serviceKey: scopeService(), workMode: scopeMode() }, request.signal);
-      if (request.isCurrent()) setScopePlan(plan);
-    } catch (error) {
-      if (request.isCurrent()) setScopeError(errorText(error));
-    } finally {
-      if (request.isCurrent()) setScopePlanning(false);
-      request.finish();
-    }
-  };
-  const applyScopeTransition = async () => {
-    const plan = scopePlan();
-    if (!plan) {
-      await requestScopePlan();
-      return;
-    }
-    const issueId = props.issue.id;
-    const generation = issueGeneration;
-    setScopeApplying(true);
-    setScopeError("");
-    try {
-      await applyIssueScopeTransition(issueId, { serviceKey: scopeService(), workMode: scopeMode() }, plan);
-      if (issueGeneration !== generation) return;
-      await props.onUpdated();
-      if (issueGeneration === generation) setScopeOpen(false);
-    } catch (error) {
-      if (issueGeneration === generation) {
-        setScopePlan(null);
-        setScopeError(errorText(error));
-      }
-    } finally {
-      if (issueGeneration === generation) setScopeApplying(false);
-    }
-  };
   const productionServices = createMemo(() => servicesForWorkMode(catalog().services, "production_analysis"));
-  const openFollowUp = () => {
-    setFollowUpTitle(`【正式跟进】${props.issue.title}`);
-    setFollowUpDescription(props.issue.description);
-    setFollowUpService(productionServices().some((service) => service.key === props.issue.service.key) ? props.issue.service.key : (productionServices()[0]?.key ?? ""));
-    setFollowUpError("");
-    setFollowUpOpen(true);
-  };
-  const createFormalFollowUp = async () => {
-    if (!followUpTitle().trim() || !followUpService()) return;
-    const issueId = props.issue.id;
-    const generation = issueGeneration;
-    setFollowUpSaving(true);
-    setFollowUpError("");
-    try {
-      const created = await createIssue({
-        title: followUpTitle().trim(),
-        description: followUpDescription().trim(),
-        priority: props.issue.priority,
-        workMode: "production_analysis",
-        serviceKey: followUpService(),
-        assigneeSubject: people().some(({ subject }) => subject === props.issue.assigneeSubject) ? props.issue.assigneeSubject : null,
-        ccSubjects: props.issue.ccRecipients.map(({ subject }) => subject).filter((subject) => people().some((person) => person.subject === subject)),
-        relatedIssueKeys: [issueId],
-      });
-      if (issueGeneration !== generation) return;
-      setFollowUpOpen(false);
-      props.onCreatedFollowUp(created.id);
-    } catch (error) {
-      if (issueGeneration === generation) setFollowUpError(errorText(error));
-    } finally {
-      if (issueGeneration === generation) setFollowUpSaving(false);
-    }
-  };
   // A UI rule without a server counterpart: follow-ups read the development Issue's committed snapshot.
   const canCreateFollowUp = () =>
     canModifyIssueCode(issueKind() ?? "prod") &&
@@ -469,49 +169,6 @@ export function IssueWorkspace(props: {
   const relatedRefusal = (onlyRemoves = false) => relatedIssueUpdateRefusal(props.issue, { onlyRemoves });
   // Resolved Issues hide the editor; a missing runtime view still permits detaching existing relations.
   const canEditRelatedIssues = () => relatedRefusal() !== "related_issue_update_not_allowed";
-  const selectableRelatedIssues = createMemo(() => props.issueList.items().filter((candidate) => candidate.id !== props.issue.id));
-  const closeRelatedEditor = () => {
-    relatedTask.cancel();
-    setRelatedOpen(false);
-    setRelatedLoading(false);
-  };
-  const openRelatedEditor = async () => {
-    const request = relatedTask.begin();
-    setRelatedKeys(props.issue.relatedIssues.map(({ id }) => id));
-    setRelatedError("");
-    setRelatedOpen(true);
-    setRelatedLoading(true);
-    try {
-      await props.issueList.refresh();
-      if (request.isCurrent() && props.issueList.error()) setRelatedError(errorText(props.issueList.error()));
-    } finally {
-      if (request.isCurrent()) setRelatedLoading(false);
-      request.finish();
-    }
-  };
-  const saveRelatedIssues = async () => {
-    const issueId = props.issue.id;
-    const generation = issueGeneration;
-    const currentKeys = new Set(props.issue.relatedIssues.map(({ id }) => id));
-    // A failed related context only blocks additions; the user can still detach broken relations.
-    const refusal = relatedRefusal(relatedKeys().every((id) => currentKeys.has(id)));
-    if (refusal) {
-      setRelatedError(errorText(refusal, relatedSaveErrors));
-      return;
-    }
-    setRelatedSaving(true);
-    setRelatedError("");
-    try {
-      await updateIssueRelatedIssues(issueId, relatedKeys());
-      if (issueGeneration !== generation) return;
-      await props.onUpdated();
-      if (issueGeneration === generation) closeRelatedEditor();
-    } catch (error) {
-      if (issueGeneration === generation) setRelatedError(errorText(error, relatedSaveErrors));
-    } finally {
-      if (issueGeneration === generation) setRelatedSaving(false);
-    }
-  };
   const canChangeScope = () => {
     const kind = issueKind();
     return kind !== undefined && canChangeIssueScope({ environmentKind: kind, status: props.issue.status, workspaceStatus: props.issue.workspace.status, agentRunning: props.issue.agentRunning });
@@ -585,12 +242,24 @@ export function IssueWorkspace(props: {
           </Show>
           <div class="issue-secondary-actions">
             <Show when={canCreateFollowUp()}>
-              <Button icon={<Plus size={15} />} onClick={openFollowUp}>
+              <Button
+                icon={<Plus size={15} />}
+                onClick={() => {
+                  openFollowUp?.();
+                  setFollowUpOpen(true);
+                }}
+              >
                 创建正式跟进
               </Button>
             </Show>
             <Show when={canChangeScope()}>
-              <Button icon={<GitBranch size={15} />} onClick={() => openScopeTransition()}>
+              <Button
+                icon={<GitBranch size={15} />}
+                onClick={() => {
+                  openScope?.();
+                  setScopeOpen(true);
+                }}
+              >
                 变更处理范围
               </Button>
             </Show>
@@ -606,7 +275,14 @@ export function IssueWorkspace(props: {
               </Button>
             </Show>
             <Show when={props.issue.status !== "resolved"}>
-              <Button icon={<Pencil size={15} />} disabled={issueActive()} onClick={openEditor}>
+              <Button
+                icon={<Pencil size={15} />}
+                disabled={issueActive()}
+                onClick={() => {
+                  openEdit?.(props.issue);
+                  setEditOpen(true);
+                }}
+              >
                 编辑工单
               </Button>
             </Show>
@@ -667,7 +343,8 @@ export function IssueWorkspace(props: {
                 icon={<Pencil size={14} />}
                 disabled={issueActive()}
                 onClick={() => {
-                  void openRelatedEditor();
+                  openRelated?.();
+                  setRelatedOpen(true);
                 }}
               >
                 编辑关联
@@ -760,321 +437,24 @@ export function IssueWorkspace(props: {
         <IssueFiles issue={props.issue} hidden={props.hidden} />
       </Show>
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
-      <Modal
+      <RelatedIssuesDialog
+        issue={props.issue}
+        issueList={props.issueList}
         open={relatedOpen()}
-        title="编辑关联工单"
-        okText="保存关联"
-        cancelText="取消"
-        confirmLoading={relatedSaving()}
-        cancelButtonProps={{ disabled: relatedSaving() }}
-        okButtonProps={{ disabled: relatedLoading() || relatedKeys().length > sharedConfig.limits.relatedIssues }}
-        onOk={() => {
-          void saveRelatedIssues();
-        }}
-        onCancel={() => {
-          if (!relatedSaving()) closeRelatedEditor();
-        }}
-      >
-        <div class="create-issue-form related-issue-form">
-          <label>
-            <span>
-              关联工单（{selectableRelatedIssues().length} 个可选，最多选择 {sharedConfig.limits.relatedIssues} 个）
-            </span>
-            <RelatedIssueSelect candidates={selectableRelatedIssues()} value={relatedKeys()} loading={relatedLoading()} inputLabel="编辑关联工单" onChange={setRelatedKeys} />
-          </label>
-          <p>保存后将关闭当前会话。下次运行会使用所选工单的资料和可用对话作为只读上下文；有本地开发分支时也会提供代码快照。</p>
-          <Show when={relatedError()}>
-            <div class="create-error modal-form-error" role="alert">
-              {relatedError()}
-            </div>
-          </Show>
-        </div>
-      </Modal>
-      <Modal
-        open={followUpOpen()}
-        title="创建正式跟进工单"
-        okText="创建并关联"
-        cancelText="取消"
-        confirmLoading={followUpSaving()}
-        okButtonProps={{ disabled: !followUpTitle().trim() || !followUpService() }}
-        onOk={() => {
-          void createFormalFollowUp();
-        }}
-        onCancel={() => {
-          if (!followUpSaving()) setFollowUpOpen(false);
-        }}
-      >
-        <div class="create-issue-form compact-issue-form follow-up-form">
-          <label>
-            <span>处理方式</span>
-            <Input aria-label="正式跟进处理方式" value="正式问题调查" disabled />
-          </label>
-          <label>
-            <span>服务</span>
-            <Select
-              aria-label="正式跟进服务"
-              value={followUpService()}
-              onChange={(value) => {
-                const selected = selectedChoice(
-                  value,
-                  productionServices().map((service) => service.key),
-                );
-                if (selected) setFollowUpService(selected);
-              }}
-              options={productionServices().map((service) => ({ value: service.key, label: service.name }))}
-            />
-          </label>
-          <label>
-            <span>标题</span>
-            <Input aria-label="正式跟进标题" value={followUpTitle()} onInput={(event) => setFollowUpTitle(event.currentTarget.value)} />
-          </label>
-          <DescriptionField value={followUpDescription} inputLabel="正式跟进描述" expandLabel="放大正式跟进描述" onChange={setFollowUpDescription} />
-          <p>新工单会关联当前开发工单，并读取其已提交分支快照和 Pi 对话；附件不会复制。</p>
-          <Show when={followUpError()}>
-            <div class="create-error modal-form-error" role="alert">
-              {followUpError()}
-            </div>
-          </Show>
-        </div>
-      </Modal>
-      <Modal
-        open={scopeOpen()}
-        title="变更处理范围"
-        okText={scopePlan() ? "确认变更" : "预检变更"}
-        cancelText="取消"
-        confirmLoading={scopePlanning() || scopeApplying()}
-        cancelButtonProps={{ disabled: scopePlanning() || scopeApplying() }}
-        okButtonProps={{ disabled: !scopeService() }}
-        onOk={() => {
-          void applyScopeTransition();
-        }}
-        onCancel={() => {
-          if (!scopePlanning() && !scopeApplying()) setScopeOpen(false);
-        }}
-      >
-        <div class="create-issue-form compact-issue-form">
-          <label>
-            <span>目标处理方式</span>
-            <Select
-              aria-label="目标处理方式"
-              disabled={scopeApplying()}
-              value={scopeMode()}
-              onChange={(value) => {
-                const selected = selectedChoice(
-                  value,
-                  availableScopeModes().map((option) => option.value),
-                );
-                if (!selected) return;
-                setScopeMode(selected);
-                const candidates = servicesForWorkMode(catalog().services, selected);
-                setScopeService((current) => (candidates.some((service) => service.key === current) ? current : (candidates[0]?.key ?? "")));
-                resetScopePlan();
-              }}
-              options={availableScopeModes()}
-            />
-          </label>
-          <label>
-            <span>目标服务</span>
-            <Select
-              aria-label="目标服务"
-              disabled={scopeApplying()}
-              value={scopeService()}
-              onChange={(value) => {
-                const selected = selectedChoice(
-                  value,
-                  availableScopeServices().map((service) => service.key),
-                );
-                if (selected) {
-                  setScopeService(selected);
-                  resetScopePlan();
-                }
-              }}
-              options={availableScopeServices().map((service) => ({ value: service.key, label: service.name }))}
-            />
-          </label>
-          <Show when={scopePlan()}>
-            {(plan) => (
-              <section class="repository-band scope-transition-preview" aria-label="范围变更预览">
-                <div class="band-title">
-                  <GitBranch size={16} />
-                  <h2>
-                    {workModeLabel[plan().current.workMode]} → {workModeLabel[plan().target.workMode]}
-                  </h2>
-                </div>
-                <div class="scope-transition-repositories">
-                  <For each={plan().repositories.retained}>
-                    {(repository) => (
-                      <div class="scope-transition-repository">
-                        <strong>保留 · {repository.name}</strong>
-                        <small>{repository.baseBranch}</small>
-                      </div>
-                    )}
-                  </For>
-                  <For each={plan().repositories.added}>
-                    {(repository) => (
-                      <div class="scope-transition-repository">
-                        <strong>新增 · {repository.name}</strong>
-                        <small>{repository.baseBranch}</small>
-                      </div>
-                    )}
-                  </For>
-                  <For each={plan().repositories.removed}>
-                    {(repository) => (
-                      <div class="scope-transition-repository">
-                        <strong>移除 · {repository.name}</strong>
-                        <small>{repository.baseBranch}</small>
-                      </div>
-                    )}
-                  </For>
-                  <Show when={plan().branch}>
-                    <div class="scope-transition-repository">
-                      <strong>分支</strong>
-                      <small>{plan().branch}</small>
-                    </div>
-                  </Show>
-                </div>
-                <p>已有对话和附件将保留；{plan().session.closeCurrent ? "当前 Agent 会话将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
-              </section>
-            )}
-          </Show>
-          <Show when={scopeError()}>
-            <div class="create-error modal-form-error" role="alert">
-              {scopeError()}
-            </div>
-          </Show>
-        </div>
-      </Modal>
-      <Modal
+        register={(open) => (openRelated = open)}
+        onClose={() => setRelatedOpen(false)}
+        onSaved={props.onUpdated}
+      />
+      <FollowUpDialog issue={props.issue} open={followUpOpen()} register={(open) => (openFollowUp = open)} onClose={() => setFollowUpOpen(false)} onCreated={props.onCreatedFollowUp} />
+      <ScopeTransitionDialog issue={props.issue} open={scopeOpen()} register={(open) => (openScope = open)} onClose={() => setScopeOpen(false)} onApplied={props.onUpdated} />
+      <IssueEditDialog
+        issue={props.issue}
         open={editOpen()}
-        title="编辑工单"
-        confirmLoading={editSaving()}
-        onOk={() => {
-          void saveIssue();
-        }}
-        onCancel={dismissEditor}
-        footer={
-          <>
-            <Button disabled={editSaving()} onClick={dismissEditor}>
-              {editCommitted() ? "关闭" : "取消"}
-            </Button>
-            <Show
-              when={editCommitted()}
-              fallback={
-                <>
-                  <Button
-                    danger
-                    disabled={editSaving() || !editTitle().trim() || resetDisabled()}
-                    loading={editSaving() && editResetting()}
-                    onClick={() => {
-                      void saveIssue(true);
-                    }}
-                  >
-                    重置
-                  </Button>
-                  <Button
-                    type="primary"
-                    disabled={editSaving() || !editTitle().trim()}
-                    loading={editSaving() && !editResetting()}
-                    onClick={() => {
-                      void saveIssue();
-                    }}
-                  >
-                    保存
-                  </Button>
-                </>
-              }
-            >
-              <Button type="primary" disabled={editSaving()} loading={editSaving()} onClick={() => void retryEditRefresh()}>
-                重新读取
-              </Button>
-            </Show>
-          </>
-        }
-      >
-        <Show
-          when={!editCommitted()}
-          fallback={
-            <p role={editSaving() && !editError() ? "status" : "alert"}>
-              {editCommitted()}
-              {editError() ? `，${editError()}` : "。"}
-            </p>
-          }
-        >
-          <div class="create-issue-form compact-issue-form edit-issue-form">
-            <Show when={editError() || peopleError()}>
-              <div class="create-error modal-form-error" role="alert">
-                {editError() || peopleError()}
-                <Show when={editConflict()}>
-                  <Button size="small" disabled={editSaving()} onClick={() => void reloadEditDraft()}>
-                    重新载入（放弃草稿）
-                  </Button>
-                </Show>
-              </div>
-            </Show>
-            <label>
-              <span>优先级</span>
-              <Select
-                aria-label="编辑工单优先级"
-                value={editPriority()}
-                onChange={(value) => {
-                  const selected = selectedChoice(
-                    value,
-                    priorityOptions.map((option) => option.value),
-                  );
-                  if (selected) setEditPriority(selected);
-                }}
-                options={priorityOptions}
-              />
-            </label>
-            <label>
-              <span>处理人</span>
-              <Select
-                aria-label="编辑工单处理人"
-                value={editAssignee() ?? undefined}
-                allowClear
-                onClear={() => setEditAssignee(null)}
-                onChange={(value) => {
-                  if (typeof value === "string" && value) setEditAssignee(value);
-                }}
-                options={people()
-                  .filter((person) => !currentWorkMode() || canUseIssueWorkMode(person.role, currentWorkMode()!))
-                  .map((person) => ({ value: person.subject, label: personLabel(person) }))}
-              />
-            </label>
-            <label>
-              <span>抄送人</span>
-              <div class="multi-select-trigger">
-                <Select
-                  mode="multiple"
-                  aria-label="编辑工单抄送人"
-                  value={editCc()}
-                  onChange={setEditCc}
-                  options={people()
-                    .filter((person) => person.subject !== editAssignee())
-                    .map((person) => ({ value: person.subject, label: personLabel(person) }))}
-                />
-              </div>
-            </label>
-            <label>
-              <span>标题</span>
-              <Input aria-label="编辑工单标题" value={editTitle()} onInput={(event) => setEditTitle(event.currentTarget.value)} />
-            </label>
-            <DescriptionField value={editDescription} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={(value) => setEditDescription(value)} />
-            <AttachmentPicker
-              files={editAttachments}
-              existingFiles={() => (editBase()?.attachments ?? []).filter((attachment) => !removedAttachmentIds().includes(attachment.id))}
-              inputLabel="编辑工单选择附件"
-              onFilesChange={(files) => setEditAttachments(files)}
-              onRemoveExisting={(id) => {
-                setRemovedAttachmentIds((current) => [...current, id]);
-                setEditError("");
-              }}
-              onError={(message) => setEditError(message)}
-            />
-            <p class="edit-issue-reset-hint">重置会保存当前修改并创建新会话，旧对话可在历史中查看；新会话不会带入旧聊天，代码、附件和工作文件保留。</p>
-          </div>
-        </Show>
-      </Modal>
+        register={(open) => (openEdit = open)}
+        onClose={() => setEditOpen(false)}
+        onSaved={props.onUpdated}
+        onDirtyChange={props.onEditDirtyChange}
+      />
     </section>
   );
 }
