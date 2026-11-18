@@ -16,8 +16,8 @@ import { applyIssueSandboxNetwork } from "../agent/issue-sandbox.ts";
 import { workspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
 import { issuesAffectedByGlobalChange, issuesAffectedByServiceChange } from "../configuration/impact.ts";
-import { selectDmsCredentials } from "../configuration/user-credentials.ts";
-import { applicationSettings, userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
+import { loadSharedCapabilityCredentials, selectDmsCredentials } from "../configuration/user-credentials.ts";
+import { userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
 import { agentModelSelection, ApiError, checkRevision, closedRecord, isClassifiedFailure, optionalText, record, text } from "./input.ts";
 import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "../search/settings.ts";
@@ -85,8 +85,8 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
         const actor = await requireDeveloper(database, request);
         if (Object.keys(input).some((key) => !["instanceAlias", "schemaName"].includes(key))) throw new ApiError(400, "invalid_dms_scope_request");
         const [personal] = await database.db.select().from(userCredentials).where(eq(userCredentials.subject, actor)).limit(1);
-        const [shared] = await database.db.select({ credentials: applicationSettings.sharedDmsCredentials }).from(applicationSettings).where(eq(applicationSettings.id, 1)).limit(1);
-        return selectDmsCredentials(personal, shared?.credentials);
+        const shared = await loadSharedCapabilityCredentials(database.db);
+        return selectDmsCredentials(personal, shared.dms);
       });
       return await resolveDmsScope(connection, text(input.instanceAlias, "dms_instance_alias", 255), text(input.schemaName, "dms_schema_name", 255));
     } catch (error) {

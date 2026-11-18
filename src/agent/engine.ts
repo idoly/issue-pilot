@@ -9,7 +9,7 @@ import type { JsonAgentSessionEvent, SessionManager } from "@earendil-works/pi-c
 
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
 import { stableErrorReason } from "../diagnostics.ts";
-import { loadIssueCredentialOwner, resolveIssueCapabilities } from "../configuration/user-credentials.ts";
+import { loadIssueCredentialOwner, loadSharedCapabilityCredentials, resolveIssueCapabilities } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { SharedCheckoutLease } from "../workspace/git.ts";
 import { resolveAgentModel } from "../configuration/agent.ts";
@@ -44,7 +44,7 @@ import {
 import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
-import { agentSessions, applicationSettings, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
+import { agentSessions, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, isDevelopmentEnvironment, issueWorkMode, personGitIdentity, requiresDeveloperOwner, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { AgentBusyError, type AgentController, type AgentReservation } from "./contracts.ts";
@@ -623,11 +623,7 @@ export class AgentEngine implements AgentController {
     }
     const environmentServices = await listEnvironmentServices(this.database, issue.environmentId);
     const queryServices = environmentServices.filter((row) => !isDevelopmentEnvironment(row.environment.kind));
-    const [shared] = await this.database
-      .select({ sls: applicationSettings.sharedSlsCredentials, dms: applicationSettings.sharedDmsCredentials })
-      .from(applicationSettings)
-      .where(eq(applicationSettings.id, 1))
-      .limit(1);
+    const shared = await loadSharedCapabilityCredentials(this.database);
     const serviceScopes = queryServices.map((row) => {
       const config = projectCapabilityConfiguration(row.deployment.config);
       const scope = { environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name };

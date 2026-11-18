@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
+import { parseDmsConnectionConfiguration, parseSlsConnectionConfiguration } from "../capabilities/registry.ts";
 import type { Database } from "../db/client.ts";
 import { credentialOwnerSubject, type CapabilityName, type DeploymentConfig, type StoredDeploymentConfig, type DmsCredentials, type SlsCredentials } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
-import { issues, subjects, userCredentials } from "../db/schema.ts";
+import { applicationSettings, issues, subjects, userCredentials } from "../db/schema.ts";
 
 export async function loadIssueCredentialOwner(database: Database, issueId: string) {
   const [issue] = await database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
@@ -17,7 +18,79 @@ export async function loadIssueCredentialOwner(database: Database, issueId: stri
 type CredentialGroup<Value> = { ok: true; value: Value } | { ok: false; error: string };
 type PersonalCredentials = typeof userCredentials.$inferSelect;
 type ConfiguredCapabilities = Pick<StoredDeploymentConfig, "dms" | "sls">;
-type SharedCredentials = { dms?: DmsCredentials | null; sls?: SlsCredentials | null };
+export type SharedCredentials = { dms?: DmsCredentials | null; sls?: SlsCredentials | null };
+
+/** The shared application group, read by scope resolution, execution and the settings page alike. */
+export async function loadSharedCapabilityCredentials(database: Pick<Database, "select">): Promise<SharedCredentials> {
+  const [row] = await database
+    .select({ dms: applicationSettings.sharedDmsCredentials, sls: applicationSettings.sharedSlsCredentials })
+    .from(applicationSettings)
+    .where(eq(applicationSettings.id, 1))
+    .limit(1);
+  return { dms: row?.dms ?? null, sls: row?.sls ?? null };
+}
+
+export interface SharedCredentialStatus {
+  configured: boolean;
+  /** DMS connections expose their URL; SLS has no displayable field. */
+  url?: string;
+  revision: number;
+}
+
+function sharedRevisionColumn(kind: CapabilityName) {
+  return kind === "dms" ? applicationSettings.sharedDmsRevision : applicationSettings.sharedSlsRevision;
+}
+
+export async function loadSharedCredentialStatus(database: Pick<Database, "select">, kind: CapabilityName): Promise<SharedCredentialStatus> {
+  const [row] = await database
+    .select({ dms: applicationSettings.sharedDmsCredentials, sls: applicationSettings.sharedSlsCredentials, revision: sharedRevisionColumn(kind) })
+    .from(applicationSettings)
+    .where(eq(applicationSettings.id, 1))
+    .limit(1);
+  const revision = row?.revision ?? 0;
+  return kind === "dms"
+    ? { configured: Boolean(row?.dms?.url && row.dms.authorization), url: row?.dms?.url ?? "", revision }
+    : { configured: Boolean(row?.sls?.accessKeyId && row.sls.accessKeySecret), revision };
+}
+
+type SharedCredentialValues = Pick<typeof applicationSettings.$inferInsert, "sharedDmsCredentials" | "sharedSlsCredentials">;
+
+/** Parse a shared credential group once; the route only validates the update envelope. */
+export function parseSharedCredentialUpdate(kind: CapabilityName, update: unknown): SharedCredentialValues {
+  return kind === "dms" ? { sharedDmsCredentials: parseDmsConnectionConfiguration(update) } : { sharedSlsCredentials: parseSlsConnectionConfiguration(update) };
+}
+
+export function clearSharedCredentialUpdate(kind: CapabilityName): SharedCredentialValues {
+  return kind === "dms" ? { sharedDmsCredentials: null } : { sharedSlsCredentials: null };
+}
+
+/** Store a parsed shared group and advance its own revision; the caller checked the expected revision first. */
+export async function saveSharedCredentialUpdate(database: Database, kind: CapabilityName, values: SharedCredentialValues): Promise<number> {
+  const [existing] = await database
+    .select({ revision: sharedRevisionColumn(kind) })
+    .from(applicationSettings)
+    .where(eq(applicationSettings.id, 1))
+    .limit(1);
+  const revision = (existing?.revision ?? 0) + 1;
+  const next = { ...values, [kind === "dms" ? "sharedDmsRevision" : "sharedSlsRevision"]: revision };
+  await database.transaction((transaction) =>
+    transaction
+      .insert(applicationSettings)
+      .values({ id: 1, ...next })
+      .onConflictDoUpdate({ target: applicationSettings.id, set: next }),
+  );
+  return revision;
+}
+
+/** Current revision of one shared group, read before sessions are closed. */
+export async function loadSharedCredentialRevision(database: Pick<Database, "select">, kind: CapabilityName): Promise<number> {
+  const [row] = await database
+    .select({ revision: sharedRevisionColumn(kind) })
+    .from(applicationSettings)
+    .where(eq(applicationSettings.id, 1))
+    .limit(1);
+  return row?.revision ?? 0;
+}
 
 /**
  * Completeness is one fact shared by selection, execution and status projection.
