@@ -27,6 +27,16 @@ See the [ownership table](docs/ai/ARCHITECTURE.md#owners). Routes coordinate own
 
 A review-only request authorizes findings, not edits or upgrades. Confirmed findings must include location, evidence, effect, plausible trigger, minimum remedy, tradeoff and verification. Prioritize actual impact/likelihood/repair cost using P0–P3. Distinguish reproduced failures, predictable risks and theoretical concerns. Report conclusion, overdesign, oversimplification, designs to retain, a minimal plan and coverage gaps; do not manufacture findings.
 
+### Solid 2.0 Web
+
+The Web app uses Solid 2.0, whose patterns differ from both React and Solid 1.x; pattern-matching either is the dominant bug source. These files ship inside the installed packages and always match `node_modules`:
+
+- `node_modules/solid-js/skills/solid-2.0/SKILL.md` — read before writing or reviewing Web code (props are read, effects take compute + apply, stores are written through the draft).
+- `node_modules/solid-js/CHEATSHEET.md` — check unfamiliar names and the "What changed from 1.x" table.
+- `node_modules/solid-js/skills/reactivity-diagnostics/SKILL.md` — read when the dev runtime prints a code such as `[REACTIVE_WRITE_IN_OWNED_SCOPE]`; treat every code as a defect to look up, never noise to suppress.
+
+Name signals, memos and effects clearly so diagnostics and rerun attribution can report them. `@solidjs/diagnostics` is not installed; do not add it without a concrete verification benefit.
+
 ## Required contracts
 
 ### Business and configuration

@@ -1,14 +1,14 @@
 import { eq } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
 import { agentDisplayEvent } from "../agent/event-display.ts";
-import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
+import { assertBoundSessionPath, openBoundSession } from "../agent/session-file.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
 import { sessionFooterStats } from "../agent/footer.ts";
 import { readQueryResult } from "../agent/query-results.ts";
@@ -198,17 +198,18 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
     reply.raw.once("close", cleanup);
     try {
       const [binding] = await database.db.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-      if (binding && !isIssueSessionPath(binding.sessionFile, issueRoot(stateRoot, issue.key))) throw new Error("agent_session_file_incomplete");
+      const root = issueRoot(stateRoot, issue.key);
+      if (binding) assertBoundSessionPath(binding.sessionFile, root);
       const sessionReady = Boolean(binding && (await pathExists(binding.sessionFile)));
-      if (binding && sessionReady) await assertSessionFileComplete(binding.sessionFile);
+      // Validation can outlive the reader; do not open or send after the socket is gone.
       if (cleaned || reply.raw.destroyed) {
         cleanup();
         reply.hijack();
         return;
       }
+      const manager = binding && sessionReady ? await openBoundSession(binding.sessionFile, root) : undefined;
       // Capture the transcript, coalesced deltas and execution state with no await before
       // starting the live buffer. Buffering earlier would append already coalesced deltas again.
-      const manager = binding && sessionReady ? SessionManager.open(binding.sessionFile) : undefined;
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];
       const sessionContext = manager?.buildSessionContext();
       // A persisted session describes the displayed conversation, even if its owner has since changed models.

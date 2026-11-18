@@ -1,16 +1,12 @@
-import { execFile } from "node:child_process";
 import { cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { executeLocalCommand } from "../process.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
+import { runGit, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 
-const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
-const exec = promisify(execFile);
-const git = async (args: string[]) =>
-  (await exec("git", trustedGitArgs(args), { timeout: gitOperationMs, maxBuffer: gitOutputBytes, env: trustedGitEnvironment({ ...process.env, GIT_TERMINAL_PROMPT: "0" }) })).stdout.trim();
+const { gitOperationMs } = issuePilotConfig.limits.process;
+const git = async (args: string[]) => (await runGit(args)).trim();
 
 async function writeAtomicGitFile(file: string, content: string): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;

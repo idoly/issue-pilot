@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import type { DatabaseReader } from "../db/client.ts";
 import { environments, issueCcRecipients, issues, issueWorkspaces, services, subjects } from "../db/schema.ts";
 import type { AgentRunState } from "../domain/contracts.ts";
+import type { IssueExecutionItem } from "./contracts.ts";
 
 export function issueSummaryQuery(reader: DatabaseReader) {
   return reader
@@ -45,7 +46,7 @@ export function issueSummaryQuery(reader: DatabaseReader) {
 export type IssueSummaryRow = Awaited<ReturnType<typeof issueSummaryQuery>>[number];
 
 /** List, detail, related Issues and SSE share one projection and opaque change token. */
-export function serializeIssueSummary({ issue, assignee, ccSubjects, service, environmentKey, workspace }: IssueSummaryRow, runState: AgentRunState) {
+export function serializeIssueSummary({ issue, assignee, ccSubjects, service, environmentKey, workspace }: IssueSummaryRow, runState: AgentRunState): IssueExecutionItem {
   const summary = {
     id: issue.key,
     title: issue.title,

@@ -33,7 +33,7 @@ const issue: IssueDetail = {
   scopeTransitions: [],
   ccRecipients: [],
   workingDirectory: "/fixture/workspaces/issue",
-  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
+  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, lastError: null, retryable: false },
 };
 
 afterEach(() => {

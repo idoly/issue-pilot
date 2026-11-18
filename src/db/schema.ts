@@ -1,6 +1,7 @@
 import type { ApplicationParameterOverrides, DingtalkUserSettings } from "../configuration/contracts.ts";
 import type { IssueSearchSettings } from "../search/contracts.ts";
 import type { DingtalkColumns } from "../mcp/dingtalk-contracts.ts";
+import { SCOPE_TRANSITION_ACTIONS, type ScopeTransitionAction } from "../workspace/scope-contracts.ts";
 import { randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
@@ -355,7 +356,7 @@ export const issueScopeTransitions = sqliteTable(
     actorSubject: text("actor_subject")
       .notNull()
       .references(() => subjects.subject),
-    action: text("action").notNull(),
+    action: text("action", { enum: SCOPE_TRANSITION_ACTIONS }).$type<ScopeTransitionAction>().notNull(),
     fromServiceKey: text("from_service_key").notNull(),
     fromServiceName: text("from_service_name").notNull(),
     fromWorkMode: text("from_work_mode", { enum: ISSUE_WORK_MODES }).$type<IssueWorkMode>().notNull(),

@@ -59,7 +59,6 @@ import {
   type IssueStatus,
   type IssueType,
   type IssueWorkMode,
-  type WorkspaceStatus,
 } from "../../../domain/contracts";
 import type {
   AgentModelOption,
@@ -99,26 +98,26 @@ export type Service = ServiceConfiguration;
 export type ServiceInput = ServiceConfigurationInput;
 
 export type { UserRole } from "../../../domain/contracts";
+import type {
+  CurrentUser,
+  IssueDetail,
+  IssueExecutionItem,
+  IssueListItem,
+  IssueScopeTransitionPlan,
+  ManagedRepository,
+  ManagedUser,
+  Person,
+  WorkspaceStats,
+  WorkspaceStatsState,
+} from "../../../http/contracts";
+export type { CurrentUser, IssueDetail, IssueExecutionItem, IssueListItem, IssueScopeTransitionPlan, ManagedRepository, ManagedUser, Person, WorkspaceStats, WorkspaceStatsState };
 import type { UserRole } from "../../../domain/contracts";
 export { USER_ROLES, canEditManagedUser, canManageDevelopmentConfiguration, canUseIssueWorkMode, hasAdministratorAccess, hasPersonalGitIdentity } from "../../../domain/contracts";
-export interface Person {
-  subject: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  isAdmin?: boolean;
-}
 export interface DmsScopeResolution {
   instanceId: string;
   instanceHost: string;
   instancePort: string;
   databaseId: string;
-}
-export interface ManagedUser extends Person {
-  revision: number;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
 }
 interface ManagedUserInput {
   subject: string;
@@ -171,87 +170,6 @@ export const updateAgentConfiguration = (input: AgentConfigurationUpdate) => jso
 export const loadManagedUsers = (signal?: AbortSignal) => request<ManagedUser[]>("/api/users/manage", signal ? { signal } : undefined);
 export const createUser = (input: ManagedUserInput) => jsonRequest<ManagedUser>("/api/users", "POST", input);
 export const updateUser = (subject: string, input: ManagedUserUpdate) => jsonRequest<ManagedUser>(`/api/users/${encodeURIComponent(subject)}`, "PATCH", input);
-
-export interface IssueListItem {
-  id: string;
-  title: string;
-  priority: IssuePriority;
-  type: IssueType;
-  status: IssueStatus;
-  assignee: string | null;
-  assigneeSubject: string | null;
-  reporterSubject: string;
-  /** Sorted CC recipient subjects; the detail additionally carries their profiles in ccRecipients. */
-  ccSubjects: string[];
-  service: { key: string; name: string };
-  environmentKey: string;
-  /** Opaque server change token covering Issue, Workspace and Agent state. */
-  revision: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface IssueExecutionItem extends IssueListItem {
-  workspaceStatus: WorkspaceStatus;
-  agentRunning: boolean;
-  resolvedAt: string | null;
-}
-
-interface IssueScopeTransitionHistoryItem {
-  id: string;
-  action: "rebind_read_only" | "convert_to_development" | "migrate_development";
-  from: { service: { key: string; name: string }; workMode: IssueWorkMode };
-  to: { service: { key: string; name: string }; workMode: IssueWorkMode };
-  repositories: { retained: string[]; added: string[]; removed: string[] };
-  planHash: string;
-  actor: { subject: string; name: string };
-  createdAt: string;
-}
-
-export interface IssueDetail extends IssueExecutionItem {
-  editVersion: string;
-  description: string;
-  repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
-  workspace: { status: WorkspaceStatus; sourceAvailable: boolean; runtimeReady: boolean; lastError?: string | null; retryable: boolean };
-  workingDirectory: string;
-  attachments: Array<{ id: string; fileName: string; storedFileName?: string; mediaType: string; size: number; sha256: string; createdAt?: string }>;
-  collaboratingServices: Array<{ key: string; name: string }>;
-  relatedIssues: IssueExecutionItem[];
-  scopeTransitions: IssueScopeTransitionHistoryItem[];
-  ccRecipients: Person[];
-  reporter?: Person;
-}
-
-export interface IssueScopeTransitionPlan {
-  planHash: string;
-  expectedIssueUpdatedAt: string;
-  action: "none" | "rebind_read_only" | "convert_to_development" | "migrate_development";
-  current: { service: { key: string; name: string }; workMode: IssueWorkMode; repositoryAccess: "read" | "write" };
-  target: { service: { key: string; name: string }; workMode: IssueWorkMode; repositoryAccess: "read" | "write" };
-  repositories: {
-    retained: Array<{ name: string; url: string; baseBranch: string }>;
-    added: Array<{ name: string; url: string; baseBranch: string }>;
-    removed: Array<{ name: string; url: string; baseBranch: string }>;
-  };
-  branch: string | null;
-  session: { closeCurrent: boolean; preserveConversation: true };
-  preserved: ["attachments", "conversation"];
-  warnings: string[];
-}
-
-export interface WorkspaceStats {
-  sampledAt: string;
-  totalBytes: number;
-  sharedGitBytes: number;
-  policy: { retentionHours: number | null; highWaterBytes: number; targetBytes: number; maintenanceIntervalMinutes: number };
-  workspaces: Array<{ issueKey: string; issueStatus: IssueStatus; workspaceStatus: WorkspaceStatus; resolvedAt: string | null; bytes: number; releasable: boolean; blockedReason: string | null }>;
-}
-
-interface WorkspaceStatsState {
-  snapshot: WorkspaceStats | null;
-  sampling: boolean;
-  error: string | null;
-}
 
 interface IssueMetadataInput {
   title: string;
@@ -365,9 +283,6 @@ const issuePath = (key: string, suffix = "") => `/api/issues/${encodeURIComponen
 const servicePath = (key: string) => `/api/services/${encodeURIComponent(key)}`;
 
 export const loadUsers = (signal?: AbortSignal) => request<Person[]>("/api/users", { signal });
-export interface CurrentUser extends Person {
-  identityLocked: boolean;
-}
 export const loadCurrentUser = (signal?: AbortSignal) => request<CurrentUser>("/api/me", { signal });
 export const loadCatalog = (signal?: AbortSignal) => request<ConfigCatalog>("/api/catalog", { signal });
 export const loadConfig = (signal?: AbortSignal) => request<Config>("/api/config", { signal });
@@ -557,16 +472,6 @@ export const deleteRepository = (id: string) => request<void>(`/api/repositories
 export const loadServiceDbHubTargets = (key: string) =>
   request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
 
-export interface ManagedRepository {
-  revision: number;
-  id: string;
-  name: string;
-  url: string;
-  group: string;
-  createdAt: string;
-  updatedAt: string;
-  services: Array<{ key: string; name: string }>;
-}
 export const loadRepositories = (signal?: AbortSignal) => request<ManagedRepository[]>("/api/repositories", signal ? { signal } : undefined);
 
 export const loadServiceConfigurationDescription = (key: string, signal?: AbortSignal) =>

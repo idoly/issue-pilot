@@ -1,9 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import type { IssueDetail } from "../data/client";
 import { issuePilotConfig } from "../../../../issue-pilot.config";
-import { AttachmentPreview } from "./AttachmentPreview";
+import { AttachmentPreview, type PreviewAttachment } from "./AttachmentPreview";
 import { settle } from "../test-settle";
 
 afterEach(() => {
@@ -17,7 +16,7 @@ it("does not request a known oversized attachment and leaves it available for or
   render(() => (
     <AttachmentPreview
       issueKey="ISSUE-1"
-      attachment={{ id: "large", fileName: "large.txt", mediaType: "text/plain", size: issuePilotConfig.web.filePreviewBytes + 1, sha256: "" }}
+      attachment={{ id: "large", fileName: "large.txt", mediaType: "text/plain", size: issuePilotConfig.web.filePreviewBytes + 1 }}
       loadFile={load}
       onClose={() => {}}
     />
@@ -30,17 +29,15 @@ it("does not request a known oversized attachment and leaves it available for or
 it("rejects a file that grew after listing before decoding or creating an object URL", async () => {
   const blob = new Blob([new Uint8Array(issuePilotConfig.web.filePreviewBytes + 1)], { type: "text/plain" });
   const decode = vi.spyOn(blob, "text");
-  render(() => (
-    <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "growing", fileName: "growing.txt", mediaType: "text/plain", size: 1, sha256: "" }} loadFile={async () => blob} onClose={() => {}} />
-  ));
+  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "growing", fileName: "growing.txt", mediaType: "text/plain", size: 1 }} loadFile={async () => blob} onClose={() => {}} />);
   expect((await screen.findByRole("alert")).textContent).toContain("文件超过预览大小限制");
   expect(decode).not.toHaveBeenCalled();
 });
 
 it("does not refetch a preview when an issue refresh recreates the same attachment object", async () => {
-  const attachment = { id: "stable", fileName: "stable.txt", mediaType: "text/plain", size: 6, sha256: "a".repeat(64) };
+  const attachment = { id: "stable", fileName: "stable.txt", mediaType: "text/plain", size: 6 };
   const load = vi.fn<NonNullable<Parameters<typeof import("./AttachmentPreview").AttachmentPreview>[0]["loadFile"]>>().mockResolvedValue(new Blob(["stable"], { type: "text/plain" }));
-  const [selected, setSelected] = createSignal<IssueDetail["attachments"][number]>(attachment, { ownedWrite: true });
+  const [selected, setSelected] = createSignal<PreviewAttachment>(attachment, { ownedWrite: true });
   render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={selected()} loadFile={load} onClose={() => {}} />);
   await screen.findByText("stable");
   expect(load).toHaveBeenCalledOnce();
@@ -60,8 +57,8 @@ for (const action of ["close", "switch"] as const)
         }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const original = { id: "old", fileName: "old.txt", mediaType: "text/plain", size: 16, sha256: "a".repeat(64) };
-    const [selected, setSelected] = createSignal<IssueDetail["attachments"][number] | null>(original, { ownedWrite: true });
+    const original = { id: "old", fileName: "old.txt", mediaType: "text/plain", size: 16 };
+    const [selected, setSelected] = createSignal<PreviewAttachment | null>(original, { ownedWrite: true });
     render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={selected()} onClose={() => setSelected(null)} />);
     try {
       await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -94,8 +91,8 @@ for (const outcome of ["success", "failure"] as const)
           finish = outcome === "success" ? resolve : () => reject(new Error("clipboard_write_failed"));
         }),
     );
-    const original = { id: "old", fileName: "old.txt", mediaType: "text/plain", size: 16, sha256: "a".repeat(64) };
-    const [selected, setSelected] = createSignal<IssueDetail["attachments"][number]>(original, { ownedWrite: true });
+    const original = { id: "old", fileName: "old.txt", mediaType: "text/plain", size: 16 };
+    const [selected, setSelected] = createSignal<PreviewAttachment>(original, { ownedWrite: true });
     render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={selected()} onClose={() => {}} />);
     try {
       await screen.findByText("old attachment text");
@@ -120,7 +117,7 @@ it("keeps attachment text available after a clipboard failure and allows retry",
   );
   const clipboard = await import("../ui/clipboard");
   vi.spyOn(clipboard, "copyText").mockRejectedValueOnce(new Error("clipboard_write_failed")).mockResolvedValueOnce();
-  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "text", fileName: "notes.txt", mediaType: "text/plain", size: 16, sha256: "a".repeat(64) }} onClose={() => {}} />);
+  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "text", fileName: "notes.txt", mediaType: "text/plain", size: 16 }} onClose={() => {}} />);
   await screen.findByText("copyable attachment text");
   fireEvent.click(screen.getByRole("button", { name: "复制文字" }));
   await screen.findByRole("alert");
@@ -133,7 +130,7 @@ it("keeps attachment text available after a clipboard failure and allows retry",
 it("retries a failed attachment preview while retaining the download action", async () => {
   const fetchMock = vi.fn<typeof globalThis.fetch>().mockRejectedValueOnce(new Error("network_failed")).mockResolvedValueOnce(new Response("Recovered attachment"));
   vi.stubGlobal("fetch", fetchMock);
-  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "text", fileName: "notes.txt", mediaType: "text/plain", size: 20, sha256: "a".repeat(64) }} onClose={() => {}} />);
+  render(() => <AttachmentPreview issueKey="ISSUE-1" attachment={{ id: "text", fileName: "notes.txt", mediaType: "text/plain", size: 20 }} onClose={() => {}} />);
   await screen.findByRole("alert");
   expect(screen.queryByRole("link", { name: "下载文件" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "重试" }));

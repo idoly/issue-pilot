@@ -68,7 +68,7 @@ beforeEach(() => {
     workspaceStatus: "ready",
     agentRunning: false,
     resolvedAt: null,
-    workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
+    workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, lastError: null, retryable: false },
     repositories: [],
     attachments: [],
     collaboratingServices: [],

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { and, eq, inArray, ne } from "drizzle-orm";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { SessionManager, type JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { JsonAgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
 import { stableErrorReason } from "../diagnostics.ts";
@@ -34,10 +34,8 @@ import {
 import type { RunEvent } from "./events.ts";
 import {
   createPrivateSessionManager,
-  assertSessionFileComplete,
   flushSessionEntries,
   gitIdentityEnvironment,
-  isIssueSessionPath,
   PiSessionRuntime,
   type GitCommitIdentity,
   type KeyedModelRuntimeFactory,
@@ -51,6 +49,7 @@ import { ENVIRONMENT_KINDS, isDevelopmentEnvironment, issueWorkMode, personGitId
 import { DomainError } from "../domain/errors.ts";
 import { AgentBusyError, type AgentController, type AgentReservation } from "./contracts.ts";
 import { createAgentSessionContext } from "./context.ts";
+import { assertBoundSessionPath, openBoundSession } from "./session-file.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
 /** Operator log context for background Agent failures; never sent to clients. */
@@ -766,16 +765,10 @@ export class AgentEngine implements AgentController {
     if (active) return active;
     await Promise.all([chmod(path.dirname(sessionDirectory), 0o700), chmod(sessionDirectory, 0o700)]);
     const [binding] = await this.database.select().from(agentSessions).where(eq(agentSessions.issueId, issue.id)).limit(1);
-    if (binding && !isIssueSessionPath(binding.sessionFile, sessionDirectory)) throw new Error("agent_session_file_incomplete");
+    if (binding) assertBoundSessionPath(binding.sessionFile, sessionDirectory);
     const existingFile = binding && (await pathExists(binding.sessionFile));
     if (binding && !existingFile) throw new Error("agent_session_file_missing");
-    if (existingFile) {
-      await assertSessionFileComplete(binding.sessionFile);
-      const manager = SessionManager.open(binding.sessionFile, sessionDirectory, workDirectory);
-      // Never let Pi rebind the Issue to a replacement session file.
-      if (manager.getSessionFile() !== path.resolve(binding.sessionFile)) throw new Error("agent_session_file_incomplete");
-      return manager;
-    }
+    if (existingFile) return openBoundSession(binding.sessionFile, sessionDirectory, workDirectory);
     const manager = await createPrivateSessionManager(workDirectory, sessionDirectory);
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("failed_to_initialize_agent_session");

@@ -46,7 +46,7 @@ const issue: IssueDetail = {
   updatedAt: "2026-10-18T00:00:00Z",
   repositories: [],
   workingDirectory: "/fixture/workspaces/issue",
-  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
+  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, lastError: null, retryable: false },
   attachments: [],
   collaboratingServices: [],
   relatedIssues: [],
@@ -224,7 +224,7 @@ for (const change of ["identity", "issue"] as const)
       const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {});
       if (failure === "committed cleanup") state.update.mockImplementationOnce(() => pending);
       else updated.mockImplementationOnce(() => pending);
-      const attachment = { id: "existing", fileName: "existing.txt", mediaType: "text/plain", size: 3, sha256: "a".repeat(64) };
+      const attachment = { id: "existing", fileName: "existing.txt", storedFileName: "existing.txt", mediaType: "text/plain", size: 3, sha256: "a".repeat(64), createdAt: new Date().toISOString() };
       const [currentIssue, setIssue] = createSignal({ ...issue, attachments: [attachment] }, { ownedWrite: true });
       const [user, setUser] = createSignal({ subject: "developer", role: "developer" }, { ownedWrite: true });
       state.user = user;

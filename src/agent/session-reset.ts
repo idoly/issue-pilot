@@ -3,11 +3,12 @@ import { stat, unlink, type FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Database } from "../db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../db/schema.ts";
 import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
-import { assertSessionFileComplete, createPrivateSessionManager, isIssueSessionPath, openRegularSessionFile, syncSessionFile } from "./pi-session.ts";
+import { assertSessionFileComplete, createPrivateSessionManager, openRegularSessionFile, syncSessionFile } from "./pi-session.ts";
+import { assertBoundSessionPath, openBoundSession } from "./session-file.ts";
 import { DomainError } from "../domain/errors.ts";
 
 const resetEntry = "issue-pilot-session-reset";
@@ -24,9 +25,7 @@ async function ownSessionFile<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 async function readSession(file: string, root: string) {
-  if (!isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
-  await ownSessionFile(() => assertSessionFileComplete(file));
-  return ownSessionFile(async () => SessionManager.open(file, root, root));
+  return ownSessionFile(() => openBoundSession(file, root));
 }
 
 /**
@@ -34,7 +33,7 @@ async function readSession(file: string, root: string) {
  * listing history must not scan every tool result or treat later conversation content as a link.
  */
 async function readSessionSummary(file: string, root: string) {
-  if (!isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
+  assertBoundSessionPath(file, root);
   const { descriptor, metadata } = await ownSessionFile(() => openRegularSessionFile(file));
   try {
     // A crash inside Pi's append can leave an unterminated final record. Listing needs only the header,
@@ -279,8 +278,8 @@ export async function readIssueMessageReceipt(
   await assertIssueRoot(stateRoot, issue.key);
   if (current) {
     const file = current.getSessionFile();
-    if (!file || !isIssueSessionPath(file, root)) throw new Error("agent_session_file_incomplete");
-    await ownSessionFile(() => assertSessionFileComplete(file));
+    assertBoundSessionPath(file ?? "", root);
+    await ownSessionFile(() => assertSessionFileComplete(file!));
     const receipt = agentMessageReceipt(current.getEntries(), request);
     if (receipt) return receipt;
   }

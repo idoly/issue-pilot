@@ -42,7 +42,7 @@ function issueFixture(fields: Omit<Partial<IssueDetail>, "workspace"> & { worksp
     ccRecipients: [],
     workingDirectory: "/fixture/workspaces/issue",
     ...rest,
-    workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false, ...workspace },
+    workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, lastError: null, retryable: false, ...workspace },
   };
 }
 

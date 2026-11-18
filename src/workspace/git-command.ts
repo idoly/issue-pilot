@@ -1,4 +1,4 @@
-import { localCommandExecutor, type CommandExecutor } from "../process.ts";
+import { executeLocalCommand, localCommandExecutor, type CommandExecutor } from "../process.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { domainError } from "../domain/errors.ts";
 import { OperationError } from "../operation-error.ts";
@@ -31,6 +31,39 @@ export function trustedGitEnvironment(environment: Readonly<Record<string, strin
   for (const [key, value] of Object.entries(environment)) if (value !== undefined) result[key] = value;
   result.GIT_CONFIG_NOSYSTEM = "1";
   return result;
+}
+
+export interface GitRunOptions {
+  /** Extra environment, merged over the process environment; trusted Git variables cannot be overridden. */
+  environment?: Readonly<Record<string, string | undefined>> | undefined;
+  signal?: AbortSignal;
+  timeout?: number;
+  /** null retains all output; the default bounds it like other local commands. */
+  maxOutputBytes?: number | null;
+  strictStdoutUtf8?: boolean;
+}
+
+/**
+ * The one trusted Git runner. Process-group termination ends credential helpers and hooks with Git,
+ * abort signals cancel a running command, and non-zero exits reject with the exit status as `code`
+ * (callers distinguish e.g. `show-ref --exists` code 2).
+ */
+export async function runGit(args: readonly string[], options: GitRunOptions = {}): Promise<string> {
+  const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
+  const result = await executeLocalCommand("git", trustedGitArgs(args), {
+    timeout: options.timeout ?? gitOperationMs,
+    maxOutputBytes: options.maxOutputBytes === undefined ? gitOutputBytes : options.maxOutputBytes,
+    environment: trustedGitEnvironment({ ...process.env, GIT_TERMINAL_PROMPT: "0", ...options.environment }),
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.strictStdoutUtf8 ? { strictStdoutUtf8: true } : {}),
+  });
+  if (result.killed || result.code !== 0) {
+    const error: Error & { code?: number; stderr?: string } = new Error(`git_failed:${args.join(" ")}\n${result.stderr}`);
+    error.code = result.code;
+    error.stderr = result.stderr;
+    throw error;
+  }
+  return result.stdout;
 }
 
 interface GitIndexOptions {

@@ -10,6 +10,7 @@ import { errorDiagnostic } from "../diagnostics.ts";
 import { agentModelSelection, ApiError, checkRevision, choice, closedRecord, isClassifiedFailure, record, text } from "./input.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
+import type { CurrentUser, ManagedUser } from "./contracts.ts";
 
 export type IdentityMode = typeof issuePilotConfig.http.identity;
 
@@ -39,7 +40,7 @@ function userAdmin(value: unknown): boolean {
   return value;
 }
 
-function serializeManagedUser(user: typeof subjects.$inferSelect) {
+function serializeManagedUser(user: typeof subjects.$inferSelect): ManagedUser {
   return {
     ...serializePerson(user),
     revision: user.revision,
@@ -231,7 +232,8 @@ export function registerUserRoutes(
   app.get("/api/me", async (request, _reply) => {
     const person = await requireCurrentUser(database, request);
     // Only tells the Web whether to offer the switcher; server identity resolution is the same in both modes.
-    return { ...serializePerson(person), identityLocked: identity === "gateway" };
+    const currentUser: CurrentUser = { ...serializePerson(person), identityLocked: identity === "gateway" };
+    return currentUser;
   });
 
   app.get("/api/users/manage", async (request, _reply) => {

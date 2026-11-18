@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from
 
 import { Copy, Paperclip, ZoomIn, ZoomOut } from "../ui/icons";
 import { copyText as copyToClipboard } from "../ui/clipboard";
-import { fetchAttachment, type IssueDetail } from "../data/client";
+import { fetchAttachment } from "../data/client";
 import { createLatestTask } from "../data/latest";
 
 import { attachmentPreviewKind } from "./file-preview";
@@ -12,9 +12,15 @@ import { sharedConfig } from "../../../../issue-pilot.config.ts";
 
 const previewTooLarge = "文件超过预览大小限制，请关闭弹窗后下载查看。";
 
-type IssueAttachment = IssueDetail["attachments"][number];
+/** Display facts only: an uploaded attachment and a work file preview share them. */
+export interface PreviewAttachment {
+  id: string;
+  fileName: string;
+  mediaType: string;
+  size: number;
+}
 
-export function AttachmentPreview(props: { issueKey: string; attachment: IssueAttachment | null; loadFile?: (signal: AbortSignal) => Promise<Blob>; onClose: () => void }) {
+export function AttachmentPreview(props: { issueKey: string; attachment: PreviewAttachment | null; loadFile?: (signal: AbortSignal) => Promise<Blob>; onClose: () => void }) {
   const [attempt, setAttempt] = createSignal(0, { ownedWrite: true });
   const [loading, setLoading] = createSignal(false, { ownedWrite: true });
   const [text, setText] = createSignal("", { ownedWrite: true });

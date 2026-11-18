@@ -57,12 +57,6 @@ const fallback = [
 
 export function workModePlaybook(workMode: IssueWorkMode | undefined): string[] {
   const mode =
-    workMode === "development_fix"
-      ? defectFix
-      : workMode === "development_feature"
-        ? featureDevelopment
-        : workMode === "production_analysis" || workMode === "test_analysis"
-          ? analysis
-          : fallback;
+    workMode === "development_fix" ? defectFix : workMode === "development_feature" ? featureDevelopment : workMode === "production_analysis" || workMode === "test_analysis" ? analysis : fallback;
   return [...commonMethod, "", ...mode];
 }

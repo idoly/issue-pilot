@@ -1,9 +1,7 @@
 import { OperationError } from "../operation-error.ts";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { and, asc, eq, inArray } from "drizzle-orm";
 import pMap from "p-map";
@@ -18,12 +16,11 @@ import { agentSessions, environments, issueRelations, issueRepositories, issues,
 import { isIssueActive, isWorkspaceBusy, scopeTransitionRefusal, type IssueScopeState, type IssueStatus, type WorkspaceStatus } from "../domain/contracts.ts";
 import { DomainError, OPERATIONAL_FAILURE_CODES } from "../domain/errors.ts";
 import { SerialQueue } from "../serial.ts";
+import { executeLocalCommand } from "../process.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows, type ExpectedRepository } from "./project.ts";
 import { inspectReleasedRepositories } from "./runtime.ts";
 import { assertIssueRoot, assertManagedIssueWorkspaceLayout, classifyRepositoryState, gitRoot, issueRoot, pathExists } from "./state.ts";
-
-const execFileAsync = promisify(execFile);
 
 export interface WorkspaceLifecyclePolicy {
   retentionMs: number;
@@ -117,7 +114,9 @@ export async function directoryBytes(candidate: string): Promise<number> {
   if (!(await pathExists(candidate))) return 0;
   const { diskUsageMs, diskUsageOutputBytes } = issuePilotConfig.limits.process;
   // A nonzero exit can include a lower bound. It cannot serve as a complete measurement.
-  const { stdout } = await execFileAsync("du", ["-sk", "--", candidate], { encoding: "utf8", timeout: diskUsageMs, maxBuffer: diskUsageOutputBytes });
+  const measured = await executeLocalCommand("du", ["-sk", "--", candidate], { timeout: diskUsageMs, maxOutputBytes: diskUsageOutputBytes });
+  if (measured.code !== 0) throw new Error("workspace_disk_usage_failed", { cause: new Error(measured.stderr) });
+  const stdout = measured.stdout;
   const kibibytes = Number(stdout.trim().split(/\s+/, 1)[0]);
   if (!Number.isSafeInteger(kibibytes) || kibibytes < 0) throw new Error("invalid_workspace_disk_usage");
   return kibibytes * 1024;

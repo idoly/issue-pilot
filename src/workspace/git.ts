@@ -1,20 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, readdir, readlink, realpath, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { normalizeIssueKey } from "../domain/contracts.ts";
 import { executeLocalCommand } from "../process.ts";
 import { KeyedSerialQueue } from "../serial.ts";
-import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
+import { indexGitlinkChanges, runGit, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 import { createPrivateIssueBranch, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { assertIssueRoot, issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
-
-const execFileAsync = promisify(execFile);
 
 export interface PrepareWorktreeInput {
   issueKey: string;
@@ -579,10 +575,10 @@ export class WorktreeManager {
     if (highWater <= 0) return;
     if (target < 0 || target >= highWater) throw new Error("shared_checkout_target_must_be_below_high_water");
     if (!(await managedGitDirectoryExists(this.sharedCheckoutsRoot))) return;
-    const { stdout } = await execFileAsync("du", ["-x", "-B1", "-d2", "--", this.sharedCheckoutsRoot], {
-      timeout: issuePilotConfig.limits.process.diskUsageMs,
-      maxBuffer: issuePilotConfig.limits.process.diskUsageOutputBytes,
-    });
+    const { diskUsageMs, diskUsageOutputBytes } = issuePilotConfig.limits.process;
+    const usage = await executeLocalCommand("du", ["-x", "-B1", "-d2", "--", this.sharedCheckoutsRoot], { timeout: diskUsageMs, maxOutputBytes: diskUsageOutputBytes });
+    if (usage.code !== 0) throw new Error("shared_checkout_disk_usage_failed", { cause: new Error(usage.stderr) });
+    const stdout = usage.stdout;
     const measured = new Map(
       stdout
         .trimEnd()
@@ -809,13 +805,7 @@ export class WorktreeManager {
     }
   }
 
-  private async git(args: string[]): Promise<string> {
-    const { gitOperationMs, gitOutputBytes } = issuePilotConfig.limits.process;
-    const { stdout } = await execFileAsync("git", trustedGitArgs(args), {
-      timeout: gitOperationMs,
-      maxBuffer: gitOutputBytes,
-      env: trustedGitEnvironment({ ...process.env, ...this.gitEnvironment.getStore() }),
-    });
-    return stdout;
+  private git(args: string[]): Promise<string> {
+    return runGit(args, { environment: this.gitEnvironment.getStore() ?? {} });
   }
 }

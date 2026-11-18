@@ -13,12 +13,7 @@ type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete"
 // A deployment carries only its environment, repository baselines and capability targets; model or MCP fields never belong here.
 const DEPLOYMENT_FIELDS = ["environmentKey", "capabilities", "repositoryBranches", "dbhub", ...CAPABILITY_KEYS] as const;
 
-function parseServiceDeployment(
-  input: unknown,
-  repositoryAliases: Set<string>,
-  existing: StoredDeploymentConfig | undefined,
-  environmentKinds: ReadonlyMap<string, EnvironmentKind>,
-) {
+function parseServiceDeployment(input: unknown, repositoryAliases: Set<string>, existing: StoredDeploymentConfig | undefined, environmentKinds: ReadonlyMap<string, EnvironmentKind>) {
   const deployment = closedRecord(input, DEPLOYMENT_FIELDS, "invalid_service_deployment");
   const selected = strings(deployment.capabilities ?? [], "capabilities");
   if (new Set(selected).size !== selected.length || selected.some((key) => !CAPABILITY_KEYS.includes(key as CapabilityName))) throw new DomainError("invalid_capabilities", "bad_request");

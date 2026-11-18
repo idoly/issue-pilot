@@ -4,15 +4,15 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchem
 import { arr, bool, compile, int, nullable, obj, oneOf, opt, str, type Static } from "@earendil-works/pi-schema";
 import type { FastifyRequest } from "fastify";
 import { eq } from "drizzle-orm";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import path from "node:path";
-import { lstat } from "node:fs/promises";
+
 import { ISSUE_KEY_PATTERN, ISSUE_PRIORITIES, ISSUE_WORK_MODES, parseIssueKey } from "../domain/contracts.ts";
 import { isStableErrorCode } from "../diagnostics.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
 import { sessionTranscript } from "../agent/events.ts";
-import { assertSessionFileComplete, isIssueSessionPath } from "../agent/pi-session.ts";
+import { openBoundSession } from "../agent/session-file.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { ensureCurrentSubject, requireIssue } from "../configuration/access.ts";
 import type { ApiRouteContext } from "../http/route-context.ts";
@@ -212,12 +212,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       const row = await requireIssue(context.database, key);
       const [binding] = await context.database.db.select().from(agentSessions).where(eq(agentSessions.issueId, row.id)).limit(1);
       let transcript = [] as ReturnType<typeof sessionTranscript>;
-      if (binding) {
-        if (!isIssueSessionPath(binding.sessionFile, issueRoot(context.stateRoot, row.key))) throw new Error("mcp_session_path_invalid");
-        if (!(await lstat(binding.sessionFile)).isFile()) throw new Error("mcp_session_path_invalid");
-        await assertSessionFileComplete(binding.sessionFile);
-        transcript = sessionTranscript(SessionManager.open(binding.sessionFile), row.id);
-      }
+      if (binding) transcript = sessionTranscript(await openBoundSession(binding.sessionFile, issueRoot(context.stateRoot, row.key)), row.id);
       const seen = new Set(transcript.map((event) => event.id));
       return page([...transcript, ...context.events.replayCurrent(row.id).filter((event) => !seen.has(event.id))], input);
     }

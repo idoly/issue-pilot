@@ -66,7 +66,7 @@ const issue: IssueDetail = {
   resolvedAt: null,
   repositories: [],
   workingDirectory: "/fixture/workspaces/issue",
-  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, retryable: false },
+  workspace: { status: "ready", sourceAvailable: false, runtimeReady: true, lastError: null, retryable: false },
   attachments: [],
   collaboratingServices: [],
   relatedIssues: [],
@@ -210,10 +210,18 @@ it("offers previews for supported attachments", async () => {
   const detailed: IssueDetail = {
     ...issue,
     attachments: [
-      { id: "text", fileName: "results.json", mediaType: "application/json", size: 30, sha256: "a".repeat(64) },
-      { id: "workbook", fileName: "input.xlsx", mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 512, sha256: "a".repeat(64) },
-      { id: "image", fileName: "image.png", mediaType: "image/png", size: 512, sha256: "a".repeat(64) },
-      { id: "archive", fileName: "archive.zip", mediaType: "application/zip", size: 512, sha256: "a".repeat(64) },
+      { id: "text", fileName: "results.json", storedFileName: "results.json", mediaType: "application/json", size: 30, sha256: "a".repeat(64), createdAt: new Date().toISOString() },
+      {
+        id: "workbook",
+        fileName: "input.xlsx",
+        storedFileName: "input.xlsx",
+        mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        size: 512,
+        sha256: "a".repeat(64),
+        createdAt: new Date().toISOString(),
+      },
+      { id: "image", fileName: "image.png", storedFileName: "image.png", mediaType: "image/png", size: 512, sha256: "a".repeat(64), createdAt: new Date().toISOString() },
+      { id: "archive", fileName: "archive.zip", storedFileName: "archive.zip", mediaType: "application/zip", size: 512, sha256: "a".repeat(64), createdAt: new Date().toISOString() },
     ],
   };
   render(() => <Workspace issue={detailed} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
@@ -271,7 +279,7 @@ it("allows detaching relations without a prepared runtime view while refusing ad
   vi.stubGlobal("fetch", fetchMock);
   render(() => (
     <Workspace
-      issue={{ ...issue, relatedIssues: [existing], workspace: { ...issue.workspace, runtimeReady: false } }}
+      issue={{ ...issue, relatedIssues: [existing], workspace: { ...issue.workspace, runtimeReady: false, lastError: null } }}
       onOpenSource={() => {}}
       onUpdated={async () => {}}
       onCreatedFollowUp={() => {}}

@@ -10,6 +10,7 @@ import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 import type { WorkspaceLifecycleManager } from "../workspace/lifecycle.ts";
 import type { IssueScopeTransitionManager } from "../workspace/scope-transition.ts";
 import type { SourceBrowser } from "../workspace/source-browser.ts";
+import type { Person } from "./contracts.ts";
 
 export { authorizeWorkMode, ensureCurrentSubject, requireAdmin, requireCurrentUser, requireDeveloper, requireDeveloperUser, requireIssue } from "../configuration/access.ts";
 
@@ -33,7 +34,7 @@ export async function issueEnvironmentKind(database: Pick<DatabaseConnection, "d
   return environment.kind;
 }
 
-export function serializePerson(person: typeof subjects.$inferSelect) {
+export function serializePerson(person: typeof subjects.$inferSelect): Person {
   return { subject: person.subject, name: person.displayName ?? person.subject, email: person.email ?? "", role: person.role, ...(person.isAdmin ? { isAdmin: true } : {}) };
 }
 

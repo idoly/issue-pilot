@@ -11,6 +11,7 @@ import { authorizeWorkMode, requireCurrentUser, requireIssue, type ApiRouteConte
 import type { IdentityRequest } from "../configuration/access.ts";
 import { DomainError } from "../domain/errors.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import type { IssueScopeTransitionPlan, WorkspaceStatsState } from "./contracts.ts";
 
 function serializeInspection(inspection: Awaited<ReturnType<ApiRouteContext["workspaces"]["inspectIssue"]>>) {
   return {
@@ -89,7 +90,8 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
       lastRefreshAt = now;
     }
     const { snapshot, ...state } = workspaces.readStats(refresh);
-    return { ...state, snapshot: snapshot ? { ...snapshot, workspaces: snapshot.workspaces.map(serializeInspection) } : null };
+    const stats: WorkspaceStatsState = { ...state, snapshot: snapshot ? { ...snapshot, workspaces: snapshot.workspaces.map(serializeInspection) } : null };
+    return stats;
   });
 
   const transitionTarget = (body: unknown) => {
@@ -106,7 +108,8 @@ export function registerWorkspaceRoutes(context: ApiRouteContext): void {
     await authorizeWorkMode(database, request, target.workMode);
     return runScopeExclusive(async () => {
       await authorizeWorkMode(database, request, target.workMode);
-      return scopeTransitions.plan(issue.id, target);
+      const plan: IssueScopeTransitionPlan = await scopeTransitions.plan(issue.id, target);
+      return plan;
     });
   });
 

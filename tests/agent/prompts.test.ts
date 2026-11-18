@@ -91,8 +91,10 @@ test("injects the runtime time and gates repository and related-Issue workspace 
 });
 
 test("selects the work-mode playbook and states the verification ladder", () => {
-  const prompt = (workMode: "production_analysis" | "test_analysis" | "development_fix" | "development_feature" | undefined, environmentKind: "prod" | "test" | "dev" = workMode?.startsWith("development") ? "dev" : "prod") =>
-    agentSystemPrompt({ ...baseContext, environmentKey: environmentKind }, { environmentKind, mcpTools: false, workMode });
+  const prompt = (
+    workMode: "production_analysis" | "test_analysis" | "development_fix" | "development_feature" | undefined,
+    environmentKind: "prod" | "test" | "dev" = workMode?.startsWith("development") ? "dev" : "prod",
+  ) => agentSystemPrompt({ ...baseContext, environmentKey: environmentKind }, { environmentKind, mcpTools: false, workMode });
 
   const analysis = prompt("production_analysis");
   assert.match(analysis, /Problem-solving method:/);

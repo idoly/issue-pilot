@@ -9,6 +9,7 @@ import { canModifyIssueCode, issueScopeForWorkMode, issueWorkMode, scopeTransiti
 import { DomainError } from "../domain/errors.ts";
 import { loadIssueDeployments } from "./issue-services.ts";
 import type { WorkspaceLifecycleManager } from "./lifecycle.ts";
+import type { PlannedRepository, ScopeTransitionAction, ScopeTransitionHistoryItem, ScopeTransitionPlan } from "./scope-contracts.ts";
 
 export interface ScopeTransitionTarget {
   serviceKey: string;
@@ -20,38 +21,7 @@ export interface ScopeTransitionExpectation {
   expectedPlanHash: string;
 }
 
-interface PlannedRepository {
-  name: string;
-  url: string;
-  baseBranch: string;
-}
-
-type ScopeTransitionAction = "none" | "rebind_read_only" | "convert_to_development" | "migrate_development";
-
-export interface ScopeTransitionPlan {
-  planHash: string;
-  expectedIssueUpdatedAt: string;
-  action: ScopeTransitionAction;
-  current: {
-    service: { key: string; name: string };
-    workMode: IssueWorkMode;
-    repositoryAccess: "read" | "write";
-  };
-  target: {
-    service: { key: string; name: string };
-    workMode: IssueWorkMode;
-    repositoryAccess: "read" | "write";
-  };
-  repositories: {
-    retained: PlannedRepository[];
-    added: PlannedRepository[];
-    removed: PlannedRepository[];
-  };
-  branch: string | null;
-  session: { closeCurrent: boolean; preserveConversation: true };
-  preserved: ["attachments", "conversation"];
-  warnings: string[];
-}
+export type { ScopeTransitionPlan } from "./scope-contracts.ts";
 
 /** Operator-correctable scope refusal; HTTP maps the conflict category once. */
 export class ScopeTransitionRefusal extends DomainError {
@@ -174,7 +144,7 @@ export class IssueScopeTransitionManager {
     return { planHash: hashPlan(planWithoutHash), ...planWithoutHash };
   }
 
-  async history(issueId: string, reader: DatabaseReader = this.database) {
+  async history(issueId: string, reader: DatabaseReader = this.database): Promise<ScopeTransitionHistoryItem[]> {
     const rows = await reader
       .select({ transition: issueScopeTransitions, actor: subjects })
       .from(issueScopeTransitions)

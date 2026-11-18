@@ -26,7 +26,7 @@ vi.mock("../data/client", async (importOriginal) => {
     createdAt: now,
     updatedAt: now,
     repositories: [{ name: "srm", url: "git@example.com:team/srm.git", baseBranch: "prod", workingBranch: "hotfix-issue" as string | null }],
-    attachments: [{ id: "attachment-1", fileName: "existing.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }],
+    attachments: [{ id: "attachment-1", fileName: "existing.csv", storedFileName: "attachment-1.csv", mediaType: "text/csv", size: 2048, sha256: "a".repeat(64), createdAt: now }],
     collaboratingServices: [],
     relatedIssues: [],
     scopeTransitions: [],
@@ -34,7 +34,7 @@ vi.mock("../data/client", async (importOriginal) => {
     reporter: { subject: "fixture-user", name: "严欣", email: "owner@example.test", role: "developer" },
     environmentKey: "test",
     workingDirectory: "/fixture/workspaces/issue",
-    workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, runtimeReady: !retryable, retryable },
+    workspace: { status: retryable ? "failed" : "ready", sourceAvailable: true, runtimeReady: !retryable, lastError: null, retryable },
   });
   const issues = [
     issue("ISSUE-20260810-042", "结算页提交后订单状态未刷新", "in_progress"),

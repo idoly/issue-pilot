@@ -2,7 +2,7 @@ import type { IssueDetail } from "../data/client";
 
 export type AttachmentPreviewKind = "image" | "text" | "pdf" | "unsupported";
 
-export function attachmentPreviewKind(attachment: IssueDetail["attachments"][number]): AttachmentPreviewKind {
+export function attachmentPreviewKind(attachment: Pick<IssueDetail["attachments"][number], "fileName" | "mediaType">): AttachmentPreviewKind {
   if (["image/png", "image/jpeg", "image/webp", "image/gif"].includes(attachment.mediaType)) return "image";
   if (attachment.mediaType === "application/pdf") return "pdf";
   if (

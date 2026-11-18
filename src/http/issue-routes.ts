@@ -52,6 +52,7 @@ import {
 } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
 import { ApiError, choice, optionalText, record, strings, text } from "./input.ts";
+import type { IssueDetail, IssueExecutionItem } from "./contracts.ts";
 import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
 import {
   ensureCurrentSubject,
@@ -204,7 +205,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     return keys.map((key) => byKey.get(key)!);
   };
   const parseRelatedIssues = (input: Record<string, unknown>) => validateRelatedIssues(parseRelatedIssueKeys(input));
-  const serializeIssueSummaryRow = (row: IssueSummaryRow) => serializeIssueSummary(row, engine.getRunState(row.issue.id));
+  const serializeIssueSummaryRow = (row: IssueSummaryRow): IssueExecutionItem => serializeIssueSummary(row, engine.getRunState(row.issue.id));
   const readIssueSummary = async (issueId: string, reader?: DatabaseReader) => {
     const row = (await issueSummaryQuery(reader ?? database.db).where(eq(issues.id, issueId)))[0];
     if (!row) throw new ApiError(404, "issue_not_found");
@@ -551,7 +552,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     let repositoryNames = new Map<string, string>();
     if (repositoryState !== "invalid") repositoryNames = issueRepositoryWorkspaceNames(repositoryRows);
     const sourceAvailable = Boolean(repositoryState !== "invalid" && hasRepositoryView(repositoryState, workspace) && (await pathExists(issueRoot(stateRoot, issue.key))));
-    return {
+    const detail: IssueDetail = {
       ...summary,
       editVersion: issueEditVersion(
         issue,
@@ -581,6 +582,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       reporter: reporter ? serializePerson(reporter) : undefined,
       ccRecipients: ccRows.map(({ person }) => serializePerson(person)),
     };
+    return detail;
   });
 
   return { createIssue, resolveCreationScope };

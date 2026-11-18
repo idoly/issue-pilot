@@ -4,6 +4,7 @@ import { assertDevelopmentRepositoryUrls } from "../configuration/service-deploy
 import { repositories, serviceRepositories, services, serviceDeployments, environments } from "../db/schema.ts";
 import { ApiError, checkRevision, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import type { ManagedRepository } from "./contracts.ts";
 
 function repositoryInput(body: unknown) {
   const input = record(body);
@@ -35,7 +36,7 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
         .select({ url: serviceRepositories.url, serviceKey: services.key, serviceName: services.name })
         .from(serviceRepositories)
         .innerJoin(services, eq(services.id, serviceRepositories.serviceId));
-      return rows.map((row) => ({
+      return rows.map((row): ManagedRepository => ({
         ...row,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
