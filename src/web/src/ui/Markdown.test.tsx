@@ -42,6 +42,20 @@ describe("Markdown", () => {
     expect(view.container.textContent).toContain("[unfinished](/file)");
   });
 
+  it("preserves literal backslashes in a link's code label", () => {
+    const view = render(() => <Markdown source={"[`\\[literal\\]`](/file)"} />);
+    expect(view.container.querySelector("a code")?.textContent).toBe("\\[literal\\]");
+    expect(view.container.querySelector("a")?.getAttribute("href")).toBe("/file");
+  });
+
+  it.each(["*", "_", "~"])("renders long unclosed %s runs literally and still sanitizes following HTML", (delimiter) => {
+    const text = `text ${delimiter.repeat(10_000)}tail`;
+    const view = render(() => <Markdown source={`${text}\n\n<img src="x" onerror="alert(1)">`} cache={false} />);
+    expect(view.container.querySelector("p")?.textContent).toBe(text);
+    expect(view.container.querySelector("em, strong, del")).toBeNull();
+    expect(view.container.querySelector("img")?.hasAttribute("onerror")).toBe(false);
+  });
+
   it("opens external links in a new tab without exposing the opener", () => {
     const view = render(() => <Markdown source={"[docs](https://example.test/docs) and [local](/api/issues)"} />);
     const [external, local] = Array.from(view.container.querySelectorAll("a"));

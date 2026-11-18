@@ -23,6 +23,10 @@ npm run build
 
 `npm ci` 必须正常执行 postinstall 补丁校验。`npm run build` 只构建 Web，不生成后端 dist，也不启动服务。
 
+Web 使用 [Solid 2 正式版](https://www.solidjs.com/blog/solid-2-0-the-long-hold)，`solid-js`、`@solidjs/web` 和 `@solidjs/vite-plugin` 按兼容组合更新。测试库当前使用支持 Solid 2 的 `@solidjs/testing-library` 1.0 RC；升级时核对 peerDependencies 和发布通道，不能仅按 npm 的 latest 标签选择。前端框架更新需通过完整 Web 测试、生产构建和独立浏览器验收。
+
+Linux x64 构建需用 `npm ls @solidjs/compiler-linux-x64-gnu` 核对原生编译器。镜像未同步新版平台包时，npm 可能静默使用 WASM；可在独立 checkout 执行 `npm ci --registry=https://registry.npmjs.org/` 后复核。
+
 `package-lock.json` 的 `resolved` 统一使用 `https://registry.npmjs.org/`。本机 npm 配置了内网镜像时，npm 默认会把这些地址替换到镜像下载，integrity 不变。更新依赖后如果锁文件写入了镜像地址，提交前改回公共源地址。
 
 手工调试需要独立根配置和空数据库，按[部署](DEPLOYMENT.md#首次本地运行)准备后启动：

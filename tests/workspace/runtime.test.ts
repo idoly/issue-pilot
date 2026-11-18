@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -121,6 +122,78 @@ test("an absent generated link is rebuilt while a replaced link is refused", asy
     await assert.rejects(prepare(), { message: "issue_runtime_entry_changed" });
     assert.equal(await readFile(entry, "utf8"), "model-created file");
   } finally {
+    await rm(state, { recursive: true, force: true });
+  }
+});
+
+test("runtime updates preserve unchanged entries through publication failure, retry and mode repair", async (context) => {
+  const state = await mkdtemp(path.join(tmpdir(), "issue-pilot-runtime-delta-"));
+  const key = "ISSUE-20261118-901";
+  const relatedKey = "ISSUE-20261118-902";
+  try {
+    await claimIssueRoot(state, key);
+    await claimIssueRoot(state, relatedKey);
+    const checkout = path.join(sharedCheckoutsRoot(state), "repository", "commit");
+    await mkdir(checkout, { recursive: true });
+    const related = { key: relatedKey, workDirectory: issueRoot(state, relatedKey), metadata: { title: "Before" } };
+    const prepare = () => prepareIssueRuntime(state, key, [{ name: "backend", repositoryPath: checkout }], "read", [related]);
+    const root = await prepare();
+    const metadataFile = path.join(root, ".related-issue-20261118-902.json");
+    const manifest = path.join(root, ".issue-runtime.json");
+    const unchanged = [path.join(root, "backend"), path.join(root, ".related-issue-20261118-902")];
+    const linkState = () => Promise.all(unchanged.map(async (file) => ({ inode: (await lstat(file)).ino, target: await readlink(file) })));
+    const before = await linkState();
+    const previousMetadata = await readFile(metadataFile, "utf8");
+    const metadataInode = (await lstat(metadataFile)).ino;
+    const previousManifest = await readFile(manifest, "utf8");
+    related.metadata.title = "After";
+    const rename = fs.rename;
+    const failure = new Error("injected_manifest_failure");
+    context.mock.method(fs, "rename", async (...args: Parameters<typeof fs.rename>) => {
+      assert.deepEqual(await linkState(), before, "unchanged links remain available throughout publication and rollback");
+      if (args[1] === manifest) throw failure;
+      return rename(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(prepare(), (error) => error === failure);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+    assert.equal(await readFile(metadataFile, "utf8"), previousMetadata);
+    assert.equal((await lstat(metadataFile)).ino, metadataInode);
+    assert.equal(await readFile(manifest, "utf8"), previousManifest);
+    assert.deepEqual(await linkState(), before);
+    assert.ok((await readdir(root)).every((name) => !name.startsWith(".runtime-")));
+
+    await prepare();
+    assert.deepEqual(JSON.parse(await readFile(metadataFile, "utf8")), { title: "After" });
+    assert.deepEqual(await linkState(), before);
+    await chmod(metadataFile, 0o640);
+    await prepare();
+    assert.equal((await lstat(metadataFile)).mode & 0o777, 0o400);
+    assert.deepEqual(await linkState(), before);
+    const sealed = await lstat(metadataFile);
+    await chmod(manifest, 0o644);
+    await prepare();
+    assert.equal((await lstat(manifest)).mode & 0o777, 0o600);
+    assert.equal((await lstat(metadataFile)).ino, sealed.ino);
+    assert.deepEqual(await linkState(), before);
+
+    await rm(unchanged[0]!);
+    await prepare();
+    assert.equal(path.resolve(root, await readlink(unchanged[0]!)), checkout);
+    assert.deepEqual((await linkState())[1], before[1]);
+    assert.equal((await lstat(metadataFile)).ino, sealed.ino);
+
+    const backendInode = (await lstat(unchanged[0]!)).ino;
+    await prepareIssueRuntime(state, key, [{ name: "backend", repositoryPath: checkout }], "read");
+    assert.equal((await lstat(unchanged[0]!)).ino, backendInode);
+    assert.deepEqual((await readdir(root)).sort(), [".issue-runtime.json", "backend"]);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     await rm(state, { recursive: true, force: true });
   }
 });

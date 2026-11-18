@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { git } from "../helpers/git.ts";
-import { chmod, mkdir, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { eq } from "drizzle-orm";
 import { openDatabase } from "../../src/db/client.ts";
 import { issuePins, issueRelations, issues, issueWorkspaces, repositories, subjects } from "../../src/db/schema.ts";
 import { IssueProjectManager } from "../../src/workspace/project.ts";
+import { repositoryStorePath, retainedSnapshotRef } from "../../src/workspace/git.ts";
 import { issueRoot, pathExists } from "../../src/workspace/state.ts";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
 
@@ -79,7 +80,7 @@ for (const mode of ["success", "rollback", "referenced", "symlink"] as const) {
   });
 }
 
-test("deletion refuses dirty development worktrees and removes clean registered worktrees without touching the remote", async () => {
+test("deletion refuses dirty worktrees and restores the original files and Git metadata on database failure", async () => {
   const f = await createApiFixture();
   const db = openDatabase(f.databaseFile);
   try {
@@ -99,22 +100,57 @@ test("deletion refuses dirty development worktrees and removes clean registered 
       .from(issues)
       .where(eq(issues.key, String(created.id)));
     const project = await new IssueProjectManager(db.db, f.root).prepare(issue!, "dev");
-    const file = path.join(project.repositories[0]!.workspacePath, "README.md");
+    const { workspacePath, workingBranch } = project.repositories[0]!;
+    await git(["-C", workspacePath, "commit", "--allow-empty", "-m", "private change"]);
+    const tip = await git(["-C", workspacePath, "rev-parse", "HEAD"]);
+    const shared = repositoryStorePath(f.root, source);
+    const assertUnpublished = async () => {
+      await assert.rejects(git(["-C", shared, "show-ref", "--exists", `refs/heads/${workingBranch}`]), { code: 2 });
+      await assert.rejects(git(["-C", shared, "show-ref", "--exists", retainedSnapshotRef(tip)]), { code: 2 });
+    };
+    const file = path.join(workspacePath, "README.md");
     await writeFile(file, "dirty\n");
     const refused = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}` });
     assert.equal(refused.statusCode, 409, refused.body);
     assert.equal(await readFile(file, "utf8"), "dirty\n");
     await writeFile(file, "original\n");
+    const shutdownFile = path.join(workspacePath, "shutdown-evidence.txt");
+    f.engine.closeSessionHook = async () => writeFile(shutdownFile, "written during session shutdown\n");
+    const changedOnClose = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}` });
+    assert.equal(changedOnClose.statusCode, 409, changedOnClose.body);
+    assert.equal(await readFile(shutdownFile, "utf8"), "written during session shutdown\n");
+    assert.equal((await db.db.select().from(issues).where(eq(issues.id, issue!.id))).length, 1);
+    f.engine.closeSessionHook = undefined;
+    await unlink(shutdownFile);
+    await chmod(file, 0o640);
+    // Keep the inode alive even if an implementation unlinks it and recreates the checkout.
+    await using original = await open(file, "r");
+    const metadata = path.resolve(workspacePath, await git(["-C", workspacePath, "rev-parse", "--git-dir"]));
+    const retainedFiles = [file, path.join(workspacePath, ".git"), ...["index", "HEAD", "gitdir", "commondir"].map((name) => path.join(metadata, name))];
+    const snapshot = () =>
+      Promise.all(
+        retainedFiles.map(async (file) => {
+          const { ino, mode, mtimeMs } = await lstat(file);
+          return { ino, mode, mtimeMs, content: await readFile(file) };
+        }),
+      );
+    const before = await snapshot();
     await db.client.execute("CREATE TRIGGER refuse_development_delete BEFORE DELETE ON issues BEGIN SELECT RAISE(ABORT, 'injected_failure'); END");
     const failed = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}` });
     assert.equal(failed.statusCode, 500, failed.body);
     assert.equal(await readFile(file, "utf8"), "original\n");
-    assert.equal(await git(["-C", project.repositories[0]!.workspacePath, "branch", "--show-current"]), project.repositories[0]!.workingBranch);
+    assert.deepEqual(await snapshot(), before, "a failed delete must restore the same files, index and Git registration without reconstruction");
+    assert.equal((await original.stat()).ino, (await lstat(file)).ino);
+    assert.equal(await git(["-C", workspacePath, "branch", "--show-current"]), workingBranch);
+    assert.equal(await git(["-C", workspacePath, "rev-parse", "HEAD"]), tip);
+    assert.deepEqual(await readdir(path.join(f.root, "control", "deletions")), []);
+    await assertUnpublished();
     await db.client.execute("DROP TRIGGER refuse_development_delete");
     const deleted = await f.app.inject({ method: "DELETE", url: `/api/issues/${issue!.key}` });
     assert.equal(deleted.statusCode, 204, deleted.body);
     assert.equal(await pathExists(issueRoot(f.root, issue!.key)), false);
     assert.equal(await readFile(path.join(source, "README.md"), "utf8"), "original\n");
+    await assertUnpublished();
     assert.deepEqual((await db.client.execute("PRAGMA foreign_key_check")).rows, []);
   } finally {
     db.close();

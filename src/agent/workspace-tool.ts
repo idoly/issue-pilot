@@ -20,7 +20,7 @@ import { resolveRecordedRepository } from "../workspace/runtime.ts";
 import { readIssueBranchCommit } from "../workspace/issue-git.ts";
 import { classifyRepositoryState } from "../workspace/state.ts";
 import { executeLocalCommand } from "../process.ts";
-import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "../workspace/git-command.ts";
+import { assertNoEmbeddedRepository, trustedGitArgs } from "../workspace/git-command.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { domainError } from "../domain/errors.ts";
 import { prepareIssueCommand } from "./issue-sandbox.ts";
@@ -45,22 +45,6 @@ type WorkspaceToolOptions = {
   checkoutLease?: SharedCheckoutLease;
   onScopeChanged?: (readRoots?: string[]) => void;
 };
-
-/** New gitlinks are embedded repositories staged from the Issue worktree, never reviewed submodules. */
-async function assertNoEmbeddedRepository(root: string): Promise<void> {
-  const gitlinks = await indexGitlinkChanges(root).catch((error: unknown) => {
-    throw new Error("workspace_git_index_invalid", { cause: error });
-  });
-  const added = gitlinks.filter((entry) => entry.added).map((entry) => entry.path);
-  if (!added.length) return;
-  const result = await executeLocalCommand("git", trustedGitArgs(["-C", root, "reset", "-q", "HEAD", "--", ...added]), {
-    timeout: issuePilotConfig.limits.process.gitOperationMs,
-    maxOutputBytes: issuePilotConfig.limits.process.gitOutputBytes,
-    environment: trustedGitEnvironment(),
-  });
-  if (result.code !== 0) throw new Error("workspace_git_index_invalid");
-  throw new Error("embedded_repository_not_allowed");
-}
 
 async function updateBoundBranch(database: Database, issue: Issue, input: GitInput, options: WorkspaceToolOptions, signal?: AbortSignal) {
   const rows = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id));

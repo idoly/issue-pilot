@@ -121,6 +121,8 @@ node --experimental-strip-types scripts/migrate-development-git.ts \
 
 管理员 API 删除是永久删除，不是代码回收；页面没有删除入口。即使返回 500 或断线，也可能已经部分生效。不要反复删除、手动清空目录或重建记录；按[存储参考](ai/STORAGE.md#deletion-and-cross-medium-failure)检查准确的暂存位置和事务阶段。
 
+删除会在会话关闭后校验工作树，再把工单根目录连同私有 Git 整体暂存。数据库失败时原样移回，不重建工作树；不要在暂存目录运行 Git，原有路径关系只在记录的位置有效。
+
 ## 首次开发准备中断
 
 首次准备开发代码时，如果进程在 `git worktree add` 之后、数据库保存仓库记录之前退出，重试会返回 `workspace_path_already_exists`。系统不会自动接管这个目录，需要停止写入后人工确认：

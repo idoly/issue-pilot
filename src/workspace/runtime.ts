@@ -102,7 +102,7 @@ function entryName(name: string): string {
  * Generated links are not write-protected inside the Issue sandbox, so an absent link is rebuildable and reported in
  * `missingLinks`. A replaced link (other target or type) and any absent or changed generated file are still refused.
  */
-async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; modesMatch: boolean; missingLinks: Set<string> } | undefined> {
+async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; modeMismatches: Set<string>; missingLinks: Set<string> } | undefined> {
   const file = path.join(root, manifestName),
     metadata = await absent(file);
   if (!metadata) return undefined;
@@ -115,7 +115,7 @@ async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; mod
     new Set(entries.map((entry) => entry.name)).size !== entries.length
   )
     throw new Error("invalid_issue_runtime_manifest");
-  let modesMatch = (metadata.mode & 0o7777) === 0o600;
+  const modeMismatches = new Set((metadata.mode & 0o7777) === 0o600 ? [] : [manifestName]);
   const missingLinks = new Set<string>();
   for (const entry of entries) {
     entryName(entry.name);
@@ -132,9 +132,9 @@ async function loadRuntime(root: string): Promise<{ entries: RuntimeEntry[]; mod
         : !metadata.isFile() || digest(await readFile(selected, "utf8")) !== entry.value
     )
       throw new Error("issue_runtime_entry_changed");
-    if (entry.kind === "file" && (metadata.mode & 0o7777) !== 0o400) modesMatch = false;
+    if (entry.kind === "file" && (metadata.mode & 0o7777) !== 0o400) modeMismatches.add(entry.name);
   }
-  return { entries, modesMatch, missingLinks };
+  return { entries, modeMismatches, missingLinks };
 }
 /** A repository name may be absent or occupied by a verified, previously generated link. */
 export async function inspectReleasedRepositories(stateRoot: string, issueKey: string, repositories: RecordedRepository[], names: ReadonlyMap<string, string>): Promise<Map<string, string>> {
@@ -208,16 +208,17 @@ export async function prepareIssueRuntime(
   const previousByName = new Map(previous.map((entry) => [entry.name, entry]));
   const entries: RuntimeEntry[] = desired.map(({ name, kind, content }) => ({ name, kind, value: kind === "link" ? content : digest(content) }));
   for (const entry of entries) if (!previousByName.has(entry.name) && (await absent(path.join(root, entry.name)))) throw new Error("issue_runtime_path_collision");
-  if (
-    manifest?.modesMatch &&
-    !missingLinks.size &&
-    previous.length === entries.length &&
-    entries.every(({ name, kind, value }) => {
-      const entry = previousByName.get(name);
-      return entry?.kind === kind && entry.value === value;
-    })
-  )
-    return root;
+  // Validated, unchanged entries never leave their public paths or participate in rollback.
+  const unchanged = new Set(
+    entries
+      .filter(({ name, kind, value }) => {
+        const previous = previousByName.get(name);
+        return previous?.kind === kind && previous.value === value && !missingLinks.has(name) && !manifest?.modeMismatches.has(name);
+      })
+      .map(({ name }) => name),
+  );
+  if (manifest && !manifest.modeMismatches.size && unchanged.size === entries.length && previous.length === entries.length) return root;
+  const updates = desired.filter(({ name }) => !unchanged.has(name));
   const operation = randomUUID(),
     backups: Array<{ original: string; backup: string }> = [],
     installed: string[] = [],
@@ -227,7 +228,7 @@ export async function prepareIssueRuntime(
     failure: unknown,
     result: string | undefined;
   try {
-    for (const entry of desired) {
+    for (const entry of updates) {
       const temporary = path.join(root, `.runtime-${operation}-${staged.length}`);
       staged.push(temporary);
       if (entry.kind === "link") await symlink(path.relative(root, entry.content), temporary);
@@ -235,14 +236,14 @@ export async function prepareIssueRuntime(
     }
     for (const entry of previous) {
       // An absent generated link has nothing to back up; a path that reappeared since inspection fails the no-clobber link below.
-      if (missingLinks.has(entry.name)) continue;
+      if (unchanged.has(entry.name) || missingLinks.has(entry.name)) continue;
       const original = path.join(root, entry.name),
         backup = path.join(root, `.runtime-old-${operation}-${backups.length}`);
       await rename(original, backup);
       backups.push({ original, backup });
     }
-    for (let index = 0; index < desired.length; index++) {
-      const target = path.join(root, desired[index]!.name);
+    for (let index = 0; index < updates.length; index++) {
+      const target = path.join(root, updates[index]!.name);
       await link(staged[index]!, target);
       installed.push(target);
       await rm(staged[index]!);

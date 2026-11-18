@@ -12,7 +12,7 @@ import { domainError } from "../domain/errors.ts";
 import { localCommandExecutor, type CommandExecutionOptions, type CommandExecutor } from "../process.ts";
 import type { Database } from "../db/client.ts";
 import { issueRepositories, issueWorkspaces, issues } from "../db/schema.ts";
-import { indexGitlinkChanges, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
+import { assertNoEmbeddedRepository, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
 import { issueRepositoryWorkspaceNames, managedGitDirectoryExists, WorktreeManager } from "./git.ts";
 import { recordedSharedSnapshot, resolveRecordedRepository } from "./runtime.ts";
 import type { WorkFileRepository } from "./work-files.ts";
@@ -125,17 +125,12 @@ export class SourceBrowser {
     });
   }
 
-  /** New gitlinks are embedded repositories, not reviewed submodules; they must never enter the index. */
-  private async assertNoEmbeddedRepository(context: SourceContext): Promise<void> {
-    const gitlinks = await indexGitlinkChanges(context.root, {
+  private assertNoEmbeddedRepository(context: SourceContext): Promise<void> {
+    return assertNoEmbeddedRepository(context.root, {
       executor: this.executor,
       gitExecutable: issuePilotConfig.runtime.sourceBrowser.gitExecutable,
-      environment: this.commandOptions().environment,
+      ...this.mutationOptions(),
     });
-    const added = gitlinks.filter((entry) => entry.added).map((entry) => entry.path);
-    if (!added.length) return;
-    await this.runGit(["-C", context.root, "reset", "-q", "HEAD", "--", ...added], this.mutationOptions()).catch(() => undefined);
-    throw domainError("embedded_repository_not_allowed");
   }
 
   async repositories(issue: IssueReference): Promise<SourceRepository[]> {

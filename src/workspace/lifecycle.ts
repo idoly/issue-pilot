@@ -706,12 +706,15 @@ export class WorkspaceLifecycleManager {
         const [reference] = await this.database.select({ id: issueRelations.issueId }).from(issueRelations).where(eq(issueRelations.relatedIssueId, issueId)).limit(1);
         if (reference) throw new IssueDeletionRefusal("issue_is_related_context");
         const root = issueRoot(this.stateRoot, issue.key);
-        if (!(await pathExists(root))) throw new IssueDeletionRefusal("workspace_missing");
-        if (!(await lstat(root)).isDirectory() || (await realpath(root)) !== root) throw new IssueDeletionRefusal("workspace_path_outside_issue_root");
         const repositories = await this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issueId));
         const state = classifyRepositoryState(repositories);
         if (repositories.length && state === "invalid") throw new IssueDeletionRefusal("development_repository_state_invalid");
         const active = repositories.filter((repository) => repository.localPath !== null);
+        if (active.length) issueRepositoryWorkspaceNames(repositories);
+        // Session shutdown hooks can still write files. Validate the final filesystem state after they stop.
+        await reservation.closeSession(issueId);
+        if (!(await pathExists(root))) throw new IssueDeletionRefusal("workspace_missing");
+        if (!(await lstat(root)).isDirectory() || (await realpath(root)) !== root) throw new IssueDeletionRefusal("workspace_path_outside_issue_root");
         await assertManagedIssueWorkspaceLayout(
           root,
           active.map((repository) => repository.localPath!),
@@ -719,37 +722,26 @@ export class WorkspaceLifecycleManager {
         for (const repository of active) {
           await this.worktrees.assertClean(repository.url, repository.localPath!, repository.workingBranch!);
         }
-        await reservation.closeSession(issueId);
         const stagingRoot = path.join(this.stateRoot, "control", "deletions");
         await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
         if ((await realpath(stagingRoot)) !== stagingRoot) throw new IssueDeletionRefusal("workspace_path_outside_issue_root");
         const staged = path.join(stagingRoot, `${issue.key.toLowerCase()}-${randomUUID()}`);
-        const commit = async () => {
-          await rename(root, staged);
-          try {
-            await this.database.transaction(async (transaction) => {
-              await transaction.delete(issues).where(eq(issues.id, issueId));
-            });
-          } catch (error) {
-            try {
-              await rename(staged, root);
-            } catch (rollbackError) {
-              throw new OperationError("issue_delete_rollback_failed", "unknown", { cause: new AggregateError([error, rollbackError]) });
-            }
-            throw error;
-          }
-        };
-        if (active.length) {
-          const names = issueRepositoryWorkspaceNames(repositories);
-          await this.worktrees.removeBatch({
-            issueKey: issue.key,
-            mode: developmentWorktreeMode(issue.type),
-            worktrees: active.map((repository) => ({ workspaceName: names.get(repository.url)!, url: repository.url, workingBranch: repository.workingBranch!, workspacePath: repository.localPath! })),
-            finalize: commit,
-            // Deletion is not release: the private branch is deleted with the root and must not enter the shared store.
-            publish: false,
+        // Private Git and its worktrees share this root. Stage them intact: database failure
+        // restores the original files, permissions and index without reconstructing a checkout.
+        // No Git operation runs at the temporary location or publishes the private branch.
+        await rename(root, staged);
+        try {
+          await this.database.transaction(async (transaction) => {
+            await transaction.delete(issues).where(eq(issues.id, issueId));
           });
-        } else await commit();
+        } catch (error) {
+          try {
+            await rename(staged, root);
+          } catch (rollbackError) {
+            throw new OperationError("issue_delete_rollback_failed", "unknown", { cause: new AggregateError([error, rollbackError]) });
+          }
+          throw error;
+        }
         // After DB commit, do not restore a partly removed root or pretend the delete fully succeeded.
         // Failed cleanup remains explicitly staged for operator inspection; never scan/adopt it on startup.
         try {

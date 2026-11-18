@@ -1,5 +1,7 @@
 import { localCommandExecutor, type CommandExecutor } from "../process.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
+import { domainError } from "../domain/errors.ts";
+import { OperationError } from "../operation-error.ts";
 
 /**
  * Trusted Git runs outside SRT on model-writable worktrees. Repository-controlled configuration,
@@ -31,14 +33,19 @@ export function trustedGitEnvironment(environment: Readonly<Record<string, strin
   return result;
 }
 
+interface GitIndexOptions {
+  executor?: CommandExecutor;
+  gitExecutable?: string;
+  environment?: Record<string, string>;
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
 /**
  * List index gitlink changes against HEAD. Comparing HEAD with the index never inspects a
  * submodule worktree, and plumbing diff-index ignores the porcelain diff.ignoreSubmodules setting.
  */
-export async function indexGitlinkChanges(
-  root: string,
-  options: { executor?: CommandExecutor; gitExecutable?: string; environment?: Record<string, string>; timeout?: number; signal?: AbortSignal } = {},
-): Promise<Array<{ path: string; added: boolean }>> {
+export async function indexGitlinkChanges(root: string, options: GitIndexOptions = {}): Promise<Array<{ path: string; added: boolean }>> {
   const executor = options.executor ?? localCommandExecutor;
   let pending = "";
   const changes: Array<{ path: string; added: boolean }> = [];
@@ -66,6 +73,8 @@ export async function indexGitlinkChanges(
     {
       timeout: options.timeout ?? issuePilotConfig.limits.process.gitOperationMs,
       maxOutputBytes: null,
+      // These decoded paths may become reset arguments; replacement decoding could select another index entry.
+      strictStdoutUtf8: true,
       environment: trustedGitEnvironment(options.environment),
       onStdout: consume,
       ...(options.signal ? { signal: options.signal } : {}),
@@ -74,4 +83,30 @@ export async function indexGitlinkChanges(
   if (result.stdout) consume(result.stdout);
   if (result.killed || result.code !== 0 || pending || header) throw new Error("workspace_git_index_invalid", { cause: new Error(result.stderr) });
   return changes;
+}
+
+/** Refuse new embedded repositories and unstage only their exact paths; recorded submodules remain usable. */
+export async function assertNoEmbeddedRepository(root: string, options: GitIndexOptions = {}): Promise<void> {
+  const gitlinks = await indexGitlinkChanges(root, options).catch((error: unknown) => {
+    throw new Error("workspace_git_index_invalid", { cause: error });
+  });
+  const added = gitlinks.filter((entry) => entry.added).map((entry) => entry.path);
+  if (!added.length) return;
+  const refusal = domainError("embedded_repository_not_allowed");
+  try {
+    const result = await (options.executor ?? localCommandExecutor).execute(
+      options.gitExecutable ?? "git",
+      trustedGitArgs(["--literal-pathspecs", "-C", root, "reset", "-q", "HEAD", "--", ...added]),
+      {
+        // Once inspection found an invalid index, settle this bounded cleanup even if the caller cancels.
+        timeout: options.timeout ?? issuePilotConfig.limits.process.gitOperationMs,
+        maxOutputBytes: issuePilotConfig.limits.process.gitOutputBytes,
+        environment: trustedGitEnvironment(options.environment),
+      },
+    );
+    if (result.killed || result.code !== 0) throw new Error("workspace_git_index_reset_failed", { cause: result });
+  } catch (cleanup) {
+    throw new OperationError("workspace_git_index_cleanup_failed", "unknown", { cause: new AggregateError([refusal, cleanup]) });
+  }
+  throw refusal;
 }

@@ -69,8 +69,6 @@ export interface RemoveWorktreeBatchInput {
   mode: "hotfix" | "feature";
   worktrees: Array<Omit<RestoreWorktreeInput, "issueKey" | "mode" | "expectedCommit">>;
   finalize?: () => Promise<void>;
-  /** Release and scope removal publish and retain the branch tip (default). Permanent Issue deletion passes false. */
-  publish?: boolean;
 }
 
 export class WorktreeRemovalFailure extends Error {
@@ -305,12 +303,8 @@ export class WorktreeManager {
     });
   }
 
-  /**
-   * Release publishes the recorded branch only; the current checkout branch is never trusted as a substitute.
-   * Deletion (`publish` false) removes the worktree without publishing or retaining anything in the shared store;
-   * the private branch stays in the Issue root so a rollback can still restore it.
-   */
-  async remove(url: string, workspacePath: string, expectedBranch: string, publish = true): Promise<string> {
+  /** Release publishes the recorded branch only; the current checkout branch is never trusted as a substitute. */
+  async remove(url: string, workspacePath: string, expectedBranch: string): Promise<string> {
     const resolvedWorkspace = this.validatedWorkspacePath(workspacePath);
     const repositoryKey = repositoryHash(url, 20);
     return this.serialized(repositoryKey, async () => {
@@ -318,12 +312,10 @@ export class WorktreeManager {
       const cachePath = await developmentRepositoryStorePath(this.stateRoot, issueKey, url);
       await this.assertCleanLocked(resolvedWorkspace, cachePath, expectedBranch);
       const commit = (await this.git(["-C", resolvedWorkspace, "rev-parse", "HEAD"])).trim();
-      if (publish) {
-        const shared = resolve(this.repositoriesRoot, repositoryKey);
-        const published = await publishIssueBranch(shared, cachePath, expectedBranch, true);
-        if (published !== commit) throw new Error("working_branch_changed_during_release");
-        await this.retainSnapshotCommit(shared, commit);
-      } else if ((await readIssueBranchCommit(cachePath, expectedBranch)) !== commit) throw new Error("working_branch_changed_during_release");
+      const shared = resolve(this.repositoriesRoot, repositoryKey);
+      const published = await publishIssueBranch(shared, cachePath, expectedBranch, true);
+      if (published !== commit) throw new Error("working_branch_changed_during_release");
+      await this.retainSnapshotCommit(shared, commit);
       try {
         await this.git(["-C", cachePath, "worktree", "remove", resolvedWorkspace]);
       } catch (error) {
@@ -477,7 +469,7 @@ export class WorktreeManager {
     try {
       for (const worktree of input.worktrees) {
         try {
-          const commit = await this.remove(worktree.url, worktree.workspacePath, worktree.workingBranch, input.publish ?? true);
+          const commit = await this.remove(worktree.url, worktree.workspacePath, worktree.workingBranch);
           removed.push({ worktree, commit });
         } catch (error) {
           if (error instanceof WorktreeRemovalFailure) removed.push({ worktree, commit: error.commit });

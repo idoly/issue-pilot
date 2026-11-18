@@ -197,6 +197,8 @@ test("storage reads on navigation and explicit sampling requests a background re
   expect(loadWorkspaceStats).toHaveBeenCalledTimes(1);
   expect(vi.mocked(loadWorkspaceStats).mock.calls[0]![1]).toBe(false);
   fireEvent.click(screen.getByRole("tab", { name: "团队" }));
+  // A navigation leaves the resource view only after its batched update is displayed.
+  await screen.findByRole("tab", { name: "团队", selected: true });
   fireEvent.click(screen.getByRole("tab", { name: "资源" }));
   await waitFor(() => expect(loadWorkspaceStats).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.getByRole("button", { name: "重新采样" })).toHaveProperty("disabled", false));
