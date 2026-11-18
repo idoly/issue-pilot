@@ -1,6 +1,7 @@
 import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { createIssueRecord, type DingtalkImportClaim } from "../issues/create.ts";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -14,7 +15,6 @@ import {
   environments,
   issueAttachments,
   issueCcRecipients,
-  issueKeySequences,
   issuePins,
   issueRelations,
   issueRepositories,
@@ -37,7 +37,7 @@ import {
   type IssueWorkMode,
 } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
-import { claimIssueRoot, classifyRepositoryState, hasRepositoryView, issueRoot, pathExists, removeEmptyIssueRoot } from "../workspace/state.ts";
+import { classifyRepositoryState, hasRepositoryView, issueRoot, pathExists } from "../workspace/state.ts";
 import {
   finalizeRetiredAttachments,
   type PendingAttachment,
@@ -90,18 +90,6 @@ function issueEditVersion(issue: typeof issues.$inferSelect, attachments: readon
     .digest("hex");
 }
 
-const regionalDateFormat = new Intl.DateTimeFormat("en-CA", {
-  timeZone: issuePilotConfig.regional.timeZone,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
-function regionalDateStamp(now: Date): string {
-  const dateParts = new Map(regionalDateFormat.formatToParts(now).map((part) => [part.type, part.value]));
-  return `${dateParts.get("year")}${dateParts.get("month")}${dateParts.get("day")}`;
-}
-
 async function readIssueInput(stateRoot: string, request: FastifyRequest): Promise<{ input: Record<string, unknown>; attachments: PendingAttachment[] }> {
   if (!request.isMultipart()) return { input: record(request.body), attachments: [] };
   const attachments: PendingAttachment[] = [];
@@ -119,7 +107,6 @@ async function readIssueInput(stateRoot: string, request: FastifyRequest): Promi
   }
 }
 
-export type DingtalkImportClaim = Pick<typeof dingtalkIssueImports.$inferInsert, "baseId" | "tableId" | "recordId" | "sourceUrl">;
 export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"];
 export type IssueCreationScopeResolver = ReturnType<typeof registerIssueRoutes>["resolveCreationScope"];
 
@@ -279,49 +266,26 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
         const issueId = randomUUID();
         return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
           options.signal?.throwIfAborted();
-          const day = regionalDateStamp(now());
-          // Reserve the number before touching the filesystem. A failed create may leave a gap, never a reusable key.
-          const [next] = await database.db
-            .insert(issueKeySequences)
-            .values({ day, lastValue: 1 })
-            .onConflictDoUpdate({ target: issueKeySequences.day, set: { lastValue: sql`${issueKeySequences.lastValue} + 1` } })
-            .returning({ sequence: issueKeySequences.lastValue });
-          const issueKey = `ISSUE-${day}-${String(next!.sequence).padStart(3, "0")}`;
-          const writtenObjectKeys: string[] = [];
-          await claimIssueRoot(stateRoot, issueKey);
-          let issue: typeof issues.$inferSelect;
-          try {
-            const publishedAttachments = await publishPendingAttachments(stateRoot, issueKey, initialAttachments, writtenObjectKeys);
-            issue = await database.db.transaction(async (transaction) => {
-              const [insertedIssue] = await transaction
-                .insert(issues)
-                .values({
-                  id: issueId,
-                  key: issueKey,
-                  title: issueValues.title,
-                  description: issueValues.description,
-                  priority: issueValues.priority,
-                  type: issueValues.type,
-                  serviceId: issueValues.serviceId,
-                  environmentId: issueValues.environment.id,
-                  reporterSubject,
-                  assigneeSubject: issueValues.assigneeSubject,
-                })
-                .returning();
-              if (issueValues.ccSubjects.length) await transaction.insert(issueCcRecipients).values(issueValues.ccSubjects.map((recipient) => ({ issueId: insertedIssue!.id, subject: recipient })));
-              if (relatedIssues.length) await transaction.insert(issueRelations).values(relatedIssues.map((relatedIssue) => ({ issueId: insertedIssue!.id, relatedIssueId: relatedIssue.id })));
-              await transaction.insert(issueWorkspaces).values({ issueId: insertedIssue!.id });
-              if (options.dingtalk) await transaction.insert(dingtalkIssueImports).values({ ...options.dingtalk, issueId: insertedIssue!.id, importedBy: reporterSubject });
-              await insertPublishedAttachments(transaction, insertedIssue!.id, reporterSubject, publishedAttachments);
-              return insertedIssue!;
-            });
-          } catch (error) {
-            const rollbackErrors: unknown[] = [];
-            await removeWrittenAttachments(writtenObjectKeys).catch((rollbackError) => rollbackErrors.push(rollbackError));
-            await removeEmptyIssueRoot(stateRoot, issueKey).catch((rollbackError) => rollbackErrors.push(rollbackError));
-            if (rollbackErrors.length) throw new OperationError("issue_state_rollback_failed", "unknown", { cause: new AggregateError([error, ...rollbackErrors], "issue_state_rollback_failed") });
-            throw error;
-          }
+          const issue = await createIssueRecord({
+            database: database.db,
+            stateRoot,
+            issueId,
+            values: {
+              title: issueValues.title,
+              description: issueValues.description,
+              priority: issueValues.priority,
+              type: issueValues.type,
+              serviceId: issueValues.serviceId,
+              environmentId: issueValues.environment.id,
+              assigneeSubject: issueValues.assigneeSubject,
+              ccSubjects: issueValues.ccSubjects,
+            },
+            reporterSubject,
+            relatedIssueIds: relatedIssues.map(({ id }) => id),
+            attachments: initialAttachments,
+            now: now(),
+            ...(options.dingtalk ? { dingtalk: options.dingtalk } : {}),
+          });
           if (options.startAgent !== false) reservation.enqueue(issue.id);
           return issue;
         });
