@@ -7,18 +7,13 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { JsonAgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { loadEnabledCapabilities } from "../configuration/capability-switches.ts";
 import { stableErrorReason } from "../diagnostics.ts";
-import { loadIssueCredentialOwner, loadSharedCapabilityCredentials, resolveIssueCapabilities } from "../configuration/user-credentials.ts";
+import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { SharedCheckoutLease } from "../workspace/git.ts";
 import { resolveAgentModel } from "../configuration/agent.ts";
-import { loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
-import { projectCapabilityConfiguration } from "../configuration/credentials.ts";
-import { issueServiceIds, listEnvironmentServices, loadIssueDeployments } from "../workspace/issue-services.ts";
-import { createWorkspaceTool } from "./workspace-tool.ts";
-import { openVerifiedAttachmentFile } from "../workspace/attachments.ts";
+import { loadIssueDeployments } from "../workspace/issue-services.ts";
 import { IssueWorkFileStore } from "../workspace/work-files.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import {
@@ -32,23 +27,15 @@ import {
   type AgentMessageScope,
 } from "./message-delivery.ts";
 import type { RunEvent } from "./events.ts";
-import {
-  createPrivateSessionManager,
-  flushSessionEntries,
-  gitIdentityEnvironment,
-  PiSessionRuntime,
-  type GitCommitIdentity,
-  type KeyedModelRuntimeFactory,
-  type ManagedPiSession,
-} from "./pi-session.ts";
+import { createPrivateSessionManager, flushSessionEntries, PiSessionRuntime, type GitCommitIdentity, type KeyedModelRuntimeFactory, type ManagedPiSession } from "./pi-session.ts";
 import { IssueProjectManager } from "../workspace/project.ts";
 import { assertIssueRoot, issueRoot, pathExists } from "../workspace/state.ts";
 import type { Database } from "../db/client.ts";
-import { agentSessions, issueAttachments, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS, isDevelopmentEnvironment, issueWorkMode, personGitIdentity, requiresDeveloperOwner, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
+import { agentSessions, environments, issueWorkspaces, issues, services, subjects } from "../db/schema.ts";
+import { ENVIRONMENT_KINDS, issueWorkMode, personGitIdentity, requiresDeveloperOwner, type AgentRunState, type EnvironmentKind } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { AgentBusyError, type AgentController, type AgentReservation } from "./contracts.ts";
-import { createAgentSessionContext } from "./context.ts";
+import { prepareAgentRound } from "./round-preparation.ts";
 import { assertBoundSessionPath, openBoundSession } from "./session-file.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -594,7 +581,6 @@ export class AgentEngine implements AgentController {
     // The owner's complete personal model group replaces the shared model and key; only its absence selects the shared group.
     const model = await resolveAgentModel(this.database, owner.credentials?.modelCredentials);
     if (!model.apiKey) throw new Error("model_api_key_not_configured");
-    const agentConfiguration = model.configuration;
     let personalGit: PersonalGitEnvironment | undefined;
     if (owner.user.role === "developer") {
       const deployment = await loadIssueDeployments(this.database, issue);
@@ -607,65 +593,27 @@ export class AgentEngine implements AgentController {
     }
 
     const workDirectory = await assertIssueRoot(this.stateRoot, issue.key);
-    this.roundSignal(issue.id);
     const checkoutLease = new SharedCheckoutLease();
     this.checkoutLeases.set(issue.id, checkoutLease);
-    const project = await checkoutLease.run(() => this.projectManager.prepare(issue, environmentKind, personalGit?.env, this.roundSignal(issue.id)));
-    this.roundSignal(issue.id);
-    const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
-    await chmod(workDirectory, 0o700);
-    const attachmentPath = workDirectory;
-    await chmod(path.dirname(workDirectory), 0o700);
-    const attachments = await this.database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
-    for (const attachment of attachments) {
-      const handle = await openVerifiedAttachmentFile(attachmentPath, attachment.objectKey, attachment.size, attachment.sha256, this.roundSignal(issue.id));
-      await handle.close();
-    }
-    const environmentServices = await listEnvironmentServices(this.database, issue.environmentId);
-    const queryServices = environmentServices.filter((row) => !isDevelopmentEnvironment(row.environment.kind));
-    const shared = await loadSharedCapabilityCredentials(this.database);
-    const serviceScopes = queryServices.map((row) => {
-      const config = projectCapabilityConfiguration(row.deployment.config);
-      const scope = { environmentKey: row.environment.key, serviceKey: row.service.key, serviceName: row.service.name };
-      // Each capability resolves independently so a missing DMS group does not block SLS, and vice versa.
-      // Failed targets stay discoverable; the selected query reports its own credential error at execution time.
-      const { configuration: resolved, errors: credentialErrors } = resolveIssueCapabilities(config, owner.credentials, shared);
-      return { ...scope, config: resolved, credentialErrors };
-    });
-    const deploymentConfig = serviceScopes.find((scope) => scope.serviceKey === service.key && scope.environmentKey === service.environmentKey)?.config ?? {};
-    const mcpRows = await loadMcpConnections(this.database);
-    const includedServiceIds = new Set(await issueServiceIds(this.database, issue));
-    const mcpConfigurations = serviceMcpConnections(
-      mcpRows,
-      environmentServices.filter((row) => includedServiceIds.has(row.service.id)).map((row) => row.deployment.id),
-    );
-    const context = createAgentSessionContext({
-      issueKey: issue.key,
-      issueType: issue.type,
-      enabledCapabilities: await loadEnabledCapabilities(this.database),
-      deploymentConfig,
-      additionalDeploymentConfigs: serviceScopes.map((scope) => scope.config),
-      agentConfiguration,
-      serviceKey: service.key,
-      environmentKey: service.environmentKey,
-      environmentKind,
-      repositoryAccess: project.repositories.map((repository) => repository.access),
-    });
-    let readRoots = project.readRoots;
-    const commitIdentity = owner.user.role === "developer" ? personGitIdentity(owner.user) : gitIdentity;
-    const workspaceTool = await createWorkspaceTool(this.database, issue, environmentKind, this.projectManager, {
+    const prepared = await prepareAgentRound({
+      database: this.database,
       stateRoot: this.stateRoot,
-      runtimeRoot: project.runtimeRoot,
+      projectManager: this.projectManager,
+      issue,
+      service: { ...service, environmentKind },
+      environmentKind,
+      owner,
+      model,
+      gitIdentity,
       ...(personalGit ? { personalGit } : {}),
-      commitEnvironment: gitIdentityEnvironment(commitIdentity),
-      networkDomains: agentConfiguration.runtime.networkAllowedDomains ?? [],
       checkoutLease,
-      onScopeChanged: (updatedRoots) => {
-        if (updatedRoots) readRoots = updatedRoots;
+      signal: () => this.roundSignal(issue.id),
+      onScopeChanged: () => {
         const current = this.sessions.get(issue.id);
         if (current) current.scopeChanged = true;
       },
     });
+    const { agentConfiguration, context, deploymentConfig, serviceScopes, mcpConfigurations, workspaceTool, commitIdentity, sharedRepositories } = prepared;
     const { managed, hadMessages } = await this.sessionQueue.run(issue.id, async () => {
       // Reopen after preparation: admissions made meanwhile appended to the file through another manager.
       const manager = await this.sessionManagerLocked(issue, workDirectory);
@@ -682,7 +630,7 @@ export class AgentEngine implements AgentController {
         mcpConfigurations,
         manager,
         get readRoots() {
-          return readRoots;
+          return prepared.readRoots();
         },
         gitIdentity: commitIdentity,
         modelApiKey: model.apiKey,
@@ -697,11 +645,11 @@ export class AgentEngine implements AgentController {
       return { managed, hadMessages };
     });
     this.roundSignal(issue.id);
-    await this.markRunning(issue.id, project.runtimeReady);
+    await this.markRunning(issue.id, prepared.project.runtimeReady);
     this.assertCurrentSession(issue.id, managed);
     if (messageEntryId) await this.startQueuedMessage(issue, managed, messageEntryId);
 
-    const repositoryContexts = project.repositories.map((repository) => ({
+    const repositoryContexts = prepared.project.repositories.map((repository) => ({
       branch: repository.workingBranch ?? repository.baseBranch,
       baseBranch: repository.baseBranch,
       baseCommit: repository.baseCommit,
@@ -709,7 +657,7 @@ export class AgentEngine implements AgentController {
       readOnly: repository.access === "read",
     }));
     const prompt = hadMessages
-      ? continuationPrompt(issue.key, repositoryContexts, attachmentPath, currentMessage, undefined, project.relatedIssueKeys, project.runtimeRoot)
+      ? continuationPrompt(issue.key, repositoryContexts, prepared.attachmentPath, currentMessage, undefined, prepared.project.relatedIssueKeys, prepared.project.runtimeRoot)
       : initialPrompt({
           issueKey: issue.key,
           title: issue.title,
@@ -717,9 +665,9 @@ export class AgentEngine implements AgentController {
           issueType: issue.type,
           repositories: repositoryContexts,
           service,
-          attachmentPath,
-          relatedIssueKeys: project.relatedIssueKeys,
-          relatedRoot: project.runtimeRoot,
+          attachmentPath: prepared.attachmentPath,
+          relatedIssueKeys: prepared.project.relatedIssueKeys,
+          relatedRoot: prepared.project.runtimeRoot,
           ...(currentMessage !== undefined ? { latestUpdate: currentMessage } : {}),
         });
     await this.promptRound(issue.id, managed, prompt, images, currentMessage?.startsWith("/") ? currentMessage : undefined);
