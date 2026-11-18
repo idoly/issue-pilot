@@ -5,8 +5,10 @@ import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Database } from "../db/client.ts";
-import { agentSessions, issues, issueWorkspaces } from "../db/schema.ts";
+import { agentSessions, issueWorkspaces } from "../db/schema.ts";
 import { assertIssueRoot, issueRoot } from "../workspace/state.ts";
+import { ISSUE_STATUSES } from "../domain/contracts.ts";
+import { transitionIssue } from "../issues/status.ts";
 import { assertSessionFileComplete, createPrivateSessionManager, openRegularSessionFile, syncSessionFile } from "./pi-session.ts";
 import { assertBoundSessionPath, openBoundSession } from "./session-file.ts";
 import { DomainError } from "../domain/errors.ts";
@@ -101,7 +103,7 @@ export async function resetIssueSession(
     await database.transaction(async (transaction) => {
       await edit?.(transaction);
       await transaction.update(agentSessions).set({ sessionFile: file, workspacePath: root, updatedAt: new Date() }).where(eq(agentSessions.issueId, issue.id));
-      await transaction.update(issues).set({ status: "open", updatedAt: new Date() }).where(eq(issues.id, issue.id));
+      await transitionIssue(transaction, issue.id, { from: ISSUE_STATUSES, to: "open" });
       await transaction
         .update(issueWorkspaces)
         .set({ status: "ready", releasedAt: null, lastError: null, updatedAt: new Date() })

@@ -17,6 +17,7 @@ import { isIssueActive, isWorkspaceBusy, scopeTransitionRefusal, type IssueScope
 import { DomainError, OPERATIONAL_FAILURE_CODES } from "../domain/errors.ts";
 import { SerialQueue } from "../serial.ts";
 import { executeLocalCommand } from "../process.ts";
+import { transitionIssue } from "../issues/status.ts";
 import { issueRepositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure } from "./git.ts";
 import { developmentWorktreeMode, IssueProjectManager, replaceIssueRepositoryRows, type ExpectedRepository } from "./project.ts";
 import { inspectReleasedRepositories } from "./runtime.ts";
@@ -670,11 +671,7 @@ export class WorkspaceLifecycleManager {
               .where(eq(issueRepositories.id, repository.id));
           }
           await transaction.update(issueWorkspaces).set({ status: "ready", runtimeReady: true, releasedAt: null, lastError: null, updatedAt: now }).where(eq(issueWorkspaces.issueId, issue.id));
-          const [reopened] = await transaction
-            .update(issues)
-            .set({ status: "open", resolvedAt: null, updatedAt: now })
-            .where(and(eq(issues.id, issue.id), eq(issues.status, "resolved")))
-            .returning();
+          const reopened = await transitionIssue(transaction, issue.id, { from: ["resolved"], to: "open", resolvedAt: null, updatedAt: now });
           if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
           return reopened;
         }),
@@ -687,11 +684,7 @@ export class WorkspaceLifecycleManager {
   }
 
   private async markReopened(issue: Issue): Promise<Issue> {
-    const [reopened] = await this.database
-      .update(issues)
-      .set({ status: "open", resolvedAt: null, updatedAt: new Date() })
-      .where(and(eq(issues.id, issue.id), eq(issues.status, "resolved")))
-      .returning();
+    const reopened = await transitionIssue(this.database, issue.id, { from: ["resolved"], to: "open", resolvedAt: null });
     if (!reopened) throw new WorkspaceRestoreRefusal("invalid_issue_status_transition");
     return reopened;
   }

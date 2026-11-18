@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, unlink } from "node:fs/promises";
 import path from "node:path";
 
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { JsonAgentSessionEvent, SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -36,6 +36,7 @@ import { ENVIRONMENT_KINDS, issueWorkMode, personGitIdentity, requiresDeveloperO
 import { DomainError } from "../domain/errors.ts";
 import { AgentBusyError, type AgentController, type AgentReservation } from "./contracts.ts";
 import { prepareAgentRound } from "./round-preparation.ts";
+import { transitionIssue } from "../issues/status.ts";
 import { assertBoundSessionPath, openBoundSession } from "./session-file.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
@@ -474,10 +475,7 @@ export class AgentEngine implements AgentController {
               await this.stopSession(issueId);
             }
             await this.database.transaction(async (transaction) => {
-              await transaction
-                .update(issues)
-                .set({ status: "open", updatedAt: new Date() })
-                .where(and(eq(issues.id, issueId), ne(issues.status, "resolved")));
+              await transitionIssue(transaction, issueId, { from: ["open", "in_progress", "pending"], to: "open" });
               await transaction.update(issueWorkspaces).set({ status: "ready", releasedAt: null, lastError: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issueId));
             });
             this.publishStatus(issueId, "cancelled");
@@ -495,11 +493,7 @@ export class AgentEngine implements AgentController {
         }
         try {
           const failed = await this.database.transaction(async (transaction) => {
-            const [failedIssue] = await transaction
-              .update(issues)
-              .set({ status: "open", updatedAt: new Date() })
-              .where(and(eq(issues.id, issueId), ne(issues.status, "resolved")))
-              .returning({ id: issues.id });
+            const failedIssue = await transitionIssue(transaction, issueId, { from: ["open", "in_progress", "pending"], to: "open" });
             if (!failedIssue) return false;
             const [failedWorkspace] = await transaction
               .update(issueWorkspaces)
@@ -836,11 +830,7 @@ export class AgentEngine implements AgentController {
 
   private async markRunning(issueId: string, runtimeReady?: boolean): Promise<void> {
     await this.database.transaction(async (transaction) => {
-      const [runningIssue] = await transaction
-        .update(issues)
-        .set({ status: "in_progress", resolvedAt: null, updatedAt: new Date() })
-        .where(and(eq(issues.id, issueId), inArray(issues.status, ["open", "pending"])))
-        .returning({ id: issues.id });
+      const runningIssue = await transitionIssue(transaction, issueId, { from: ["open", "pending"], to: "in_progress", resolvedAt: null });
       if (!runningIssue) throw new Error("issue_not_runnable");
       const [runningWorkspace] = await transaction
         .update(issueWorkspaces)
@@ -865,11 +855,7 @@ export class AgentEngine implements AgentController {
         .where(eq(issueWorkspaces.issueId, issueId))
         .returning({ issueId: issueWorkspaces.issueId });
       if (!readyWorkspace) throw new Error("issue_workspace_missing");
-      const [completedIssue] = await transaction
-        .update(issues)
-        .set({ status: "pending", updatedAt: new Date() })
-        .where(and(eq(issues.id, issueId), eq(issues.status, "in_progress")))
-        .returning({ id: issues.id });
+      const completedIssue = await transitionIssue(transaction, issueId, { from: ["in_progress"], to: "pending" });
       if (!completedIssue) throw new Error("issue_not_running");
     });
     this.publishStatus(issueId, "complete");

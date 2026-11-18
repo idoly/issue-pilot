@@ -1,6 +1,7 @@
 import { OperationError } from "../operation-error.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createIssueRecord, type DingtalkImportClaim } from "../issues/create.ts";
+import { transitionIssue } from "../issues/status.ts";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
@@ -471,11 +472,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
       const currentIssue = await requireIssue(database, issue.key);
       if (currentIssue.status !== "pending") throw new ApiError(409, "invalid_issue_status_transition");
       await reservation.closeSession(issue.id);
-      const [updatedIssue] = await database.db
-        .update(issues)
-        .set({ status: "resolved", resolvedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(issues.id, issue.id), eq(issues.status, "pending")))
-        .returning();
+      const updatedIssue = await transitionIssue(database.db, issue.id, { from: ["pending"], to: "resolved", resolvedAt: new Date() });
       if (!updatedIssue) throw new ApiError(409, "invalid_issue_status_transition");
       return readIssueSummary(updatedIssue.id);
     });
