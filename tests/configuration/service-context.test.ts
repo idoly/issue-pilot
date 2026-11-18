@@ -42,7 +42,6 @@ test("generated descriptions include exact capability parameters without secrets
       ],
     },
     sls: { accessKeyId: "private-sls-id", accessKeySecret: "private-sls-secret", region: "cn-hangzhou", project: "prod-project", logstores: ["orders-api", "gateway"] },
-    mcpServices: ["docs"],
     archivedDevelopment: { password: "private-archive" },
   } as StoredDeploymentConfig;
   const context = deploymentContext({ kind: "prod" as const, name: "正式" }, configuration, [

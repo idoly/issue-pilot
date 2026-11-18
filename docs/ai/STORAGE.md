@@ -189,7 +189,7 @@ PY
 
 Only database.sqlite signifies completion of this example's copy and checks; preserve .partial for inspection. Record source revision, root configuration, source DB path and time without secrets. Passing SQLite checks does not validate file/Git alignment or old-code compatibility.
 
-Before releasing migration 0082, export the retired secrets from the validated checkpoint copy with [export-retired-secrets.ts](../../scripts/export-retired-secrets.ts). The script requires either the state lease or an explicit `--checkpoint-copy`, writes a new 0600 file under an owned 0700 parent, never prints values, and refuses when the columns are already gone. Keep the export private like a credential; after 0082 runs it is the only recovery source. The sequence is in the [runbook](../RUNBOOK.md#退役密钥离线留证).
+The retired secrets removed by migration 0082 survive only in the private pre-release export recorded in the [runbook](../RUNBOOK.md#退役密钥留证). Keep it like a credential; the one-off export tool was removed after the release.
 
 ### Restoring a checkpoint
 

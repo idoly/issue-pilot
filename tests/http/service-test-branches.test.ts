@@ -13,7 +13,6 @@ test("adds missing IQS test deployment and persists every selected branch withou
     const deployments = ["dev", "test", "prod"].map((environmentKey) => ({
       environmentKey,
       capabilities: [],
-      mcpServices: [],
       repositoryBranches:
         environmentKey === "dev"
           ? []

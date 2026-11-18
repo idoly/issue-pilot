@@ -6,18 +6,20 @@ import type { Database } from "../db/client.ts";
 import { environments, issues, issueServiceScopes, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, repositories as repositoryCatalog, services } from "../db/schema.ts";
 import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, isDevelopmentEnvironment, isSshRepositoryUrl, type CapabilityName, type EnvironmentKind, type StoredDeploymentConfig } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
-import { optionalText, record, strings, text } from "../domain/input.ts";
+import { closedRecord, optionalText, record, strings, text } from "../domain/input.ts";
 
 type DatabaseExecutor = Pick<Database, "select" | "insert" | "update" | "delete">;
 
+// A deployment carries only its environment, repository baselines and capability targets; model or MCP fields never belong here.
+const DEPLOYMENT_FIELDS = ["environmentKey", "capabilities", "repositoryBranches", "dbhub", ...CAPABILITY_KEYS] as const;
+
 function parseServiceDeployment(
-  deployment: Record<string, unknown>,
+  input: unknown,
   repositoryAliases: Set<string>,
   existing: StoredDeploymentConfig | undefined,
   environmentKinds: ReadonlyMap<string, EnvironmentKind>,
 ) {
-  if (deployment.agent !== undefined) throw new DomainError("deployment_agent_not_allowed", "bad_request");
-  if (Object.hasOwn(deployment, "mysql")) throw new DomainError("mysql_configuration_retired", "bad_request");
+  const deployment = closedRecord(input, DEPLOYMENT_FIELDS, "invalid_service_deployment");
   const selected = strings(deployment.capabilities ?? [], "capabilities");
   if (new Set(selected).size !== selected.length || selected.some((key) => !CAPABILITY_KEYS.includes(key as CapabilityName))) throw new DomainError("invalid_capabilities", "bad_request");
   const environmentKey = text(deployment.environmentKey, "environment_key", 100);
@@ -25,7 +27,6 @@ function parseServiceDeployment(
   const environmentKind = environmentKinds.get(environmentKey);
   const development = isDevelopmentEnvironment(environmentKind);
   const capabilities = CAPABILITY_KEYS.filter((key) => selected.includes(key));
-  if (strings(deployment.mcpServices ?? [], "mcp_services").length) throw new DomainError("mcp_services_are_global", "bad_request");
   if (development && capabilities.length) throw new DomainError("development_capabilities_inherited", "bad_request");
   if (development && existing && Object.keys(existing).some((key) => key !== "archivedDevelopment")) throw new DomainError("development_configuration_layout_invalid", "conflict");
   if (development && Array.isArray(deployment.repositoryBranches) && deployment.repositoryBranches.length) throw new DomainError("development_branches_inherited", "bad_request");

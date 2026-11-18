@@ -35,7 +35,6 @@ export type {
   SourceWorkspaceFileComparison,
 } from "../../../workspace/source-contracts";
 import {
-  mergeAgentCostSource,
   AGENT_RUN_STATES,
   AGENT_CODEMODE_MODES,
   ISSUE_PRIORITIES,
@@ -74,7 +73,6 @@ import type {
 export type { RunEvent } from "../../../agent/events";
 
 export {
-  mergeAgentCostSource,
   AGENT_RUN_STATES,
   AGENT_CODEMODE_MODES,
   ISSUE_PRIORITIES,

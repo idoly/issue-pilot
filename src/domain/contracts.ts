@@ -195,8 +195,6 @@ export type StoredDeploymentConfig = Omit<CapabilityConfiguration, "dms" | "sls"
   sls?: SlsScope & Partial<SlsCredentials>;
   /** Private pre-upgrade development settings; never projected or executed. */
   archivedDevelopment?: unknown;
-  /** Historical deployment bindings removed by migration 0082; MCP availability is now global. */
-  mcpServices?: string[];
 };
 
 /** Credential owner is the assignee, else the reporter; callers still enforce that the owner is active. */

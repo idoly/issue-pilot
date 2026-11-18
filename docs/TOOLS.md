@@ -81,7 +81,7 @@ python3 -m pip install --upgrade --target "$(python3 -m site --user-site)" -r re
 python3 -c 'import openpyxl, et_xmlfile; print(openpyxl.__version__)'
 ```
 
-当前用户包目录为 `/home/idoly/.local/lib/python3.13/site-packages`。Python 会自动读取，不再需要项目 `.venv`。更换 Python 主次版本或运行用户后要重新安装、验证公共库。
+当前用户包目录为 `/home/idoly/.local/lib/python3.13/site-packages`。Python 会自动读取该目录，工单不使用项目 `.venv`。更换 Python 主次版本或运行用户后要重新安装、验证公共库。
 
 没有 pip 时先由管理员准备 `python3-pip` 或经过审核的 pip 安装。Debian 的系统 Python 有安装保护，普通 `pip install --user` 也可能被拒绝；以上明确写入用户包目录，不使用 `sudo pip` 或 `--break-system-packages`。
 

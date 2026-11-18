@@ -2,9 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createApiFixture, createIssue, createService } from "./fixture.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { eq } from "drizzle-orm";
-import { openDatabase } from "../../src/db/client.ts";
-import { serviceDeployments, services } from "../../src/db/schema.ts";
 
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 const input = {
@@ -52,19 +49,13 @@ test("manages MCP configs without returning credentials and reserves all running
   }
 });
 
-test("unowned MCP entries and historical bindings do not leak into service descriptions or block deletion", async () => {
-  const f = await createApiFixture(),
-    database = openDatabase(f.databaseFile);
+test("unowned MCP entries stay out of service descriptions, deployments refuse MCP bindings and deletion is not blocked", async () => {
+  const f = await createApiFixture();
   try {
     await createService(f.app, "Global", ["test"]);
     const added = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: { ...input, enabled: true } });
     assert.equal(added.statusCode, 201, added.body);
     const id = added.json().id;
-    const [service] = await database.db.select().from(services).where(eq(services.key, "global"));
-    await database.db
-      .update(serviceDeployments)
-      .set({ config: { mcpServices: [id, "obsolete-binding"] } })
-      .where(eq(serviceDeployments.serviceId, service!.id));
     const config = (await f.app.inject({ method: "GET", url: "/api/config" })).json();
     const projected = config.services.find((row: { key: string }) => row.key === "global");
     assert.equal("mcpServices" in projected.deployments[0], false);
@@ -82,13 +73,10 @@ test("unowned MCP entries and historical bindings do not leak into service descr
       },
     });
     assert.equal(bind.statusCode, 400, bind.body);
-    assert.equal(bind.json().error, "mcp_services_are_global");
+    assert.equal(bind.json().error, "invalid_service_deployment");
     assert.equal((await f.app.inject({ method: "DELETE", url: `/api/mcp-services/${id}`, headers })).statusCode, 204);
-    const after = await f.app.inject({ method: "GET", url: "/api/config" });
-    assert.equal(after.statusCode, 200, after.body);
-    assert.doesNotMatch(after.body, /obsolete-binding/);
+    assert.equal((await f.app.inject({ method: "GET", url: "/api/config" })).statusCode, 200);
   } finally {
-    database.close();
     await f.cleanup();
   }
 });

@@ -130,7 +130,7 @@ test("changing DBHub targets retains other deployments and rejects the retired M
       Object.assign(retired.deployments[0]!, { mysql: value });
       const response = await f.app.inject({ method: "PATCH", url: `/api/services/${service.key}`, headers, payload: { expectedRevision: 3, ...retired } });
       assert.equal(response.statusCode, 400);
-      assert.equal(response.json().error, "mysql_configuration_retired");
+      assert.equal(response.json().error, "invalid_service_deployment");
       assert.deepEqual(await loadMcpConnections(database.db), after);
     }
     assert.equal((await f.app.inject({ method: "GET", url: `/api/services/${service.key}/mysql-targets`, headers })).statusCode, 404);

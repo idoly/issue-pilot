@@ -227,7 +227,7 @@ test("uses unified issue runtimes while preserving read-only and writable Agent 
     const deployments = await database.db
       .insert(serviceDeployments)
       .values([
-        { serviceId: service!.id, environmentId: prod.id, config: { mcpServices: ["obsolete-binding"] } },
+        { serviceId: service!.id, environmentId: prod.id, config: {} },
         { serviceId: service!.id, environmentId: dev.id, config: {} },
       ])
       .returning();

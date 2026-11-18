@@ -114,7 +114,7 @@ This setting does not provision a browser, site login or general UDP/ICMP capabi
 
 The repository catalog owns URL, name and independent group. Services bind repositories; prod/test deployments own baselines and targets. Dev baselines derive from the same service's prod deployment. Recorded Issue paths/branches remain historical and cannot be guessed from changed configuration.
 
-Service writes require an explicit deployments array; omission is not clearing. Keep drafts on revision conflict. Repository URL cascades advance service revisions; group-only edits do not rebind Issues. Owner: [service-deployments.ts](../../src/configuration/service-deployments.ts).
+Service writes require an explicit deployments array; omission is not clearing. Each deployment input is closed to `environmentKey`, `capabilities`, `repositoryBranches`, `dbhub` and the capability sections; any other field (model overrides, MCP bindings, retired capability keys) is refused with invalid_service_deployment. Keep drafts on revision conflict. Repository URL cascades advance service revisions; group-only edits do not rebind Issues. Owner: [service-deployments.ts](../../src/configuration/service-deployments.ts).
 
 - DMS records instanceAlias/schema intent; the server resolves actual instances/databaseId using the selected credentials, not client-supplied host/ID guesses.
 - SLS records region/project/logstores or multiple targets. A configured * still requires a concrete logstore at call time; there is no custom target name.

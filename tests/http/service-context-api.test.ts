@@ -25,7 +25,6 @@ async function serviceInput(f: Awaited<ReturnType<typeof createApiFixture>>, key
       environmentKey: deployment.environmentKey,
       repositoryBranches: deployment.repositoryBranches.map((row) => ({ repositoryAlias: row.repositoryAlias, baseBranch: row.baseBranch })),
       capabilities: [],
-      mcpServices: [],
     })),
   };
 }

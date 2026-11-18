@@ -473,7 +473,7 @@ test("validates the global model and repository ownership independently", async 
     (staleService.deployments[0] as Record<string, unknown>).agent = testAgent;
     const staleResponse = await fixture.app.inject({ method: "POST", url: "/api/services", payload: staleService });
     assert.equal(staleResponse.statusCode, 400);
-    assert.equal((await json(staleResponse)).error, "deployment_agent_not_allowed");
+    assert.equal((await json(staleResponse)).error, "invalid_service_deployment");
     const config = (await fixture.app.inject({ method: "GET", url: "/api/config" }).then((response) => JSON.parse(response.body))) as {
       services: Array<{ key: string; repositories: Array<{ id: string; alias: string; url: string }> }>;
     };

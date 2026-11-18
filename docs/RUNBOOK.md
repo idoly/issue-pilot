@@ -70,23 +70,9 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 
 需要执行检查点或恢复时，由维护者按[存储参考](ai/STORAGE.md#database-checkpoints)操作；不会因为有备份就自动获得修改或删除权限。
 
-## 退役密钥离线留证
+## 退役密钥留证
 
-迁移 0082 会删除 `user_credentials.model_api_keys`、`application_settings.mysql_stdio`、`application_settings.max_concurrent_issues`，以及部署配置中的 `nacos`、`db`、`redis`、`mq`、`es`、`mcpServices`。删除后只能从数据库检查点恢复。
-
-1. 按[数据库检查点](ai/STORAGE.md#database-checkpoints)停止写入、释放租约并制作、验证检查点。
-2. 从检查点副本导出，不要连接在线数据库：
-
-   ```bash
-   node --experimental-strip-types scripts/export-retired-secrets.ts \
-     --database /absolute/path/to/checkpoint/database.sqlite \
-     --output /absolute/private/path/retired-secrets.json \
-     --checkpoint-copy
-   ```
-
-   输出目录必须是当前用户所有的 0700 目录；文件以 0600 新建且不覆盖已有文件。脚本只输出计数，不打印密钥；退役列已删除时会拒绝导出。
-3. 确认导出文件可读后，再发布并运行迁移 0082。
-4. 导出文件按凭据保管：限制访问，不放进工单目录、日志、普通备份或聊天记录。
+迁移 0082 已删除 `user_credentials.model_api_keys`、`application_settings.mysql_stdio`、`application_settings.max_concurrent_issues`，以及部署配置中的 `nacos`、`db`、`redis`、`mq`、`es`、`mcpServices`。发布前从已验证检查点导出的 `/home/idoly/.local/state/issue-pilot-host/retired-secrets/retired-secrets-2026-11-17.json`（0600）是这些值唯一的恢复来源，按凭据保管：不放进工单目录、日志、普通备份或聊天记录。
 
 ## 恢复与回退
 
