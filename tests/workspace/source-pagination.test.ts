@@ -721,7 +721,7 @@ test("rejects a FIFO blame target without opening or waiting for it", { skip: pr
       finally { await database.close(); }
     `;
     // A separate process makes a regression's blocking FIFO read safe to terminate.
-    const result = await executeLocalCommand(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, path.join(f.root, "issues.db"), f.root, f.issue.id, f.issue.key], {
+    const result = await executeLocalCommand(process.execPath, ["--input-type=module", "-e", script, path.join(f.root, "issues.db"), f.root, f.issue.id, f.issue.key], {
       timeout: 2_000,
     });
     assert.equal(result.killed, false, "blame must reject nonregular files without blocking");

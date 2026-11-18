@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
-const prune = (root: string, ...options: string[]) => execute(process.execPath, ["--experimental-strip-types", "scripts/prune-web-assets.ts", root, ...options]);
+const prune = (root: string, ...options: string[]) => execute(process.execPath, ["scripts/prune-web-assets.ts", root, ...options]);
 
 async function generation(root: string, suffix: string, id: string): Promise<void> {
   const files = [`index-${id}AAAAA.js`, `index-${id}BBBBB.css`, `Lazy-${id}CCCCC.js`, `editor.worker-${id}DDDDD.js`, `Geist-${id}EEEEE.woff2`];

@@ -147,10 +147,7 @@ test("reports a missing workspace in the explicit audit without preventing ordin
 
   const reopened = await openApplicationDatabase(file);
   await reopened.close();
-  assert.throws(
-    () => execFileSync(process.execPath, ["--experimental-strip-types", "scripts/check-issue-state.ts", "--state-root", root], { stdio: "pipe" }),
-    /issue_workspace_missing:ISSUE-20260809-003/,
-  );
+  assert.throws(() => execFileSync(process.execPath, ["scripts/check-issue-state.ts", "--state-root", root], { stdio: "pipe" }), /issue_workspace_missing:ISSUE-20260809-003/);
 });
 
 test("refuses to open a database whose committed rows violate foreign keys", async () => {

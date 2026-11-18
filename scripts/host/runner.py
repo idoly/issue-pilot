@@ -48,7 +48,7 @@ options = parser.parse_args()
 
 root = pathlib.Path(options.root).resolve() if options.root else pathlib.Path(__file__).resolve().parents[2]
 node = options.node
-command = [node, "--experimental-strip-types", "src/http/production.ts"]
+command = [node, "src/http/production.ts"]
 if not (root / "src/http/production.ts").is_file():
     raise SystemExit(f"{root} is not an Issue Pilot checkout; pass --root.")
 if os.getuid() != home.stat().st_uid or os.getuid() == 0:
@@ -81,7 +81,7 @@ def load_config():
     if not os.access(node, os.X_OK):
         raise RuntimeError(f"Node binary is missing or not executable: {node}")
     try:
-        result = subprocess.run([node, "--experimental-strip-types", "--input-type=module", "-e", config_script],
+        result = subprocess.run([node, "--input-type=module", "-e", config_script],
                                 cwd=root, env={"PATH": "/usr/bin:/bin", "HOME": str(home)}, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=60, check=True)
         config = json.loads(result.stdout.strip().splitlines()[-1])

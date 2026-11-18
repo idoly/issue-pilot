@@ -69,7 +69,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
     } finally {
       await database.close();
     }
-    const run = () => exec(process.execPath, ["--experimental-strip-types", "scripts/check-issue-state.ts", "--state-root", state, "--development-git"]);
+    const run = () => exec(process.execPath, ["scripts/check-issue-state.ts", "--state-root", state, "--development-git"]);
     await assert.rejects(run(), (error: Error & { code?: unknown; stderr?: string; stdout?: string }) => {
       assert.equal(error.code, 1);
       assert.match(error.stderr ?? "", /ISSUE-20261023-003 [a-f0-9]{20} sharedWorktreeOnly/);

@@ -63,9 +63,10 @@ root=$(cd "$root" && pwd -P)
 candidate=$(cd "$candidate" && pwd -P)
 [[ $root != "$candidate" && $candidate != "$root/"* && $root != "$candidate/"* ]] ||
   fail "Use a separate checkout outside the live application directory."
-runner="$candidate/scripts/host/runner.py"
+# The live checkout's runner verifies the old argv until the fast-forward; afterwards it owns the new argv.
+runner="$root/scripts/host/runner.py"
 web_check="$candidate/scripts/prune-web-assets.ts"
-[[ -f $runner && -f $web_check ]] || fail "The candidate lacks the release tools."
+[[ -f $runner && -f $candidate/scripts/host/runner.py && -f $web_check ]] || fail "Missing live runner or candidate release tools."
 
 # Verify both checkouts without changing files the running process may still load.
 previous=$(git -C "$root" rev-parse HEAD)
@@ -85,7 +86,7 @@ git -C "$root" diff --quiet "$previous" "$head" -- package.json package-lock.jso
 [[ -d $root/node_modules && -d $candidate/node_modules ]] || fail "The live checkout or candidate lacks dependencies."
 (
   cd "$candidate"
-  "$node_bin" --experimental-strip-types --input-type=module -e '
+  "$node_bin" --input-type=module -e '
     import { pathToFileURL } from "node:url";
     import { verifyRuntimeDependencyPatches } from "./src/http/dependency-patches.ts";
     await verifyRuntimeDependencyPatches(pathToFileURL(process.argv[1] + "/"));
@@ -94,7 +95,7 @@ git -C "$root" diff --quiet "$previous" "$head" -- package.json package-lock.jso
 
 # Config paths are checkout-relative unless explicitly absolute. This path does not move live state or ports.
 config=$("$python_bin" "$runner" --root "$root" --node "$node_bin" config)
-candidate_config=$("$python_bin" "$runner" --root "$candidate" --node "$node_bin" config)
+candidate_config=$("$python_bin" "$candidate/scripts/host/runner.py" --root "$candidate" --node "$node_bin" config)
 mapfile -t config_values < <("$python_bin" - "$root" "$candidate" "$config" "$candidate_config" <<'PYCODE'
 import json, pathlib, sys
 
@@ -105,6 +106,8 @@ for key in ("stateRoot", "databaseFile", "webRoot"):
     projected = live / path.relative_to(candidate) if path.is_relative_to(candidate) else path
     if projected != pathlib.Path(old[key]):
         raise SystemExit(f"Candidate changes {key}; coordinate this change separately.")
+if old["operationLock"] != new["operationLock"]:
+    raise SystemExit("Candidate changes the host operation lock; coordinate this change separately.")
 if old["baseUrl"] != new["baseUrl"] or old["host"] != new["host"]:
     raise SystemExit("Candidate changes the listener; coordinate this change separately.")
 for value in (old["baseUrl"], old["webRoot"], old["stateRoot"], old["databaseFile"], new["webRoot"], old["operationLock"]):
@@ -121,8 +124,8 @@ build=${config_values[4]}
 [[ -d $state_root && ! -L $state_root && -f $database_file && ! -L $database_file ]] ||
   fail "The configured state root or database is missing; refusing to stop the service."
 
-"$node_bin" --experimental-strip-types "$web_check" "$build" --check-current
-"$node_bin" --experimental-strip-types "$web_check" "$web_root" --check-current
+"$node_bin" "$web_check" "$build" --check-current
+"$node_bin" "$web_check" "$web_root" --check-current
 
 # Hold the runner's lock across stop, checkout/Web switch and start.
 exec {release_lock}>>"${config_values[5]}"
@@ -174,7 +177,7 @@ if ((pending_count > 0)); then
   # Prove the candidate migrations and their integrity checks on the copy before touching the service.
   if ! (
     cd "$candidate"
-    env -i HOME="$HOME" PATH=/usr/bin:/bin NODE_ENV=production "$node_bin" --experimental-strip-types --input-type=module -e '
+    env -i HOME="$HOME" PATH=/usr/bin:/bin NODE_ENV=production "$node_bin" --input-type=module -e '
       import { migrateStateDatabase } from "./src/db/migrate.ts";
       await migrateStateDatabase(process.argv[1], process.argv[2]);
     ' "$preflight_state" "$preflight_database"
@@ -272,9 +275,9 @@ echo
 "$python_bin" "$runner" --root "$root" --node "$node_bin" status
 
 # 9. Prune bundles that neither generation references; never pipe output (EPIPE aborts deletion).
-$node_bin --experimental-strip-types "$root/scripts/prune-web-assets.ts" "$web_root" >"$work/prune-dry-run.txt"
+"$node_bin" "$root/scripts/prune-web-assets.ts" "$web_root" >"$work/prune-dry-run.txt"
 sed -n '1p' "$work/prune-dry-run.txt"
-$node_bin --experimental-strip-types "$root/scripts/prune-web-assets.ts" "$web_root" --apply >"$work/prune-applied.txt"
+"$node_bin" "$root/scripts/prune-web-assets.ts" "$web_root" --apply >"$work/prune-applied.txt"
 sed -n '1p' "$work/prune-applied.txt"
 echo "Both Web generations are intact; release complete at revision $head."
 success=1

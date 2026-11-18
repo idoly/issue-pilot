@@ -123,7 +123,7 @@ for (const phase of ["queued", "started"] as const)
   test(`process death after the ${phase} checkpoint preserves conservative retry behavior`, { timeout: 15_000 }, async (t) => {
     const f = await fixture(t);
     const child = fork(fileURLToPath(new URL("../helpers/agent-delivery-process.ts", import.meta.url)), [f.manager.getSessionFile()!, f.issue.serviceId, f.issue.environmentId, phase], {
-      execArgv: ["--experimental-strip-types"],
+      execArgv: [],
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     let diagnostics = "";

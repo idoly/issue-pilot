@@ -85,7 +85,7 @@ tail -n 100 /home/idoly/.local/state/issue-pilot-host/application.log
 怀疑数据库记录和目录不一致时，停止写入后，在已验证的源码目录执行只读检查，将参数改为目标数据根的绝对路径：
 
 ```bash
-node --experimental-strip-types scripts/check-issue-state.ts --state-root /absolute/path/to/state
+node scripts/check-issue-state.ts --state-root /absolute/path/to/state
 ```
 
 检查工单关联的工作区记录、解决状态以及目录归属。排查共享 Git 时可追加 `--shared-git`，校验全部共享快照的 Git 指针、提交与工作树。单独排查开发仓库绑定时，追加 `--development-git`，核对私有仓、工作树双向指针和镜像分支。只有共享分支、没有私有仓或工作树的记录需要另找历史证据。遇到异常先保留现场；审计不修复、不清理，常规重启也不需要执行它。

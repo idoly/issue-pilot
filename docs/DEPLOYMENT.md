@@ -19,7 +19,7 @@ Debian 13 amd64，以 `idoly` 运行。一个 Node API 在 **3000** 提供网页
 | 模型目录和 Pi 资源 | `~/.pi/agent` |
 | SSH 主机信任 | 运行用户的 `~/.ssh/known_hosts` |
 
-`scripts/host/` 中的脚本随仓库维护；`restart.sh` 是当前机器的私有包装，调用已部署的 runner 副本。更新脚本后先核对已部署副本与仓库一致；不要把 `data/` 放进测试夹具或测试容器。
+`scripts/host/` 中的脚本随仓库维护；`restart.sh` 是当前机器的私有包装，调用已部署的 runner 副本。启动参数变化时，必须用旧 runner 核验并停止旧进程，再用新 runner 启动新进程。协调发布成功后、下次使用 `restart.sh` 前，同步该副本并核对 `status`。不要把 `data/` 放进测试夹具或测试容器。
 
 ## 启动、停止与重启
 
@@ -76,7 +76,7 @@ Node 使用运行用户的私有编译缓存加快后续启动，默认位于 `~
 npm ci
 python3 -c 'import openpyxl, et_xmlfile; print(openpyxl.__version__)'
 npm run build
-node --experimental-strip-types src/http/production.ts
+node src/http/production.ts
 ```
 
 `npm ci` 必须执行补丁校验。服务启动时还会核对 Pi SDK 和 zod 的运行时补丁内容，缺失时拒绝启动并提示 `dependency_patch_not_applied`（例如用了 `--ignore-scripts`）；此时重新执行 `npm ci` 或 `node scripts/apply-pi-sdk-patch.mjs`。API 首次启动会升级、初始化数据库；不用先运行 `db:migrate`。没有 `npm start`，Web build 也不会启动服务。
@@ -113,8 +113,8 @@ node --experimental-strip-types src/http/production.ts
 4. 确认新页面可用后清理更早的资源。默认只列出待删文件，核对后再加 `--apply`：
 
 ```bash
-node --experimental-strip-types scripts/prune-web-assets.ts $target
-node --experimental-strip-types scripts/prune-web-assets.ts $target --apply
+node scripts/prune-web-assets.ts $target
+node scripts/prune-web-assets.ts $target --apply
 ```
 
 脚本只删除两份清单都未引用的哈希文件及其 `.br`/`.gz`，不动目录（如 `editor-icons-*`）和稳定命名文件。任一清单缺失、清单引用的文件不存在，或清单与对应 HTML 不匹配时拒绝执行，此时按步骤 1–3 修正，不要手工删除。
@@ -123,7 +123,7 @@ node --experimental-strip-types scripts/prune-web-assets.ts $target --apply
 
 ### 协调发布（后端与 Web）
 
-在独立 worktree 完成安装、构建和验证，再从候选目录运行发布脚本。保留运行目录当前源码，脚本在旧进程排空并退出后才快进合并。此入口适用于可快进且安装输入、状态路径、监听地址不变的发布；涉及这些变更时单独准备并协调切换。
+在独立 worktree 完成安装、构建和验证，再从候选目录运行发布脚本。保留运行目录当前源码，脚本在旧进程排空并退出后才快进合并。此入口适用于可快进且安装输入、状态路径、监听地址不变的发布。预检比较整个 `package.json`，仅改 npm 命令也会被拦下；此时单独核对安装输入并协调切换，不跳过预检。
 
 ```bash
 candidate=/absolute/path/to/release-checkout

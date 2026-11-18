@@ -63,8 +63,11 @@ a = p.parse_args()
 root = a.root
 web = root / "src/web/dist"
 if a.action == "config":
+    lock = ${JSON.stringify(lock)}
+    if os.environ["TEST_RELEASE_MODE"] == "lock-changed" and (root / "release-revision.txt").read_text() == "new":
+        lock += ".new"
     print(json.dumps(dict(baseUrl="http://127.0.0.1:1", host="127.0.0.1", stateRoot=str(root / "data"),
-        databaseFile=str(root / "data/db.sqlite"), webRoot=str(web), operationLock=${JSON.stringify(lock)})))
+        databaseFile=str(root / "data/db.sqlite"), webRoot=str(web), operationLock=lock)))
 elif a.action == "status":
     print("{}")
 else:
@@ -72,7 +75,8 @@ else:
     revision = (root / "release-revision.txt").read_text()
     page = web.joinpath("index.html").read_text()
     with open(${JSON.stringify(trace)}, "a") as events:
-        print(a.action, revision, "new" if "newABCDE" in page else "old", file=events)
+        runner_revision = (pathlib.Path(__file__).resolve().parents[2] / "release-revision.txt").read_text()
+        print(a.action, revision, "new" if "newABCDE" in page else "old", "runner=" + runner_revision, file=events)
     mode = os.environ["TEST_RELEASE_MODE"]
     if a.action == "stop" and (mode == "stop-fails" or (mode == "start-fails" and revision == "new")):
         raise SystemExit(1)
@@ -96,16 +100,17 @@ else:
     await generation(candidate, "new");
     const run = (mode: string) => exec("bash", [release, "--root", live, "--candidate", candidate, "--revision", head], { env: { ...env, TEST_RELEASE_MODE: mode, TMPDIR: sandbox } });
 
+    await assert.rejects(run("lock-changed"), /Candidate changes the host operation lock/);
     await fixtureFile(candidate, "src/web/dist/index.html", '<script src="/assets/index-badABCDE.js"></script>');
     await assert.rejects(run("ok"), /web_manifest_html_mismatch/);
     await assert.rejects(readFile(trace), { code: "ENOENT" });
     await generation(candidate, "new");
     await assert.rejects(run("stop-fails"));
-    assert.equal(await readFile(trace, "utf8"), "stop old old\n");
+    assert.equal(await readFile(trace, "utf8"), "stop old old runner=old\n");
     assert.equal(await readFile(path.join(live, "release-revision.txt"), "utf8"), "old");
 
     await assert.rejects(run("start-fails"), /failed process did not stop/);
-    assert.equal(await readFile(trace, "utf8"), "stop old old\nstop old old\nstart new new\nstop new new\n");
+    assert.equal(await readFile(trace, "utf8"), "stop old old runner=old\nstop old old runner=old\nstart new new runner=new\nstop new new runner=new\n");
     assert.match(await readFile(path.join(live, "src/web/dist/index.html"), "utf8"), /newABCDE/);
     assert.match(await readFile(path.join(live, "src/web/dist/index.previous.html"), "utf8"), /oldABCDE/);
 

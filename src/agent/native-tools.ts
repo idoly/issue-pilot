@@ -88,7 +88,7 @@ export function issueNativeTools(policy: IssueFilesystemPolicy, getEnvironment: 
         issueLocalCommands.run(root, async () => {
           if (!validate.check(input)) throw new Error(`invalid_issue_${tool.name}_input`);
           signal?.throwIfAborted();
-          const prepared = await prepareIssueCommand(policy, [process.execPath, "--experimental-strip-types", path.join(import.meta.dirname, "native-tool-executor.ts"), tool.name, root]);
+          const prepared = await prepareIssueCommand(policy, [process.execPath, path.join(import.meta.dirname, "native-tool-executor.ts"), tool.name, root]);
           let buffer = "",
             result: any,
             failure: string | undefined;

@@ -297,7 +297,7 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
       readRoots: policy.readRoots ?? [],
     });
     const entry = path.join(import.meta.dirname, "network-exec.ts");
-    const invocation = [process.execPath, "--experimental-strip-types", entry, root, config, ...command];
+    const invocation = [process.execPath, entry, root, config, ...command];
     if (policy.networkDomains?.length) SandboxManager.registerCommandNetworkLists(id, { allowedDomains: [...policy.networkDomains] });
     const text = await SandboxManager.wrapWithSandbox(
       invocation.map(shellQuote).join(" "),

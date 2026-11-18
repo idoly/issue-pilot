@@ -25,7 +25,7 @@ Merge real providers, baseUrl, api, model IDs and capabilities into the user's m
 This offline check does not call a model or mutate the business DB; its private temporary runtime is closed:
 
 ```bash
-node --experimental-strip-types --input-type=module <<'NODE'
+node --input-type=module <<'NODE'
 import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { PiAgentModelCatalog } from './src/agent/model-runtime.ts';
 const catalog = new PiAgentModelCatalog();

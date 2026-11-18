@@ -1,5 +1,5 @@
 // Keeps the Web assets of the current and previous release generations and removes older hashed bundles.
-// Usage: node --experimental-strip-types scripts/prune-web-assets.ts [web-root] [--apply | --check-current]
+// Usage: node scripts/prune-web-assets.ts [web-root] [--apply | --check-current]
 // Without --apply this only lists what would be removed.
 import { lstat, readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";

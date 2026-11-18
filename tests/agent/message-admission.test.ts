@@ -61,7 +61,7 @@ test("preserves accepted text and images after a process dies before the round s
   const { root, file, database, issue } = await fixture();
   await database.close();
   const child = fork(fileURLToPath(new URL("../helpers/agent-admission-process.ts", import.meta.url)), [root, issue.id], {
-    execArgv: ["--experimental-strip-types"],
+    execArgv: [],
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
   let diagnostics = "";
