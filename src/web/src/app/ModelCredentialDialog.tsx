@@ -22,6 +22,8 @@ export function ModelCredentialDialog(props: {
   onReload?: () => void;
   onSave: (selection: AgentModelSelection, apiKey: string | undefined) => Promise<void>;
   onClear: () => Promise<void>;
+  /** Confirmation naming the cleared scope; shared and personal groups affect different people. */
+  clearConfirmText: string;
   /** Controls shown above the fields, such as the shared/personal target switch. */
   children?: JSX.Element;
 }) {
@@ -176,7 +178,7 @@ export function ModelCredentialDialog(props: {
             size="small"
             disabled={saving() || Boolean(props.onReload)}
             onClick={() => {
-              void run(props.onClear);
+              if (window.confirm(props.clearConfirmText)) void run(props.onClear);
             }}
           >
             清除凭据

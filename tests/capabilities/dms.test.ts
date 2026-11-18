@@ -948,7 +948,8 @@ test("handles MCP errors, unbounded SQL and results, and abort", async () => {
   });
   await assert.rejects(queryDms({ schema: "orders", script: "SELECT 1" }, configured, undefined, failure.connect), /dms_mcp_tool_failed/);
 
-  const largeValue = "x".repeat(1_100_000);
+  // Above the inline budget that enters model context, yet below the 1 MiB persisted-evidence read budget.
+  const largeValue = "x".repeat(issuePilotConfig.limits.capability.inlineResultBytes);
   const unbounded = fixtureSession({
     async listTools() {
       return [executeScriptTool];
@@ -971,7 +972,7 @@ test("handles MCP errors, unbounded SQL and results, and abort", async () => {
     const store = new IssueWorkFileStore(root, "ISSUE-20261016-005");
     const exported = await queryDms({ schema: "orders", script: "SELECT value FROM large_values", export: { fileName: "large.json" } }, configured, undefined, unbounded.connect, store);
     assert.equal(JSON.parse(exported.content[0]!.text).export.fileName, "large.json");
-    assert.ok((await stat(path.join(store.directory, "large.json"))).size > 1_100_000);
+    assert.ok((await stat(path.join(store.directory, "large.json"))).size > largeValue.length);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

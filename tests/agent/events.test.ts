@@ -360,6 +360,29 @@ test("retains only the current non-durable Agent state for reconnecting clients"
   assert.deepEqual(bus.replayCurrent("issue-1"), []);
 });
 
+test("drops replayed activity when the round leaves running even without a status event", () => {
+  const bus = new AgentEventBus();
+  const event = (id: string, wireEvent: RunEvent["event"]): RunEvent => ({ id, issueId: "issue-1", createdAt: "2026-08-08T00:00:00.000Z", event: wireEvent });
+  bus.publish(event("start", { type: "agent_start" }));
+  bus.publish(event("tool-start", { type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "npm test" } }));
+  // A steer admitted during the round does not change the run state; activity stays replayable.
+  bus.publish(event("still-running", { type: "issue_run_state", state: "running" }));
+  assert.deepEqual(
+    bus.replayCurrent("issue-1").map(({ id }) => id),
+    ["start", "tool-start"],
+  );
+  // Failure or cancellation cleanup may fail to publish issue_status; the round end still clears replay.
+  bus.publish(event("queued", { type: "issue_run_state", state: "queued" }));
+  assert.deepEqual(bus.replayCurrent("issue-1"), []);
+  bus.publish(event("start-2", { type: "agent_start" }));
+  bus.publish(event("idle", { type: "issue_run_state", state: "idle" }));
+  assert.deepEqual(bus.replayCurrent("issue-1"), []);
+  // Late SDK events after the round cannot recreate a replay entry without a new agent_start.
+  bus.publish(event("late", { type: "queue_update", steering: [], followUp: [] }));
+  assert.deepEqual(bus.replayCurrent("issue-1"), []);
+  assert.equal((bus as unknown as { replay: Map<string, unknown> }).replay.size, 0);
+});
+
 test("replays the visible transcript from the active Pi session branch", () => {
   const manager = SessionManager.inMemory("/workspace");
   manager.appendCustomEntry("issue-pilot-user", { message: "Inspect the database", images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=" }] });

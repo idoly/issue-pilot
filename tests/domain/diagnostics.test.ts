@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DrizzleQueryError } from "drizzle-orm";
 import Fastify from "fastify";
+import { DomainError } from "../../src/domain/errors.ts";
+import { OperationError } from "../../src/operation-error.ts";
 
 import { errorChain, errorDiagnostic, hasErrorCode } from "../../src/diagnostics.ts";
 
@@ -52,4 +54,29 @@ test("resource disposal failures retain both errors for classification and datab
   assert.doesNotMatch(logged.output, /fixture-secret|insert into credentials/);
   cleanup.cause = failure;
   assert.equal(errorChain(failure).length, 4, "cyclic diagnostic chains must terminate");
+});
+
+test("logs owned codes and known system codes without trusting arbitrary nested messages", async () => {
+  const errno = Object.assign(new Error("ENOENT: no such file or directory, open '/private/fixture-path'"), { code: "ENOENT" });
+  const sqlite = new DrizzleQueryError("update issues set title = ?", ["fixture-secret"], Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }));
+  const failure = new AggregateError(
+    [
+      new DomainError("agent_failed", "internal", { cause: errno }),
+      new OperationError("cleanup_failed", "unknown", { cause: sqlite }),
+      new Error("detail with /private/fixture-path"),
+      new Error("fixture_secret_value"),
+      Object.assign(new Error("hidden"), { code: "FIXTURE_SECRET_VALUE" }),
+    ],
+    "agent_failure_cleanup_failed",
+  );
+  const logged = await loggedDiagnostic(failure);
+  assert.equal(logged.message, "database_operation_failed:SQLITE_BUSY");
+  const causes = (JSON.parse(logged.output) as { err: { causes: string[] } }).err.causes;
+  assert.deepEqual(new Set(causes), new Set(["agent_failed", "ENOENT", "cleanup_failed", "SQLITE_BUSY"]));
+  assert.doesNotMatch(logged.output, /fixture-secret|fixture_secret_value|FIXTURE_SECRET_VALUE|fixture-path|update issues|database is locked/);
+
+  const plain = await loggedDiagnostic(new Error("agent_run_failed", { cause: errno }));
+  assert.equal(plain.message, "agent_run_failed");
+  assert.deepEqual((JSON.parse(plain.output) as { err: { causes: string[] } }).err.causes, ["ENOENT"]);
+  assert.doesNotMatch(plain.output, /fixture-path/);
 });

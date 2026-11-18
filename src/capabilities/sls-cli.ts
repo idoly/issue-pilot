@@ -10,6 +10,7 @@ import type { CapabilityConfig } from "./registry.ts";
 import type { SlsQuery } from "./sls.ts";
 
 const limits = issuePilotConfig.limits.capability;
+const TOO_LARGE = "sls_result_too_large_narrow_query";
 const providerErrors = new Map<string, string>([
   ["Unauthorized", "sls_access_denied"],
   ["SignatureNotMatch", "sls_signature_mismatch"],
@@ -128,9 +129,9 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
       if (meta.hasSQL && typeof meta.limited === "number" && meta.limited > 0 && page.length >= meta.limited) throw new DomainError("sls_sql_limit_required", "upstream");
       analysis = meta.hasSQL;
       // Separate page envelopes overestimate the merged JSON size. Only rescan the whole result near the limit.
-      recordsBytesUpperBound += Buffer.byteLength(capabilityResultText({ records: page }));
+      recordsBytesUpperBound += Buffer.byteLength(capabilityResultText({ records: page }, TOO_LARGE));
       for (const record of page) records.push(record);
-      if (recordsBytesUpperBound > limits.resultBytes) recordsBytesUpperBound = Buffer.byteLength(capabilityResultText({ records }));
+      if (recordsBytesUpperBound > limits.inlineResultBytes) recordsBytesUpperBound = Buffer.byteLength(capabilityResultText({ records }, TOO_LARGE));
       if (analysis || page.length < limits.sls.pageResults) break;
     }
     const metadata = {
@@ -146,7 +147,7 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
       returnedRows: records.length,
       possiblyIncomplete: false,
     };
-    return capabilityTextResult(capabilityResultText({ query: metadata, records }), { provider: "aliyun-sls-cli", ...metadata });
+    return capabilityTextResult(capabilityResultText({ query: metadata, records }, TOO_LARGE), { provider: "aliyun-sls-cli", ...metadata });
   } catch (error) {
     failures.push(error);
     throw error;

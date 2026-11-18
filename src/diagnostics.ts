@@ -1,4 +1,5 @@
 import { DrizzleQueryError } from "drizzle-orm";
+import { getSystemErrorMap } from "node:util";
 
 import { DomainError, OPERATIONAL_FAILURE_CODES } from "./domain/errors.ts";
 import { OperationError } from "./operation-error.ts";
@@ -33,17 +34,48 @@ export function errorCode(error: unknown): string {
   return "unknown";
 }
 
+const causeCodeLimit = 16;
+const systemErrorCodes = new Set([...getSystemErrorMap().values()].map(([code]) => code));
+
+/** Only application-owned failures and known OS codes are safe; message spelling is not a trust boundary. */
+function causeCodes(error: unknown, outer: string): string[] {
+  const codes = new Set<string>();
+  for (const candidate of errorChain(error)) {
+    const code = codeOf(candidate);
+    if (code && code !== outer && systemErrorCodes.has(code)) codes.add(code);
+    if (candidate instanceof DomainError || candidate instanceof OperationError) {
+      const owned = candidate instanceof DomainError ? candidate.code : candidate.message;
+      if (owned !== outer && owned.length <= 120 && isStableErrorCode(owned)) codes.add(owned);
+    }
+    if (candidate instanceof DrizzleQueryError) {
+      const sqlite = codeOf(candidate.cause);
+      if (sqlite && /^SQLITE_[A-Z_]+$/.test(sqlite)) codes.add(sqlite);
+    }
+    if (codes.size >= causeCodeLimit) break;
+  }
+  return [...codes];
+}
+
+function withCauses(message: string, error: unknown): Error {
+  const diagnostic = new Error(message);
+  const causes = causeCodes(error, message);
+  // pino serializes enumerable error properties; only the filtered codes are attached.
+  if (causes.length) Object.assign(diagnostic, { causes });
+  return diagnostic;
+}
+
 /**
  * Sanitize an error for logging. Drizzle errors embed SQL parameters, including private configuration
- * values, and pino serializes causes and aggregate members, so only the public wrapper is logged.
+ * values, and pino serializes causes and aggregate members, so only the public wrapper is logged, together
+ * with the safe structured codes of its causes.
  */
 export function errorDiagnostic(error: unknown): unknown {
   const queryError = errorChain(error).find((candidate): candidate is DrizzleQueryError => candidate instanceof DrizzleQueryError);
   if (queryError) {
     const code = codeOf(queryError.cause);
-    return new Error(typeof code === "string" && /^SQLITE_[A-Z_]+$/.test(code) ? `database_operation_failed:${code}` : "database_operation_failed");
+    return withCauses(typeof code === "string" && /^SQLITE_[A-Z_]+$/.test(code) ? `database_operation_failed:${code}` : "database_operation_failed", error);
   }
-  if (error instanceof Error && ("cause" in error || error instanceof AggregateError || error instanceof SuppressedError)) return new Error(error.message);
+  if (error instanceof Error && ("cause" in error || error instanceof AggregateError || error instanceof SuppressedError)) return withCauses(error.message, error);
   return error;
 }
 

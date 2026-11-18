@@ -811,7 +811,7 @@ test("plans and applies read-only scope transitions with stale-plan protection",
     const convertibleId = fixture.engine.enqueued.at(-1)!;
     fixture.engine.running.clear();
     const conversionDatabase = openDatabase(fixture.databaseFile);
-    await conversionDatabase.db.insert(issueRepositories).values({ issueId: convertibleId, url: "https://example.test/convertible.git", baseBranch: "main", commitBefore: "b".repeat(40) });
+    await conversionDatabase.db.insert(issueRepositories).values({ issueId: convertibleId, url: "git@example.test:convertible.git", baseBranch: "main", commitBefore: "b".repeat(40) });
     await conversionDatabase.db.update(issues).set({ status: "pending" }).where(eq(issues.id, convertibleId));
     await conversionDatabase.db.update(issueWorkspaces).set({ status: "ready", runtimeReady: true }).where(eq(issueWorkspaces.issueId, convertibleId));
     await conversionDatabase.close();

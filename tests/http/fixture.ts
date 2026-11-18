@@ -168,7 +168,11 @@ export async function json(response: { body: string }): Promise<Record<string, u
   return JSON.parse(response.body) as Record<string, unknown>;
 }
 
-export function servicePayload(name: string, environments: EnvironmentKind[] = ["test"], repositoryUrls = [`https://example.test/${name.toLowerCase().replace(/\s+/g, "-")}.git`]) {
+export function servicePayload(
+  name: string,
+  environments: EnvironmentKind[] = ["test"],
+  repositoryUrls = [environments.includes("dev") ? `git@example.test:${name.toLowerCase().replace(/\s+/g, "-")}.git` : `https://example.test/${name.toLowerCase().replace(/\s+/g, "-")}.git`],
+) {
   const key = name.toLowerCase();
   const repositories = repositoryUrls.map((url, index) => ({ alias: `${key}-${index + 1}`, url }));
   return {

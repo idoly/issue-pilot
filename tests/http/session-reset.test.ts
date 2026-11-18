@@ -5,12 +5,15 @@ import type { ReadStream } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
+import path from "node:path";
 import { mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
+import { cachedReceiptIndexCount, readIssueMessageReceipt } from "../../src/agent/session-reset.ts";
+import { appendFile } from "node:fs/promises";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
@@ -369,6 +372,73 @@ test("binding rollback removes only the new file and preserves the original stat
     const retry = await f.app.inject({ method: "POST", url: `/api/issues/${f.issue.key}/reset-session`, headers, payload: { expectedSessionId: f.manager.getSessionId() } });
     assert.equal(retry.statusCode, 200);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("archived generations are parsed once for receipts until their file identity changes", async () => {
+  const f = await fixture();
+  const open = SessionManager.open;
+  let opened = 0;
+  SessionManager.open = ((...parameters: Parameters<typeof open>) => {
+    opened += 1;
+    return open(...parameters);
+  }) as typeof open;
+  try {
+    const request = { id: "retry-1", subject: issuePilotConfig.bootstrapUser.subject };
+    const entryId = f.manager.appendCustomEntry("issue-pilot-user", {
+      message: "archived input",
+      request,
+      delivery: { version: 1, state: "queued", serviceId: "service", environmentId: "environment" },
+    });
+    const oldFile = f.manager.getSessionFile()!;
+    const reset = await f.app.inject({ method: "POST", url: `/api/issues/${f.issue.key}/reset-session`, headers, payload: { expectedSessionId: f.manager.getSessionId() } });
+    assert.equal(reset.statusCode, 200, reset.body);
+    const cachedBefore = cachedReceiptIndexCount();
+    const stateRoot = path.dirname(path.dirname(f.root));
+    const lookup = (options?: { forAdmission?: boolean }) => readIssueMessageReceipt(f.db.db, stateRoot, f.issue, request, undefined, options);
+
+    opened = 0;
+    assert.equal((await lookup())?.state, "queued");
+    // The bound session plus the archived generation.
+    assert.equal(opened, 2);
+    assert.equal(cachedReceiptIndexCount(), cachedBefore + 1);
+    opened = 0;
+    const repeated = await lookup({ forAdmission: true });
+    assert.deepEqual(repeated, { state: "queued", message: "archived input", images: [] });
+    // Only the mutable bound session is reopened; the archived index is reused.
+    assert.equal(opened, 1);
+    assert.equal(await readIssueMessageReceipt(f.db.db, stateRoot, f.issue, { ...request, subject: "someone-else" }, undefined), undefined);
+
+    // Any identity change (here an external append) invalidates the index and the new state is read.
+    await appendFile(
+      oldFile,
+      JSON.stringify({
+        type: "custom",
+        customType: "issue-pilot-user-delivery",
+        id: "transition-1",
+        parentId: entryId,
+        timestamp: new Date().toISOString(),
+        data: { version: 1, entryId, state: "rejected" },
+      }) + "\n",
+    );
+    opened = 0;
+    assert.equal((await lookup())?.state, "rejected");
+    assert.equal(opened, 2);
+
+    // A cut-off archived tail is indexed by the recoverable reader without Pi and keeps its lookup semantics.
+    await appendFile(oldFile, '{"type":"custom","customType":"issue-pilot-user"');
+    opened = 0;
+    assert.equal((await lookup())?.state, "rejected");
+    assert.equal(opened, 1);
+    opened = 0;
+    assert.equal((await lookup())?.state, "rejected");
+    assert.equal(opened, 1);
+    const missing = { id: "never-admitted", subject: request.subject };
+    await assert.rejects(readIssueMessageReceipt(f.db.db, stateRoot, f.issue, missing, undefined), /agent_session_file_incomplete/);
+    assert.equal(await readIssueMessageReceipt(f.db.db, stateRoot, f.issue, missing, undefined, { forAdmission: true }), undefined);
+  } finally {
+    SessionManager.open = open;
     await f.cleanup();
   }
 });

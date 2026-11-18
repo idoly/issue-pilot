@@ -436,8 +436,8 @@ export async function queryDms(
           { provider: "aliyun-dms-mcp", tool: tool.name, fileName: exported.fileName },
         );
       }
-      // Inline results share the capability result budget; larger result sets must use export.
-      if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.resultBytes) throw dmsFailure("dms_mcp_result_too_large_use_export");
+      // Inline results enter model context; larger result sets must use export.
+      if (Buffer.byteLength(text) > issuePilotConfig.limits.capability.inlineResultBytes) throw dmsFailure("dms_mcp_result_too_large_use_export");
       return capabilityTextResult(text, { provider: "aliyun-dms-mcp", tool: tool.name, instanceAlias: database.instanceAlias, schema: input.schema });
     });
   } catch (error) {

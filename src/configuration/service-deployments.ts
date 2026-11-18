@@ -4,7 +4,7 @@ import { or, eq, inArray, sql } from "drizzle-orm";
 import { resolveConfiguredCapabilitySections } from "./credentials.ts";
 import type { Database } from "../db/client.ts";
 import { environments, issues, issueServiceScopes, serviceDeploymentRepositories, serviceDeployments, serviceRepositories, repositories as repositoryCatalog, services } from "../db/schema.ts";
-import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, isDevelopmentEnvironment, type CapabilityName, type EnvironmentKind, type StoredDeploymentConfig } from "../domain/contracts.ts";
+import { CAPABILITY_KEYS, ENVIRONMENT_KINDS, isDevelopmentEnvironment, isSshRepositoryUrl, type CapabilityName, type EnvironmentKind, type StoredDeploymentConfig } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { optionalText, record, strings, text } from "../domain/input.ts";
 
@@ -48,6 +48,11 @@ function parseServiceDeployment(
   return { environmentKey, environmentKind, repositoryBranches, config };
 }
 
+/** A development deployment promises writable worktrees and therefore personal SSH access for every repository. */
+export function assertDevelopmentRepositoryUrls(urls: Iterable<string>): void {
+  if ([...urls].some((url) => !isSshRepositoryUrl(url))) throw new DomainError("development_repository_ssh_url_required", "bad_request");
+}
+
 function parseServiceConfigurationInput(input: Record<string, unknown>, existing: Map<string, StoredDeploymentConfig>, environmentKinds: ReadonlyMap<string, EnvironmentKind>) {
   const repositories = Array.isArray(input.repositories)
     ? input.repositories
@@ -64,6 +69,7 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
   if (new Set(deployments.map((deployment) => deployment.environmentKey)).size !== deployments.length) throw new DomainError("duplicate_deployment_environment", "bad_request");
   if (deployments.some((deployment) => isDevelopmentEnvironment(deployment.environmentKind)) && !deployments.some((deployment) => deployment.environmentKind === "prod"))
     throw new DomainError("development_production_deployment_required", "bad_request");
+  if (deployments.some((deployment) => isDevelopmentEnvironment(deployment.environmentKind))) assertDevelopmentRepositoryUrls(repositories.map(({ url }) => url));
   return { repositories, deployments };
 }
 

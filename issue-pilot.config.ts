@@ -81,6 +81,8 @@ const limits = deepFreeze({
   },
   capability: {
     resultBytes: 1024 * 1024,
+    // Native service_query rows returned to the model; larger evidence must be narrowed or exported.
+    inlineResultBytes: 128 * 1024,
     dingtalk: { tableFields: 200, descriptionCharacters: 8000, labelCharacters: 512 },
     mcp: { tools: 200 },
     dms: { databases: 20, scriptChars: 64 * 1024, firstHandshakeMs: 12_000, retryDelayMs: 1_000, maxRetryDelayMs: 5_000 },

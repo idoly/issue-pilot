@@ -253,6 +253,11 @@ export function IssueWorkspace(props: {
     setRemovedAttachmentIds([]);
     setEditOpen(false);
   };
+  // Esc, × and Cancel reopen from the Issue, so dismissing a dirty draft needs explicit consent.
+  const dismissEditor = () => {
+    if (editSaving() || (editDirty() && !window.confirm("编辑内容尚未保存，是否放弃这些修改？"))) return;
+    closeEditor();
+  };
   const markEditCommitted = (message: string) => {
     setEditCommitted(message);
     setRemovedAttachmentIds([]);
@@ -928,7 +933,7 @@ export function IssueWorkspace(props: {
                     </div>
                   </Show>
                 </div>
-                <p>已有对话和附件将保留；{plan().session.closeCurrent ? "当前 Agent session 将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
+                <p>已有对话和附件将保留；{plan().session.closeCurrent ? "当前 Agent 会话将关闭并按目标范围重建。" : "当前范围无需变更。"}</p>
               </section>
             )}
           </Show>
@@ -946,10 +951,10 @@ export function IssueWorkspace(props: {
         onOk={() => {
           void saveIssue();
         }}
-        onCancel={closeEditor}
+        onCancel={dismissEditor}
         footer={
           <>
-            <Button disabled={editSaving()} onClick={closeEditor}>
+            <Button disabled={editSaving()} onClick={dismissEditor}>
               {editCommitted() ? "关闭" : "取消"}
             </Button>
             <Show

@@ -80,11 +80,28 @@ export function parseSlsScopeConfiguration(value: unknown): SlsScope {
   return { ...scope, ...(targets ? { targets } : {}) };
 }
 
+const windowText = (seconds: number) => (seconds % 3600 === 0 ? `${seconds / 3600} hours` : `${seconds / 60} minutes`);
 const slsQueryProperties = {
-  from: opt(int({ minimum: 0 })),
-  to: opt(int({ minimum: 1 })),
-  query: opt(str({ maxLength: limits.sls.queryChars, description: "Log filter or SQL analysis. SQL uses its LIMIT/ORDER BY for pagination; incomplete results fail explicitly." })),
-  trace_id: opt(str({ maxLength: limits.sls.traceIdChars })),
+  from: opt(
+    int({
+      minimum: 0,
+      description: `Window start in Unix epoch seconds (not milliseconds); provide with to. When both are omitted the window is the last ${windowText(limits.sls.defaultWindowSeconds)} (last ${windowText(limits.sls.traceWindowSeconds)} with trace_id), so an empty result only covers that window.`,
+    }),
+  ),
+  to: opt(int({ minimum: 1, description: "Window end in Unix epoch seconds (not milliseconds), greater than from; provide with from." })),
+  query: opt(
+    str({
+      maxLength: limits.sls.queryChars,
+      description:
+        "Log filter or SQL analysis. SQL uses its LIMIT/ORDER BY for pagination; incomplete results fail explicitly. Search non-UUID trace or business IDs here. Do not combine with trace_id.",
+    }),
+  ),
+  trace_id: opt(
+    str({
+      maxLength: limits.sls.traceIdChars,
+      description: "UUID-format trace ID (8-4-4-4-12 hex) searched as full text. Mutually exclusive with query; search other trace ID formats through query.",
+    }),
+  ),
 };
 const dmsExportSchema = obj({
   fileName: str({
@@ -94,7 +111,12 @@ const dmsExportSchema = obj({
   }),
 });
 const dmsQueryProperties = {
-  script: str({ minLength: 1, maxLength: limits.dms.scriptChars, description: "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement." }),
+  script: str({
+    minLength: 1,
+    maxLength: limits.dms.scriptChars,
+    description:
+      "One read-only SELECT, SHOW, DESCRIBE, or EXPLAIN statement without comments. Backtick-quote identifiers that match SQL keywords (for example `do`, `load`, `lock`, `release`, `handler`, `set`, `use`); unquoted they are rejected as non-read-only. Add LIMIT or narrower filters for large results.",
+  }),
   logic: opt(bool({ description: "Whether DMS should execute the statement as a logical database query." })),
 };
 export const capabilityInputSchemas = {

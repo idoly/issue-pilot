@@ -4,10 +4,13 @@ import { structuredJsonResult } from "../capabilities/contracts.ts";
 import { DmsOperationError, queryDms, type DmsQueryRound } from "../capabilities/dms.ts";
 import { capabilityToolInputSchema, type CapabilityInputs } from "../capabilities/registry.ts";
 import { readSlsLogs } from "../capabilities/sls.ts";
+import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { objectToolParameters } from "./tool-schema.ts";
 import type { IssueWorkFileStore } from "../workspace/work-files.ts";
 import type { AgentSessionContext } from "./context.ts";
 import type { CapabilityName, DeploymentConfig } from "../domain/contracts.ts";
+
+const inlineResultKiB = issuePilotConfig.limits.capability.inlineResultBytes / 1024;
 
 export interface ServiceToolScope {
   environmentKey: string;
@@ -52,9 +55,10 @@ export function createCapabilityTools(
       parameters: schema,
       outputSchema: unknownSchema(),
       description:
-        "Query evidence from a configured environment and service. Development Issues can read production/test sources; other Issues stay in their own environment. Use workspace list/describe to read service investigation notes before choosing a capability. Credentials and allowed query scopes are injected by the server. SLS requires an exact region, project and logstore; there are no custom target names. Native operations remain read-only. External MCP servers expose separate tools through Pi.",
+        "Query evidence from a configured environment and service. Development Issues can read production/test sources; other Issues stay in their own environment. Use workspace list/describe to read service investigation notes before choosing a capability. Credentials and allowed query scopes are injected by the server. SLS requires an exact region, project and logstore; there are no custom target names. Native operations remain read-only. Configured service MCP servers, when present, expose separate tools through Pi.",
       promptGuidelines: [
         "When codemode is enabled, service_query resolves to structured JSON data. Batch independent non-DMS evidence reads with Promise.allSettled and return only the fields needed for the answer. Await calls that depend on an earlier result or write the same file.",
+        `Inline results are limited to ${inlineResultKiB} KiB of JSON. On sls_result_too_large_narrow_query, narrow from/to, add filters or use SQL analysis with LIMIT. On dms_mcp_result_too_large_use_export, add LIMIT or narrower filters, or use export when the tool offers it.`,
         "Run DMS batches serially with spacing. Adjust batch size and spacing from observed latency and failures; do not assume a fixed request quota. On DMS failure, the error JSON contains error and diagnostics (phase, elapsedMs, phaseElapsedMs, sqlDispatchAttempted, optional retryAfterSeconds). A dispatch attempt does not prove server execution. Honor retryAfterSeconds when present; otherwise use bounded backoff. Never automatically replay SQL with an unknown result.",
       ],
       execute: async (_id, raw, signal): Promise<AgentToolResult<unknown>> => {

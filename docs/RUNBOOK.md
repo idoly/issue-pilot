@@ -203,4 +203,6 @@ scripts/host/health-probe.sh
 */5 * * * * cd /home/idoly/issue-pilot && scripts/host/health-probe.sh >> /home/idoly/.local/state/issue-pilot-host/health-probe.log 2>&1
 ```
 
+已知限制：探针只把结果写入本地日志，没有告警通道；需要有人定期查看该日志，或另行接入外部告警。
+
 `restarts_24h` 独立统计启动尝试，包含发布启动和失败启动，从部署新版 runner 后开始记录，告警时先查应用日志和进程身份。探针日志按需人工截断，不要删除仍用于判断重启次数或故障现场的文件。

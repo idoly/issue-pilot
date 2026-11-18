@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { isSshRepositoryUrl } from "../domain/contracts.ts";
 import type { userCredentials } from "../db/schema.ts";
 
 export interface PersonalGitEnvironment {
@@ -11,7 +12,7 @@ export interface PersonalGitEnvironment {
 
 export async function createPersonalGitEnvironment(credentials: Pick<typeof userCredentials.$inferSelect, "gitPrivateKey"> | undefined, urls: string[]): Promise<PersonalGitEnvironment> {
   const remoteUrls = urls.filter((url) => !url.startsWith("file:") && !path.isAbsolute(url));
-  if (remoteUrls.some((url) => !url.startsWith("ssh://") && !/^[^/]+@[^:]+:/.test(url))) throw new Error("personal_git_ssh_url_required");
+  if (remoteUrls.some((url) => !isSshRepositoryUrl(url))) throw new Error("personal_git_ssh_url_required");
   if (remoteUrls.length && !credentials?.gitPrivateKey) throw new Error("user_git_ssh_credentials_required");
   const directory = await mkdtemp(path.join(tmpdir(), "issue-pilot-git-"));
   try {

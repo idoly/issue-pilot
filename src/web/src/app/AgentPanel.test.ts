@@ -677,7 +677,7 @@ describe("Agent conversation state", () => {
   });
 
   for (const [code, status, warning] of [
-    ["agent_message_outcome_unknown", 409, "会话已切换，无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。"],
+    ["agent_message_outcome_unknown", 409, "无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。"],
     ["issue_already_running", 409, "工单正在被其他操作处理，请稍后重试。"],
     ["resolved_issue_cannot_run_agent", 409, "工单已解决，请先重开后再发送。"],
     ["agent_session_file_incomplete", 500, "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。"],
@@ -1016,7 +1016,7 @@ describe("Agent conversation state", () => {
     source.emit("ready", { agent: { provider: "stale", model: "stale-model", thinkingLevel: "high" }, runState: "idle", issueStatus: "resolved" });
     await settle();
     expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(false);
-    expect(screen.getByText("no-model")).toBeTruthy();
+    expect(screen.getByText("无模型")).toBeTruthy();
     expect(onRefresh).not.toHaveBeenCalled();
     expect(EventSourceMock.instances).toHaveLength(1);
     source.emit(

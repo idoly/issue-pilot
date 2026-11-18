@@ -1,5 +1,5 @@
 import { Button, Select, Skeleton } from "../ui";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, Show } from "solid-js";
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { createLatestTask } from "../data/latest";
@@ -8,6 +8,12 @@ import { fileSize, localDate, localDateTime, statusLabel, typeLabel } from "./mo
 
 type InsightView = "output" | "distribution" | "team" | "resources";
 type StatisticsPeriod = "7d" | "30d" | "90d";
+const insightTabs: Array<{ value: InsightView; label: string }> = [
+  { value: "output", label: "产出" },
+  { value: "distribution", label: "分布" },
+  { value: "team", label: "团队" },
+  { value: "resources", label: "资源" },
+];
 
 export function Statistics(props: { issues: IssueListItem[] }) {
   const [workspaceStats, setWorkspaceStats] = createSignal<WorkspaceStats | null>(null, { ownedWrite: true });
@@ -15,6 +21,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [view, setView] = createSignal<InsightView>("distribution", { ownedWrite: true });
   const [period, setPeriod] = createSignal<StatisticsPeriod>("30d", { ownedWrite: true });
+  const tabId = createUniqueId();
   const latest = createLatestTask();
   const [sampling, setSampling] = createSignal(false, { ownedWrite: true });
   const [sampleError, setSampleError] = createSignal("", { ownedWrite: true });
@@ -171,20 +178,33 @@ export function Statistics(props: { issues: IssueListItem[] }) {
         />
       </header>
       <nav class="insight-tabs" role="tablist" aria-label="统计分类">
-        <button type="button" role="tab" aria-selected={view() === "output" ? "true" : "false"} class={view() === "output" ? "selected" : ""} onClick={() => setView("output")}>
-          产出
-        </button>
-        <button type="button" role="tab" aria-selected={view() === "distribution" ? "true" : "false"} class={view() === "distribution" ? "selected" : ""} onClick={() => setView("distribution")}>
-          分布
-        </button>
-        <button type="button" role="tab" aria-selected={view() === "team" ? "true" : "false"} class={view() === "team" ? "selected" : ""} onClick={() => setView("team")}>
-          团队
-        </button>
-        <button type="button" role="tab" aria-selected={view() === "resources" ? "true" : "false"} class={view() === "resources" ? "selected" : ""} onClick={() => setView("resources")}>
-          资源
-        </button>
+        <For each={insightTabs}>
+          {(tab, index) => (
+            <button
+              type="button"
+              role="tab"
+              id={`${tabId}-${tab.value}`}
+              aria-controls={`${tabId}-${tab.value}-panel`}
+              aria-selected={view() === tab.value ? "true" : "false"}
+              tabindex={view() === tab.value ? 0 : -1}
+              class={view() === tab.value ? "selected" : ""}
+              onClick={() => setView(tab.value)}
+              onKeyDown={(event) => {
+                // Automatic activation with a roving tab stop, as in the WAI-ARIA tabs pattern.
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const count = insightTabs.length;
+                const next = event.key === "Home" ? 0 : event.key === "End" ? count - 1 : (index() + (event.key === "ArrowLeft" ? -1 : 1) + count) % count;
+                setView(insightTabs[next]!.value);
+                (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
+              }}
+            >
+              {tab.label}
+            </button>
+          )}
+        </For>
       </nav>
-      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "output"}>
+      <div class="insight-panel" role="tabpanel" id={`${tabId}-output-panel`} aria-labelledby={`${tabId}-output`} tabindex={0} hidden={view() !== "output"}>
         <section class="metric-strip" aria-label="周期产出指标">
           <div>
             <span>周期新增</span>
@@ -208,7 +228,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           </div>
         </section>
       </div>
-      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "distribution"}>
+      <div class="insight-panel" role="tabpanel" id={`${tabId}-distribution-panel`} aria-labelledby={`${tabId}-distribution`} tabindex={0} hidden={view() !== "distribution"}>
         <div class="distribution-grid" role="region" aria-label="工单分布" tabindex={0}>
           <section class="statistics-section">
             <div class="statistics-title">
@@ -251,7 +271,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           </section>
         </div>
       </div>
-      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "team"}>
+      <div class="insight-panel" role="tabpanel" id={`${tabId}-team-panel`} aria-labelledby={`${tabId}-team`} tabindex={0} hidden={view() !== "team"}>
         <section class="statistics-section compact-panel" aria-labelledby="assignee-summary-title">
           <div class="statistics-title">
             <h2 id="assignee-summary-title">个人处理情况</h2>
@@ -277,7 +297,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           </div>
         </section>
       </div>
-      <div class="insight-panel" role="tabpanel" tabindex={0} hidden={view() !== "resources"}>
+      <div class="insight-panel" role="tabpanel" id={`${tabId}-resources-panel`} aria-labelledby={`${tabId}-resources`} tabindex={0} hidden={view() !== "resources"}>
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
           <div class="statistics-title workspace-storage-title">
             <h2 id="workspace-capacity-title">工作区存储</h2>

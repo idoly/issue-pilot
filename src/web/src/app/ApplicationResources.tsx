@@ -32,6 +32,7 @@ interface ApplicationResources {
 }
 
 const ResourcesContext = createContext<ApplicationResources>();
+const resourceRefreshIntervalMs = 30_000;
 
 function latestLoader<Value>(load: (signal: AbortSignal) => Promise<Value>, apply: (value: Value) => void, reportError: (message: string) => void): () => Promise<Value> {
   const latest = createLatestTask();
@@ -114,7 +115,8 @@ export function ApplicationResourcesProvider(props: ParentProps) {
       if (!request.isCurrent()) return users;
       if (currentUserSubject() && !users.some((user) => user.subject === currentUserSubject())) {
         setCurrentUser(null);
-        setCurrentUserSubject(null, false);
+        // Preserve the selected subject: clearing it would silently authenticate as the default user.
+        setPeople(users);
       }
       const { identityLocked: locked, ...currentUser } = await loadCurrentUser(request.signal);
       if (!request.isCurrent()) return users;
@@ -143,6 +145,21 @@ export function ApplicationResourcesProvider(props: ParentProps) {
 
   void refreshCatalog().catch(() => undefined);
   void refreshPeople().catch(() => undefined);
+  // Services, users and roles change in other tabs and browsers without a push; reload them when the page
+  // is looked at again so selectors and permissions do not stay stale until a manual reload.
+  let lastRefresh = Date.now();
+  const refreshWhenVisible = () => {
+    if (document.visibilityState !== "visible" || Date.now() - lastRefresh < resourceRefreshIntervalMs) return;
+    lastRefresh = Date.now();
+    void refreshCatalog().catch(() => undefined);
+    void refreshPeople().catch(() => undefined);
+  };
+  document.addEventListener("visibilitychange", refreshWhenVisible);
+  window.addEventListener("focus", refreshWhenVisible);
+  onCleanup(() => {
+    document.removeEventListener("visibilitychange", refreshWhenVisible);
+    window.removeEventListener("focus", refreshWhenVisible);
+  });
 
   return (
     <ResourcesContext

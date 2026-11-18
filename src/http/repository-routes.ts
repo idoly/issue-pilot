@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { issuesAffectedByRepositoryChange } from "../configuration/impact.ts";
-import { repositories, serviceRepositories, services } from "../db/schema.ts";
+import { assertDevelopmentRepositoryUrls } from "../configuration/service-deployments.ts";
+import { repositories, serviceRepositories, services, serviceDeployments, environments } from "../db/schema.ts";
 import { ApiError, checkRevision, record, text } from "./input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
@@ -70,6 +71,15 @@ export function registerRepositoryRoutes(context: ApiRouteContext) {
       }
       const bindings = await database.db.select({ serviceId: serviceRepositories.serviceId }).from(serviceRepositories).where(eq(serviceRepositories.url, existing.url));
       const serviceIds = [...new Set(bindings.map((row) => row.serviceId))];
+      if (serviceIds.length) {
+        const development = await database.db
+          .select({ id: serviceDeployments.id })
+          .from(serviceDeployments)
+          .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId))
+          .where(and(inArray(serviceDeployments.serviceId, serviceIds), eq(environments.kind, "dev")))
+          .limit(1);
+        if (development.length) assertDevelopmentRepositoryUrls([input.url]);
+      }
       const affected = await issuesAffectedByRepositoryChange(database.db, existing.url);
       return runIssueExclusive(
         engine,

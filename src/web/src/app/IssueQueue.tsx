@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, Show, untrack } from "solid-js";
 
 import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
 import { canUseIssueWorkMode, createIssue, listIssuePins, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
@@ -43,6 +43,7 @@ export function IssueQueue(props: {
   const { catalog, people, currentUser, catalogError, peopleError, refreshCatalog } = useApplicationResources();
   const { items: issues, error: loadError, refresh: loadIssues } = props.issueList;
   const loading = () => props.issueList.loading() || props.issueList.refreshing();
+  const openHintId = createUniqueId();
   const [pinError, setPinError] = createSignal("", { ownedWrite: true });
   const [pinsLoading, setPinsLoading] = createSignal(false, { ownedWrite: true });
   const [pinnedIssueKeys, setPinnedIssueKeys] = createSignal<string[]>([], { ownedWrite: true });
@@ -343,6 +344,10 @@ export function IssueQueue(props: {
           />
         </div>
       </div>
+      {/* Rows keep the list role so the pin stays a separate control; the description announces activation. */}
+      <span id={openHintId} class="visually-hidden">
+        按 Enter 或空格打开工单
+      </span>
       <div class="queue-list" role="list" ref={list}>
         <Show
           when={!loading() || issues().length > 0}
@@ -385,6 +390,7 @@ export function IssueQueue(props: {
                   <div
                     role="listitem"
                     tabindex={0}
+                    aria-describedby={openHintId}
                     class={`queue-item${issue().id === props.selectedId ? " selected" : ""}${pinned() ? " pinned" : ""}`}
                     aria-current={issue().id === props.selectedId ? "true" : undefined}
                     onClick={() => props.onSelect(issue().id)}

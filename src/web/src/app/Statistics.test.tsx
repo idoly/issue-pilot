@@ -299,3 +299,23 @@ test("retention starts at resolution and old Issue keys do not imply eligibility
   // Resolution is already November 16 in the configured Asia/Shanghai time zone.
   expect(await screen.findByText("保留至 2026/11/23")).toBeTruthy();
 });
+
+test("statistics tabs use a roving tab stop with arrow and Home/End keys", async () => {
+  vi.mocked(loadWorkspaceStats).mockReturnValue(new Promise(() => {}));
+  render(() => <Statistics issues={[issue({ id: "first" })]} />);
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs.map((tab) => tab.getAttribute("tabindex"))).toEqual(["-1", "0", "-1", "-1"]);
+  const selectedPanel = () => document.getElementById(screen.getByRole("tab", { selected: true }).getAttribute("aria-controls")!)!;
+  expect(selectedPanel().hidden).toBe(false);
+  expect(selectedPanel().getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { selected: true }).id);
+  fireEvent.keyDown(screen.getByRole("tab", { name: "分布" }), { key: "ArrowRight" });
+  await waitFor(() => expect(screen.getByRole("tab", { name: "团队", selected: true })).toBe(document.activeElement));
+  expect(screen.getByRole("tab", { name: "团队" }).getAttribute("tabindex")).toBe("0");
+  fireEvent.keyDown(document.activeElement!, { key: "End" });
+  await screen.findByRole("tab", { name: "资源", selected: true });
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+  await screen.findByRole("tab", { name: "产出", selected: true });
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
+  await screen.findByRole("tab", { name: "资源", selected: true });
+  expect(selectedPanel().hidden).toBe(false);
+});

@@ -85,6 +85,19 @@ test("exposes only selected DMS/SLS targets without credentials", () => {
   assert.deepEqual((schemas[0]!.properties.schema as { enum: string[] }).enum, ["orders"]);
   assert.deepEqual((schemas[1]!.properties.logstore as { enum: string[] }).enum, ["application", "gateway"]);
 });
+test("documents SLS time units, default window, trace ID format and DMS keyword quoting for the model", () => {
+  const tool = createCapabilityTools(context, config)[0]!;
+  const schemas = (tool.parameters as unknown as { anyOf: Array<{ properties: Record<string, { description?: string }> }> }).anyOf;
+  const sls = schemas[1]!.properties;
+  assert.match(sls.from!.description!, /Unix epoch seconds \(not milliseconds\)/);
+  assert.match(sls.from!.description!, /last 15 minutes \(last 24 hours with trace_id\)/);
+  assert.match(sls.to!.description!, /Unix epoch seconds/);
+  assert.match(sls.trace_id!.description!, /UUID-format/);
+  assert.match(sls.trace_id!.description!, /Mutually exclusive with query/);
+  assert.match(sls.query!.description!, /non-UUID trace or business IDs/);
+  assert.match(schemas[0]!.properties.script!.description!, /Backtick-quote identifiers that match SQL keywords/);
+  assert.ok(tool.promptGuidelines?.some((line) => line.includes("128 KiB") && line.includes("sls_result_too_large_narrow_query") && line.includes("dms_mcp_result_too_large_use_export")));
+});
 test("multi-target tool parameters keep an object root so strict OpenAI-compatible providers accept them", () => {
   for (const [scopeContext, scopeConfig, union] of [
     [context, config, true],

@@ -1119,7 +1119,11 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(issueDialog).getByRole("button", { name: "移除existing.csv" }));
     await waitFor(() => expect(within(issueDialog).queryByText("existing.csv")).toBeNull());
     expect(within(issueDialog).getByText("1")).toBeTruthy();
+    // Cancelling an edited Issue asks before discarding the changes.
+    const discardEdits = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(within(issueDialog).getByRole("button", { name: "取消" }));
+    expect(discardEdits).toHaveBeenCalledOnce();
+    discardEdits.mockRestore();
     fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
     const reopenedIssueDialog = await waitFor(() => screen.getByRole("dialog", { name: "编辑工单" }));
     expect(within(reopenedIssueDialog).getByText("existing.csv")).toBeTruthy();

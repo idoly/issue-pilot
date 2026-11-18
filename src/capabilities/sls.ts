@@ -49,7 +49,7 @@ export async function readSlsLogs(input: CapabilityInputs["sls"], configured: Ca
     if (active.aborted) throw new Error("sls_query_timeout");
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new Error("sls_cli_not_available");
     if (error instanceof DomainError) throw error;
-    if (error instanceof Error && (error.message === "capability_result_too_large" || error.message === "command_output_too_large")) throw error;
+    if (error instanceof Error && (error.message === "sls_result_too_large_narrow_query" || error.message === "command_output_too_large")) throw error;
     throw new Error("sls_query_failed");
   }
 }

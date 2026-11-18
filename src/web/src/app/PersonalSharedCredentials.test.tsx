@@ -72,6 +72,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+  vi.restoreAllMocks();
 });
 
 const openGroup = async (index: number) => {
@@ -107,10 +108,36 @@ test("clearing the checkbox switches the dialog to the admin's personal credenti
   expect(state.saveDms).not.toHaveBeenCalled();
 });
 
-test("shared SLS can be cleared with its own revision", async () => {
+test("shared SLS can be cleared with its own revision after confirming the shared scope", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   const dialog = await openGroup(3);
   fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
+  expect(confirm).toHaveBeenCalledWith("清除共享 SLS？所有未配置个人 SLS 的人员都将无法使用它。");
+  await settle();
+  expect(state.saveSls).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
   await waitFor(() => expect(state.saveSls).toHaveBeenCalledWith({ expectedRevision: 7, mode: "clear" }));
+});
+
+test("clearing a personal group names the personal scope", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const dialog = await openGroup(2);
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /共享凭证/ }));
+  await waitFor(() => expect(within(dialog).getByLabelText("DMS 地址")).toHaveProperty("value", "https://personal.example.test/sse"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
+  expect(confirm).toHaveBeenCalledWith("清除个人 DMS？清除后将使用共享凭证。");
+  await waitFor(() => expect(state.savePersonal).toHaveBeenCalledWith({ expectedRevision: 2, production: { dms: { mode: "clear" } } }));
+  expect(state.saveDms).not.toHaveBeenCalled();
+});
+
+test("clearing the shared API key confirms before saving", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const dialog = await openGroup(0);
+  fireEvent.click(within(dialog).getByRole("button", { name: "清除凭据" }));
+  expect(confirm).toHaveBeenCalledWith("清除共享 API Key？所有未配置个人 API Key 的人员都将无法使用它。");
+  await settle();
+  expect(state.saveAgent).not.toHaveBeenCalled();
 });
 
 test("the shared API key reuses the model dialog and keeps the global runtime settings", async () => {
@@ -218,6 +245,7 @@ for (const group of ["dms", "sls"] as const)
             finish = () => resolve({ configured: false, revision: 8 });
           }),
       );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const dialog = await openGroup(group === "dms" ? 2 : 3);
     fireEvent.click(within(dialog).getByRole("button", { name: "清除凭证" }));
     await waitFor(() => expect(finish).toBeTypeOf("function"));

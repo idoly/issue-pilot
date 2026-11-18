@@ -3,9 +3,10 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 
 const limits = issuePilotConfig.limits.capability;
 
-export function capabilityResultText(value: unknown): string {
+/** Native evidence returned inline enters model context, so it uses the smaller inline budget and an actionable code. */
+export function capabilityResultText(value: unknown, tooLargeCode: string): string {
   const text = JSON.stringify(value, null, 2);
-  if (Buffer.byteLength(text) > limits.resultBytes) throw new Error("capability_result_too_large");
+  if (Buffer.byteLength(text) > limits.inlineResultBytes) throw new Error(tooLargeCode);
   return text;
 }
 

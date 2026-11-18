@@ -92,6 +92,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+  vi.restoreAllMocks();
 });
 
 test("inactive personnel are hidden until requested and enablement carries the row revision", async () => {
@@ -103,6 +104,21 @@ test("inactive personnel are hidden until requested and enablement carries the r
   fireEvent.click(screen.getByRole("button", { name: "启用" }));
   await waitFor(() => expect(state.updateUser).toHaveBeenCalledWith("inactive", { active: true, expectedRevision: 0 }));
   await waitFor(() => expect(state.refreshPeople).toHaveBeenCalled());
+});
+
+test("deactivation asks for confirmation while activation does not", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(() => <UserManagement />);
+  await screen.findByText("Alice");
+  const row = screen.getByText("Alice").closest("tr")!;
+  fireEvent.click(within(row).getByRole("button", { name: "停用" }));
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(confirm.mock.calls[0]![0]).toContain("停用“Alice”");
+  await settle();
+  expect(state.updateUser).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  fireEvent.click(within(row).getByRole("button", { name: "停用" }));
+  await waitFor(() => expect(state.updateUser).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ active: false })));
 });
 
 test("new personnel use a stable email account and failures retain the draft", async () => {
@@ -258,7 +274,9 @@ test("clearing removes the whole personal model group", async () => {
   await screen.findByText("API Key");
   fireEvent.click(screen.getAllByRole("button", { name: "更新凭证" })[0]!);
   const dialog = await screen.findByRole("dialog");
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   fireEvent.click(within(dialog).getByRole("button", { name: "清除凭据" }));
+  expect(confirm).toHaveBeenCalledWith("清除个人 API Key？清除后将使用共享凭证。");
   await waitFor(() => expect(state.saveCredentials).toHaveBeenCalledWith({ expectedRevision: 3, model: { mode: "clear" } }));
 });
 

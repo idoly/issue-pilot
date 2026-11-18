@@ -45,11 +45,12 @@
 
 ## 服务与查询目标
 
+- 仓库目录支持 HTTPS 和 SSH。服务包含开发环境部署时，关联仓库必须全部使用 SSH；保存服务或修改目录地址时会检查。仅分析的服务可保留 HTTPS，但开发者作为工单凭证所有者时仍只能使用本人 SSH 身份，HTTPS 会被明确拒绝。
 - 服务关联仓库；正式／测试部署配置各自的基线和查询目标。
 - 开发基线从**同服务的正式部署**推导，不另设一套开发基线。
 - DMS 配置实例别名和数据库；实际连接信息由所选凭证解析。
 - SLS 配置地域、项目和日志库；调用仍需指定具体日志库。
-- DBHub 在部署中填写目标，应用按需生成连接，不再保存第二份 MCP 配置；外部 MCP 按部署归属管理。MySQL 使用配置的外部 MCP，不是原生 MySQL 查询器。
+- DBHub 在部署中填写目标，应用按需生成 stdio 连接，不再保存第二份 MCP 配置。目前服务 MCP 工具只来自这类生成连接；手工添加的 HTTPS／SSE／stdio 连接都是全局连接，只供钉钉导入，不会成为智能体工具。MySQL 使用配置的外部 MCP，不是原生 MySQL 查询器。
 - 开发工单查询正式／测试证据时，需要明确选环境。
 
 保存凭证不代表目标已配置，保存目标也不代表凭证或权限有效。配置更新被运行工单阻止时，先等待或中断任务，不绕过冲突检查。
@@ -104,6 +105,22 @@ NODE
 “端点”提供工单 MCP 客户端配置，地址为 `/mcp`。服务 MCP 只在工单允许的部署和服务范围内提供给智能体。
 
 钉钉导入只使用选定的**全局 MCP 连接**（未绑定部署）；绑定到服务部署的连接无论名称如何都是该服务的智能体工具，不能用于导入。个人偏好只保存来源和字段映射，不保存网关密钥；全局连接不作为智能体工具。
+
+全局连接没有页面编辑入口，由管理员调用接口维护（字段和返回值见[接口契约](ai/HTTP.md#global-mcp-connections)）。示例中的地址、身份和密钥均为占位符，真实密钥不要写进脚本或命令历史：
+
+```bash
+BASE=http://127.0.0.1:3000
+ADMIN='X-Issue-Pilot-Subject: <管理员 subject>'
+# 查看现有连接（不含密钥）
+curl -s "$BASE/api/mcp-services" -H "$ADMIN"
+# 新建名为 dingtalk 的 HTTPS 连接；Authorization 从文件读取，避免出现在命令行
+curl -s -X POST "$BASE/api/mcp-services" -H "$ADMIN" -H 'Content-Type: application/json' \
+  --data @dingtalk-mcp.json   # {"name":"dingtalk","transport":"streamable_http","url":"https://<网关地址>/mcp","enabled":true,"credentialUpdate":{"mode":"replace","values":{"authorization":"Bearer <令牌>"}}}
+# 测试连接：成功返回工具列表；失败只返回稳定错误码；stdio 错误详情写入运维日志，仅遮盖本系统配置的连接凭证
+curl -s -X POST "$BASE/api/mcp-services/<id>/test" -H "$ADMIN"
+```
+
+修改用 `PATCH /api/mcp-services/<id>`（只改名称或开关时可用 `"credentialUpdate":{"mode":"preserve"}` 保留原密钥），删除用 `DELETE`。有工单运行时写入会被拒绝，等待或中断后重试。钉钉偏好中的连接名称需与这里的名称一致（默认 `dingtalk`）。
 
 新建工单时，钉钉记录中的非空「提出人备注」会追加到工单描述。重复导入直接返回已有工单，不更新描述。
 

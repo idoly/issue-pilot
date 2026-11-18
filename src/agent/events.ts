@@ -94,7 +94,9 @@ export class AgentEventBus {
 
   private updateReplay(envelope: RunEvent): void {
     const event = envelope.event;
-    if (event.type === "issue_status" || event.type === "session_reset") {
+    // Leaving "running" ends the executing round on every path, including failure or cancellation cleanup that
+    // could not publish issue_status. Issue deletion requires an idle Issue, so it leaves no replay behind either.
+    if (event.type === "issue_status" || event.type === "session_reset" || (event.type === "issue_run_state" && event.state !== "running")) {
       this.replay.delete(envelope.issueId);
       return;
     }

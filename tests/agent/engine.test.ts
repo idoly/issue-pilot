@@ -10,6 +10,7 @@ import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 import { applicationParameterBounds } from "../../src/configuration/parameters.ts";
 import type { AgentReservation } from "../../src/agent/contracts.ts";
 import { AgentEngine } from "../../src/agent/engine.ts";
+import { DomainError } from "../../src/domain/errors.ts";
 import { repositoryPreparationMode } from "../../src/workspace/project.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
 
@@ -332,7 +333,8 @@ test("persists streaming admissions before serialized dispatch, including uncert
     releaseFirst = resolve;
   });
   const database = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress" }] }) }) }) };
-  const engine = new AgentEngine(database as never, unusedStateRoot);
+  const reported: Array<{ error: unknown; context: unknown }> = [];
+  const engine = new AgentEngine(database as never, unusedStateRoot, undefined, (error, context) => reported.push({ error, context }));
   const internal = engine as unknown as { sessions: Map<string, unknown> };
   let call = 0;
   internal.sessions.set("issue-1", {
@@ -365,9 +367,20 @@ test("persists streaming admissions before serialized dispatch, including uncert
   assert.equal(records.length, 1);
   releaseFirst();
   await first;
-  await assert.rejects(second, /steer_failed/);
+  // The admission already reads started and Pi input handlers may have acted: unknown, never "unsent".
+  await assert.rejects(second, (error: unknown) => {
+    assert.ok(error instanceof DomainError);
+    assert.equal(error.code, "agent_message_outcome_unknown");
+    assert.equal(error.statusCode, 409);
+    assert.match(String((error.cause as Error).message), /steer_failed/);
+    return true;
+  });
   assert.equal(steers[1]?.includes("second"), true);
   assert.deepEqual(records, ["first", "second"]);
+  assert.deepEqual(
+    reported.map(({ error, context }) => [(error as Error).message, context]),
+    [["steer_failed", { issueId: "issue-1", issueKey: fixtureIssueKey }]],
+  );
   assert.equal(engine.isRunning("issue-1"), false);
 });
 
@@ -413,6 +426,43 @@ test("does not steer a new message past an earlier message still queued for the 
   assert.deepEqual(steers, []);
   assert.deepEqual(records, ["second"]);
   assert.equal(scheduled.length, 1);
+});
+
+test("read-only streaming sessions persist follow-ups for a freshly prepared round without calling Pi steer", async () => {
+  const database = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: fixtureIssueKey, status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
+  };
+  const engine = new AgentEngine(database as never, unusedStateRoot);
+  const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void; run(issueId: string, message: string): Promise<void> };
+  const manager = await createPrivateSessionManager(issueRoot(unusedStateRoot, fixtureIssueKey), issueRoot(unusedStateRoot, fixtureIssueKey));
+  const scheduled: Array<() => Promise<void>> = [];
+  const dispatched: string[] = [];
+  internal.schedule = (_id, operation) => {
+    scheduled.push(operation);
+  };
+  internal.run = async (_id, message) => {
+    dispatched.push(message);
+  };
+  internal.sessions.set("issue-1", {
+    streaming: true,
+    retireAfterRound: true,
+    session: {
+      sessionManager: manager,
+      async steer() {
+        assert.fail("Read-only follow-up entered transient Pi queue");
+      },
+    },
+    async stop() {},
+  });
+  await engine.send("issue-1", "follow-up", undefined, [], undefined, { id: "read-only-follow-up", subject: "user" });
+  const admission = manager.getEntries().find((entry) => entry.type === "custom" && entry.customType === "issue-pilot-user");
+  assert.ok(admission && admission.type === "custom");
+  assert.equal((admission.data as { delivery: { state: string } }).delivery.state, "queued");
+  assert.equal(scheduled.length, 1);
+  // The preceding round retires its session; dispatch must prepare a new one using the durable input.
+  internal.sessions.delete("issue-1");
+  await scheduled[0]!();
+  assert.deepEqual(dispatched, ["follow-up"]);
 });
 
 test("queues slash commands sent while streaming for the next round instead of steering them", async () => {
@@ -962,8 +1012,10 @@ test("reports background execution failures even when cleanup and failure persis
   };
   const database = { transaction: async (operation: (value: typeof transaction) => Promise<void>) => operation(transaction) };
   const failure = new Error("provider failed at /private/fixture-path");
-  const engine = new AgentEngine(database as never, unusedStateRoot, undefined, (error) => {
+  const contexts: unknown[] = [];
+  const engine = new AgentEngine(database as never, unusedStateRoot, undefined, (error, context) => {
     reported.push(error);
+    contexts.push(context);
     throw new Error("logger_failed");
   });
   const internal = engine as unknown as { schedule(issueId: string, operation: () => Promise<void>): void };
@@ -977,6 +1029,7 @@ test("reports background execution failures even when cleanup and failure persis
     });
     await waitFor(() => !engine.isRunning("issue-1"));
     assert.deepEqual(reported, [failure]);
+    assert.deepEqual(contexts, [{ issueId: "issue-1" }]);
     assert.equal(updates.find((update) => update.status === "failed")?.lastError, "agent_run_failed");
     assert.equal(nextRound, true);
   } finally {

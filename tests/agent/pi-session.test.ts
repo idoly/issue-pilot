@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import type { Model } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { AgentSession, type ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { sessionToolAllowlist, type AgentSessionContext } from "../../src/agent/context.ts";
@@ -320,6 +320,47 @@ test("starts an SDK session with only context-selected tools and explicit resour
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  }
+});
+
+test("records a changed model and thinking level when resuming a session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-pi-resume-"));
+  const workspaceRoot = join(root, "workspace");
+  const sessionDirectory = join(root, "sessions");
+  await Promise.all([mkdir(workspaceRoot), mkdir(sessionDirectory)]);
+  const manager = await createPrivateSessionManager(workspaceRoot, sessionDirectory);
+  manager.appendModelChange("old-provider", "old-model");
+  manager.appendThinkingLevelChange("high");
+  manager.appendMessage({ role: "user", content: [{ type: "text", text: "Earlier question." }], timestamp: Date.now() });
+  manager.appendMessage({ ...fauxAssistantMessage("Earlier answer."), provider: "old-provider", model: "old-model" });
+  const runtime = new PiSessionRuntime(sharedModelRuntime(modelRuntime(true, []), []));
+  const start = () =>
+    runtime.start({
+      manager,
+      context: context({ writable: false }),
+      deploymentConfig: {},
+      modelApiKey: "fixture-key",
+      workspaceRoot,
+      agentDirectory: root,
+      systemPrompt: "",
+      onEvent: () => undefined,
+    });
+  try {
+    await (await start()).stop();
+    const selection = () => manager.getBranch().filter((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
+    assert.deepEqual(
+      selection()
+        .slice(2)
+        .map((entry) => (entry.type === "model_change" ? `${entry.provider}/${entry.modelId}` : entry.type === "thinking_level_change" ? entry.thinkingLevel : "")),
+      ["test-provider/test-model", "medium"],
+    );
+    const restored = manager.buildSessionContext();
+    assert.deepEqual([restored.model, restored.thinkingLevel], [{ provider: "test-provider", modelId: "test-model" }, "medium"]);
+    // An unchanged selection is not recorded again on the next resume.
+    await (await start()).stop();
+    assert.equal(selection().length, 4);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

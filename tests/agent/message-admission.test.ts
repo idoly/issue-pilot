@@ -689,7 +689,12 @@ for (const outcome of ["accepted", "late", "uncertain"] as const)
     } as unknown as ManagedPiSession);
     try {
       const sent = engine.send(issue.id, "original steer", undefined, [], undefined, request);
-      if (outcome === "uncertain") await assert.rejects(sent, /remote_delivery_uncertain/);
+      if (outcome === "uncertain")
+        await assert.rejects(sent, (error: unknown) => {
+          assert.match((error as Error).message, /^agent_message_outcome_unknown$/);
+          assert.match(String(((error as Error).cause as Error).message), /remote_delivery_uncertain/);
+          return true;
+        });
       else await sent;
       await internal.waitForIdle();
       await engine.send(issue.id, "original steer", undefined, [], undefined, request);

@@ -1,6 +1,8 @@
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { errorMessage } from "../data/client";
 
+const megabytes = (bytes: number) => `${Math.floor(bytes / 1024 / 1024)} MB`;
+
 export type ErrorTexts = Readonly<Record<string, string>>;
 
 /**
@@ -23,7 +25,13 @@ const messages: ErrorTexts = {
   invalid_repository_url: "请填写有效的 HTTPS 或 SSH 仓库地址。",
   invalid_repository_group: "请填写 1 至 64 个字符的分组名称，不能包含控制字符。",
   repository_is_used_by_services: "仓库仍被服务使用，请先解除关联。",
+  service_is_used_by_issues: "已有工单属于该服务，不能删除。工单记录需要保留该服务。",
+  deployment_is_used_by_issues: "已有工单属于要移除的环境部署，不能移除。请保留该环境部署后再保存。",
   service_has_running_issues: "相关环境有运行中的工单，请稍后重试。",
+  mcp_has_running_issues: "MCP 连接变更会影响所有工单，当前有工单正在运行，请稍后重试。",
+  mcp_configuration_save_failed: "MCP 连接保存失败，请稍后重试；如持续失败请联系管理员查看服务日志。",
+  capability_has_running_issues: "有使用该能力的工单正在处理，请等待处理结束或先中止 Agent 后重试。",
+  mcp_name_conflict: "MCP 连接名称已存在，请换一个名称。",
   global_configuration_has_running_issues: "有工单正在运行，请稍后重试。",
   resource_in_use: "配置仍被使用，不能删除。",
   last_active_admin: "至少保留一位在用的开发管理人员。",
@@ -48,6 +56,14 @@ const messages: ErrorTexts = {
   personal_sls_credentials_incomplete: "个人 SLS 凭据不完整，请重新设置完整凭据后重试。",
   issue_developer_owner_required: "开发工单的处理人（未分配时为报告人）必须是在用的开发人员。",
   issue_credential_owner_inactive: "工单处理人（未分配时为报告人）已停用，请更换处理人后重试。",
+  invalid_git_private_key: "SSH 私钥格式无效，请粘贴完整私钥，以 -----BEGIN … PRIVATE KEY----- 开头。",
+  user_credentials_save_failed: "凭证保存失败，请重新加载确认当前状态后重试；如持续出现请联系管理员。",
+  user_git_ssh_credentials_required: "工单处理人（未分配时为报告人）尚未配置个人 SSH Key，请在“我的凭证”中设置后重试。",
+  development_repository_ssh_url_required: "含开发环境部署的服务必须使用 SSH 仓库地址（如 git@host:group/repo.git）。",
+  personal_git_ssh_url_required: "开发处理只能通过 SSH 访问仓库，请联系管理员将仓库地址改为 SSH 格式（如 git@host:group/repo.git）。",
+  dms_scope_resolve_failed: "无法连接 DMS 解析实例或数据库，请检查 DMS 地址和网络后重试；如持续出现请联系管理员。",
+  sls_result_too_large_narrow_query: `SLS 查询结果超过 ${Math.floor(sharedConfig.limits.capability.inlineResultBytes / 1024)} KiB 上限，请缩短时间范围、增加过滤条件或在 SQL 分析中使用 LIMIT。`,
+  dms_mcp_result_too_large_use_export: `DMS 查询结果超过 ${Math.floor(sharedConfig.limits.capability.inlineResultBytes / 1024)} KiB 上限，请加 LIMIT 或更严格的过滤条件，或改用导出。`,
   dingtalk_mcp_not_configured: "尚未启用钉钉 MCP 连接，请联系管理员在全局 MCP 连接中配置。",
 
   // Issue lifecycle and editing
@@ -80,7 +96,7 @@ const messages: ErrorTexts = {
   agent_run_failed: "处理未完成：发生了未识别的错误。已有对话和文件已保留，请核对结果后重试处理。",
   agent_message_too_long: `消息超过 ${sharedConfig.limits.agentMessageChars.toLocaleString()} 字符上限，请分段发送。`,
   invalid_agent_message: "消息内容无效，请输入文字后重新发送。",
-  agent_message_outcome_unknown: "会话已切换，无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。",
+  agent_message_outcome_unknown: "无法确认这条消息是否已执行。请先查看对话和结果，再决定是否重发。",
   agent_session_file_incomplete: "会话文件不完整，消息未接收。请保留草稿并联系管理员检查会话文件。",
   agent_session_file_missing: "会话文件缺失，消息未接收。请保留草稿并联系管理员检查会话绑定。",
   issue_root_missing: "工单目录缺失，消息未接收。请保留草稿并联系管理员恢复原目录。",
@@ -89,8 +105,8 @@ const messages: ErrorTexts = {
   agent_event_connection_failed: "事件连接中断，正在自动重连",
   agent_event_protocol_error: "收到无法识别的 Agent 事件",
   agent_message_failed: "消息发送失败，请重试",
-  invalid_agent_image: "只能粘贴 PNG、JPEG、GIF 或 WebP 图片",
-  agent_image_limit_exceeded: "图片数量或大小超过 multipart 限制",
+  invalid_agent_image: `只能粘贴 PNG、JPEG、GIF 或 WebP 图片，最多 ${sharedConfig.limits.agentImage.files} 张`,
+  agent_image_limit_exceeded: `图片最多 ${sharedConfig.limits.agentImage.files} 张，单张不超过 ${megabytes(sharedConfig.limits.agentImage.fileBytes)}，合计不超过 ${megabytes(sharedConfig.limits.agentImage.requestBytes)}`,
   issue_refresh_failed: "工单状态刷新失败，等待下次连接重试",
 };
 

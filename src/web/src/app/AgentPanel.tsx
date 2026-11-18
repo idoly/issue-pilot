@@ -123,7 +123,7 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
             </a>
           )}
         </Show>
-        <For each={images()}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="Tool output" />}</For>
+        <For each={images()}>{(image) => <img class="agent-inline-image" src={`data:${image.mimeType};base64,${image.data}`} alt="工具输出图片" />}</For>
         <Show when={!text() && !diff().length && !calls().length && !images().length}>
           <div class="agent-tool-timing">{props.entry.status === "running" ? "等待工具结果…" : "无文本输出"}</div>
         </Show>
@@ -134,7 +134,7 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
 
 function SessionSummaryEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "summary" }> }) {
   const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
-  const label = () => (props.entry.summaryType === "compaction" ? "compaction" : "branch");
+  const label = () => (props.entry.summaryType === "compaction" ? "压缩" : "分支");
   const description = () => (props.entry.summaryType === "compaction" ? `已压缩 ${(props.entry.tokensBefore ?? 0).toLocaleString()} tokens` : "分支摘要");
   return (
     <section class="agent-summary">
@@ -196,7 +196,9 @@ function AssistantBlock(props: { issue: IssueDetail; block: Extract<Conversation
       }
     >
       <div class={{ "agent-thinking": props.block.type === "thinking" }}>
-        <div class="agent-streaming-block">{props.block.value}</div>
+        <div class="agent-streaming-block" aria-busy="true">
+          {props.block.value}
+        </div>
       </div>
     </Show>
   );
@@ -729,8 +731,11 @@ export function AgentPanel(props: {
       const limits = sharedConfig.limits.agentImage;
       const current = images();
       const accepted = pastedImages.filter((file) => ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type));
+      if (accepted.length !== pastedImages.length) {
+        setError("invalid_agent_image");
+        return;
+      }
       if (
-        accepted.length !== pastedImages.length ||
         current.length + accepted.length > limits.files ||
         accepted.some((file) => file.size > limits.fileBytes) ||
         [...current.map(({ file }) => file), ...accepted].reduce((total, file) => total + file.size, 0) > limits.requestBytes
@@ -963,7 +968,7 @@ export function AgentPanel(props: {
               </For>
             </div>
             <span class="agent-meta-model">
-              <b title={`模型：${agent().model || "no-model"}`}>{agent().model || "no-model"}</b>
+              <b title={`模型：${agent().model || "无模型"}`}>{agent().model || "无模型"}</b>
               <Show when={agent().thinkingLevel}>
                 <span class="agent-meta-thinking" title="思考级别">
                   · {agent().thinkingLevel}

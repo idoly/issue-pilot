@@ -375,6 +375,22 @@ function sessionTools(
   return tools;
 }
 
+/**
+ * Pi records the model and thinking level only when it creates a session. A resumed session would keep
+ * describing its previous selection after a configuration change, so record the one this round uses.
+ */
+function recordResumedSelection(manager: SessionManager, model: NonNullable<AgentSession["model"]>, thinkingLevel: AgentSessionContext["model"]["thinkingLevel"]): void {
+  let recordedModel: { provider: string; modelId: string } | undefined;
+  let recordedThinking: string | undefined;
+  for (const entry of manager.getBranch()) {
+    if (entry.type === "model_change") recordedModel = { provider: entry.provider, modelId: entry.modelId };
+    else if (entry.type === "message" && entry.message.role === "assistant") recordedModel = { provider: entry.message.provider, modelId: entry.message.model };
+    else if (entry.type === "thinking_level_change") recordedThinking = entry.thinkingLevel;
+  }
+  if (recordedModel?.provider !== model.provider || recordedModel.modelId !== model.id) manager.appendModelChange(model.provider, model.id);
+  if (recordedThinking !== thinkingLevel) manager.appendThinkingLevelChange(thinkingLevel);
+}
+
 function assertSessionState(session: AgentSession, context: AgentSessionContext, expectedSessionId: string, expectedTools: string[]) {
   const model = session.model;
   if (session.sessionId !== expectedSessionId) throw new Error("pi_session_id_mismatch");
@@ -552,6 +568,7 @@ export class PiSessionRuntime {
         resourceLoader,
       });
       activeSession = session;
+      recordResumedSelection(options.manager, model, context.model.thinkingLevel);
       session.setActiveToolsByName(expectedTools);
       assertSessionState(session, context, options.manager.getSessionId(), expectedTools);
       await session.bindExtensions({});

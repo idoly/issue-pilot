@@ -107,6 +107,15 @@ it("shows a failed or running execution ahead of the business status", async () 
   expect(await badge("resolved task")).toBe("已解决");
 });
 
+it("describes queue rows as openable with Enter or Space", async () => {
+  const onSelect = vi.fn<(id: string) => void>();
+  render(() => <Queue selectedId="" userSubject="alice" onSelect={onSelect} />);
+  const row = (await screen.findByText("alice task")).closest<HTMLElement>("[role=listitem]")!;
+  expect(document.getElementById(row.getAttribute("aria-describedby")!)?.textContent).toBe("按 Enter 或空格打开工单");
+  fireEvent.keyDown(row, { key: " " });
+  expect(onSelect).toHaveBeenCalledWith("alice");
+});
+
 it("changes selection for an explicit identity change and for a removed Issue", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   let items = rows();

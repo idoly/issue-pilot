@@ -233,6 +233,11 @@ export function PersonalCredentials() {
     const label = groups.find((row) => row.key === group)?.label ?? "";
     return shared() ? `共享 ${label}` : `${group && configured(group) ? "更新" : "设置"} ${label}`;
   };
+  const clearConfirmText = (group: Group | null) => {
+    const label = groups.find((row) => row.key === group)?.label ?? "";
+    if (shared()) return `清除共享 ${label}？所有未配置个人 ${label} 的人员都将无法使用它。`;
+    return group === "git" ? "清除个人 SSH Key？清除后无法以你的身份执行开发 Git 操作。" : `清除个人 ${label}？清除后将使用共享凭证。`;
+  };
   return (
     <Show when={currentUser()}>
       <section class="user-management-card personal-credentials" aria-label="我的凭证">
@@ -293,6 +298,7 @@ export function PersonalCredentials() {
           onReload={conflict() ? reloadCredentials : undefined}
           onSave={(selection, apiKey) => saveModel(selection, apiKey)}
           onClear={() => saveModel(null, undefined)}
+          clearConfirmText={clearConfirmText("model")}
         >
           {targetSwitch("model")}
         </ModelCredentialDialog>
@@ -360,7 +366,7 @@ export function PersonalCredentials() {
                 size="small"
                 disabled={saving()}
                 onClick={() => {
-                  void save(true);
+                  if (window.confirm(clearConfirmText(selected()))) void save(true);
                 }}
               >
                 清除凭证

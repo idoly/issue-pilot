@@ -273,6 +273,11 @@ const REPOSITORY_ACCESS_BY_ENVIRONMENT = Object.fromEntries(
   }),
 ) as Record<EnvironmentKind, "read" | "write">;
 
+/** Remote Git URLs that can use the developer's personal SSH identity. URL syntax is validated at admission. */
+export function isSshRepositoryUrl(url: string): boolean {
+  return url.startsWith("ssh://") || /^[^/]+@[^:]+:/.test(url);
+}
+
 /** Issues in this environment kind use isolated writable worktrees; the others read shared snapshots. */
 export function canModifyIssueCode(environmentKind: EnvironmentKind): boolean {
   return REPOSITORY_ACCESS_BY_ENVIRONMENT[environmentKind] === "write";

@@ -64,6 +64,38 @@ describe("application configuration resources", () => {
     expect(resources.agentDrafts.get("issue").text).toBe("");
   });
 
+  it("reloads services and people when the page is shown again, at most once per interval", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const client = await import("../data/client");
+      let resources!: ReturnType<typeof useApplicationResources>;
+      function Probe() {
+        resources = useApplicationResources();
+        return null;
+      }
+      render(() => (
+        <ApplicationResourcesProvider>
+          <Probe />
+        </ApplicationResourcesProvider>
+      ));
+      await waitFor(() => expect(resources.currentUser()?.role).toBe("developer"));
+      expect(client.loadCatalog).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(new Event("focus"));
+      expect(client.loadCatalog).toHaveBeenCalledTimes(1);
+      // Another administrator changed this user's role and added a service meanwhile.
+      vi.mocked(client.loadCatalog).mockResolvedValueOnce({ environments: [], services: [{ key: "billing", name: "Billing" }] } as unknown as Awaited<ReturnType<typeof client.loadCatalog>>);
+      vi.mocked(client.loadUsers).mockResolvedValueOnce([{ subject: "user", name: "User", email: "user@example.test", role: "product" }]);
+      vi.mocked(client.loadCurrentUser).mockResolvedValueOnce({ subject: "user", name: "User", email: "user@example.test", role: "product", identityLocked: false });
+      vi.setSystemTime(Date.now() + 31_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(resources.currentUser()?.role).toBe("product"));
+      expect(resources.catalog().services.map((service) => service.key)).toEqual(["billing"]);
+      expect(client.loadCatalog).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("warns before leaving the page while an Agent draft is unsent", async () => {
     let resources!: ReturnType<typeof useApplicationResources>;
     function Probe() {
@@ -128,16 +160,18 @@ describe("application configuration resources", () => {
     }
   });
 
-  it("clears the previous user while resolving an inactive selection's replacement", async () => {
+  it("keeps a deactivated selection pinned until the user explicitly chooses another identity", async () => {
     const client = await import("../data/client");
     const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" };
     const bob: Person = { subject: "bob", name: "Bob", email: "bob@example.test", role: "developer" };
-    const replacement = deferred<CurrentUser>();
     setCurrentUserSubject("alice");
     vi.mocked(client.loadUsers).mockResolvedValueOnce([alice]).mockResolvedValueOnce([bob]);
     vi.mocked(client.loadCurrentUser)
       .mockResolvedValueOnce({ ...alice, identityLocked: false })
-      .mockImplementationOnce(() => replacement.promise);
+      .mockImplementationOnce(async () => {
+        expect(currentUserSubject()).toBe("alice");
+        throw new Error("invalid_current_subject");
+      });
     let resources!: ReturnType<typeof useApplicationResources>;
     function Probe() {
       resources = useApplicationResources();
@@ -148,21 +182,17 @@ describe("application configuration resources", () => {
         <Probe />
       </ApplicationResourcesProvider>
     ));
-    try {
-      await waitFor(() => expect(resources.currentUser()?.subject).toBe("alice"));
-      localStorage.setItem("issue-pilot.current-user", "bob");
-      const refresh = resources.refreshPeople();
-      await waitFor(() => expect(client.loadCurrentUser).toHaveBeenCalledTimes(2));
-      expect(resources.currentUser()).toBeNull();
-      expect(currentUserSubject()).toBeNull();
-      expect(localStorage.getItem("issue-pilot.current-user")).toBe("bob");
-      replacement.resolve({ ...bob, identityLocked: false });
-      await refresh;
-      expect(resources.currentUser()?.subject).toBe("bob");
-      expect(currentUserSubject()).toBe("bob");
-    } finally {
-      replacement.resolve({ ...bob, identityLocked: false });
-    }
+    await waitFor(() => expect(resources.currentUser()?.subject).toBe("alice"));
+    localStorage.setItem("issue-pilot.current-user", "bob");
+    await expect(resources.refreshPeople()).rejects.toThrow("invalid_current_subject");
+    expect(resources.currentUser()).toBeNull();
+    expect(currentUserSubject()).toBe("alice");
+    expect(localStorage.getItem("issue-pilot.current-user")).toBe("bob");
+    expect(resources.people()).toEqual([bob]);
+    expect(resources.peopleError()).not.toBe("");
+    resources.selectCurrentUser("bob");
+    await waitFor(() => expect(resources.currentUser()?.subject).toBe("bob"));
+    expect(currentUserSubject()).toBe("bob");
   });
 
   it("does not let an unmounted identity load replace another page's selection", async () => {

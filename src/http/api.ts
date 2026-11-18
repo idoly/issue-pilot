@@ -185,7 +185,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         database.db,
         stateRoot,
         (event) => events.publish(event),
-        (error) => app.log.error(errorDiagnostic(error)),
+        // Background failures have no request; name the Issue so operators can find its state.
+        (error, context) => (context ? app.log.error({ ...context, err: errorDiagnostic(error) }, "agent_background_failure") : app.log.error(errorDiagnostic(error))),
         undefined,
         parameters.maxConcurrentIssues,
       );

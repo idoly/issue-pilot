@@ -1,5 +1,6 @@
 import { agentMessageReceipt, type AgentMessageRequest } from "./message-delivery.ts";
-import { unlink } from "node:fs/promises";
+import { stat, unlink, type FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -145,39 +146,124 @@ export async function readIssueSessionHistory(database: Database, stateRoot: str
   return readSession(entry.file, issueRoot(stateRoot, issue.key));
 }
 
+type ReceiptEntry = { type: string; id?: unknown; customType?: unknown; data?: unknown };
+
+/** agentMessageReceipt reads only admission and delivery-transition entries; retain nothing else. */
+function receiptEntries(entries: Iterable<{ type: string; id?: unknown; customType?: unknown; data?: unknown }>): ReceiptEntry[] {
+  const retained: ReceiptEntry[] = [];
+  for (const entry of entries)
+    if (entry.type === "custom" && (entry.customType === "issue-pilot-user" || entry.customType === "issue-pilot-user-delivery"))
+      retained.push({ type: "custom", id: entry.id, customType: entry.customType, data: entry.data });
+  return retained;
+}
+
 /** Only a cut-off final append is recoverable here. Never open this file through Pi or rewrite it. */
-async function readArchivedReceipt(file: string, sessionId: string, request: AgentMessageRequest) {
-  const { descriptor, metadata } = await ownSessionFile(() => openRegularSessionFile(file));
-  try {
-    const tail = Buffer.alloc(1);
-    const { bytesRead } = await descriptor.read(tail, 0, 1, metadata.size - 1);
-    const unterminated = bytesRead === 1 && tail[0] !== 0x0a;
-    const entries: Array<{ type: string; id?: unknown; customType?: unknown; data?: unknown }> = [];
-    let header = false;
-    let invalid = false;
-    for await (const raw of descriptor.readLines({ encoding: "utf8", autoClose: false, start: 0 })) {
-      if (invalid) throw new Error("agent_session_file_incomplete");
-      if (!raw.trim()) continue;
-      let record: unknown;
-      try {
-        record = JSON.parse(header ? raw : raw.replace(/^\uFEFF/, ""));
-      } catch {
-        if (!unterminated || !header) throw new Error("agent_session_file_incomplete");
-        invalid = true;
-        continue;
-      }
-      if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("agent_session_file_incomplete");
-      const entry = record as { type?: unknown; id?: unknown; customType?: unknown; data?: unknown };
-      if (!header) {
-        if (entry.type !== "session" || entry.id !== sessionId) throw new Error("agent_session_file_incomplete");
-        header = true;
-      } else if (entry.type === "custom") entries.push({ ...entry, type: "custom" });
+async function readArchivedReceiptEntries(descriptor: FileHandle, size: number, sessionId: string): Promise<ReceiptEntry[]> {
+  const tail = Buffer.alloc(1);
+  const { bytesRead } = await descriptor.read(tail, 0, 1, size - 1);
+  const unterminated = bytesRead === 1 && tail[0] !== 0x0a;
+  const entries: Array<{ type: string; id?: unknown; customType?: unknown; data?: unknown }> = [];
+  let header = false;
+  let invalid = false;
+  for await (const raw of descriptor.readLines({ encoding: "utf8", autoClose: false, start: 0 })) {
+    if (invalid) throw new Error("agent_session_file_incomplete");
+    if (!raw.trim()) continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(header ? raw : raw.replace(/^\uFEFF/, ""));
+    } catch {
+      if (!unterminated || !header) throw new Error("agent_session_file_incomplete");
+      invalid = true;
+      continue;
     }
-    if (!header) throw new Error("agent_session_file_incomplete");
-    return agentMessageReceipt(entries, request);
+    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("agent_session_file_incomplete");
+    const entry = record as { type?: unknown; id?: unknown; customType?: unknown; data?: unknown };
+    if (!header) {
+      if (entry.type !== "session" || entry.id !== sessionId) throw new Error("agent_session_file_incomplete");
+      header = true;
+    } else if (entry.type === "custom") entries.push({ ...entry, type: "custom" });
+  }
+  if (!header) throw new Error("agent_session_file_incomplete");
+  return receiptEntries(entries);
+}
+
+type FileIdentity = Pick<Stats, "dev" | "ino" | "size" | "mtimeMs">;
+interface CachedReceiptIndex extends FileIdentity {
+  sessionId: string;
+  recoverable: boolean;
+  entries: ReceiptEntry[];
+  bytes: number;
+}
+
+const receiptCacheFiles = 128;
+const receiptCacheBytes = 16 * 1024 * 1024;
+let receiptCacheTotal = 0;
+/**
+ * Archived (reset) generations are never appended to, yet prod/test sessions retire every round, so each
+ * admission with a request ID would otherwise reparse every archived transcript. Keep only their admission and
+ * transition entries, keyed by path and file identity; any change in identity reparses. LRU by insertion order.
+ */
+const receiptCache = new Map<string, CachedReceiptIndex>();
+
+function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+
+function forgetReceiptIndex(file: string): void {
+  const cached = receiptCache.get(file);
+  if (!cached) return;
+  receiptCache.delete(file);
+  receiptCacheTotal -= cached.bytes;
+}
+
+function rememberReceiptIndex(file: string, value: CachedReceiptIndex): void {
+  forgetReceiptIndex(file);
+  if (value.bytes > receiptCacheBytes) return;
+  receiptCache.set(file, value);
+  receiptCacheTotal += value.bytes;
+  for (const [oldest, cached] of receiptCache) {
+    if (receiptCache.size <= receiptCacheFiles && receiptCacheTotal <= receiptCacheBytes) break;
+    receiptCache.delete(oldest);
+    receiptCacheTotal -= cached.bytes;
+  }
+}
+
+/** Test seam: the number of archived generations whose receipt index is retained. */
+export function cachedReceiptIndexCount(): number {
+  return receiptCache.size;
+}
+
+/** Receipt entries of an archived generation, parsed once per file identity with the same validation as before. */
+async function archivedReceiptEntries(file: string, root: string, sessionId: string, recoverable: boolean): Promise<ReceiptEntry[]> {
+  const { descriptor, metadata } = await ownSessionFile(() => openRegularSessionFile(file));
+  const before = identityOf(metadata);
+  try {
+    const cached = receiptCache.get(file);
+    if (cached && cached.sessionId === sessionId && cached.recoverable === recoverable && sameIdentity(cached, metadata)) {
+      receiptCache.delete(file);
+      receiptCache.set(file, cached);
+      return cached.entries;
+    }
+    forgetReceiptIndex(file);
+    if (recoverable) {
+      const entries = await readArchivedReceiptEntries(descriptor, metadata.size, sessionId);
+      rememberReceiptIndex(file, { ...before, sessionId, recoverable, entries, bytes: Buffer.byteLength(JSON.stringify(entries)) });
+      return entries;
+    }
   } finally {
     await descriptor.close();
   }
+  const manager = await readSession(file, root);
+  const entries = receiptEntries(manager.getEntries());
+  // Pi may migrate an old format while opening it; cache only when the file kept the identity it was read with.
+  const after = await ownSessionFile(() => stat(file));
+  if (manager.getSessionId() === sessionId && sameIdentity(before, after))
+    rememberReceiptIndex(file, { ...identityOf(after), sessionId, recoverable, entries, bytes: Buffer.byteLength(JSON.stringify(entries)) });
+  return entries;
+}
+
+function identityOf(metadata: FileIdentity): FileIdentity {
+  return { dev: metadata.dev, ino: metadata.ino, size: metadata.size, mtimeMs: metadata.mtimeMs };
 }
 
 /** Search every validated reset generation. A partial last append cannot erase a complete admission record. */
@@ -202,7 +288,10 @@ export async function readIssueMessageReceipt(
   for (const entry of await issueSessionHistory(database, stateRoot, issue)) {
     if (current?.getSessionId() === entry.sessionId) continue;
     const recoverable = !entry.current && entry.incomplete;
-    const receipt = recoverable ? await readArchivedReceipt(entry.file, entry.sessionId, request) : agentMessageReceipt((await readSession(entry.file, root)).getEntries(), request);
+    // The bound (current) file still receives appends; only archived generations use the index cache.
+    const receipt = entry.current
+      ? agentMessageReceipt((await readSession(entry.file, root)).getEntries(), request)
+      : agentMessageReceipt(await archivedReceiptEntries(entry.file, root, entry.sessionId, recoverable), request);
     if (receipt) return receipt;
     incomplete ||= recoverable;
   }

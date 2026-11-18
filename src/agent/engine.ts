@@ -53,6 +53,12 @@ import { AgentBusyError, type AgentController, type AgentReservation } from "./c
 import { createAgentSessionContext } from "./context.ts";
 import { agentSystemPrompt, continuationPrompt, initialPrompt, promptWithRuntimeTime } from "./prompts.ts";
 
+/** Operator log context for background Agent failures; never sent to clients. */
+export interface AgentErrorContext {
+  issueId: string;
+  issueKey?: string;
+}
+
 export class AgentEngine implements AgentController {
   private readonly issueQueue = new KeyedSerialQueue();
   private readonly steerQueue = new KeyedSerialQueue();
@@ -69,7 +75,9 @@ export class AgentEngine implements AgentController {
   private readonly stateRoot: string;
   private readonly database: Database;
   private readonly publish: ((event: RunEvent) => void) | undefined;
-  private readonly onError: (error: unknown) => void;
+  private readonly onError: (error: unknown, context?: AgentErrorContext) => void;
+  /** Issue keys of Issues with Agent activity, so background failure logs name the Issue; cleared when activity ends. */
+  private readonly issueKeys = new Map<string, string>();
   private readonly sessions = new Map<string, ManagedPiSession>();
   private readonly checkoutLeases = new Map<string, SharedCheckoutLease>();
   private readonly personalGit = new Map<string, PersonalGitEnvironment>();
@@ -86,7 +94,7 @@ export class AgentEngine implements AgentController {
     database: Database,
     stateRoot: string,
     publish?: (event: RunEvent) => void,
-    onError: (error: unknown) => void = () => undefined,
+    onError: (error: unknown, context?: AgentErrorContext) => void = () => undefined,
     createKeyedRuntime?: KeyedModelRuntimeFactory,
     maxConcurrentIssues: number = applicationParameters().maxConcurrentIssues,
   ) {
@@ -169,6 +177,7 @@ export class AgentEngine implements AgentController {
           .where(eq(issues.id, issueId))
           .limit(1);
         if (!issue) throw new Error("issue_not_found");
+        this.issueKeys.set(issueId, issue.key);
         await authorize?.();
         if (request) {
           const receipt = await this.findMessageReceipt({ id: issueId, key: issue.key }, request, true);
@@ -209,8 +218,16 @@ export class AgentEngine implements AgentController {
           this.assertNotReserved(issueId);
           await assertIssueRoot(this.stateRoot, issue.key);
           // Earlier messages still queued for a later round keep their order; never steer past them.
-          // Pi refuses extension commands in steer before queueing them; run any "/" input as the next round instead.
-          if (userMessage.startsWith("/") || !this.isReusableSession(issueId, managed) || !managed.streaming || pendingAgentMessages(managed.session.sessionManager).length) {
+          // Retiring read-only sessions cannot prove which Pi steers were consumed before their final poll.
+          // Persist follow-up rounds instead; this keeps their leases bounded without dropping admitted input.
+          // Pi also refuses extension commands in steer, so run any "/" input as the next round.
+          if (
+            managed.retireAfterRound ||
+            userMessage.startsWith("/") ||
+            !this.isReusableSession(issueId, managed) ||
+            !managed.streaming ||
+            pendingAgentMessages(managed.session.sessionManager).length
+          ) {
             await scheduleMessage();
             return;
           }
@@ -230,7 +247,14 @@ export class AgentEngine implements AgentController {
             throw error;
           }
           if (!this.isCurrentSession(issueId, managed)) throw new DomainError("agent_message_outcome_unknown", "conflict");
-          await managed.session.steer(steered, images);
+          try {
+            await managed.session.steer(steered, images);
+          } catch (error) {
+            // The admission is already marked started and Pi input handlers may have acted before failing, so the
+            // outcome is unknown rather than unsent: report it as such and never re-queue or resend it.
+            this.reportError(error, issueId);
+            throw new DomainError("agent_message_outcome_unknown", "conflict", { cause: error });
+          }
           // Pi may have accepted work before the old session was disposed; do not replay it.
           if (!this.isCurrentSession(issueId, managed)) throw new DomainError("agent_message_outcome_unknown", "conflict");
           // The round can finish while Pi is still admitting the steer, leaving it undelivered in Pi's queue.
@@ -371,7 +395,10 @@ export class AgentEngine implements AgentController {
     if (!active) throw new Error("agent_activity_not_started");
     const remaining = active - 1;
     if (remaining > 0) this.runCounts.set(issueId, remaining);
-    else this.runCounts.delete(issueId);
+    else {
+      this.runCounts.delete(issueId);
+      this.issueKeys.delete(issueId);
+    }
     this.publishRunState(issueId, previous);
     this.notifyIdle();
   }
@@ -451,7 +478,7 @@ export class AgentEngine implements AgentController {
       } catch (error) {
         if (controller.signal.aborted) {
           // Cancellation is not a successful conclusion or a failed workspace; preserve a reusable dev session.
-          if (error !== controller.signal.reason) this.reportError(error);
+          if (error !== controller.signal.reason) this.reportError(error, issueId);
           try {
             const managed = this.sessions.get(issueId);
             if (managed) {
@@ -470,7 +497,7 @@ export class AgentEngine implements AgentController {
             this.publishStatus(issueId, "cancelled");
           } catch (stateError) {
             this.cancellationErrors.get(issueId)?.push(stateError);
-            this.reportError(stateError);
+            this.reportError(stateError, issueId);
           }
           return;
         }
@@ -505,7 +532,7 @@ export class AgentEngine implements AgentController {
         } catch (reportingError) {
           cleanupFailures.push(reportingError);
         }
-        this.reportError(cleanupFailures.length ? new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed") : error);
+        this.reportError(cleanupFailures.length ? new AggregateError([error, ...cleanupFailures], "agent_failure_cleanup_failed") : error, issueId);
       } finally {
         // Keep execution and failure cleanup in the same per-Issue serialized round.
         this.executingIssues.delete(issueId);
@@ -516,12 +543,13 @@ export class AgentEngine implements AgentController {
         release();
       }
     });
-    void round.catch((error: unknown) => this.reportError(error));
+    void round.catch((error: unknown) => this.reportError(error, issueId));
   }
 
   private async run(issueId: string, latestMessage?: string, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
     const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
+    this.issueKeys.set(issueId, issue.key);
     if (issue.status === "resolved") throw new DomainError("resolved_issue_cannot_run_agent", "conflict");
     let currentMessage = latestMessage?.trim() || undefined;
     if (messageEntryId || latestMessage === undefined) {
@@ -664,7 +692,7 @@ export class AgentEngine implements AgentController {
         gitIdentity: commitIdentity,
         modelApiKey: model.apiKey,
         workFiles: new IssueWorkFileStore(this.stateRoot, issue.key),
-        systemPrompt: agentSystemPrompt(context),
+        systemPrompt: agentSystemPrompt(context, { environmentKind, mcpTools: mcpConfigurations.length > 0 }),
         onEvent: (event) => this.publishPiEvent(issue.id, event),
       });
       managed.retireAfterRound = sharedRepositories;
@@ -708,9 +736,13 @@ export class AgentEngine implements AgentController {
     return personGitIdentity(person);
   }
 
-  private reportError(error: unknown): void {
+  private reportError(error: unknown, issueId?: string): void {
     try {
-      this.onError(error);
+      if (issueId === undefined) this.onError(error);
+      else {
+        const issueKey = this.issueKeys.get(issueId);
+        this.onError(error, { issueId, ...(issueKey ? { issueKey } : {}) });
+      }
     } catch {
       // Logging failures cannot create an unhandled background rejection.
     }
@@ -720,7 +752,7 @@ export class AgentEngine implements AgentController {
     try {
       this.publish?.(event);
     } catch (error) {
-      this.reportError(error);
+      this.reportError(error, event.issueId);
     }
   }
 
@@ -824,6 +856,7 @@ export class AgentEngine implements AgentController {
     if (messageEntryId) {
       const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
       if (!issue) throw new Error("issue_not_found");
+      this.issueKeys.set(issueId, issue.key);
       const selected = await this.sessionQueue.run(issueId, async () => {
         this.assertCurrentSession(issueId, managed);
         return selectAgentMessage(managed.session.sessionManager, issue, messageEntryId);

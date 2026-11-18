@@ -115,6 +115,8 @@ export function UserManagement() {
   };
   const toggle = async (user: ManagedUser) => {
     if (saving() || !canEdit(user)) return;
+    // Only deactivation removes access, so activation proceeds without a prompt.
+    if (user.active && !window.confirm(`停用“${user.name}”？停用后不能再被选为处理人或抄送人，其负责的工单也无法运行 Agent。`)) return;
     const owner = generation;
     setSaving(true);
     setError("");

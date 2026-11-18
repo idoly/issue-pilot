@@ -1,3 +1,4 @@
+import { StringDecoder } from "node:string_decoder";
 import { addAbortListener } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -49,12 +50,84 @@ export function createMcpFetch(configuration: McpConfiguration, signal: AbortSig
   };
 }
 
+/** Mask only credentials supplied by this system; business tokens and arbitrary error text are not guessed. */
+export function redactMcpConnectionCredentials(text: string, configuration: McpConfiguration): string {
+  const secrets = new Set<string>();
+  const credential = (value: string) => {
+    if (value) secrets.add(value);
+  };
+  credential(configuration.authorization);
+  if (configuration.authorization) credential(configuration.authorization.replace(/^\S+\s+/, ""));
+  const credentialName = /key|secret|password|passwd|authorization|token|credential/i;
+  const connectionUrl = (value: string) => {
+    try {
+      const url = new URL(value);
+      if (url.password) {
+        credential(url.password);
+        credential(decodeURIComponent(url.password));
+      }
+      for (const [name, selected] of url.searchParams) if (credentialName.test(name)) credential(selected);
+    } catch {
+      // Most environment values and command arguments are not connection URLs.
+    }
+  };
+  for (const [name, value] of Object.entries(configuration.stdio?.env ?? {})) {
+    if (credentialName.test(name)) credential(value);
+    connectionUrl(value);
+  }
+  const args = configuration.stdio?.args ?? [];
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index]!;
+    const option = argument.match(/^--?([^=]+)(?:=(.*))?$/);
+    if (option && credentialName.test(option[1]!)) credential(option[2] ?? args[index + 1] ?? "");
+    connectionUrl(option?.[2] ?? argument);
+  }
+  for (const value of [...secrets].sort((left, right) => right.length - left.length)) text = text.replaceAll(value, "[credential]");
+  return text;
+}
+
+const stderrDiagnosticBytes = 16 * 1024;
+
+/**
+ * The host runner captures application stderr. Retain a bounded diagnostic and mask known connection
+ * credentials before logging it. If the stream exceeds the budget, omit its text as a whole: retaining
+ * a raw tail could cut a credential in half and make exact-value masking ineffective.
+ */
+function watchStdioStderr(transport: StdioClientTransport, configuration: McpConfiguration): void {
+  const decoder = new StringDecoder("utf8");
+  let text = "";
+  let bytes = 0;
+  transport.stderr?.on("data", (chunk: Buffer | string) => {
+    bytes += Buffer.byteLength(chunk);
+    if (bytes <= stderrDiagnosticBytes) text += typeof chunk === "string" ? chunk : decoder.write(chunk);
+    else text = "";
+  });
+  transport.stderr?.on("end", () => {
+    if (!bytes) return;
+    if (bytes <= stderrDiagnosticBytes) text += decoder.end();
+    try {
+      console.warn(
+        JSON.stringify({
+          level: 40,
+          time: Date.now(),
+          msg: "mcp_stdio_stderr",
+          mcpConnection: configuration.name,
+          stderr: bytes <= stderrDiagnosticBytes ? redactMcpConnectionCredentials(text, configuration) : "mcp_stderr_diagnostic_limit_exceeded",
+          stderrBytes: bytes,
+        }),
+      );
+    } catch {
+      // Diagnostics cannot change the connection outcome.
+    }
+  });
+}
+
 /** All external MCP transports use the protocol SDK; Pi consumes them through its public adapter. */
 export function createMcpTransport(configuration: McpConfiguration, signal: AbortSignal, request: typeof fetch = fetch): Transport {
   if (configuration.transport === "stdio") {
     if (!configuration.stdio) throw new McpFailure("mcp_stdio_configuration_required");
     const transport = new StdioClientTransport({ ...configuration.stdio, stderr: "pipe" });
-    transport.stderr?.on("data", () => {});
+    watchStdioStderr(transport, configuration);
     return transport;
   }
   const endpoint = new URL(configuration.url);

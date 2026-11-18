@@ -205,3 +205,32 @@ test("catalog URL changes invalidate service drafts even when the original URL i
     await f.cleanup();
   }
 });
+
+test("development services require SSH while analysis-only services retain HTTPS, including catalog edits", async () => {
+  const fixture = await createApiFixture();
+  try {
+    const https = "https://git.example.test/analysis.git";
+    await createService(fixture.app, "AnalysisHttps", ["prod", "test"], [https]);
+    const definition = servicePayload("InvalidDev", ["dev"], [https]);
+    const blocked = await fixture.app.inject({ method: "POST", url: "/api/services", headers, payload: definition });
+    assert.equal(blocked.statusCode, 400, blocked.body);
+    assert.equal(blocked.json().error, "development_repository_ssh_url_required");
+    const ssh = "git@git.example.test:development.git";
+    await createService(fixture.app, "ValidDev", ["dev"], [ssh]);
+    const catalog = (await fixture.app.inject({ url: "/api/repositories" })).json();
+    const repository = catalog.find((row: { url: string }) => row.url === ssh);
+    const changed = await fixture.app.inject({
+      method: "PATCH",
+      url: `/api/repositories/${repository.id}`,
+      headers,
+      payload: { name: repository.name, group: repository.group, url: "https://git.example.test/development.git", expectedRevision: repository.revision },
+    });
+    assert.equal(changed.statusCode, 400, changed.body);
+    assert.equal(changed.json().error, "development_repository_ssh_url_required");
+    const saved = (await fixture.app.inject({ url: "/api/repositories" })).json().find((row: { id: string }) => row.id === repository.id);
+    assert.equal(saved.url, ssh);
+    assert.equal(saved.revision, repository.revision);
+  } finally {
+    await fixture.cleanup();
+  }
+});

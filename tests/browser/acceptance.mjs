@@ -34,7 +34,7 @@ try {
   app = await buildApi({ stateRoot: root, databaseFile, engine, events, modelCatalog, logger: false, webRoot });
   await createService(app, "browser", ["dev"]);
   const mdmRepositories = Array.from({ length: 24 }, (_, index) => `git@example.test:digital-biz-projects/mdm/servers/repository-${index}.git`);
-  const mallRepository = "https://example.test/digital-biz-projects/xhgj-mall/fronts/mall.git";
+  const mallRepository = "git@example.test:digital-biz-projects/xhgj-mall/fronts/mall.git";
   const groupedService = servicePayload("grouped", ["dev", "test"], [...mdmRepositories, mallRepository]);
   for (const { alias, url } of groupedService.repositories) {
     const registered = await app.inject({ method: "POST", url: "/api/repositories", payload: { name: alias, url, group: url === mallRepository ? "mall" : "mdm" } });
@@ -52,7 +52,7 @@ try {
     database.close();
   }
   engine.running.clear();
-  const url = "https://example.test/browser.git";
+  const url = "git@example.test:browser.git";
   const source = path.join(root, "seed");
   const copyBefore = '\texport const original = "订单\u00a0value";\r\n  export const stable = true;\r\n';
   const copyAfter = '\texport const modified = "订单\u00a0value";\r\n  export const stable = false;\r\n';
@@ -238,6 +238,12 @@ try {
   await page.keyboard.press("Escape");
   await expandedDescription.waitFor({ state: "hidden" });
   assert.equal(await expandDescription.evaluate((button) => button === document.activeElement), true);
+  // Dirty Issue edits require an explicit discard, including Escape from the parent dialog.
+  page.once("dialog", (dialog) => {
+    assert.equal(dialog.type(), "confirm");
+    assert.match(dialog.message(), /尚未保存/);
+    return dialog.accept();
+  });
   await page.keyboard.press("Escape");
   await issueEditor.waitFor({ state: "hidden" });
   assert.equal(await editOpener.evaluate((button) => button === document.activeElement), true);
@@ -1196,6 +1202,7 @@ try {
     assert.equal(await page.getByLabel("发送给 Agent", { exact: true }).inputValue(), "Preserve this linked-view draft");
     assert.deepEqual(dialogs, []);
     page.off("dialog", dismissNavigation);
+    page.once("dialog", (dialog) => dialog.accept());
     await edit.getByRole("button", { name: "取消", exact: true }).click();
   } finally {
     synchronization.close();

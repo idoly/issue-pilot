@@ -82,6 +82,31 @@ it("saves edits and resets from the footer without confirmation", async () => {
   expect(confirm).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
 });
+for (const via of ["取消", "关闭弹窗", "Escape"] as const)
+  it(`asks before discarding a dirty edit via ${via} and closes a clean one silently`, async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const dialog = await open();
+    const dismiss = () => {
+      if (via === "Escape") fireEvent(dialog, new Event("cancel", { cancelable: true }));
+      else fireEvent.click(within(dialog).getByRole("button", { name: via }));
+    };
+    await fireEvent.input(within(dialog).getByLabelText("编辑工单标题"), { target: { value: "未保存的标题" } });
+    dismiss();
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0]![0]).toContain("尚未保存");
+    expect(within(dialog).getByLabelText("编辑工单标题")).toHaveProperty("value", "未保存的标题");
+    confirm.mockReturnValue(true);
+    dismiss();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
+    expect(state.update).not.toHaveBeenCalled();
+    confirm.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+    const reopened = await screen.findByRole("dialog", { name: "编辑工单" });
+    expect(within(reopened).getByLabelText("编辑工单标题")).toHaveProperty("value", issue.title);
+    fireEvent.click(within(reopened).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
+    expect(confirm).not.toHaveBeenCalled();
+  });
 it("preserves drafts and does not reset when saving fails", async () => {
   state.update.mockRejectedValue(new Error("保存失败"));
   const dialog = await open();
