@@ -1,8 +1,8 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Select, Skeleton } from "../ui";
+import { hasAdministratorAccess } from "../../../domain/contracts";
 import {
   errorMessage,
-  hasAdministratorAccess,
   loadApplicationParameters,
   RequestError,
   updateApplicationParameters,

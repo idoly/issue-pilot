@@ -2,10 +2,9 @@ import { Button, Input, Modal, Select, Skeleton, TextArea } from "../ui";
 import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, Show, snapshot, Switch, untrack } from "solid-js";
 
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
-import { CAPABILITY_KEYS } from "../../../domain/contracts";
+import { CAPABILITY_KEYS, canManageDevelopmentConfiguration } from "../../../domain/contracts";
 import { ChevronRight, Pencil, Plus, Trash2 } from "../ui/icons";
 import {
-  canManageDevelopmentConfiguration,
   loadServiceDbHubTargets,
   loadRepositories,
   loadServiceConfigurationDescription,

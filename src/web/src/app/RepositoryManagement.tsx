@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, Modal, Select, Skeleton } from "../ui";
-import { canManageDevelopmentConfiguration, deleteRepository, loadRepositories, registerRepository, updateRepository, type ManagedRepository } from "../data/client";
+import { canManageDevelopmentConfiguration } from "../../../domain/contracts";
+import { deleteRepository, loadRepositories, registerRepository, updateRepository, type ManagedRepository } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
 import { errorText } from "./error-text";

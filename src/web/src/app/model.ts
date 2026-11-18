@@ -1,6 +1,6 @@
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
+import { canUseIssueWorkMode } from "../../../domain/contracts";
 import {
-  canUseIssueWorkMode,
   ENVIRONMENT_KINDS,
   ISSUE_PRIORITIES,
   ISSUE_WORK_MODES,

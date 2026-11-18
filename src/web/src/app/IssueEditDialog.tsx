@@ -1,7 +1,8 @@
 import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 
 import { Button, Input, Modal, Select } from "../ui";
-import { canResetIssueSession, canUseIssueWorkMode, getIssue, isWorkspaceBusy, issueWorkMode, RequestError, updateIssue, type IssueDetail, type IssuePriority } from "../data/client";
+import { canUseIssueWorkMode } from "../../../domain/contracts";
+import { canResetIssueSession, getIssue, isWorkspaceBusy, issueWorkMode, RequestError, updateIssue, type IssueDetail, type IssuePriority } from "../data/client";
 import { useApplicationResources } from "./ApplicationResources";
 import { AttachmentPicker, DescriptionField, selectedChoice } from "./IssueForm";
 import { errorText, type ErrorTexts } from "./error-text";

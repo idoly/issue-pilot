@@ -176,6 +176,14 @@ function AppWorkspace(props: { initialView?: AppView }) {
   };
   window.addEventListener("popstate", onHistoryNavigation);
   onCleanup(() => window.removeEventListener("popstate", onHistoryNavigation));
+  // An Issue edit draft lives only in the dialog; warn before a reload or tab close discards it.
+  const beforeUnload = (event: BeforeUnloadEvent) => {
+    if (!issueEditDirty()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  };
+  window.addEventListener("beforeunload", beforeUnload);
+  onCleanup(() => window.removeEventListener("beforeunload", beforeUnload));
   let issueWorkspace: HTMLElement | undefined;
   const detailTask = createLatestTask();
   onCleanup(detailTask.cancel);

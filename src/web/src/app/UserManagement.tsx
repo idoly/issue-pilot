@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
-import { canEditManagedUser, canManageDevelopmentConfiguration, createUser, hasAdministratorAccess, loadManagedUsers, updateUser, USER_ROLES, type ManagedUser, type UserRole } from "../data/client";
+import { canEditManagedUser, canManageDevelopmentConfiguration, hasAdministratorAccess, USER_ROLES } from "../../../domain/contracts";
+import { createUser, loadManagedUsers, updateUser, type ManagedUser, type UserRole } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
 import { errorText } from "./error-text";

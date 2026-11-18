@@ -112,7 +112,6 @@ import type {
 } from "../../../http/contracts";
 export type { CurrentUser, IssueDetail, IssueExecutionItem, IssueListItem, IssueScopeTransitionPlan, ManagedRepository, ManagedUser, Person, WorkspaceStats, WorkspaceStatsState };
 import type { UserRole } from "../../../domain/contracts";
-export { USER_ROLES, canEditManagedUser, canManageDevelopmentConfiguration, canUseIssueWorkMode, hasAdministratorAccess, hasPersonalGitIdentity } from "../../../domain/contracts";
 export interface DmsScopeResolution {
   instanceId: string;
   instanceHost: string;

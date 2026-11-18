@@ -2,7 +2,8 @@ import { Badge, Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, Show, untrack } from "solid-js";
 
 import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
-import { canUseIssueWorkMode, createIssue, listIssuePins, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
+import { canUseIssueWorkMode } from "../../../domain/contracts";
+import { createIssue, listIssuePins, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
 import { createLatestTask } from "../data/latest";
 import { errorText } from "./error-text";
 import { useApplicationResources } from "./ApplicationResources";

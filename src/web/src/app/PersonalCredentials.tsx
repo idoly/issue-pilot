@@ -1,9 +1,8 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Button, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
 import { createLatestTask } from "../data/latest";
+import { hasAdministratorAccess, hasPersonalGitIdentity } from "../../../domain/contracts";
 import {
-  hasAdministratorAccess,
-  hasPersonalGitIdentity,
   loadPersonalCredentials,
   loadSharedDmsCredentials,
   loadSharedSlsCredentials,
