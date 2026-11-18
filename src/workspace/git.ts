@@ -262,6 +262,8 @@ async function assertCheckoutMatchesObjects(checkout: string, tree: string): Pro
 
 export class WorktreeManager {
   private readonly gitEnvironment = new AsyncLocalStorage<Record<string, string>>();
+  /** The current round's abort signal; preparation passes it once instead of every internal call. */
+  private readonly gitSignal = new AsyncLocalStorage<AbortSignal | undefined>();
 
   /** Explicit offline audit. Normal reads validate only the selected checkout. */
   static async assertSharedState(stateRoot: string): Promise<void> {
@@ -277,6 +279,11 @@ export class WorktreeManager {
 
   withGitEnvironment<T>(env: Record<string, string>, operation: () => Promise<T>): Promise<T> {
     return this.gitEnvironment.run(env, operation);
+  }
+
+  /** Run preparation under a round's abort signal; pass undefined for rollback, which must finish. */
+  withSignal<T>(signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
+    return this.gitSignal.run(signal, operation);
   }
   private readonly stateRoot: string;
   private readonly repositoriesRoot: string;
@@ -367,6 +374,7 @@ export class WorktreeManager {
       const result = await executeLocalCommand("git", trustedGitArgs(["-C", resolvedWorkspace, "ls-files", "-v", "-z"]), {
         timeout: issuePilotConfig.limits.process.gitOperationMs,
         environment: trustedGitEnvironment({ ...process.env, ...this.gitEnvironment.getStore() }),
+        ...(this.gitSignal.getStore() ? { signal: this.gitSignal.getStore()! } : {}),
         maxOutputBytes: null,
         onStdout: (chunk) => {
           hiddenChangesPossible ||= (atEntryStart && /^[a-zS]/.test(chunk)) || /\0[a-zS]/.test(chunk);
@@ -419,7 +427,8 @@ export class WorktreeManager {
       const rollbackErrors: unknown[] = [];
       for (const createdWorktree of created.reverse()) {
         try {
-          await this.serialized(createdWorktree.repositoryKey, () => this.discardPrepared(createdWorktree));
+          // Rollback completes even when the round that created these worktrees was cancelled.
+          await this.withSignal(undefined, () => this.serialized(createdWorktree.repositoryKey, () => this.discardPrepared(createdWorktree)));
         } catch (rollbackError) {
           rollbackErrors.push(rollbackError);
         }
@@ -631,7 +640,8 @@ export class WorktreeManager {
       await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
     } catch (error) {
       // Keep the Git failure (exit code/stderr, never the key, which stays in a private file) for diagnosis;
-      // logs go through errorDiagnostic, which reports only this stable code.
+      // logs go through errorDiagnostic, which reports only this stable code. Cancellation is not a fetch failure.
+      if (error instanceof Error && error.name === "AbortError") throw error;
       if (this.gitEnvironment.getStore()) throw new Error("personal_git_fetch_failed", { cause: error });
       throw error;
     }
@@ -800,12 +810,15 @@ export class WorktreeManager {
   private async assertBranchReference(branch: string): Promise<void> {
     try {
       if ((await this.git(["check-ref-format", "--branch", branch])).trim() !== branch) throw new Error("invalid_repository_configuration");
-    } catch {
+    } catch (error) {
+      // Cancellation is not a configuration problem; the round reports it as cancelled.
+      if (error instanceof Error && error.name === "AbortError") throw error;
       throw new Error("invalid_repository_configuration");
     }
   }
 
   private git(args: string[]): Promise<string> {
-    return runGit(args, { environment: this.gitEnvironment.getStore() ?? {} });
+    const signal = this.gitSignal.getStore();
+    return runGit(args, { environment: this.gitEnvironment.getStore() ?? {}, ...(signal ? { signal } : {}) });
   }
 }

@@ -610,7 +610,7 @@ export class AgentEngine implements AgentController {
     this.roundSignal(issue.id);
     const checkoutLease = new SharedCheckoutLease();
     this.checkoutLeases.set(issue.id, checkoutLease);
-    const project = await checkoutLease.run(() => this.projectManager.prepare(issue, environmentKind, personalGit?.env));
+    const project = await checkoutLease.run(() => this.projectManager.prepare(issue, environmentKind, personalGit?.env, this.roundSignal(issue.id)));
     this.roundSignal(issue.id);
     const sharedRepositories = project.repositories.every((repository) => repository.access === "read");
     await chmod(workDirectory, 0o700);
@@ -618,7 +618,7 @@ export class AgentEngine implements AgentController {
     await chmod(path.dirname(workDirectory), 0o700);
     const attachments = await this.database.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
     for (const attachment of attachments) {
-      const handle = await openVerifiedAttachmentFile(attachmentPath, attachment.objectKey, attachment.size, attachment.sha256);
+      const handle = await openVerifiedAttachmentFile(attachmentPath, attachment.objectKey, attachment.size, attachment.sha256, this.roundSignal(issue.id));
       await handle.close();
     }
     const environmentServices = await listEnvironmentServices(this.database, issue.environmentId);

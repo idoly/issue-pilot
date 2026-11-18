@@ -774,3 +774,47 @@ test("re-including a repository retains its refreshed baseline in the shared sto
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a cancelled round stops preparation before any Git work and does not cancel rollback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-cancel-prepare-"));
+  try {
+    const source = join(root, "source"),
+      remote = join(root, "remote.git"),
+      state = join(root, "state");
+    await git(["init", "-b", "main", source]);
+    await writeFile(join(source, "README.md"), "fixture\n");
+    await git(["-C", source, "add", "."]);
+    await git(["-C", source, "commit", "-m", "seed"]);
+    await git(["clone", "--bare", source, remote]);
+    const manager = new WorktreeManager(state);
+    const worktree = { issueKey: "ISSUE-20261118-901", workspaceName: "repo", url: remote, baseBranch: "main", mode: "hotfix" as const };
+    await claimIssueRoot(state, worktree.issueKey);
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(
+      manager.withSignal(cancelled.signal, () => manager.prepareBatch({ worktrees: [worktree], finalize: async () => assert.fail("must not finalize") })),
+      (error: Error) => error.name === "AbortError",
+    );
+    await assert.rejects(access(join(state, "workspaces", "issue-20261118-901", "repo")), { code: "ENOENT" });
+
+    // The round aborts after the worktree exists: rollback must still run to completion.
+    const midFlight = new AbortController();
+    await assert.rejects(
+      manager.withSignal(midFlight.signal, () =>
+        manager.prepareBatch({
+          worktrees: [worktree],
+          finalize: async () => {
+            midFlight.abort();
+            throw new Error("simulated_finalize_failure");
+          },
+        }),
+      ),
+      /simulated_finalize_failure/,
+    );
+    await assert.rejects(access(join(state, "workspaces", "issue-20261118-901", "repo")), { code: "ENOENT" });
+    await assert.rejects(access(issueRepositoryStorePath(state, worktree.issueKey, remote)), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

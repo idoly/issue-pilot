@@ -434,13 +434,24 @@ export class IssueProjectManager {
     }
   }
 
-  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, gitEnvironment?: Record<string, string>): Promise<PreparedIssueProject> {
-    if (gitEnvironment) return this.worktrees.withGitEnvironment(gitEnvironment, () => this.prepare(issue, environmentKind));
+  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, gitEnvironment?: Record<string, string>, signal?: AbortSignal): Promise<PreparedIssueProject> {
+    return this.worktrees.withSignal(signal, () => this.prepareLocked(issue, environmentKind, gitEnvironment, signal));
+  }
+
+  private async prepareLocked(
+    issue: ProjectIssue,
+    environmentKind: EnvironmentKind,
+    gitEnvironment: Record<string, string> | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<PreparedIssueProject> {
+    signal?.throwIfAborted();
+    if (gitEnvironment) return this.worktrees.withGitEnvironment(gitEnvironment, () => this.prepareLocked(issue, environmentKind, undefined, signal));
     await assertIssueRoot(this.stateRoot, issue.key);
     const [{ repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
       loadIssueDeployments(this.database, issue),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
+    signal?.throwIfAborted();
     const shared = repositoryPreparationMode(environmentKind, issue.type) === "shared";
     const repositoryUrls = new Set(repositoryRows.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
@@ -484,11 +495,16 @@ export class IssueProjectManager {
 
     const readRoots = new Set<string>();
     const checkedCheckouts = new Set<string>();
+    signal?.throwIfAborted();
     const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id, { readRoots, checkedCheckouts });
     let prepared: PreparedWorktree[];
     if (shared) {
       prepared = [];
-      for (const { repository, baseBranch } of repositoryRows) prepared.push(await this.worktrees.prepareShared({ url: repository.url, baseBranch }, checkedCheckouts));
+      for (const { repository, baseBranch } of repositoryRows) {
+        signal?.throwIfAborted();
+        prepared.push(await this.worktrees.prepareShared({ url: repository.url, baseBranch }, checkedCheckouts));
+      }
+      signal?.throwIfAborted();
       await saveRepositoryRows(prepared);
     } else {
       const mode = developmentWorktreeMode(issue.type);
