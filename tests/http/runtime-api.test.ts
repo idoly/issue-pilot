@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import fs, { mkdir, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { ServerResponse } from "node:http";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { eq } from "drizzle-orm";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { AgentEventBus, type RunEvent } from "../../src/agent/events.ts";
+import { AgentEngine } from "../../src/agent/engine.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { PiSessionRuntime, createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 import { agentSessions, issues, issueWorkspaces, userCredentials } from "../../src/db/schema.ts";
@@ -373,7 +375,7 @@ test("keeps SDK completions and merged deltas produced during snapshot preparati
   }
 });
 
-for (const stage of ["model discovery", "snapshot read"] as const)
+for (const stage of ["model discovery", "snapshot read", "session validation"] as const)
   test(`releases an Agent stream disconnected during ${stage} and accepts a new connection`, { timeout: 5_000 }, async (context) => {
     const events = new AgentEventBus(),
       fixture = await createApiFixture({ events }),
@@ -408,7 +410,30 @@ for (const stage of ["model discovery", "snapshot read"] as const)
           unsubscribe();
         };
       };
-      if (stage === "model discovery") {
+      let opened: Promise<void> | undefined;
+      if (stage === "session validation") {
+        const root = issueRoot(fixture.root, key);
+        const manager = await createPrivateSessionManager(root, root);
+        const file = manager.getSessionFile()!;
+        await connection.db.insert(agentSessions).values({ issueId: fixture.engine.enqueued[0]!, workspacePath: root, sessionFile: file });
+        const open = fs.open;
+        context.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+          if (!paused && args[0] === file) {
+            paused = true;
+            entered();
+            await gate;
+          }
+          return open(...args);
+        });
+        syncBuiltinESMExports();
+        const openSession = SessionManager.open.bind(SessionManager);
+        opened = new Promise<void>((resolve) => {
+          context.mock.method(SessionManager, "open", (...args: Parameters<typeof openSession>) => {
+            resolve();
+            return openSession(...args);
+          });
+        });
+      } else if (stage === "model discovery") {
         const list = modelCatalog.list.bind(modelCatalog);
         context.mock.method(modelCatalog, "list", async () => {
           if (!paused) {
@@ -444,13 +469,14 @@ for (const stage of ["model discovery", "snapshot read"] as const)
       controller.abort();
       await rejected;
       await disconnected;
-      assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
+      assert.equal(subscriptions, stage === "model discovery" ? 0 : 1);
       assert.equal(unsubscriptions, subscriptions);
       release();
+      await opened;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      assert.equal(subscriptions, stage === "snapshot read" ? 1 : 0);
+      assert.equal(subscriptions, stage === "model discovery" ? 0 : 1);
       assert.equal(unsubscriptions, subscriptions);
       assert.ok(abandoned);
       assert.equal(abandoned.headersSent, false);
@@ -477,6 +503,7 @@ for (const stage of ["model discovery", "snapshot read"] as const)
         setImmediate(resolve);
       });
       context.mock.restoreAll();
+      syncBuiltinESMExports();
       connection.close();
       await fixture.cleanup();
     }
@@ -635,6 +662,44 @@ async function readStreamUntil(reader: ReadableStreamDefaultReader<Uint8Array>, 
   }
   return payload;
 }
+
+test("the stream displays an admission overlapping replay once, and a second identical send separately", { timeout: 10_000 }, async (context) => {
+  const events = new AgentEventBus();
+  const fixture = await createApiFixture({ events });
+  const database = openDatabase(fixture.databaseFile);
+  const live: RunEvent[] = [];
+  const engine = new AgentEngine(database.db, fixture.root, (event) => {
+    if (event.event.type === "issue_user") live.push(event);
+  });
+  // Exercise real admission and JSONL; only model execution and live publication timing are controlled.
+  context.mock.method(engine as unknown as { run(): Promise<void> }, "run", async () => undefined);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    await createService(fixture.app, "Overlap");
+    const issue = await createIssue(fixture.app, "overlap");
+    const id = fixture.engine.enqueued[0]!;
+    await engine.send(id, "same input");
+    const address = await fixture.app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/issues/${issue.id}/agent-stream`, { signal: context.signal });
+    assert.equal(response.status, 200);
+    reader = response.body!.getReader();
+    let payload = await readStreamUntil(reader, "event: snapshot_ready\n");
+    assert.equal(payload.match(/"type":"issue_user"/g)?.length, 1);
+    await engine.send(id, "same input");
+    assert.equal(live.length, 2);
+    for (const event of live) events.publish(event);
+    events.publish({ id: "overlap-complete", issueId: id, createdAt: new Date().toISOString(), event: { type: "issue_run_state", state: "idle" } });
+    payload += await readStreamUntil(reader, "id: overlap-complete\n");
+    assert.equal(payload.match(/"type":"issue_user"/g)?.length, 2);
+    for (const event of live) assert.equal(payload.split(`id: ${event.id}\n`).length - 1, 1);
+  } finally {
+    await reader?.cancel();
+    reader?.releaseLock();
+    await engine.close();
+    await database.close();
+    await fixture.cleanup();
+  }
+});
 
 test("keeps durable entry deduplication and recent transient duplicates after the live window rolls over", { timeout: 10_000 }, async (context) => {
   const events = new AgentEventBus();

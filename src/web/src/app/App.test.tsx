@@ -1266,9 +1266,10 @@ describe("issue pilot workspace", () => {
     expect(vi.mocked(client.updateService).mock.calls.at(-1)?.[0]).toBe("srm");
     const savedService = vi.mocked(client.updateService).mock.calls.at(-1)?.[1];
     expect(savedService?.repositories[0]).toEqual({ alias: "repository-updated-repository", url: "git@example.test:team/updated.git" });
-    expect(savedService?.deployments[1]?.repositoryBranches).toEqual([{ repositoryAlias: "repository-updated-repository", baseBranch: "release/test" }]);
-    expect(savedService?.deployments[1]?.sls).toEqual({ region: "cn-test", project: "srm-updated", logstores: ["srm"], targets: [{ region: "cn-test", project: "srm-updated", logstores: ["srm"] }] });
-    expect(savedService?.deployments[1]?.dms).toBeUndefined();
+    expect(savedService?.deployments.map((row) => row.environmentKey)).toEqual(["test"]);
+    expect(savedService?.deployments[0]?.repositoryBranches).toEqual([{ repositoryAlias: "repository-updated-repository", baseBranch: "release/test" }]);
+    expect(savedService?.deployments[0]?.sls).toEqual({ region: "cn-test", project: "srm-updated", logstores: ["srm"], targets: [{ region: "cn-test", project: "srm-updated", logstores: ["srm"] }] });
+    expect(savedService?.deployments[0]?.dms).toBeUndefined();
     expect(JSON.stringify(savedService)).not.toContain("db-secret");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
     expect(client.loadCatalog).toHaveBeenCalledTimes(2);
@@ -1504,8 +1505,9 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
-    expect(saved.deployments[1]?.sls?.targets).toEqual([{ ...primary, project: "srm-updated", logstores: ["*"] }, secondary]);
-    expect(saved.deployments[1]?.sls).not.toHaveProperty("credentialUpdate");
+    const sls = saved.deployments.find((row) => row.environmentKey === "test")?.sls;
+    expect(sls?.targets).toEqual([{ ...primary, project: "srm-updated", logstores: ["*"] }, secondary]);
+    expect(sls).not.toHaveProperty("credentialUpdate");
   });
 
   test("edits DMS and SLS targets consistently while preserving credentials and resolved bindings", async () => {
@@ -1542,7 +1544,7 @@ describe("issue pilot workspace", () => {
     expect(within(dialog).queryByLabelText("sls name 2-2")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.updateService).toHaveBeenCalledOnce());
-    const saved = vi.mocked(client.updateService).mock.calls[0]![1].deployments[1]!;
+    const saved = vi.mocked(client.updateService).mock.calls[0]![1].deployments.find((row) => row.environmentKey === "test")!;
     expect(saved.dms?.databases).toEqual([database]);
     expect(saved.dms).not.toHaveProperty("credentialUpdate");
     expect(saved.sls?.targets).toEqual([target]);
@@ -1578,12 +1580,12 @@ describe("issue pilot workspace", () => {
     }
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.updateService).toHaveBeenCalledOnce());
-    const targets = vi.mocked(client.updateService).mock.calls[0]![1].deployments[1]!.sls!.targets!;
+    const targets = vi.mocked(client.updateService).mock.calls[0]![1].deployments.find((row) => row.environmentKey === "test")?.sls?.targets;
     expect(targets).toEqual([
       { region: "cn-test", project: "srm-test", logstores: ["srm"] },
       { region: "cn-other", project: "gateway-test", logstores: ["gateway"] },
     ]);
-    expect(targets.every((scope) => !("name" in scope))).toBe(true);
+    expect(targets?.every((scope) => !("name" in scope))).toBe(true);
   });
 
   test("shows the upstream DMS rate limit while resolving a database", async () => {
@@ -1627,8 +1629,9 @@ describe("issue pilot workspace", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
     await waitFor(() => expect(client.updateService).toHaveBeenCalled());
     const saved = vi.mocked(client.updateService).mock.calls.at(-1)![1];
-    expect(saved.deployments[1]?.dms?.databases[0]?.databaseId).toBe("42");
-    expect(saved.deployments[1]?.dms).not.toHaveProperty("credentialUpdate");
+    const dms = saved.deployments.find((row) => row.environmentKey === "test")?.dms;
+    expect(dms?.databases[0]?.databaseId).toBe("42");
+    expect(dms).not.toHaveProperty("credentialUpdate");
     expect(client.resolveDmsScope).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑服务" })).toBeNull());
   });

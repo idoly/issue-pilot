@@ -16,7 +16,7 @@ import { agentSessions, issues } from "../db/schema.ts";
 import { issueRoot, pathExists } from "../workspace/state.ts";
 import { canWriteIssueCode, personGitIdentity, type AccessHolder, type EnvironmentKind } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
-import { record, text } from "./input.ts";
+import { record, text } from "../domain/input.ts";
 import { issueSummaryQuery, serializeIssueSummary } from "./issue-summary.ts";
 import { issueEnvironmentKind, requireCurrentUser, requireDeveloper, requireIssue, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { createOrderedSseWriter } from "./sse.ts";
@@ -201,13 +201,13 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
       const root = issueRoot(stateRoot, issue.key);
       if (binding) assertBoundSessionPath(binding.sessionFile, root);
       const sessionReady = Boolean(binding && (await pathExists(binding.sessionFile)));
-      // Validation can outlive the reader; do not open or send after the socket is gone.
+      const manager = binding && sessionReady && !cleaned && !reply.raw.destroyed ? await openBoundSession(binding.sessionFile, root) : undefined;
+      // Opening the file can outlive the reader. Never subscribe after disconnect cleanup has run.
       if (cleaned || reply.raw.destroyed) {
         cleanup();
         reply.hijack();
         return;
       }
-      const manager = binding && sessionReady ? await openBoundSession(binding.sessionFile, root) : undefined;
       // Capture the transcript, coalesced deltas and execution state with no await before
       // starting the live buffer. Buffering earlier would append already coalesced deltas again.
       const transcript = manager ? sessionTranscript(manager, issue.id) : [];

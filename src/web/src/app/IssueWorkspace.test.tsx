@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
 const state = vi.hoisted(() => ({
@@ -183,26 +184,31 @@ it("places attachments immediately after the Issue header", () => {
   expect(header.nextElementSibling?.getAttribute("aria-labelledby")).toBe("attachments-title");
 });
 
-it("does not navigate to a follow-up created after the workspace unmounts", async () => {
-  let finish!: () => void;
-  state.create.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finish = () => resolve({ ...issue, id: "ISSUE-20261018-999", workspaceStatus: "ready", agentRunning: false, resolvedAt: null });
-      }),
-  );
-  const created = vi.fn<NonNullable<Parameters<typeof import("./IssueWorkspace").IssueWorkspace>[0]["onCreatedFollowUp"]>>();
-  const development: IssueDetail = { ...issue, environmentKey: "dev", type: "defect_fix", workspace: { ...issue.workspace, sourceAvailable: true } };
-  const view = render(() => <Workspace issue={development} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={created} />);
-  fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
-  const dialog = await screen.findByRole("dialog", { name: "创建正式跟进工单" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "创建并关联" }));
-  await waitFor(() => expect(state.create).toHaveBeenCalledOnce());
-  view.unmount();
-  finish();
-  await settle();
-  expect(created).not.toHaveBeenCalled();
-});
+for (const change of ["unmount", "subject", "role"] as const)
+  it(`does not navigate to an old follow-up after ${change}`, async () => {
+    let finish!: () => void;
+    state.create.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ...issue, id: "ISSUE-20261018-999", workspaceStatus: "ready", agentRunning: false, resolvedAt: null });
+        }),
+    );
+    const created = vi.fn<NonNullable<Parameters<typeof import("./IssueWorkspace").IssueWorkspace>[0]["onCreatedFollowUp"]>>();
+    const development: IssueDetail = { ...issue, environmentKey: "dev", type: "defect_fix", workspace: { ...issue.workspace, sourceAvailable: true } };
+    const [user, setUser] = createSignal({ subject: "developer", role: "developer" });
+    state.user = user;
+    const view = render(() => <Workspace issue={development} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={created} />);
+    fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
+    const dialog = await screen.findByRole("dialog", { name: "创建正式跟进工单" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建并关联" }));
+    await waitFor(() => expect(state.create).toHaveBeenCalledOnce());
+    if (change === "unmount") view.unmount();
+    else setUser(change === "subject" ? { subject: "other", role: "developer" } : { subject: "developer", role: "product" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "创建正式跟进工单" })).toBeNull());
+    finish();
+    await settle();
+    expect(created).not.toHaveBeenCalled();
+  });
 
 it("offers previews for supported attachments", async () => {
   const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response('{"result":"previewed-json"}'));

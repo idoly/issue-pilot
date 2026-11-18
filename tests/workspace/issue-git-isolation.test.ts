@@ -11,7 +11,7 @@ import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
 import { environments, issueRepositories, issues, serviceDeployments, services } from "../../src/db/schema.ts";
 import { repositoryStorePath, WorktreeManager } from "../../src/workspace/git.ts";
-import { isolateIssueWorktree, publishIssueBranch, publishedIssueBranchFile } from "../../src/workspace/issue-git.ts";
+import { publishIssueBranch, publishedIssueBranchFile } from "../../src/workspace/issue-git.ts";
 import { claimIssueRoot, issueRoot } from "../../src/workspace/state.ts";
 import { git } from "../helpers/git.ts";
 
@@ -70,12 +70,15 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
       await database.close();
     }
     const run = () => exec(process.execPath, ["--experimental-strip-types", "scripts/check-issue-state.ts", "--state-root", state, "--development-git"]);
-    const { stdout, stderr } = await run();
-    assert.equal(stderr, "");
-    const first = JSON.parse(stdout);
-    assert.equal(first.privateVerified, 2);
-    assert.equal(first.sharedWorktreeVerified, 1);
-    assert.equal(first.mirrorUnavailable, 1);
+    await assert.rejects(run(), (error: Error & { code?: unknown; stderr?: string; stdout?: string }) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr ?? "", /ISSUE-20261023-003 [a-f0-9]{20} sharedWorktreeOnly/);
+      const first = JSON.parse(error.stdout!);
+      assert.equal(first.privateVerified, 2);
+      assert.equal(first.sharedWorktreeOnly, 1);
+      assert.equal(first.mirrorUnavailable, 1);
+      return true;
+    });
 
     await rename(released.cachePath, path.join(root, "preserved-private-store"));
     await assert.rejects(run(), (error: Error & { code?: unknown; stderr?: string; stdout?: string }) => {
@@ -83,7 +86,7 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
       assert.match(error.stderr ?? "", /ISSUE-20261023-002 [a-f0-9]{20} sharedRefOnly/);
       const second = JSON.parse(error.stdout!);
       assert.equal(second.privateVerified, 1);
-      assert.equal(second.sharedWorktreeVerified, 1);
+      assert.equal(second.sharedWorktreeOnly, 1);
       assert.equal(second.sharedRefOnly, 1);
       return true;
     });
@@ -97,55 +100,21 @@ test("development Git audit distinguishes a verified legacy worktree from a rele
   }
 });
 
-test("legacy worktree isolation rolls back a failed switch and preserves staged, unstaged and untracked files on retry", async (context) => {
-  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-git-migration-"));
+test("publication survives a failed marker write and never overwrites a changed shared ref", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-publication-"));
   try {
-    const shared = path.join(root, "shared"),
-      workspace = path.join(root, "issue", "repo"),
-      privateStore = path.join(root, "issue", ".issue-git-fixture");
-    await git(["init", "--bare", shared]);
-    const source = path.join(root, "source");
-    await git(["clone", shared, source]);
-    await writeFile(path.join(source, "file.txt"), "initial");
-    await git(["-C", source, "add", "."]);
-    await git(["-C", source, "commit", "-m", "initial"]);
-    await git(["-C", source, "push", "origin", "HEAD:main"]);
-    await git(["-C", shared, "remote", "add", "origin", source]);
-    await git(["-C", shared, "fetch", "origin", "HEAD:refs/remotes/origin/main"]);
-    await mkdir(path.dirname(workspace));
-    const branch = "hotfix-issue-20261023-003";
-    await git(["-C", shared, "worktree", "add", "--relative-paths", "-b", branch, workspace, "main"]);
-    await writeFile(path.join(workspace, "file.txt"), "staged");
-    await git(["-C", workspace, "add", "."]);
-    await writeFile(path.join(workspace, "file.txt"), "unstaged");
-    await writeFile(path.join(workspace, "new.txt"), "untracked");
-    const pointerFile = path.join(workspace, ".git"),
-      pointer = await readFile(pointerFile, "utf8");
-    const metadata = path.resolve(workspace, pointer.slice(8).trim());
-    const status = await git(["-C", workspace, "status", "--porcelain"]);
-    const base = await git(["-C", shared, "rev-parse", "refs/heads/main"]);
-    const rename = fs.rename,
-      failure = new Error("registration move failed");
-    context.mock.method(fs, "rename", (...args: Parameters<typeof fs.rename>) => {
-      if (args[0] === metadata) return Promise.reject(failure);
-      return rename(...args);
-    });
-    syncBuiltinESMExports();
-    await assert.rejects(isolateIssueWorktree(shared, privateStore, workspace, branch, base), (error) => error === failure);
-    context.mock.restoreAll();
-    syncBuiltinESMExports();
-    assert.equal(await readFile(pointerFile, "utf8"), pointer);
-    assert.equal(await git(["-C", workspace, "status", "--porcelain"]), status);
-    await isolateIssueWorktree(shared, privateStore, workspace, branch, base);
-    await isolateIssueWorktree(shared, privateStore, workspace, branch, base);
-    assert.equal(await git(["-C", workspace, "status", "--porcelain"]), status);
-    assert.equal(await git(["-C", workspace, "show", ":file.txt"]), "staged");
-    await git(["-C", shared, "reflog", "expire", "--expire=now", "--all"]);
-    await git(["-C", shared, "gc", "--prune=now"]);
-    assert.equal(await git(["-C", workspace, "show", ":file.txt"]), "staged");
-    assert.equal(await readFile(path.join(workspace, "file.txt"), "utf8"), "unstaged");
-    assert.equal(await readFile(path.join(workspace, "new.txt"), "utf8"), "untracked");
-    await git(["-C", workspace, "commit", "-m", "staged change"]);
+    const source = path.join(root, "source"),
+      state = path.join(root, "state"),
+      issueKey = "ISSUE-20261023-003";
+    await git(["init", "-b", "main", source]);
+    await git(["-C", source, "commit", "--allow-empty", "-m", "initial"]);
+    await claimIssueRoot(state, issueKey);
+    const prepared = await new WorktreeManager(state).prepare({ issueKey, workspaceName: "repo", mode: "hotfix", url: source, baseBranch: "main" });
+    const shared = repositoryStorePath(state, source),
+      privateStore = prepared.cachePath,
+      branch = prepared.workingBranch!;
+    await git(["-C", prepared.workspacePath, "commit", "--allow-empty", "-m", "private change"]);
+    const rename = fs.rename;
     const markerFile = path.join(privateStore, publishedIssueBranchFile),
       marker = await readFile(markerFile, "utf8");
     const publicationFailure = new Error("checkpoint rename failed");

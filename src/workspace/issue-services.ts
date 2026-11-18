@@ -1,14 +1,14 @@
 import { asc, eq, inArray } from "drizzle-orm";
 import type { Database, DatabaseReader } from "../db/client.ts";
 import { issueServiceScopes, environments, services, serviceDeployments } from "../db/schema.ts";
-import { ENVIRONMENT_KINDS } from "../domain/contracts.ts";
+import { ENVIRONMENT_KINDS, isDevelopmentEnvironment } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 
 type IssueScope = { id: string; serviceId: string; environmentId: string };
 export async function listEnvironmentServices(database: Database, environmentId: string) {
   const [current] = await database.select().from(environments).where(eq(environments.id, environmentId)).limit(1);
-  const includeSources = current?.kind === "dev";
+  const includeSources = isDevelopmentEnvironment(current?.kind);
   return database
     .select({ service: services, deployment: serviceDeployments, environment: environments })
     .from(serviceDeployments)

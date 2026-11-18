@@ -159,30 +159,124 @@ test("DBHub MySQL targets save atomically with deployment-owned MCP connections 
   }
 });
 
-test("DBHub connection changes reserve all Issue environments", async () => {
+const mysqlTarget = { type: "mysql", host: "db.example.test", port: 3306, username: "reader", password: "fixture-password", database: "orders" };
+
+test("creating and deleting a prod DBHub service reserves even describe-only prod/dev observers, not test Issues", async () => {
   const f = await createApiFixture();
   try {
-    await createService(f.app, "Other", ["test"]);
-    await createIssue(f.app, "other", "test");
-    const input = servicePayload("Global Mysql", ["prod", "dev"]);
-    await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Global Mysql", url: input.repositories[0]!.url } });
-    const payload = {
-      ...input,
-      deployments: input.deployments.map((row) => ({
-        ...row,
-        ...(row.environmentKey === "prod" ? { dbhub: [{ type: "mysql", host: "db.example.test", port: 3306, username: "reader", password: "fixture-password", database: "orders" }] } : {}),
-      })),
-    };
-    const blocked = await f.app.inject({ method: "POST", url: "/api/services", headers, payload });
-    assert.equal(blocked.statusCode, 409, blocked.body);
-    const database = openDatabase(f.databaseFile);
-    try {
-      assert.deepEqual(await database.db.select().from(mcpServices), []);
-    } finally {
-      await database.close();
-    }
+    await createService(f.app, "Other", ["dev", "test"]);
+    for (const environment of ["prod", "dev", "test"] as const) await createIssue(f.app, "other", environment);
+    const observers = f.engine.enqueued.slice(0, 2),
+      unrelated = f.engine.enqueued[2]!;
+    const input = servicePayload("Mysql", ["prod"]);
+    const registered = await f.app.inject({ method: "POST", url: "/api/repositories", headers, payload: { group: "other", name: "Mysql", url: input.repositories[0]!.url } });
+    assert.equal(registered.statusCode, 201);
+    const create = () => f.app.inject({ method: "POST", url: "/api/services", headers, payload: { ...input, deployments: input.deployments.map((row) => ({ ...row, dbhub: [mysqlTarget] })) } });
+    const remove = () => f.app.inject({ method: "DELETE", url: "/api/services/mysql", headers });
+    // Neither observer includes Mysql. Their workspace tool lists deployment descriptions in these environments.
     f.engine.running.clear();
-    assert.equal((await f.app.inject({ method: "POST", url: "/api/services", headers, payload })).statusCode, 201);
+    f.engine.running.add(unrelated);
+    for (const [operation, success] of [
+      [create, 201],
+      [remove, 204],
+    ] as const) {
+      f.engine.closedSessions.length = 0;
+      for (const observer of observers) {
+        f.engine.running.add(observer);
+        const blocked = await operation();
+        assert.equal(blocked.statusCode, 409, blocked.body);
+        assert.equal(blocked.json().error, "service_has_running_issues");
+        assert.deepEqual(f.engine.closedSessions, []);
+        f.engine.running.delete(observer);
+      }
+      const saved = await operation();
+      assert.equal(saved.statusCode, success, saved.body);
+      assert.deepEqual([...f.engine.closedSessions].sort(), [...observers].sort());
+      assert.equal(f.engine.running.has(unrelated), true);
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a prod-only DBHub edit on a multi-environment service leaves the test session alone; a mixed edit still reserves it", async () => {
+  const f = await createApiFixture();
+  try {
+    const input = servicePayload("Mysql", ["test", "prod"]);
+    await createService(f.app, "Mysql", ["test", "prod"]);
+    const [service] = (await f.app.inject({ url: "/api/config" })).json<{ services: { revision: number; repositories: { id: string; alias: string; url: string }[] }[] }>().services;
+    const base = { ...input, repositories: service!.repositories };
+    const configured = { ...base, deployments: base.deployments.map((row) => (row.environmentKey === "prod" ? { ...row, dbhub: [mysqlTarget] } : row)) };
+    await createIssue(f.app, "mysql", "prod");
+    await createIssue(f.app, "mysql", "test");
+    const [prod, testId] = f.engine.enqueued;
+    const patch = (payload: typeof base, expectedRevision: number) => f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: { ...payload, expectedRevision } });
+    let revision = service!.revision;
+    const blocked = await patch(configured, revision);
+    assert.equal(blocked.statusCode, 409, blocked.body);
+    f.engine.running.delete(prod!);
+    const saved = await patch(configured, revision++);
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.deepEqual(f.engine.closedSessions, [prod]);
+    f.engine.closedSessions.length = 0;
+    // Rotating only a password keeps the same MCP ID and public projection, but the launched connection still needs replacing.
+    const rotated = { ...base, deployments: base.deployments.map((row) => (row.environmentKey === "prod" ? { ...row, dbhub: [{ ...mysqlTarget, password: "fixture-rotated" }] } : row)) };
+    f.engine.running.add(prod!);
+    assert.equal((await patch(configured, revision++)).statusCode, 200); // Unchanged data still checks/advances the service revision, but closes no session.
+    assert.deepEqual(f.engine.closedSessions, []);
+    assert.equal((await patch(rotated, revision)).statusCode, 409);
+    f.engine.running.delete(prod!);
+    assert.equal((await patch(rotated, revision++)).statusCode, 200);
+    assert.deepEqual(f.engine.closedSessions, [prod]);
+    f.engine.closedSessions.length = 0;
+    // Neither a service-wide note nor a changed test baseline can be hidden by a simultaneous prod DBHub clear.
+    for (const mixed of [
+      { ...base, description: "new notes" },
+      {
+        ...base,
+        deployments: base.deployments.map((row) => (row.environmentKey === "test" ? { ...row, repositoryBranches: row.repositoryBranches.map((branch) => ({ ...branch, baseBranch: "next" })) } : row)),
+      },
+    ]) {
+      const refused = await patch(mixed, revision);
+      assert.equal(refused.statusCode, 409, refused.body);
+      assert.equal(refused.json().error, "service_has_running_issues");
+    }
+    const selected = await f.app.inject({ url: "/api/services/mysql/dbhub-targets", headers });
+    assert.equal(selected.json().revision, revision);
+    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, "fixture-rotated");
+    assert.deepEqual(f.engine.closedSessions, []);
+    const cleared = await patch(base, revision);
+    assert.equal(cleared.statusCode, 200, cleared.body);
+    assert.deepEqual(f.engine.closedSessions, [prod]);
+    assert.equal(f.engine.running.has(testId!), true);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("adding or removing a deployment protects its old/new readers without reserving unchanged deployments", async () => {
+  const f = await createApiFixture();
+  try {
+    await createService(f.app, "Other", ["prod", "test"]);
+    await createService(f.app, "Mysql", ["prod"]);
+    const service = (await f.app.inject({ url: "/api/config" })).json().services.find((row: { key: string }) => row.key === "mysql");
+    for (const environment of ["prod", "test"] as const) await createIssue(f.app, "other", environment);
+    const [prod, testId] = f.engine.enqueued;
+    let revision = service.revision;
+    for (const input of [servicePayload("Mysql", ["prod", "test"]), servicePayload("Mysql", ["prod"])]) {
+      const patch = () => f.app.inject({ method: "PATCH", url: "/api/services/mysql", headers, payload: { ...input, repositories: service.repositories, expectedRevision: revision } });
+      f.engine.closedSessions.length = 0;
+      f.engine.running.add(testId!);
+      const refused = await patch();
+      assert.equal(refused.statusCode, 409, refused.body);
+      assert.deepEqual(f.engine.closedSessions, []);
+      f.engine.running.delete(testId!);
+      const applied = await patch();
+      assert.equal(applied.statusCode, 200, applied.body);
+      assert.deepEqual(f.engine.closedSessions, [testId]);
+      assert.ok(f.engine.running.has(prod!));
+      revision++;
+    }
   } finally {
     await f.cleanup();
   }

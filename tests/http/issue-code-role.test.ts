@@ -46,13 +46,19 @@ for (const explicit of [false, true])
       const testIssueId = f.engine.enqueued.at(-1)!;
       f.engine.messages.length = 0;
       f.engine.enqueued.length = 0;
-      // isAdmin does not grant the developer role; this actor is a plain product user.
-      await f.app.inject({
+      const product = await f.app.inject({
         method: "POST",
         url: "/api/users",
         headers: { "x-issue-pilot-subject": owner },
         payload: { subject: "product@example.test", name: "Product", email: "product@example.test", role: "product" },
       });
+      assert.equal(product.statusCode, 201, product.body);
+      // Default selection is the oldest active user, not necessarily the lexically first subject created this second.
+      if (!explicit)
+        await database.db
+          .update(subjects)
+          .set({ createdAt: new Date(0) })
+          .where(eq(subjects.subject, "product@example.test"));
       const headers = explicit ? { "x-issue-pilot-subject": "product@example.test" } : {};
       const base = `/api/issues/${dev.id}`;
       for (const request of [

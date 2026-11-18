@@ -197,12 +197,14 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         const included = await issueServiceIds(database, issue);
         const [workspace] = await database.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)).limit(1);
         const already = included.includes(target.service.id);
-        if (!(already && input.operation === "include" && workspace?.runtimeReady) && !(input.operation === "remove" && !already)) {
+        const adding = input.operation === "include" && !already;
+        const removing = input.operation === "remove" && already;
+        if (adding || removing || (input.operation === "include" && !workspace?.runtimeReady)) {
           const next = input.operation === "include" ? [...new Set([...included, target.service.id])] : included.filter((id) => id !== target.service.id);
           await loadServiceRepositorySet(database, next, issue.environmentId);
           await database.transaction(async (tx) => {
-            if (input.operation === "include") await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
-            else await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
+            if (adding) await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
+            else if (removing) await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
             await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
           });
           // Persist intent before cross-media preparation. A failed attempt retires the session too,
@@ -215,14 +217,12 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
             await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
             readRoots = project.readRoots;
           } catch (error) {
-            // The membership write is persisted intent; preparation owns the cross-media Git work and rolls
-            // back its own changes. Revert the intent too, otherwise every later round repeats the same
-            // prepare failure and hides both code and unrelated Issue edits. runtimeReady stays false so
-            // the next round re-prepares.
+            // Revert only our membership change. Retrying an existing include owns no such change;
+            // keep the view invalid so the next round re-prepares it.
             try {
               await database.transaction(async (tx) => {
-                if (input.operation === "include") await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
-                else await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
+                if (adding) await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
+                else if (removing) await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
                 await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
               });
             } catch (revertError) {

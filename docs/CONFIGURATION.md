@@ -45,6 +45,7 @@
 
 ## 服务与查询目标
 
+- 编辑服务只会保存已有部署；需要补环境时，先点相应的“添加部署”按钮，再配置分支并保存。只改服务说明不会新增部署。
 - 仓库目录支持 HTTPS 和 SSH。服务包含开发环境部署时，关联仓库必须全部使用 SSH；保存服务或修改目录地址时会检查。仅分析的服务可保留 HTTPS，但开发者作为工单凭证所有者时仍只能使用本人 SSH 身份，HTTPS 会被明确拒绝。
 - 服务关联仓库；正式／测试部署配置各自的基线和查询目标。
 - 开发基线从**同服务的正式部署**推导，不另设一套开发基线。
@@ -53,7 +54,7 @@
 - DBHub 在部署中填写目标，应用按需生成 stdio 连接，不再保存第二份 MCP 配置。目前服务 MCP 工具只来自这类生成连接；手工添加的 HTTPS／SSE／stdio 连接都是全局连接，只供钉钉导入，不会成为智能体工具。MySQL 使用配置的外部 MCP，不是原生 MySQL 查询器。
 - 开发工单查询正式／测试证据时，需要明确选环境。
 
-保存凭证不代表目标已配置，保存目标也不代表凭证或权限有效。配置更新被运行工单阻止时，先等待或中断任务，不绕过冲突检查。
+保存凭证不代表目标已配置，保存目标也不代表凭证或权限有效。只修改正式环境的 DBHub 目标时，正式和开发工单能看到变化，运行中会阻止保存；仅运行测试工单不会阻止。修改服务名称、说明或仓库绑定则影响该服务部署的所有环境。遇到冲突先等待或中断相关任务，不绕过检查。
 
 ## 参数与工单网络
 
@@ -116,7 +117,7 @@ curl -s "$BASE/api/mcp-services" -H "$ADMIN"
 # 新建名为 dingtalk 的 HTTPS 连接；Authorization 从文件读取，避免出现在命令行
 curl -s -X POST "$BASE/api/mcp-services" -H "$ADMIN" -H 'Content-Type: application/json' \
   --data @dingtalk-mcp.json   # {"name":"dingtalk","transport":"streamable_http","url":"https://<网关地址>/mcp","enabled":true,"credentialUpdate":{"mode":"replace","values":{"authorization":"Bearer <令牌>"}}}
-# 测试连接：成功返回工具列表；失败只返回稳定错误码；stdio 错误详情写入运维日志，仅遮盖本系统配置的连接凭证
+# 测试连接：成功返回工具列表；失败只返回稳定错误码；stdio 运维日志只记录连接名和标准错误字节数，不记录子进程输出
 curl -s -X POST "$BASE/api/mcp-services/<id>/test" -H "$ADMIN"
 ```
 

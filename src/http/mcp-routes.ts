@@ -4,10 +4,10 @@ import { issuesAffectedByGlobalChange } from "../configuration/impact.ts";
 import { mcpServices } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configuration/mcp.ts";
-import { errorDiagnostic } from "../diagnostics.ts";
+import { errorDiagnostic, isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { constraintFailure } from "../db/constraints.ts";
 import { DomainError } from "../domain/errors.ts";
-import { isClassifiedFailure, record } from "./input.ts";
+import { record } from "../domain/input.ts";
 import { requireAdmin, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({
@@ -38,7 +38,7 @@ export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "databa
         "mcp_has_running_issues",
       );
     } catch (error) {
-      if (isClassifiedFailure(error)) throw error;
+      if (isClassifiedOwnerFailure(error)) throw error;
       // Connection names are unique; the database boundary reports which constraint failed.
       if (constraintFailure(error)?.code === "conflict") throw new DomainError("mcp_name_conflict", "conflict", { cause: error });
       app.log.error(errorDiagnostic(error));

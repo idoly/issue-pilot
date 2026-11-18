@@ -10,7 +10,7 @@ import type { JsonAgentSessionEvent, SessionManager } from "@earendil-works/pi-c
 import { stableErrorReason } from "../diagnostics.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment, type PersonalGitEnvironment } from "../workspace/git-credentials.ts";
-import { SharedCheckoutLease } from "../workspace/git.ts";
+import { SharedCheckoutLease, WorktreeRollbackFailure } from "../workspace/git.ts";
 import { resolveAgentModel } from "../configuration/agent.ts";
 import { applicationParameterBounds, applicationParameters } from "../configuration/parameters.ts";
 import { loadIssueDeployments } from "../workspace/issue-services.ts";
@@ -463,7 +463,10 @@ export class AgentEngine implements AgentController {
         controller.signal.throwIfAborted();
         await operation();
       } catch (error) {
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted && error instanceof WorktreeRollbackFailure) {
+          // A stop request does not settle a failed Git rollback. Fail the workspace and the waiting caller.
+          this.cancellationErrors.get(issueId)?.push(error);
+        } else if (controller.signal.aborted) {
           // Cancellation is not a successful conclusion or a failed workspace; preserve a reusable dev session.
           if (error !== controller.signal.reason) this.reportError(error, issueId);
           try {
@@ -764,7 +767,7 @@ export class AgentEngine implements AgentController {
     if (!file) throw new Error("agent_session_file_missing");
     const entryId = appendAgentMessage(manager, scope, message, images, request, state);
     await flushSessionEntries(file);
-    this.publishEvent({ id: randomUUID(), issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message, ...(images.length ? { images } : {}) } });
+    this.publishEvent({ id: entryId, issueId, createdAt: new Date().toISOString(), event: { type: "issue_user", message, ...(images.length ? { images } : {}) } });
     return entryId;
   }
 

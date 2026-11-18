@@ -4,7 +4,7 @@ import { OperationError } from "../operation-error.ts";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { eq } from "drizzle-orm";
-import { loadGlobalAgentConfiguration, loadGlobalAgentRevision, loadSharedAgentApiKey, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
+import { loadGlobalAgentConfiguration, loadGlobalAgentRevision, loadSharedAgentApiKey, parseAgentModelSelection, saveGlobalAgentConfiguration } from "../configuration/agent.ts";
 import {
   installApplicationParameters,
   loadApplicationParameterState,
@@ -16,11 +16,11 @@ import { inspectAgentResources, parseAgentRuntime } from "../configuration/pi-ru
 import { applyIssueSandboxNetwork } from "../agent/issue-sandbox.ts";
 import { workspaceLifecyclePolicy } from "../workspace/lifecycle.ts";
 import { loadConfiguration, loadConfigurationCatalog, loadServiceConfigurationDescription } from "../configuration/read.ts";
-import { issuesAffectedByGlobalChange, issuesAffectedByServiceChange } from "../configuration/impact.ts";
+import { issuesAffectedByGlobalChange, issuesAffectedByServiceDeletion, issuesObservingDeployments } from "../configuration/impact.ts";
 import { loadSharedCapabilityCredentials, selectDmsCredentials } from "../configuration/user-credentials.ts";
 import { userCredentials, environments, issues, issueServiceScopes, serviceDeployments, services } from "../db/schema.ts";
-import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, checkRevision, closedRecord, isClassifiedFailure, optionalText, record, text } from "./input.ts";
+import { errorDiagnostic, isClassifiedOwnerFailure } from "../diagnostics.ts";
+import { checkRevision, closedRecord, optionalText, record, text } from "../domain/input.ts";
 import { loadIssueSearchSettings, projectIssueSearchSettings, updateIssueSearchSettings } from "../search/settings.ts";
 import { requireAdmin, requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import { applyServiceConfiguration, prepareServiceConfiguration } from "../configuration/service-deployments.ts";
@@ -43,14 +43,6 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
   const { app, database, engine, modelCatalog, runScopeExclusive, workspaces } = context;
   const findServiceByKey = async (key: string) => (await database.db.select().from(services).where(eq(services.key, key)).limit(1))[0];
 
-  const dbHubChanged = (prepared: Awaited<ReturnType<typeof prepareServiceConfiguration>>) => {
-    const incoming = prepared.parsed.deployments;
-    const targets = (config: { dbhub?: unknown }) => JSON.stringify(config.dbhub ?? []);
-    return (
-      incoming.some((row) => targets(row.config) !== targets(prepared.existingDeployments.find((old) => old.environmentId === prepared.environmentsByKey.get(row.environmentKey)?.id)?.config ?? {})) ||
-      prepared.existingDeployments.some((old) => old.config.dbhub?.length && !incoming.some((row) => prepared.environmentsByKey.get(row.environmentKey)?.id === old.environmentId))
-    );
-  };
   app.get<{ Params: { key: string } }>("/api/services/:key/dbhub-targets", { logLevel: "silent" }, async (request, _reply) => {
     return runScopeExclusive(async () => {
       await requireDeveloper(database, request);
@@ -72,7 +64,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
         if (!value) throw new DomainError("service_not_found", "not_found");
         return value;
       } catch (error) {
-        if (isClassifiedFailure(error)) throw error;
+        if (isClassifiedOwnerFailure(error)) throw error;
         app.log.error(errorDiagnostic(error));
         throw new DomainError("service_configuration_description_failed", "internal");
       }
@@ -93,7 +85,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
     } catch (error) {
       // Classified failures (including upstream dms_* codes) are logged once by the global handler; the route is
       // silent, so record only the unclassified TLS/DNS/SDK failure it replaces with an opaque code.
-      if (isClassifiedFailure(error)) throw error;
+      if (isClassifiedOwnerFailure(error)) throw error;
       app.log.error({ code: "dms_scope_resolve_failed" }, "dms_scope_resolve_failed");
       throw new DomainError("dms_scope_resolve_failed", "upstream");
     }
@@ -115,7 +107,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       else if (update.mode === "clear" && Object.keys(update).length === 1) apiKey = "";
       else throw new DomainError("invalid_credential_update", "bad_request");
     }
-    const configuration = { ...agentModelSelection(input, await modelCatalog.list()), runtime: parseAgentRuntime(input.runtime) };
+    const configuration = { ...parseAgentModelSelection(input, await modelCatalog.list()), runtime: parseAgentRuntime(input.runtime) };
     return runScopeExclusive(async () => {
       await requireAdmin(database, request);
       const affected = await issuesAffectedByGlobalChange(database.db);
@@ -184,7 +176,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       try {
         return await inspectAgentResources();
       } catch (error) {
-        if (isClassifiedFailure(error)) throw error;
+        if (isClassifiedOwnerFailure(error)) throw error;
         app.log.error(errorDiagnostic(error));
         throw new DomainError("agent_resources_inspection_failed", "internal");
       }
@@ -200,10 +192,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       const serviceId = randomUUID();
       const [existing, prepared] = await Promise.all([database.db.select({ key: services.key }).from(services), prepareServiceConfiguration({ executor: database.db, serviceId, input })]);
       const key = uniqueServiceKey(name, new Set(existing.map((row) => row.key)));
-      const affected = await issuesAffectedByServiceChange(database.db, serviceId, {
-        environmentKeys: prepared.parsed.deployments.map((row) => row.environmentKey),
-        dbHubChanged: dbHubChanged(prepared),
-      });
+      const affected = await issuesObservingDeployments(database.db, prepared.affectedEnvironmentIds);
       return runIssueExclusive(
         engine,
         affected.map((row) => row.id),
@@ -227,18 +216,14 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       if (!service) throw new DomainError("service_not_found", "not_found");
       const input = record(request.body);
       checkRevision(input.expectedRevision, service.revision);
-      const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input });
-      const affected = await issuesAffectedByServiceChange(database.db, service.id, {
-        environmentKeys: prepared.parsed.deployments.map((row) => row.environmentKey),
-        dbHubChanged: dbHubChanged(prepared),
-      });
+      const prepared = await prepareServiceConfiguration({ executor: database.db, serviceId: service.id, input, currentService: service });
+      const affected = await issuesObservingDeployments(database.db, prepared.affectedEnvironmentIds);
       return runIssueExclusive(
         engine,
         affected.map((row) => row.id),
         async (reservation) => {
-          const serviceUpdate = { name: text(input.name, "name", 200), description: optionalText(input.description) ?? "" };
           for (const row of affected) await reservation.closeSession(row.id);
-          await database.db.transaction((transaction) => applyServiceConfiguration({ executor: transaction, serviceId: service.id, prepared, serviceUpdate }));
+          await database.db.transaction((transaction) => applyServiceConfiguration({ executor: transaction, serviceId: service.id, prepared }));
           return { ok: true };
         },
         "service_has_running_issues",
@@ -253,7 +238,7 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
       const primary = await database.db.select({ id: issues.id }).from(issues).where(eq(issues.serviceId, service.id)).limit(1);
       const extra = await database.db.select().from(issueServiceScopes).where(eq(issueServiceScopes.serviceId, service.id)).limit(1);
       if (primary.length || extra.length) throw new DomainError("service_is_used_by_issues", "conflict");
-      const affected = await issuesAffectedByServiceChange(database.db, service.id);
+      const affected = await issuesAffectedByServiceDeletion(database.db, service.id);
       await runIssueExclusive(
         engine,
         affected.map((row) => row.id),

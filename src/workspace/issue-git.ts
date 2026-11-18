@@ -1,11 +1,8 @@
-import { cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { executeLocalCommand } from "../process.ts";
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
-import { runGit, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
+import { runGit } from "./git-command.ts";
 
-const { gitOperationMs } = issuePilotConfig.limits.process;
 const git = async (args: string[]) => (await runGit(args)).trim();
 
 async function writeAtomicGitFile(file: string, content: string): Promise<void> {
@@ -166,61 +163,17 @@ export async function publishIssueBranch(sharedStore: string, privateStore: stri
   return commit;
 }
 
-async function readIndexObjects(workspace: string): Promise<Set<string>> {
-  const objects = new Set<string>();
-  let pending = "";
-  const listed = await executeLocalCommand("git", trustedGitArgs(["-C", workspace, "ls-files", "--stage", "-z"]), {
-    timeout: gitOperationMs,
-    environment: trustedGitEnvironment(),
-    maxOutputBytes: null,
-    onStdout: (chunk) => {
-      pending += chunk;
-      let end: number;
-      while ((end = pending.indexOf("\0")) >= 0) {
-        const entry = pending.slice(0, end);
-        pending = pending.slice(end + 1);
-        const match = /^([0-9]{6}) ([a-f0-9]{40}) [0-3]\t/.exec(entry);
-        if (!match) throw new Error("workspace_git_index_invalid");
-        if (match[1] !== "160000" && !/^0+$/.test(match[2]!)) objects.add(match[2]!);
-      }
-    },
-  });
-  if (listed.code || pending) throw new Error("workspace_git_index_invalid");
-  return objects;
-}
-
-async function initializePrivateStore(
-  sharedStore: string,
-  temporary: string,
-  branch: string,
-  commit: string,
-  base: string,
-  workspace?: string,
-  publishedCommit: string | null = commit,
-): Promise<void> {
-  // Use only the reviewed branch. Baseline objects remain shared; Issue commits and staged blobs are packed locally.
-  await git(["init", "--bare", "--object-format=sha1", `--initial-branch=${branch}`, temporary]);
-  await writeFile(path.join(temporary, "objects/info/alternates"), `${path.relative(path.join(temporary, "objects"), path.join(sharedStore, "objects"))}\n`);
-  const origin = await git(["-C", sharedStore, "remote", "get-url", "origin"]);
-  await git(["-C", temporary, "remote", "add", "origin", origin]);
-  await git(["-C", temporary, "update-ref", `refs/heads/${branch}`, commit]);
-  await writeFile(path.join(temporary, publishedIssueBranchFile), JSON.stringify({ branch, commit: publishedCommit }) + "\n", { mode: 0o600 });
-  await git(["-C", temporary, "fetch", "--no-tags", sharedStore, "+refs/remotes/origin/*:refs/remotes/origin/*"]);
-  const objects = workspace ? await readIndexObjects(workspace) : new Set<string>();
-  if (commit === base && !objects.size) return;
-  const packed = await executeLocalCommand("git", trustedGitArgs(["-C", sharedStore, "pack-objects", "--revs", "--non-empty", path.join(temporary, "objects/pack/pack")]), {
-    timeout: gitOperationMs,
-    environment: trustedGitEnvironment(),
-    input: Buffer.from([commit, `^${base}`, ...objects].join("\n") + "\n"),
-  });
-  if (packed.code) throw new Error("workspace_git_object_preservation_failed", { cause: new Error(packed.stderr) });
-}
-
 /** Create a new branch directly in its private store. No shared branch or worktree is created. */
 export async function createPrivateIssueBranch(sharedStore: string, privateStore: string, branch: string, base: string): Promise<void> {
   const temporary = await privateStoreStagingPath(privateStore);
   try {
-    await initializePrivateStore(sharedStore, temporary, branch, base, base, undefined, null);
+    await git(["init", "--bare", "--object-format=sha1", `--initial-branch=${branch}`, temporary]);
+    await writeFile(path.join(temporary, "objects/info/alternates"), `${path.relative(path.join(temporary, "objects"), path.join(sharedStore, "objects"))}\n`);
+    const origin = await git(["-C", sharedStore, "remote", "get-url", "origin"]);
+    await git(["-C", temporary, "remote", "add", "origin", origin]);
+    await git(["-C", temporary, "update-ref", `refs/heads/${branch}`, base]);
+    await writeFile(path.join(temporary, publishedIssueBranchFile), JSON.stringify({ branch, commit: null }) + "\n", { mode: 0o600 });
+    await git(["-C", temporary, "fetch", "--no-tags", sharedStore, "+refs/remotes/origin/*:refs/remotes/origin/*"]);
     await rename(temporary, privateStore);
   } catch (error) {
     try {
@@ -242,57 +195,4 @@ async function privateStoreStagingPath(privateStore: string): Promise<string> {
   await mkdir(path.dirname(privateStore), { recursive: true, mode: 0o700 });
   if ((await realpath(path.dirname(privateStore))) !== path.dirname(privateStore)) throw new Error("workspace_git_store_invalid");
   return `${privateStore}.preparing-${randomUUID()}`;
-}
-
-/** Move a validated linked worktree's mutable Git state into its Issue. No shared write grant is needed. */
-export async function isolateIssueWorktree(sharedStore: string, privateStore: string, workspace: string, branch: string, base: string): Promise<void> {
-  const pointerFile = path.join(workspace, ".git");
-  const pointer = await readGitPointer(pointerFile);
-  if (!pointer.startsWith("gitdir: ")) throw new Error("workspace_git_binding_invalid");
-  const metadata = path.resolve(workspace, pointer.slice(8).trim());
-  const privateMetadata = path.join(privateStore, "worktrees", path.basename(metadata));
-  if (metadata === privateMetadata) {
-    await validateIssueWorktreeBinding(privateStore, workspace, branch);
-    return;
-  }
-  await validateIssueWorktreeBinding(sharedStore, workspace, branch);
-  const commit = await readIssueBranchCommit(sharedStore, branch);
-  const temporary = await privateStoreStagingPath(privateStore);
-  let installed = false,
-    switched = false;
-  try {
-    await initializePrivateStore(sharedStore, temporary, branch, commit, base, workspace);
-    await mkdir(path.join(temporary, "worktrees"), { recursive: true });
-    await cp(metadata, path.join(temporary, "worktrees", path.basename(metadata)), { recursive: true, errorOnExist: true, force: false });
-    await rename(temporary, privateStore);
-    installed = true;
-    await writeFile(path.join(privateMetadata, "commondir"), "../..\n");
-    await writeFile(path.join(privateMetadata, "gitdir"), `${path.relative(privateMetadata, pointerFile)}\n`);
-    await writeAtomicGitFile(pointerFile, `gitdir: ${path.relative(workspace, privateMetadata)}\n`);
-    switched = true;
-    await git(["-C", workspace, "rev-parse", "--verify", "HEAD"]);
-    // Preserve the old registration as recovery evidence without retaining a false shared worktree binding.
-    await rename(metadata, path.join(privateStore, "legacy-worktree-registration"));
-  } catch (error) {
-    const failures: unknown[] = [error];
-    if (switched)
-      try {
-        await writeAtomicGitFile(pointerFile, pointer);
-      } catch (failure) {
-        failures.push(failure);
-      }
-    if (installed && failures.length === 1)
-      try {
-        await rm(privateStore, { recursive: true });
-      } catch (failure) {
-        failures.push(failure);
-      }
-    try {
-      await rm(temporary, { recursive: true, force: true });
-    } catch (failure) {
-      failures.push(failure);
-    }
-    if (failures.length > 1) throw new AggregateError(failures, "workspace_git_isolation_rollback_failed");
-    throw error;
-  }
 }

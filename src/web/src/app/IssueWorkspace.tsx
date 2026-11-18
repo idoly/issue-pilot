@@ -101,23 +101,22 @@ export function IssueWorkspace(props: {
   onCleanup(() => {
     issueGeneration++;
   });
-  createEffect(
-    () => ({ issueId: props.issue.id, subject: currentUser()?.subject, role: currentUser()?.role }),
-    (context, previous) => {
-      if (!previous || (context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role)) return;
-      issueGeneration += 1;
-      setEditOpen(false);
-      setRetrying(false);
-      setRetryError("");
-      setStatusSaving(false);
-      setStatusError("");
-      setScopeOpen(false);
-      setFollowUpOpen(false);
-      setRelatedOpen(false);
-      setPreviewAttachment(null);
-      setDescriptionExpanded(false);
-    },
-  );
+  // A detail refresh preserves dialogs; a new Issue, subject or role disposes the old drafts and request handlers.
+  const dialogContext = createMemo(() => JSON.stringify([props.issue.id, currentUser()?.subject, currentUser()?.role]));
+  createEffect(dialogContext, (_context, previous) => {
+    if (!previous) return;
+    issueGeneration += 1;
+    setEditOpen(false);
+    setRetrying(false);
+    setRetryError("");
+    setStatusSaving(false);
+    setStatusError("");
+    setScopeOpen(false);
+    setFollowUpOpen(false);
+    setRelatedOpen(false);
+    setPreviewAttachment(null);
+    setDescriptionExpanded(false);
+  });
   const mayRunAgent = () => canWriteIssueCode(currentUser(), environmentKind(props.issue.environmentKey));
   const retry = async () => {
     if (!mayRunAgent()) return;
@@ -437,24 +436,26 @@ export function IssueWorkspace(props: {
         <IssueFiles issue={props.issue} hidden={props.hidden} />
       </Show>
       <AttachmentPreview issueKey={props.issue.id} attachment={previewAttachment()} onClose={() => setPreviewAttachment(null)} />
-      <RelatedIssuesDialog
-        issue={props.issue}
-        issueList={props.issueList}
-        open={relatedOpen()}
-        register={(open) => (openRelated = open)}
-        onClose={() => setRelatedOpen(false)}
-        onSaved={props.onUpdated}
-      />
-      <FollowUpDialog issue={props.issue} open={followUpOpen()} register={(open) => (openFollowUp = open)} onClose={() => setFollowUpOpen(false)} onCreated={props.onCreatedFollowUp} />
-      <ScopeTransitionDialog issue={props.issue} open={scopeOpen()} register={(open) => (openScope = open)} onClose={() => setScopeOpen(false)} onApplied={props.onUpdated} />
-      <IssueEditDialog
-        issue={props.issue}
-        open={editOpen()}
-        register={(open) => (openEdit = open)}
-        onClose={() => setEditOpen(false)}
-        onSaved={props.onUpdated}
-        onDirtyChange={props.onEditDirtyChange}
-      />
+      <Show keyed when={dialogContext()}>
+        <RelatedIssuesDialog
+          issue={props.issue}
+          issueList={props.issueList}
+          open={relatedOpen()}
+          register={(open) => (openRelated = open)}
+          onClose={() => setRelatedOpen(false)}
+          onSaved={props.onUpdated}
+        />
+        <FollowUpDialog issue={props.issue} open={followUpOpen()} register={(open) => (openFollowUp = open)} onClose={() => setFollowUpOpen(false)} onCreated={props.onCreatedFollowUp} />
+        <ScopeTransitionDialog issue={props.issue} open={scopeOpen()} register={(open) => (openScope = open)} onClose={() => setScopeOpen(false)} onApplied={props.onUpdated} />
+        <IssueEditDialog
+          issue={props.issue}
+          open={editOpen()}
+          register={(open) => (openEdit = open)}
+          onClose={() => setEditOpen(false)}
+          onSaved={props.onUpdated}
+          onDirtyChange={props.onEditDirtyChange}
+        />
+      </Show>
     </section>
   );
 }

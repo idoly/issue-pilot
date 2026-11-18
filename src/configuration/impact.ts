@@ -12,48 +12,38 @@ import { isDevelopmentEnvironment, type CapabilityName } from "../domain/contrac
 type Reader = Pick<Database, "select">;
 export type AffectedIssue = { id: string };
 
-async function issuesInEnvironments(reader: Reader, environmentIds: Iterable<string>): Promise<AffectedIssue[]> {
-  const ids = [...new Set(environmentIds)];
-  return ids.length ? reader.select({ id: issues.id }).from(issues).where(inArray(issues.environmentId, ids)) : [];
-}
-
-/** Development Issues read prod/test deployments as evidence, so a change to any deployed target reaches them too. */
-async function developmentEnvironmentIds(reader: Reader): Promise<string[]> {
+/** Inverse of listEnvironmentServices: even an unincluded service is describable in the Issue's own environment; dev sees every environment. */
+export async function issuesObservingDeployments(reader: Reader, environmentIds: Iterable<string>): Promise<AffectedIssue[]> {
+  const ids = new Set(environmentIds);
+  if (!ids.size) return [];
   const rows = await reader.select({ id: environments.id, kind: environments.kind }).from(environments);
-  return rows.filter((row) => isDevelopmentEnvironment(row.kind)).map((row) => row.id);
+  for (const row of rows) if (isDevelopmentEnvironment(row.kind)) ids.add(row.id);
+  return reader
+    .select({ id: issues.id })
+    .from(issues)
+    .where(inArray(issues.environmentId, [...ids]));
 }
 
-/**
- * Global inputs (shared model/runtime, shared DMS/SLS credentials, MCP connections and their
- * generated DBHub launch shapes) reach every session, so every Issue is affected.
- */
+/** Shared model/runtime, shared credential and global MCP writes retain their application-wide reservation. */
 export function issuesAffectedByGlobalChange(reader: Reader): Promise<AffectedIssue[]> {
   return reader.select({ id: issues.id }).from(issues);
 }
 
-/**
- * A service's description, deployments and service MCP are visible to every Issue in an environment
- * where it is or will be deployed (not only its entry/included Issues: the workspace tool lists and
- * describes all of them), plus development Issues. DBHub targets generate global MCP connections, so a
- * DBHub change (or deleting a service that has targets) affects every Issue.
- */
-export async function issuesAffectedByServiceChange(reader: Reader, serviceId: string, change: { environmentKeys?: readonly string[]; dbHubChanged?: boolean } = {}): Promise<AffectedIssue[]> {
-  const deployments = await reader.select().from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId));
-  if (change.dbHubChanged ?? deployments.some((row) => row.config.dbhub?.length)) return issuesAffectedByGlobalChange(reader);
-  const added = change.environmentKeys?.length
-    ? await reader
-        .select({ id: environments.id })
-        .from(environments)
-        .where(inArray(environments.key, [...change.environmentKeys]))
-    : [];
-  return issuesInEnvironments(reader, [...deployments.map((row) => row.environmentId), ...added.map((row) => row.id), ...(await developmentEnvironmentIds(reader))]);
+export async function issuesAffectedByServiceDeletion(reader: Reader, serviceId: string): Promise<AffectedIssue[]> {
+  const deployments = await reader.select({ environmentId: serviceDeployments.environmentId }).from(serviceDeployments).where(eq(serviceDeployments.serviceId, serviceId));
+  return issuesObservingDeployments(
+    reader,
+    deployments.map((row) => row.environmentId),
+  );
 }
 
 /** A native capability switch affects every Issue in an environment with a deployment configuring it, plus development Issues when any does. */
 export async function issuesAffectedByCapabilityChange(reader: Reader, capability: CapabilityName): Promise<AffectedIssue[]> {
   const deployments = (await reader.select().from(serviceDeployments)).filter((row) => Boolean(row.config[capability]));
-  if (!deployments.length) return [];
-  return issuesInEnvironments(reader, [...deployments.map((row) => row.environmentId), ...(await developmentEnvironmentIds(reader))]);
+  return issuesObservingDeployments(
+    reader,
+    deployments.map((row) => row.environmentId),
+  );
 }
 
 /** A repository URL change affects Issues whose entry or included service binds that URL. */

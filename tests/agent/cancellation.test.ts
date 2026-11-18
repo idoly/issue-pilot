@@ -6,7 +6,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { AgentEngine } from "../../src/agent/engine.ts";
 import { pendingAgentMessages } from "../../src/agent/message-delivery.ts";
 import { openDatabase } from "../../src/db/client.ts";
-import { agentSessions, issues } from "../../src/db/schema.ts";
+import { WorktreeRollbackFailure } from "../../src/workspace/git.ts";
+import { agentSessions, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { createApiFixture, createIssue, createService } from "../http/fixture.ts";
 
 test("cancels queued rounds without waiting for another Issue's slot, keeps input history and does not replay it", async () => {
@@ -55,6 +56,42 @@ test("cancels queued rounds without waiting for another Issue's slot, keeps inpu
     await waitFor(() => started.includes(second!.id));
   } finally {
     release();
+    await engine.close();
+    db.close();
+    await f.cleanup();
+  }
+});
+
+test("a cancelled preparation with a failed rollback is a failed workspace, not a clean stop", async () => {
+  const f = await createApiFixture();
+  const db = openDatabase(f.databaseFile),
+    errors: unknown[] = [];
+  const engine = new AgentEngine(db.db, f.root, undefined, (error) => errors.push(error));
+  const failure = new WorktreeRollbackFailure(new Error("fixture_restore_failure"));
+  const internal = engine as unknown as { run(id: string): Promise<void>; roundSignal(id: string): AbortSignal };
+  const started = Promise.withResolvers<void>();
+  internal.run = async (id) => {
+    const signal = internal.roundSignal(id);
+    const aborted = new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    started.resolve();
+    await aborted;
+    throw failure;
+  };
+  try {
+    await createService(f.app, "Rollback");
+    await createIssue(f.app, "rollback", "test");
+    const id = f.engine.enqueued[0]!;
+    engine.enqueue(id);
+    await started.promise;
+    await assert.rejects(engine.abort(id), (error) => error instanceof AggregateError && error.errors.includes(failure));
+    const [workspace] = await db.db.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, id));
+    assert.equal(workspace?.status, "failed");
+    assert.equal(workspace.lastError, "worktree_rollback_failed");
+    assert.deepEqual(errors, [failure]);
+    assert.equal(engine.getRunState(id), "idle");
+  } finally {
     await engine.close();
     db.close();
     await f.cleanup();

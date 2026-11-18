@@ -16,7 +16,7 @@ import { buildApi } from "../../src/http/api.ts";
 import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueCcRecipients, issueRelations, issueRepositories, issueWorkspaces, issues } from "../../src/db/schema.ts";
 import { issueRepositoryStorePath, repositoryStorePath } from "../../src/workspace/git.ts";
-import { isolateIssueWorktree } from "../../src/workspace/issue-git.ts";
+import { createPrivateIssueBranch } from "../../src/workspace/issue-git.ts";
 import { issueRoot } from "../../src/workspace/state.ts";
 import { prepareIssueRuntime } from "../../src/workspace/runtime.ts";
 import { createService, createIssue, modelCatalog, servicePayload, TestAgentController } from "../http/fixture.ts";
@@ -69,8 +69,9 @@ try {
   await exec("git", ["-C", store, "remote", "set-url", "origin", url]);
   const checkout = path.join(issueRoot(root, issue.key), "application");
   const branch = "browser-fixture";
-  await exec("git", ["--git-dir", store, "worktree", "add", "-b", branch, checkout, "main"]);
-  await isolateIssueWorktree(store, issueRepositoryStorePath(root, issue.key, url), checkout, branch, commit);
+  const privateStore = issueRepositoryStorePath(root, issue.key, url);
+  await createPrivateIssueBranch(store, privateStore, branch, commit);
+  await exec("git", ["-C", privateStore, "worktree", "add", "--relative-paths", checkout, branch]);
   await writeFile(path.join(checkout, "copy-whitespace.ts"), copyAfter);
   const seedDatabase = openDatabase(databaseFile);
   try {

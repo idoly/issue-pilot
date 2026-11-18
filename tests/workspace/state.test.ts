@@ -111,6 +111,21 @@ test("validates registered repositories while allowing Issue working files and d
   }
 });
 
+test("offline layout audit identifies a missing or redirected registered root without creating it", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-layout-audit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const key = "ISSUE-20261118-001";
+  const directory = issueRoot(root, key);
+  await assert.rejects(assertIssueStateLayout(root, [key]), /ISSUE-20261118-001/);
+  assert.equal(await pathExists(directory), false);
+  await mkdir(path.dirname(directory));
+  const preserved = path.join(root, "preserved");
+  await mkdir(preserved);
+  await symlink(preserved, directory);
+  await assert.rejects(assertIssueStateLayout(root, [key]), /ISSUE-20261118-001/);
+  assert.equal(await fs.readlink(directory), preserved);
+});
+
 test("preserves unmanaged Issue state and checks shared snapshots without changing them", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-state-"));
   const activeKey = "issue-20260807-001";

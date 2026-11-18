@@ -2,7 +2,7 @@ import { DomainError } from "../domain/errors.ts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { IssueSearchSettings } from "../search/contracts.ts";
 import { IssueSearchIndex } from "../search/issue-index.ts";
-import { closedRecord, text } from "./input.ts";
+import { closedRecord, text } from "../domain/input.ts";
 import { loadIssueSearchSettings } from "../search/settings.ts";
 import { requireAdmin, requireCurrentUser, type ApiRouteContext } from "./route-context.ts";
 

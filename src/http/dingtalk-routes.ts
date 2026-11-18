@@ -9,7 +9,7 @@ import { connectMcp, type McpConnector, type McpSession } from "../mcp/client.ts
 import { DingtalkError, dingtalkIssueRecord, dingtalkAttachments, parseDingtalkTable, readDingtalkFields, readDingtalkRecord, resolveDingtalkColumns } from "../mcp/dingtalk.ts";
 import type { DingtalkImportResponse, DingtalkSourceResponse } from "../mcp/dingtalk-contracts.ts";
 import { downloadDingtalkAttachments } from "./dingtalk-attachments.ts";
-import { choice, closedRecord, text } from "./input.ts";
+import { choice, closedRecord, text } from "../domain/input.ts";
 import type { IssueCreationScopeResolver, IssueCreator } from "./issue-routes.ts";
 import { authorizeWorkMode, requireCurrentUser, serializePerson, type ApiRouteContext } from "./route-context.ts";
 

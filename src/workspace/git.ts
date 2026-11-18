@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, mkdtemp, open, readdir, readlink, realpath, rm, rmdir } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, open, opendir, readdir, readlink, realpath, rename, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -368,20 +368,38 @@ export class WorktreeManager {
 
     // Git status and worktree remove both honor flags that can hide local file changes.
     // ls-files -v marks skip-worktree with S and assume-unchanged entries with lowercase tags.
-    let atEntryStart = true;
+    let pending = "";
     let hiddenChangesPossible = false;
+    const modulePaths: string[] = [];
     try {
-      const result = await executeLocalCommand("git", trustedGitArgs(["-C", resolvedWorkspace, "ls-files", "-v", "-z"]), {
+      const result = await executeLocalCommand("git", trustedGitArgs(["-C", resolvedWorkspace, "ls-files", "-v", "--stage", "-z"]), {
         timeout: issuePilotConfig.limits.process.gitOperationMs,
         environment: trustedGitEnvironment({ ...process.env, ...this.gitEnvironment.getStore() }),
         ...(this.gitSignal.getStore() ? { signal: this.gitSignal.getStore()! } : {}),
         maxOutputBytes: null,
+        strictStdoutUtf8: true,
         onStdout: (chunk) => {
-          hiddenChangesPossible ||= (atEntryStart && /^[a-zS]/.test(chunk)) || /\0[a-zS]/.test(chunk);
-          atEntryStart = chunk.endsWith("\0");
+          const entries = (pending + chunk).split("\0");
+          pending = entries.pop()!;
+          for (const entry of entries) {
+            hiddenChangesPossible ||= /^[a-zS]/.test(entry);
+            if (entry.startsWith(" 160000 ", 1)) modulePaths.push(entry.slice(entry.indexOf("\t") + 1));
+          }
         },
       });
-      if (result.code !== 0 || result.killed || !atEntryStart) throw new Error(result.stderr || "git_index_listing_incomplete");
+      if (result.code !== 0 || result.killed || pending) throw new Error(result.stderr || "git_index_listing_incomplete");
+      // Git deliberately ignores submodule contents. Only missing or empty real directories are disposable.
+      for (const modulePath of modulePaths) {
+        this.gitSignal.getStore()?.throwIfAborted();
+        const directory = resolve(resolvedWorkspace, modulePath);
+        if (!directory.startsWith(resolvedWorkspace + sep)) throw new Error("invalid_gitlink_path");
+        if (!(await managedGitDirectoryExists(directory))) continue;
+        await using handle = await opendir(directory);
+        if (await handle.read()) {
+          hiddenChangesPossible = true;
+          break;
+        }
+      }
     } catch (error) {
       throw new Error("workspace_git_inspection_failed", { cause: error });
     }
@@ -422,6 +440,7 @@ export class WorktreeManager {
         if (attempt.createdWorktree) created.push(attempt);
         prepared.push(attempt.prepared);
       }
+      this.gitSignal.getStore()?.throwIfAborted();
       return await input.finalize(prepared);
     } catch (error) {
       const rollbackErrors: unknown[] = [];
@@ -481,12 +500,13 @@ export class WorktreeManager {
           throw error;
         }
       }
+      this.gitSignal.getStore()?.throwIfAborted();
       await input.finalize?.();
     } catch (error) {
       const rollbackErrors: unknown[] = [];
       for (const { worktree, commit } of removed.reverse()) {
         try {
-          await this.restoreLocal({ issueKey: input.issueKey, mode: input.mode, expectedCommit: commit, ...worktree });
+          await this.withSignal(undefined, () => this.restoreLocal({ issueKey: input.issueKey, mode: input.mode, expectedCommit: commit, ...worktree }));
         } catch (rollbackError) {
           rollbackErrors.push(rollbackError);
         }
@@ -633,9 +653,27 @@ export class WorktreeManager {
     const cachePath = resolve(this.repositoriesRoot, repositoryKey);
     if (!(await managedGitDirectoryExists(cachePath))) {
       await mkdir(this.repositoriesRoot, { recursive: true });
-      await this.git(["init", "--bare", "--object-format=sha1", cachePath]);
-      await this.git(["-C", cachePath, "remote", "add", "origin", input.url]);
+      // Publish the store only once it can fetch. Never infer or repair the origin of an existing store.
+      const staging = await mkdtemp(resolve(this.repositoriesRoot, `${repositoryKey}.preparing-`));
+      try {
+        await this.git(["init", "--bare", "--object-format=sha1", staging]);
+        await this.git(["-C", staging, "remote", "add", "origin", input.url]);
+        await rename(staging, cachePath);
+      } catch (error) {
+        try {
+          await rm(staging, { recursive: true });
+        } catch (cleanup) {
+          throw new WorktreeRollbackFailure(new AggregateError([error, cleanup], "repository_cache_creation_rollback_failed"));
+        }
+        throw error;
+      }
     }
+    // The hash identifies the expected store, not the source its origin actually fetches.
+    const origins = await this.git(["-C", cachePath, "remote", "get-url", "--all", "origin"]).catch((error: unknown) => {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      throw new Error("repository_cache_origin_invalid", { cause: error });
+    });
+    if (origins !== `${input.url}\n`) throw new Error("repository_cache_origin_invalid");
     try {
       await this.git(["-C", cachePath, "fetch", "--prune", "origin", input.baseBranch]);
     } catch (error) {
@@ -780,7 +818,7 @@ export class WorktreeManager {
         await this.git(["-C", privateStore, "worktree", "add", "--relative-paths", workspacePath, workingBranch]);
       } catch (error) {
         try {
-          await this.discardPrepared(attempt);
+          await this.withSignal(undefined, () => this.discardPrepared(attempt));
         } catch (cleanup) {
           throw new WorktreeRollbackFailure(new AggregateError([error, cleanup], "worktree_rollback_failed"));
         }

@@ -802,7 +802,7 @@ export class WorkspaceLifecycleManager {
         },
       });
     } catch (error) {
-      if (error instanceof WorktreeRollbackFailure) throw new WorkspaceReleaseRefusal("workspace_release_rollback_failed", { cause: error });
+      if (error instanceof WorktreeRollbackFailure) throw new OperationError("workspace_release_rollback_failed", "unknown", { cause: error });
       if (error instanceof Error && ["workspace_has_changes", "workspace_repository_missing"].includes(error.message)) throw new WorkspaceReleaseRefusal(error.message, { cause: error });
       if (error && typeof error === "object" && "code" in error && error.code === "ENOTEMPTY") throw new WorkspaceReleaseRefusal("workspace_has_untracked_files", { cause: error });
       throw error;

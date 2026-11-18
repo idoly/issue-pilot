@@ -9,7 +9,8 @@ import {
   issuesAffectedByCapabilityChange,
   issuesAffectedByGlobalChange,
   issuesAffectedByRepositoryChange,
-  issuesAffectedByServiceChange,
+  issuesAffectedByServiceDeletion,
+  issuesObservingDeployments,
   issuesAffectedByUserChange,
 } from "../../src/configuration/impact.ts";
 import { openApplicationDatabase } from "../../src/db/bootstrap.ts";
@@ -70,26 +71,12 @@ async function fixture(t: { after: (callback: () => Promise<void>) => void }) {
 
 const ids = (rows: Array<{ id: string }>) => rows.map(({ id }) => id).sort();
 
-test("service changes reach every Issue in deployed or added environments plus development Issues", async (t) => {
+test("deployment observers include local and development Issues, but not readers of an unchanged environment", async (t) => {
   const db = await fixture(t);
-  assert.deepEqual(ids(await issuesAffectedByServiceChange(db, "orders")), ["billing-dev-issue", "billing-prod-issue", "orders-prod-issue"]);
-  assert.deepEqual(ids(await issuesAffectedByServiceChange(db, "orders", { environmentKeys: ["test"], dbHubChanged: false })), [
-    "billing-dev-issue",
-    "billing-prod-issue",
-    "billing-test-issue",
-    "orders-prod-issue",
-  ]);
-  assert.deepEqual(ids(await issuesAffectedByServiceChange(db, "new-service")), ["billing-dev-issue"]);
-  assert.equal((await issuesAffectedByServiceChange(db, "orders", { dbHubChanged: true })).length, 4);
-});
-
-test("existing DBHub targets make a service change global", async (t) => {
-  const db = await fixture(t);
-  await db
-    .update(serviceDeployments)
-    .set({ config: { dbhub: [{ type: "mysql", host: "db.example.test", port: 3306, username: "reader", password: "", database: "orders" }] } })
-    .where(eq(serviceDeployments.id, "billing-test"));
-  assert.equal((await issuesAffectedByServiceChange(db, "billing")).length, 4);
+  const [prod] = await db.select().from(environments).where(eq(environments.kind, "prod"));
+  assert.deepEqual(ids(await issuesObservingDeployments(db, [prod!.id])), ["billing-dev-issue", "billing-prod-issue", "orders-prod-issue"]);
+  assert.deepEqual(await issuesObservingDeployments(db, []), []);
+  assert.deepEqual(ids(await issuesAffectedByServiceDeletion(db, "orders")), ["billing-dev-issue", "billing-prod-issue", "orders-prod-issue"]);
 });
 
 test("capability switches reach environments configuring it plus development, and nothing when unconfigured", async (t) => {

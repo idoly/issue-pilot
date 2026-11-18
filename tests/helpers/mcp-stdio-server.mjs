@@ -6,7 +6,9 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSche
 if (process.env.MCP_FIXTURE_PID_FILE) await writeFile(process.env.MCP_FIXTURE_PID_FILE, String(process.pid), { mode: 0o600 });
 const secret = process.env.MCP_FIXTURE_SECRET ?? "fixture-secret";
 if (process.env.MCP_FIXTURE_FAILURE) {
-  console.error(secret, process.env.MCP_FIXTURE_DIAGNOSTIC ?? "");
+  await new Promise((resolve) => {
+    process.stderr.write(`${secret} ${process.env.MCP_FIXTURE_DIAGNOSTIC ?? ""}\n`, resolve);
+  });
   process.exit(17);
 }
 if (process.env.MCP_FIXTURE_HANG) {

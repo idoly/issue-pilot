@@ -72,6 +72,19 @@ test("reverts the persisted service scope when preparation fails", async () => {
     assert.equal(workspace!.runtimeReady, false);
     // The live session is still retired so the next round re-prepares from the reverted membership.
     assert.deepEqual(scopeChanges, [undefined]);
+
+    // Retrying include re-prepares the invalid view but didn't add this membership.
+    const include = () => tool.execute("retry", { operation: "include", service: "extra" }, undefined, undefined, undefined as never);
+    await assert.rejects(include(), /workspace_has_changes/);
+    assert.deepEqual(
+      (await database.db.select().from(issueServiceScopes)).map((row) => row.serviceId),
+      [extraService!.id],
+    );
+    // An actual new include, by contrast, owns the membership it must revert.
+    await database.db.delete(issueServiceScopes).where(eq(issueServiceScopes.issueId, issue!.id));
+    await assert.rejects(include(), /workspace_has_changes/);
+    assert.deepEqual(await database.db.select().from(issueServiceScopes), []);
+    assert.deepEqual(scopeChanges, [undefined, undefined, undefined]);
   } finally {
     await database.close();
     await rm(root, { recursive: true, force: true });

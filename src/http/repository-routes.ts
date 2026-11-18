@@ -3,7 +3,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { issuesAffectedByRepositoryChange } from "../configuration/impact.ts";
 import { assertDevelopmentRepositoryUrls } from "../configuration/service-deployments.ts";
 import { repositories, serviceRepositories, services, serviceDeployments, environments } from "../db/schema.ts";
-import { checkRevision, record, text } from "./input.ts";
+import { checkRevision, record, text } from "../domain/input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 import type { ManagedRepository } from "./contracts.ts";
 

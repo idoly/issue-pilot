@@ -145,6 +145,53 @@ test("preparing an existing bound worktree leaves its valid Git metadata unchang
   }
 });
 
+test("release preserves files inside a recorded gitlink but permits an empty placeholder", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-gitlink-release-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "source");
+  await git(["init", "-b", "main", source]);
+  await git(["-C", source, "commit", "--allow-empty", "-m", "initial"]);
+  const commit = await git(["-C", source, "rev-parse", "HEAD"]);
+  const modulePath = "vendor/upstream module";
+  await git(["-C", source, "update-index", "--add", "--cacheinfo", `160000,${commit},${modulePath}`]);
+  await git(["-C", source, "commit", "-m", "record upstream gitlink"]);
+  const manager = new WorktreeManager(root);
+  const issueKey = "ISSUE-20261118-101";
+  await claimIssueRoot(root, issueKey);
+  const work = await manager.prepare({ issueKey, workspaceName: "repo", url: source, baseBranch: "main", mode: "hotfix" });
+  const evidence = join(work.workspacePath, modulePath, "draft");
+  await writeFile(evidence, "retain me");
+  await assert.rejects(manager.remove(source, work.workspacePath, work.workingBranch!), /workspace_has_changes/);
+  assert.equal(await readFile(evidence, "utf8"), "retain me");
+  await unlink(evidence);
+  assert.equal(await manager.remove(source, work.workspacePath, work.workingBranch!), work.baseCommit);
+});
+
+test("preparation refuses missing, ambiguous and drifted cache origins before fetching", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-origin-binding-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "source"),
+    other = join(root, "other");
+  for (const url of [source, other]) {
+    await git(["init", "-b", "main", url]);
+    await git(["-C", url, "commit", "--allow-empty", "-m", basename(url)]);
+  }
+  const manager = new WorktreeManager(root);
+  const input = { url: source, baseBranch: "main" };
+  const { cachePath, baseCommit } = await manager.prepareShared(input);
+  await git(["-C", source, "commit", "--allow-empty", "-m", "new baseline"]);
+  for (const urls of [[other], [], [source, other]]) {
+    await git(["-C", cachePath, "config", "--unset-all", "remote.origin.url"]).catch((error: NodeJS.ErrnoException) => {
+      if (Number(error.code) !== 5) throw error;
+    });
+    for (const url of urls) await git(["-C", cachePath, "config", "--add", "remote.origin.url", url]);
+    await assert.rejects(manager.prepareShared(input), /repository_cache_origin_invalid/);
+    assert.equal(await git(["-C", cachePath, "rev-parse", "refs/remotes/origin/main"]), baseCommit);
+  }
+  await git(["-C", cachePath, "config", "--replace-all", "remote.origin.url", source]);
+  assert.equal((await manager.prepareShared(input)).baseCommit, await git(["-C", source, "rev-parse", "HEAD"]));
+});
+
 test("worktree removal preserves ignored files until they are explicitly removed", async () => {
   const root = await mkdtemp(join(tmpdir(), "issue-pilot-ignored-worktree-"));
   try {
@@ -262,16 +309,15 @@ test("serializes repository operations across manager instances sharing one stat
     let maximumActive = 0;
     for (const manager of managers) {
       const internal = manager as unknown as { git(args: string[]): Promise<string> };
+      const run = internal.git.bind(manager);
       internal.git = async (args) => {
         active += 1;
         maximumActive = Math.max(maximumActive, active);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 5);
-        });
-        active -= 1;
-        if (args[0] === "check-ref-format") return `${args.at(-1)}\n`;
-        if (args.includes("status")) return `# branch.head ${own.workingBranch}\n`;
-        return args.includes("rev-parse") ? "a".repeat(40) : "";
+        try {
+          return await run(args);
+        } finally {
+          active -= 1;
+        }
       };
     }
     await Promise.all(managers.map((manager) => manager.prepareShared({ url, baseBranch: "main" })));
@@ -770,6 +816,90 @@ test("re-including a repository retains its refreshed baseline in the shared sto
     assert.equal(again.workingBranch, first.workingBranch);
     assert.equal(await git(["-C", again.cachePath, "rev-parse", "refs/remotes/origin/main"]), advanced);
     assert.equal(await git(["-C", shared, "show-ref", "--hash", retainedSnapshotRef(advanced)]), advanced);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("interrupted first-time Git initialization leaves no partial store or registration and can retry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-init-retry-"));
+  try {
+    const url = join(root, "source"),
+      state = join(root, "state");
+    await git(["init", "-b", "main", url]);
+    await git(["-C", url, "commit", "--allow-empty", "-m", "fixture"]);
+    const input = { issueKey: "ISSUE-20261118-902", workspaceName: "repo", url, baseBranch: "main", mode: "hotfix" as const };
+    await claimIssueRoot(state, input.issueKey);
+    const manager = new WorktreeManager(state),
+      internal = manager as unknown as { git(args: string[]): Promise<string> };
+    const run = internal.git.bind(manager);
+    for (const phase of ["init", "worktree add"]) {
+      const controller = new AbortController();
+      internal.git = async (args) => {
+        const result = await run(args);
+        if (!controller.signal.aborted && (phase === "init" ? args[0] === "init" : args.includes("worktree") && args.includes("add"))) {
+          controller.abort();
+          controller.signal.throwIfAborted();
+        }
+        return result;
+      };
+      await assert.rejects(
+        manager.withSignal(controller.signal, () => manager.prepare(input)),
+        { name: "AbortError" },
+      );
+      if (phase === "init") assert.deepEqual(await readdir(join(state, "git", "repositories")), []);
+      await assert.rejects(access(issueRepositoryStorePath(state, input.issueKey, url)), { code: "ENOENT" });
+      await assert.rejects(access(join(issueRoot(state, input.issueKey), "repo")), { code: "ENOENT" });
+    }
+    internal.git = run;
+    const prepared = await manager.prepare(input);
+    assert.equal(await git(["-C", prepared.workspacePath, "rev-parse", "HEAD"]), prepared.baseCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cancelling a repository removal batch restores previously removed worktrees", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "issue-pilot-remove-rollback-"));
+  try {
+    const state = join(root, "state"),
+      issueKey = "ISSUE-20261118-903",
+      mode = "feature" as const;
+    const manager = new WorktreeManager(state);
+    await claimIssueRoot(state, issueKey);
+    const worktrees: Array<Awaited<ReturnType<typeof manager.prepare>> & { workspaceName: string; url: string; workingBranch: string }> = [];
+    for (const workspaceName of ["one", "two"]) {
+      const url = join(root, workspaceName);
+      await git(["init", "-b", "main", url]);
+      await git(["-C", url, "commit", "--allow-empty", "-m", "fixture"]);
+      const prepared = await manager.prepare({ issueKey, mode, workspaceName, url, baseBranch: "main" });
+      worktrees.push({ ...prepared, url, workspaceName, workingBranch: prepared.workingBranch! });
+    }
+    const controller = new AbortController(),
+      remove = manager.remove.bind(manager);
+    context.mock.method(manager, "remove", async (...args: Parameters<typeof remove>) => {
+      const commit = await remove(...args);
+      controller.abort();
+      return commit;
+    });
+    let finalized = false;
+    await assert.rejects(
+      manager.withSignal(controller.signal, () =>
+        manager.removeBatch({
+          issueKey,
+          mode,
+          worktrees,
+          finalize: async () => {
+            finalized = true;
+          },
+        }),
+      ),
+    );
+    assert.equal(finalized, false);
+    for (const row of worktrees) {
+      assert.equal(await git(["-C", row.workspacePath, "branch", "--show-current"]), row.workingBranch);
+      assert.equal(await git(["-C", row.workspacePath, "rev-parse", "HEAD"]), row.baseCommit);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

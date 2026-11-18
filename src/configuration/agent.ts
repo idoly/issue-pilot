@@ -2,7 +2,8 @@ import { and, eq } from "drizzle-orm";
 
 import type { Database } from "../db/client.ts";
 import { globalAgentConfiguration } from "../db/schema.ts";
-import type { AgentConfiguration, AgentModelDefinition, AgentModelSelection, PersonalModelCredentials } from "../domain/contracts.ts";
+import { choice, text } from "../domain/input.ts";
+import { AGENT_CODEMODE_MODES, AGENT_THINKING_LEVELS, type AgentConfiguration, type AgentModelDefinition, type AgentModelSelection, type PersonalModelCredentials } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import type { AgentModelCatalog } from "../agent/model-runtime.ts";
 
@@ -46,10 +47,18 @@ export async function loadSharedAgentApiKey(database: Pick<Database, "select">):
   return configuration.apiKey;
 }
 
-export function validateAgentModelSelection(configuration: AgentModelSelection, models: AgentModelDefinition[]): void {
+/** Shared and personal selections must both be offered by the current model catalog. */
+export function parseAgentModelSelection(input: Record<string, unknown>, models: AgentModelDefinition[]): AgentModelSelection {
+  const configuration = {
+    provider: text(input.provider, "agent_provider", 200),
+    model: text(input.model, "agent_model", 500),
+    thinkingLevel: choice(input.thinkingLevel, "agent_thinking_level", AGENT_THINKING_LEVELS),
+    codemode: choice(input.codemode, "agent_codemode", AGENT_CODEMODE_MODES),
+  };
   const model = models.find((candidate) => candidate.provider === configuration.provider && candidate.id === configuration.model);
   if (!model) throw new DomainError("agent_model_not_available", "bad_request");
   if (!model.thinkingLevels.includes(configuration.thinkingLevel)) throw new DomainError("agent_thinking_level_not_supported", "bad_request");
+  return configuration;
 }
 
 export async function ensureGlobalAgentConfiguration(database: Database, modelCatalog: AgentModelCatalog): Promise<void> {

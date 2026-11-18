@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { loadMcpConnections } from "./service-mcp.ts";
 import { parseDbHubTargets } from "./dbhub.ts";
 import { or, eq, inArray, sql } from "drizzle-orm";
@@ -69,14 +70,13 @@ function parseServiceConfigurationInput(input: Record<string, unknown>, existing
   return { repositories, deployments };
 }
 
-interface PreparedServiceConfiguration {
-  parsed: ReturnType<typeof parseServiceConfigurationInput>;
-  existingRepositories: Array<typeof serviceRepositories.$inferSelect>;
-  existingDeployments: Array<typeof serviceDeployments.$inferSelect>;
-  environmentsByKey: Map<string, typeof environments.$inferSelect>;
-}
-
-export async function prepareServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; input: Record<string, unknown> }): Promise<PreparedServiceConfiguration> {
+/** Plan from the current configuration under the scope queue, before reserving Issues or writing anything. */
+export async function prepareServiceConfiguration(options: {
+  executor: DatabaseExecutor;
+  serviceId: string;
+  input: Record<string, unknown>;
+  currentService?: Pick<typeof services.$inferSelect, "name" | "description">;
+}) {
   const { executor, serviceId } = options;
   const [existingRepositories, existingDeployments, referencedIssues, environmentRows] = await Promise.all([
     executor.select().from(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId)),
@@ -109,98 +109,88 @@ export async function prepareServiceConfiguration(options: { executor: DatabaseE
     );
   if (catalog.length !== parsed.repositories.length) throw new DomainError("repository_not_registered", "bad_request");
   if (parsed.deployments.some((deployment) => !environmentsByKey.has(deployment.environmentKey))) throw new DomainError("invalid_environment", "bad_request");
+  const existingById = new Map(existingRepositories.map((row) => [row.id, row]));
   const ids = parsed.repositories.flatMap((repository) => (repository.id ? [repository.id] : []));
-  if (new Set(ids).size !== ids.length || ids.some((id) => !existingRepositories.some((repository) => repository.id === id))) throw new DomainError("invalid_repository", "bad_request");
+  if (new Set(ids).size !== ids.length || ids.some((id) => !existingById.has(id))) throw new DomainError("invalid_repository", "bad_request");
   const retained = new Set(parsed.deployments.map((deployment) => environmentsByKey.get(deployment.environmentKey)!.id));
   const referenced = new Set(referencedIssues.map((issue) => issue.environmentId));
-  if (existingDeployments.some((deployment) => !retained.has(deployment.environmentId) && referenced.has(deployment.environmentId))) throw new DomainError("deployment_is_used_by_issues", "conflict");
-  return { parsed, existingRepositories, existingDeployments, environmentsByKey };
-}
+  const removed = existingDeployments.filter((row) => !retained.has(row.environmentId));
+  if (removed.some((row) => referenced.has(row.environmentId))) throw new DomainError("deployment_is_used_by_issues", "conflict");
 
-async function applyServiceDeployment(
-  executor: DatabaseExecutor,
-  serviceId: string,
-  environmentId: string,
-  existing: typeof serviceDeployments.$inferSelect | undefined,
-  input: ReturnType<typeof parseServiceDeployment>,
-  repositories: Map<string, { id: string }>,
-) {
-  // Retired capability and historical MCP binding keys are not carried forward. Archived development
-  // evidence stays because development layout validation still inspects it.
-  const archivedDevelopment = existing?.config.archivedDevelopment;
-  const values = {
-    config: { ...(archivedDevelopment === undefined ? {} : { archivedDevelopment }), ...input.config },
-    updatedAt: new Date(),
-  };
-  if (existing && JSON.stringify(existing.config) === JSON.stringify(values.config)) {
-    const branches = await executor.select().from(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, existing.id));
+  const repositories = parsed.repositories.map((row) => {
+    const previous = row.id ? existingById.get(row.id) : undefined;
+    return { ...row, previous, unchanged: previous?.alias === row.alias && previous.url === row.url };
+  });
+  const rebuild = repositories.length !== existingRepositories.length || repositories.some((row) => !row.unchanged);
+  // Rebuilding service bindings cascades their branch rows; all retained branch bindings must then be written again.
+  const branches =
+    !rebuild && existingDeployments.length
+      ? await executor
+          .select()
+          .from(serviceDeploymentRepositories)
+          .where(
+            inArray(
+              serviceDeploymentRepositories.deploymentId,
+              existingDeployments.map((row) => row.id),
+            ),
+          )
+      : [];
+  const repositoryIdsByAlias = new Map(repositories.map((row) => [row.alias, row.id]));
+  const writes = parsed.deployments.flatMap((input) => {
+    const environmentId = environmentsByKey.get(input.environmentKey)!.id;
+    const previous = existingDeployments.find((row) => row.environmentId === environmentId);
+    const archivedDevelopment = previous?.config.archivedDevelopment;
+    const config = { ...(archivedDevelopment === undefined ? {} : { archivedDevelopment }), ...input.config };
+    const current = branches.filter((row) => row.deploymentId === previous?.id);
     if (
-      branches.length === input.repositoryBranches.length &&
-      input.repositoryBranches.every((branch) => branches.some((current) => current.repositoryId === repositories.get(branch.repositoryAlias)!.id && current.baseBranch === branch.baseBranch))
-    ) {
-      return { deployment: existing, changed: false };
-    }
+      previous &&
+      isDeepStrictEqual(previous.config, config) &&
+      current.length === input.repositoryBranches.length &&
+      input.repositoryBranches.every((branch) => current.some((row) => row.repositoryId === repositoryIdsByAlias.get(branch.repositoryAlias) && row.baseBranch === branch.baseBranch))
+    )
+      return [];
+    return [{ id: previous?.id, environmentId, config, repositoryBranches: input.repositoryBranches }];
+  });
+  const serviceUpdate = options.currentService && { name: text(options.input.name, "name", 200), description: optionalText(options.input.description) ?? "" };
+  const nameChanged = serviceUpdate?.name !== options.currentService?.name;
+  const affectedEnvironmentIds = new Set(removed.map((row) => row.environmentId));
+  for (const row of writes) affectedEnvironmentIds.add(row.environmentId);
+  if (rebuild || nameChanged || serviceUpdate?.description !== options.currentService?.description) {
+    for (const id of retained) affectedEnvironmentIds.add(id);
   }
-  const [saved] = existing
-    ? await executor.update(serviceDeployments).set(values).where(eq(serviceDeployments.id, existing.id)).returning()
-    : await executor
-        .insert(serviceDeployments)
-        .values({ serviceId, environmentId, ...values })
-        .returning();
-  if (!saved) throw new Error("deployment_save_failed");
-  await executor.delete(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, saved.id));
-  if (input.repositoryBranches.length)
-    await executor
-      .insert(serviceDeploymentRepositories)
-      .values(input.repositoryBranches.map((branch) => ({ deploymentId: saved.id, repositoryId: repositories.get(branch.repositoryAlias)!.id, baseBranch: branch.baseBranch })));
-  return { deployment: saved, changed: true };
+  return { repositories, rebuild, writes, removed, affectedEnvironmentIds, serviceUpdate, nameChanged };
 }
 
-export async function applyServiceConfiguration(options: {
-  executor: DatabaseExecutor;
-  serviceId: string;
-  prepared: PreparedServiceConfiguration;
-  serviceUpdate?: { name: string; description: string };
-}): Promise<void> {
-  const { executor, serviceId, prepared, serviceUpdate } = options;
+export async function applyServiceConfiguration(options: { executor: DatabaseExecutor; serviceId: string; prepared: Awaited<ReturnType<typeof prepareServiceConfiguration>> }): Promise<void> {
+  const { executor, serviceId, prepared } = options;
+  const { rebuild, repositories, writes, removed, serviceUpdate, nameChanged } = prepared;
   if (serviceUpdate) {
-    const [existing] = await executor.select({ name: services.name }).from(services).where(eq(services.id, serviceId)).limit(1);
     await executor
       .update(services)
       .set({ ...serviceUpdate, revision: sql`${services.revision} + 1`, updatedAt: new Date() })
       .where(eq(services.id, serviceId));
     // Issues that include this service display its name in their detail; the entry-service name is already in
     // the summary digest, so only collaborating references need an explicit detail revision.
-    if (existing && existing.name !== serviceUpdate.name)
+    if (nameChanged)
       await executor
         .update(issues)
         .set({ detailRevision: sql`${issues.detailRevision} + 1` })
         .where(inArray(issues.id, executor.select({ issueId: issueServiceScopes.issueId }).from(issueServiceScopes).where(eq(issueServiceScopes.serviceId, serviceId))));
   }
-  const existingById = new Map(prepared.existingRepositories.map((repository) => [repository.id, repository]));
-  const unchanged = new Set(
-    prepared.parsed.repositories
-      .filter((repository) => {
-        const existing = repository.id ? existingById.get(repository.id) : undefined;
-        return existing?.alias === repository.alias && existing.url === repository.url;
-      })
-      .map((repository) => repository.id!),
-  );
-  const rebuild = unchanged.size !== prepared.existingRepositories.length || unchanged.size !== prepared.parsed.repositories.length;
   // Rebuild changed sets in request order, keeping IDs and creation times.
   // This permits swaps without temporary URLs that violate the catalog FK;
   // deployment branch bindings are rebuilt below in the same transaction.
   if (rebuild) await executor.delete(serviceRepositories).where(eq(serviceRepositories.serviceId, serviceId));
   const savedRepositoryByAlias = new Map<string, typeof serviceRepositories.$inferSelect>();
-  for (const repository of prepared.parsed.repositories) {
-    const existing = repository.id ? existingById.get(repository.id) : undefined;
+  for (const repository of repositories) {
+    const existing = repository.previous;
     const saved = !rebuild
       ? existing
       : (
           await executor
             .insert(serviceRepositories)
             .values({
-              ...(existing ? { id: existing.id, createdAt: existing.createdAt, ...(unchanged.has(existing.id) ? { updatedAt: existing.updatedAt } : {}) } : {}),
+              ...(existing ? { id: existing.id, createdAt: existing.createdAt, ...(repository.unchanged ? { updatedAt: existing.updatedAt } : {}) } : {}),
               serviceId,
               alias: repository.alias,
               url: repository.url,
@@ -210,26 +200,23 @@ export async function applyServiceConfiguration(options: {
     if (!saved) throw new Error("repository_save_failed");
     savedRepositoryByAlias.set(repository.alias, saved);
   }
-  const retainedDeployments = new Set<string>();
-  let configurationChanged = rebuild;
-  for (const input of prepared.parsed.deployments) {
-    const environmentId = prepared.environmentsByKey.get(input.environmentKey)!.id;
-    const saved = await applyServiceDeployment(
-      executor,
-      serviceId,
-      environmentId,
-      prepared.existingDeployments.find((deployment) => deployment.environmentId === environmentId),
-      input,
-      savedRepositoryByAlias,
-    );
-    retainedDeployments.add(saved.deployment.id);
-    configurationChanged ||= saved.changed;
+  for (const { id, environmentId, config, repositoryBranches } of writes) {
+    const values = { config, updatedAt: new Date() };
+    const [saved] = id
+      ? await executor.update(serviceDeployments).set(values).where(eq(serviceDeployments.id, id)).returning({ id: serviceDeployments.id })
+      : await executor
+          .insert(serviceDeployments)
+          .values({ serviceId, environmentId, ...values })
+          .returning({ id: serviceDeployments.id });
+    if (!saved) throw new Error("deployment_save_failed");
+    if (id) await executor.delete(serviceDeploymentRepositories).where(eq(serviceDeploymentRepositories.deploymentId, id));
+    if (repositoryBranches.length)
+      await executor
+        .insert(serviceDeploymentRepositories)
+        .values(repositoryBranches.map((branch) => ({ deploymentId: saved.id, repositoryId: savedRepositoryByAlias.get(branch.repositoryAlias)!.id, baseBranch: branch.baseBranch })));
   }
-  for (const deployment of prepared.existingDeployments)
-    if (!retainedDeployments.has(deployment.id)) {
-      await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
-      configurationChanged = true;
-    }
+  for (const deployment of removed) await executor.delete(serviceDeployments).where(eq(serviceDeployments.id, deployment.id));
+  const configurationChanged = rebuild || writes.length > 0 || removed.length > 0;
   if (configurationChanged) await loadMcpConnections(executor);
   if (configurationChanged && !serviceUpdate)
     await executor

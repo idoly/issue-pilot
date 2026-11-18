@@ -6,7 +6,7 @@ import { issueRoot } from "../workspace/state.ts";
 import { listIssueWorkFiles, openIssueWorkFile } from "../workspace/work-files.ts";
 import { ISSUE_WORK_MODES, relatedIssueEntryName } from "../domain/contracts.ts";
 import { errorDiagnostic } from "../diagnostics.ts";
-import { choice, record, text } from "./input.ts";
+import { choice, record, text } from "../domain/input.ts";
 import { authorizeWorkMode, requireCurrentUser, requireIssue, type ApiRouteContext } from "./route-context.ts";
 import type { IdentityRequest } from "../configuration/access.ts";
 import { DomainError } from "../domain/errors.ts";

@@ -43,7 +43,7 @@ import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { classifyRepositoryState, hasRepositoryView, issueRoot, pathExists } from "../workspace/state.ts";
 import { type PendingAttachment, readMultipartAttachment, removePendingAttachments, resolveSecureAttachmentFile, serializeAttachment } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
-import { choice, optionalText, record, strings, text } from "./input.ts";
+import { choice, optionalText, record, strings, text } from "../domain/input.ts";
 import type { IssueDetail, IssueExecutionItem } from "./contracts.ts";
 import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
 import {

@@ -4,7 +4,7 @@ import { loadCapabilitySwitches } from "../configuration/capability-switches.ts"
 import { issuesAffectedByCapabilityChange } from "../configuration/impact.ts";
 import { capabilitySwitches } from "../db/schema.ts";
 import { CAPABILITY_KEYS } from "../domain/contracts.ts";
-import { choice, closedRecord } from "./input.ts";
+import { choice, closedRecord } from "../domain/input.ts";
 import { requireDeveloper, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
 
 export function registerCapabilityRoutes(context: ApiRouteContext) {

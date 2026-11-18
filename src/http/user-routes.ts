@@ -14,8 +14,9 @@ import {
   saveSharedCredentialUpdate,
 } from "../configuration/user-credentials.ts";
 import { CAPABILITY_KEYS, USER_ROLES, hasPersonalGitIdentity, managedUserChangeRequiresAdministrator, type AgentModelSelection, type UserRole } from "../domain/contracts.ts";
-import { errorDiagnostic } from "../diagnostics.ts";
-import { agentModelSelection, checkRevision, choice, closedRecord, isClassifiedFailure, record, text } from "./input.ts";
+import { errorDiagnostic, isClassifiedOwnerFailure } from "../diagnostics.ts";
+import { parseAgentModelSelection } from "../configuration/agent.ts";
+import { checkRevision, choice, closedRecord, record, text } from "../domain/input.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { ensureCurrentSubject, requireCurrentUser, requireAdmin, requireDeveloper, runIssueExclusive, serializePerson, type ApiRouteContext } from "./route-context.ts";
 import type { CurrentUser, ManagedUser } from "./contracts.ts";
@@ -135,7 +136,7 @@ export function registerUserRoutes(
       const model = record(input.model);
       if (model.mode === "clear" && Object.keys(model).length === 1) modelUpdate = null;
       else if (model.mode === "replace" && Object.keys(model).every((key) => ["mode", "provider", "model", "thinkingLevel", "codemode", "apiKey"].includes(key))) {
-        modelUpdate = { selection: agentModelSelection(model, await modelCatalog.list()) };
+        modelUpdate = { selection: parseAgentModelSelection(model, await modelCatalog.list()) };
         if (model.apiKey !== undefined) modelUpdate.apiKey = text(model.apiKey, "model_api_key", 10_000);
       } else throw new DomainError("invalid_credential_update", "bad_request");
     }
@@ -205,7 +206,7 @@ export function registerUserRoutes(
         return personalStatus(user?.role, saved);
       },
     ).catch((error) => {
-      if (isClassifiedFailure(error)) throw error;
+      if (isClassifiedOwnerFailure(error)) throw error;
       app.log.error(errorDiagnostic(error));
       throw new DomainError("user_credentials_save_failed", "internal");
     });

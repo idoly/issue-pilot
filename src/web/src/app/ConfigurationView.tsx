@@ -79,6 +79,7 @@ interface ServiceRepositoryDraft {
 }
 
 type ServiceDeploymentDraft = DeploymentCapabilityDraft & {
+  included: boolean;
   environmentKey: string;
   dbhub?: import("../../../domain/contracts").DbHubTarget[];
   repositoryBranches: Array<{ repositoryKey: string; baseBranch: string }>;
@@ -90,6 +91,7 @@ const newDmsDatabaseDraft = (): DmsDatabaseDraft => ({ instanceAlias: "", schema
 function serviceDeploymentDraft(deployment: Service["deployments"][number]): ServiceDeploymentDraft {
   const dbhub = deployment.dbhub;
   return {
+    included: true,
     environmentKey: deployment.environmentKey,
     repositoryBranches: deployment.repositoryBranches.map((branch) => ({ repositoryKey: branch.repositoryId, baseBranch: branch.baseBranch })),
     capabilities: [...deployment.capabilities],
@@ -577,6 +579,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
       return existing
         ? serviceDeploymentDraft(existing)
         : {
+            included: !service,
             environmentKey,
             capabilities: [],
             repositoryBranches: service?.repositories.map((repository) => ({ repositoryKey: repository.id, baseBranch: sharedConfig.defaults.deployment.baseBranch })) ?? [],
@@ -674,10 +677,11 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
         });
     }
   };
+  const includedDeployments = () => serviceDeployments.filter((row) => row.included);
   const serviceValidationError = () => {
     if (!serviceName().trim()) return "请填写服务名称";
     if (!serviceRepositories().length) return "请至少选择一个关联仓库";
-    return serviceDeployments.map(deploymentValidationError).find(Boolean) ?? "";
+    return includedDeployments().map(deploymentValidationError).find(Boolean) ?? "";
   };
   const repositoryName = (repository: ServiceRepositoryDraft) => repositoryChoices().find((choice) => choice.url === repository.url)?.name ?? (repository.alias || repository.url);
   const repositoryOptions = createMemo(() => repositoryChoices().map((repository) => ({ value: repository.url, label: repository.name, url: repository.url })));
@@ -722,7 +726,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
         name: serviceName().trim(),
         description: description().trim(),
         repositories: serviceRepositories().map((repository) => ({ ...(repository.id ? { id: repository.id } : {}), alias: repository.alias.trim(), url: repository.url.trim() })),
-        deployments: serviceDeployments.map((deployment) => serializeServiceDeployment(deployment, serviceRepositories())),
+        deployments: includedDeployments().map((deployment) => serializeServiceDeployment(deployment, serviceRepositories())),
       };
       const editingKey = editingServiceKey();
       if (editingKey) await updateService(editingKey, { ...definition, expectedRevision: serviceRevisionDraft });
@@ -942,19 +946,35 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
               <Show when={!dbhubLoading()} fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
                 <For each={serviceDeployments} fallback={<div class="service-form-empty">尚未配置部署</div>}>
                   {(deployment, index) => (
-                    <ServiceDeploymentEditorRow
-                      index={index()}
-                      deployment={deployment}
-                      productionBranches={() => serviceDeployments.find((row) => row.environmentKey === "prod")?.repositoryBranches ?? []}
-                      repositories={serviceRepositories}
-                      repositoryName={repositoryName}
-                      environmentName={environmentName(configuration().environments, deployment.environmentKey)}
-                      onChange={(next) =>
-                        setServiceDeployments((current) => {
-                          Object.assign(current[index()]!, next);
-                        })
+                    <Show
+                      when={deployment.included}
+                      fallback={
+                        <Button
+                          size="small"
+                          onClick={() =>
+                            setServiceDeployments((rows) => {
+                              rows[index()]!.included = true;
+                            })
+                          }
+                        >
+                          添加{environmentName(configuration().environments, deployment.environmentKey)}部署
+                        </Button>
                       }
-                    />
+                    >
+                      <ServiceDeploymentEditorRow
+                        index={index()}
+                        deployment={deployment}
+                        productionBranches={() => includedDeployments().find((row) => row.environmentKey === "prod")?.repositoryBranches ?? []}
+                        repositories={serviceRepositories}
+                        repositoryName={repositoryName}
+                        environmentName={environmentName(configuration().environments, deployment.environmentKey)}
+                        onChange={(next) =>
+                          setServiceDeployments((current) => {
+                            Object.assign(current[index()]!, next);
+                          })
+                        }
+                      />
+                    </Show>
                   )}
                 </For>
               </Show>

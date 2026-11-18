@@ -13,12 +13,12 @@ async function checkDevelopmentGit(root: string, database: DatabaseSync): Promis
       FROM issue_repositories r JOIN issues i ON i.id = r.issue_id
       WHERE r.working_branch IS NOT NULL OR r.local_path IS NOT NULL ORDER BY i.key, r.id`)
     .all();
-  const counts = { privateVerified: 0, privateInvalid: 0, sharedWorktreeVerified: 0, sharedRefOnly: 0, unresolved: 0, mirrorEqual: 0, mirrorDifferent: 0, mirrorUnavailable: 0 };
+  const counts = { privateVerified: 0, privateInvalid: 0, sharedWorktreeOnly: 0, sharedRefOnly: 0, unresolved: 0, mirrorEqual: 0, mirrorDifferent: 0, mirrorUnavailable: 0 };
   for (const row of rows) {
     const key = String(row.key),
       url = String(row.url),
       shared = repositoryStorePath(root, url);
-    const report = (code: "privateInvalid" | "sharedRefOnly" | "unresolved") => {
+    const report = (code: "privateInvalid" | "sharedRefOnly" | "sharedWorktreeOnly" | "unresolved") => {
       counts[code]++;
       console.error(`${key} ${path.basename(shared)} ${code}`);
     };
@@ -66,14 +66,15 @@ async function checkDevelopmentGit(root: string, database: DatabaseSync): Promis
     } else if (sharedTip && local) {
       try {
         await validateIssueWorktreeBinding(shared, local, branch);
-        counts.sharedWorktreeVerified++;
+        // The old binding is evidence, not the private store required by the runtime.
+        report("sharedWorktreeOnly");
       } catch {
         report("unresolved");
       }
     } else report("unresolved");
   }
   console.log(JSON.stringify({ developmentIssues: new Set(rows.map(({ key }) => key)).size, developmentRepositories: rows.length, ...counts }));
-  if (counts.privateInvalid || counts.sharedRefOnly || counts.unresolved) process.exitCode = 1;
+  if (counts.privateInvalid || counts.sharedRefOnly || counts.sharedWorktreeOnly || counts.unresolved) process.exitCode = 1;
 }
 
 const { values } = parseArgs({ options: { "state-root": { type: "string" }, "shared-git": { type: "boolean" }, "development-git": { type: "boolean" } } });

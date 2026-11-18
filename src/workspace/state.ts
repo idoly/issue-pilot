@@ -149,4 +149,9 @@ export async function assertIssueStateLayout(stateRoot: string, issueKeys: strin
     if (entry.isDirectory() && !active.has(entry.name.toLowerCase())) unmanaged.push(`workspaces/${entry.name}`);
   }
   if (unmanaged.length) throw unmanagedIssueState(unmanaged.sort().join(","));
+  for (const key of issueKeys) {
+    await assertIssueRoot(stateRoot, key).catch((cause: unknown) => {
+      throw new Error(`issue_root_audit_failed:${key}`, { cause });
+    });
+  }
 }

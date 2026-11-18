@@ -2081,6 +2081,48 @@ async function releasableDevelopmentIssue(root: string, database: Awaited<Return
   });
 }
 
+test("automatic release reports a failed rollback separately from ordinary blocking and continues", async (context) => {
+  const {
+    root,
+    database,
+    issues: [first, second],
+  } = await seededLifecycle(context, ["ISSUE-20261118-001", "ISSUE-20261118-002"]);
+  await releasableDevelopmentIssue(root, database, first!, new Date(0));
+  await releasableDevelopmentIssue(root, database, second!, new Date(1000));
+  const manager = new WorkspaceLifecycleManager(database, root, engine as never, { retentionMs: 0, highWaterBytes: 0, targetBytes: 0, maintenanceIntervalMs: 0, taskConcurrency: 1 });
+  context.mock.method(
+    database,
+    "transaction",
+    async () => {
+      throw new Error("release_write_failed");
+    },
+    { times: 1 },
+  );
+  context.mock.method(
+    WorktreeManager.prototype,
+    "restoreLocal",
+    async () => {
+      throw new Error("release_restore_failed");
+    },
+    { times: 1 },
+  );
+  const result = await manager.maintain();
+  assert.deepEqual(
+    result.released.map((row) => row.issueKey),
+    [second!.key],
+  );
+  assert.deepEqual(result.blocked, []);
+  assert.deepEqual(
+    result.failures.map((row) => row.issueKey),
+    [first!.key],
+  );
+  const error = result.failures[0]!.error;
+  assert.ok(error instanceof OperationError && error.message === "workspace_release_rollback_failed" && error.outcome === "unknown");
+  const [row] = await database.select().from(issueRepositories).where(eq(issueRepositories.issueId, first!.id));
+  assert.ok(row?.localPath);
+  await assert.rejects(access(row.localPath), { code: "ENOENT" });
+});
+
 test("statistics requested after a queued release see the released workspace", async (context) => {
   const {
     root,

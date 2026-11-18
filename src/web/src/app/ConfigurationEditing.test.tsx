@@ -90,6 +90,35 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+for (const [url, addTest] of [
+  ["git@example.test:team/app.git", false],
+  ["https://example.test/team/app.git", false],
+  ["https://example.test/team/app.git", true],
+] as const)
+  test(`editing a prod-only ${url} service preserves its deployments unless explicitly added (addTest=${addTest})`, async () => {
+    const next = configuration();
+    const service = next.services[0]!;
+    service.repositories[0]!.url = url;
+    service.deployments = service.deployments.filter((row) => row.environmentKey === "prod");
+    state.replaceConfiguration(next);
+    render(() => <ConfigurationView />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await waitFor(() => expect(dialog.getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+    fireEvent.input(dialog.getByLabelText("项目描述"), { target: { value: "notes only" } });
+    if (addTest) {
+      fireEvent.click(dialog.getByRole("button", { name: "添加测试部署" }));
+      fireEvent.click(await dialog.findByRole("button", { name: "展开部署2" }));
+      fireEvent.input(await dialog.findByLabelText(/部署 2 仓库 .* 分支/), { target: { value: "release/test" } });
+      await settle();
+    }
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
+    const { deployments } = state.save.mock.calls[0]![1];
+    expect(deployments.map((row) => row.environmentKey)).toEqual(addTest ? ["test", "prod"] : ["prod"]);
+    expect(deployments.map((row) => row.repositoryBranches)).toEqual((addTest ? ["release/test", "main"] : ["main"]).map((baseBranch) => [{ repositoryAlias: "app", baseBranch }]));
+  });
+
 test("keeps service Tabs separate from actions with many long labels", async () => {
   const next = configuration();
   next.services = Array.from({ length: 20 }, (_, index) => ({ ...next.services[0]!, key: `service-${index}`, name: `digital-biz-projects/example-${index}/servers` }));

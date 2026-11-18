@@ -33,7 +33,7 @@ export function IssueEditDialog(props: {
   const [resetting, setResetting] = createSignal(false);
   const [committed, setCommitted] = createSignal("");
   const [error, setError] = createSignal("");
-  let generation = 0;
+  let disposed = false;
 
   const initialize = (issue: IssueDetail) => {
     setBase(issue);
@@ -50,26 +50,8 @@ export function IssueEditDialog(props: {
 
   // Opening is an event: the host initializes the draft synchronously so the first render already shows it.
   props.register((issue) => initialize(issue));
-  // A changed Issue or identity invalidates an in-flight save; the next open fills the form again.
-  createEffect(
-    () => ({ issueId: props.issue.id, subject: currentUser()?.subject, role: currentUser()?.role }),
-    (context, previous) => {
-      if (!previous || (context.issueId === previous.issueId && context.subject === previous.subject && context.role === previous.role)) return;
-      queueMicrotask(() => {
-        generation += 1;
-        setBase(null);
-        setConflict(false);
-        setAttachments([]);
-        setRemovedAttachmentIds([]);
-        setSaving(false);
-        setResetting(false);
-        setCommitted("");
-        setError("");
-      });
-    },
-  );
   onCleanup(() => {
-    generation += 1;
+    disposed = true;
     props.onDirtyChange?.(false);
   });
 
@@ -121,43 +103,40 @@ export function IssueEditDialog(props: {
   };
   const reloadDraft = async () => {
     if (saving()) return;
-    const current = generation;
     setSaving(true);
     try {
       const latest = await getIssue(props.issue.id);
-      if (current === generation) initialize(latest);
+      if (!disposed) initialize(latest);
     } catch (cause) {
-      if (current === generation) setError(`读取失败：${errorText(cause)}。草稿仍保留。`);
+      if (!disposed) setError(`读取失败：${errorText(cause)}。草稿仍保留。`);
     } finally {
-      if (current === generation) setSaving(false);
+      if (!disposed) setSaving(false);
     }
   };
-  const refreshSaved = async (current: number) => {
+  const refreshSaved = async () => {
     setError("");
     try {
       await props.onSaved();
-      if (current === generation) {
+      if (!disposed) {
         close();
         setCommitted("");
       }
     } catch (cause) {
-      if (current === generation) setError(`但刷新失败：${errorText(cause)}`);
+      if (!disposed) setError(`但刷新失败：${errorText(cause)}`);
     }
   };
   const retryRefresh = async () => {
     if (saving() || !committed()) return;
-    const current = generation;
     setSaving(true);
     try {
-      await refreshSaved(current);
+      await refreshSaved();
     } finally {
-      if (current === generation) setSaving(false);
+      if (!disposed) setSaving(false);
     }
   };
   const save = async (reset = false) => {
     const current = base();
     if (!current || saving() || committed() || !title().trim() || (reset && resetDisabled())) return;
-    const currentGeneration = generation;
     setSaving(true);
     setResetting(reset);
     setError("");
@@ -177,18 +156,18 @@ export function IssueEditDialog(props: {
         [...attachments()],
         reset,
       );
-      if (currentGeneration !== generation) return;
+      if (disposed) return;
       markCommitted(reset ? "工单已保存并重置" : "工单已保存");
-      await refreshSaved(currentGeneration);
+      await refreshSaved();
     } catch (cause) {
-      if (currentGeneration !== generation) return;
+      if (disposed) return;
       if (cause instanceof RequestError && cause.outcome === "committed") markCommitted("工单已保存，后续清理失败，请重新读取");
       else if (cause instanceof Error && cause.message === "issue_edit_conflict") {
         setConflict(true);
         setError("工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。");
       } else setError(errorText(cause, editErrors));
     } finally {
-      if (currentGeneration === generation) {
+      if (!disposed) {
         setSaving(false);
         setResetting(false);
       }
