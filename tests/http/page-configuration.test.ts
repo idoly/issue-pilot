@@ -123,7 +123,9 @@ test("DBHub MySQL targets save atomically with deployment-owned MCP connections 
     const selected = await f.app.inject({ method: "GET", url: "/api/services/mysql/dbhub-targets", headers });
     assert.equal(selected.statusCode, 200);
     assert.equal(selected.headers["cache-control"], "private, no-store");
-    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, password);
+    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, undefined);
+    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].passwordConfigured, true);
+    assert.equal(selected.body.includes(password), false);
     const connection = openDatabase(f.databaseFile);
     try {
       const rows = await loadMcpConnections(connection.db);
@@ -243,7 +245,9 @@ test("a prod-only DBHub edit on a multi-environment service leaves the test sess
     }
     const selected = await f.app.inject({ url: "/api/services/mysql/dbhub-targets", headers });
     assert.equal(selected.json().revision, revision);
-    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, "fixture-rotated");
+    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, undefined);
+    assert.equal(selected.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].passwordConfigured, true);
+    assert.equal(selected.body.includes("fixture-rotated"), false);
     assert.deepEqual(f.engine.closedSessions, []);
     const cleared = await patch(base, revision);
     assert.equal(cleared.statusCode, 200, cleared.body);

@@ -130,7 +130,6 @@ test("reauthorizes a queued connection test before starting a local process", { 
   registerMcpRoutes({
     app,
     database,
-    engine: f.engine,
     runScopeExclusive: async (operation) => {
       entered();
       await gate;

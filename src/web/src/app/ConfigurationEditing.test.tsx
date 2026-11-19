@@ -35,7 +35,7 @@ vi.mock("../data/client", async (original) => ({
 import { ConfigurationView } from "./ConfigurationView";
 import { settle } from "../test-settle";
 
-const mysql = { host: "db.example.test", port: 3306, username: "reader", password: "fixture-old-secret", database: "orders" };
+const mysqlSummary = { host: "db.example.test", port: 3306, username: "reader", database: "orders", passwordConfigured: true };
 function configuration(): Config {
   return {
     agent: { provider: "fixture", model: "model", thinkingLevel: "medium", codemode: "off", runtime: {}, apiKeyConfigured: false, revision: 0 },
@@ -58,7 +58,7 @@ function configuration(): Config {
           capabilities: [],
           repositoryBranches: [{ repositoryId: "repo", repositoryAlias: "app", baseBranch: "main" }],
           ...(environmentKey === "prod"
-            ? { dbhub: [{ type: "mysql" as const, host: mysql.host, port: mysql.port, username: mysql.username, database: mysql.database, passwordConfigured: true }] }
+            ? { dbhub: [{ type: "mysql" as const, host: mysqlSummary.host, port: mysqlSummary.port, username: mysqlSummary.username, database: mysqlSummary.database, passwordConfigured: true }] }
             : {}),
         })),
       },
@@ -75,7 +75,7 @@ beforeEach(() => {
     { id: "catalog", revision: 0, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", name: "App", url: "git@example.test:team/app.git", group: "other", services: [] },
   ]);
   state.description.mockResolvedValue({ context: "" });
-  state.mysql.mockResolvedValue({ revision: 1, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysql, type: "mysql" }] }] });
+  state.mysql.mockResolvedValue({ revision: 1, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysqlSummary, type: "mysql" }] }] });
   state.refresh.mockImplementation(async () => {
     const next = configuration();
     setValue(next);
@@ -119,6 +119,15 @@ for (const [url, addTest] of [
     expect(deployments.map((row) => row.repositoryBranches)).toEqual((addTest ? ["release/test", "main"] : ["main"]).map((baseBranch) => [{ repositoryAlias: "app", baseBranch }]));
   });
 
+test("retries the selected description even when the service revision is unchanged", async () => {
+  state.description.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ context: "recovered description" });
+  render(() => <ConfigurationView />);
+  const alert = await screen.findByRole("alert");
+  fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
+  await screen.findByText("recovered description");
+  expect(state.description).toHaveBeenCalledTimes(2);
+});
+
 test("keeps service Tabs separate from actions with many long labels", async () => {
   const next = configuration();
   next.services = Array.from({ length: 20 }, (_, index) => ({ ...next.services[0]!, key: `service-${index}`, name: `digital-biz-projects/example-${index}/servers` }));
@@ -160,7 +169,9 @@ for (const outcome of ["success", "failure"] as const)
       () =>
         new Promise((resolve, reject) => {
           finish =
-            outcome === "success" ? () => resolve({ revision: 1, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysql, type: "mysql" }] }] }) : () => reject(new Error("old_mysql_load_failed"));
+            outcome === "success"
+              ? () => resolve({ revision: 1, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysqlSummary, type: "mysql" }] }] })
+              : () => reject(new Error("old_mysql_load_failed"));
         }),
     );
     render(() => <ConfigurationView />);
@@ -184,11 +195,11 @@ for (const outcome of ["success", "failure"] as const)
     const input = state.create.mock.calls[0]![0];
     expect(input.name).toBe("New draft");
     expect(input.deployments.every((row: { dbhub?: unknown[] }) => !row.dbhub?.length)).toBe(true);
-    expect(JSON.stringify(input)).not.toContain(mysql.password);
+    expect(JSON.stringify(input)).not.toContain("fixture-old-secret");
   });
 
 test("a private version conflict offers reload and a fresh editor can save and close normally", async () => {
-  state.mysql.mockResolvedValue({ revision: 2, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysql, type: "mysql" }] }] });
+  state.mysql.mockResolvedValue({ revision: 2, deployments: [{ environmentKey: "prod", dbhub: [{ ...mysqlSummary, type: "mysql" }] }] });
   state.refresh.mockImplementation(async () => {
     const next = configuration();
     next.services[0]!.revision = 2;
@@ -286,7 +297,7 @@ test("DBHub changes MySQL targets to PostgreSQL with the selected default port",
   await waitFor(() => expect(state.mysql).toHaveBeenCalledOnce());
   fireEvent.click(await within(dialog).findByRole("button", { name: "展开部署3" }));
   const type = await within(dialog).findByRole("combobox", { name: "dbhub prod 1 type" });
-  expect(within(dialog).getByLabelText("dbhub prod 1 host")).toHaveProperty("value", mysql.host);
+  expect(within(dialog).getByLabelText("dbhub prod 1 host")).toHaveProperty("value", mysqlSummary.host);
   expect(dialog.textContent).toContain("PostgreSQL、MySQL、MariaDB、SQL Server、Oracle");
   fireEvent.click(type);
   fireEvent.click(await screen.findByRole("option", { name: /^PostgreSQL$/ }));
@@ -294,7 +305,7 @@ test("DBHub changes MySQL targets to PostgreSQL with the selected default port",
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(state.save).toHaveBeenCalledOnce());
   const deployment = state.save.mock.calls[0]![1].deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod");
-  expect(deployment?.dbhub).toEqual([{ ...mysql, type: "postgres", port: 5432 }]);
+  expect(deployment?.dbhub).toEqual([{ host: mysqlSummary.host, port: 5432, username: mysqlSummary.username, password: "", database: mysqlSummary.database, type: "postgres" }]);
   expect(deployment).not.toHaveProperty("mysql");
 });
 

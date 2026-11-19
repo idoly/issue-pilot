@@ -12,7 +12,7 @@ const input = {
   credentialUpdate: { mode: "replace", values: { authorization: "Bearer secret-token" } },
 };
 
-test("manages MCP configs without returning credentials and reserves all running sessions", async () => {
+test("manages MCP configs without returning credentials and never reserves running sessions", async () => {
   const f = await createApiFixture();
   try {
     const added = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: input });
@@ -25,14 +25,12 @@ test("manages MCP configs without returning credentials and reserves all running
     assert.equal(list.body.includes("secret-token"), false);
     const duplicate = await f.app.inject({ method: "POST", url: "/api/mcp-services", headers, payload: input });
     assert.equal(duplicate.statusCode, 409, duplicate.body);
+    assert.equal(JSON.parse(duplicate.body).error, "mcp_name_conflict");
     assert.equal(duplicate.body.includes("secret-token"), false);
+    // Global rows are never Agent tools, so a running Issue does not block saving or closing sessions.
     await createService(f.app, "Running", ["test"]);
     await createIssue(f.app, "running", "test");
     const enable = { ...input, enabled: true, credentialUpdate: { mode: "preserve" } };
-    const blocked = await f.app.inject({ method: "PATCH", url: `/api/mcp-services/${row.id}`, headers, payload: enable });
-    assert.equal(blocked.statusCode, 409, blocked.body);
-    assert.equal(JSON.parse(blocked.body).error, "mcp_has_running_issues");
-    f.engine.running.clear();
     const saved = await f.app.inject({ method: "PATCH", url: `/api/mcp-services/${row.id}`, headers, payload: enable });
     assert.equal(saved.statusCode, 200, saved.body);
     assert.equal(JSON.parse(saved.body).enabled, true);

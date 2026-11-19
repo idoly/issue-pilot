@@ -131,7 +131,9 @@ function identityScoped(request: FastifyRequest): boolean {
 
 export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstance> {
   const stateRoot = path.resolve(options.stateRoot ?? applicationConfig.stateRoot);
-  const databaseFile = options.databaseFile ?? applicationConfig.databaseFile;
+  // The database follows the effective state root: a caller that only chooses a root (for example a test)
+  // must not fall back to the production database while holding a lease on its temporary directory.
+  const databaseFile = options.databaseFile ?? path.resolve(stateRoot, issuePilotConfig.state.databaseFile);
   // Idle keep-alive sockets close at once; in-flight requests finish, and preClose ends long-lived SSE streams.
   const app = Fastify({ logger: options.logger ?? applicationConfig.http.logger, forceCloseConnections: "idle" });
   app.log.info({ revision: startupRevision() }, "Starting application");
@@ -251,6 +253,19 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
         reply.header("Pragma", "no-cache");
       }
       return payload;
+    });
+
+    // Simple cross-site form posts (multipart or text/plain) carry no custom header and no preflight, so
+    // without this check any page could act as the implicit or gateway identity. Browsers mark them;
+    // non-browser clients do not send Sec-Fetch-Site and stay unaffected.
+    app.addHook("onRequest", async (request, reply) => {
+      if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS" || !identityScoped(request)) return;
+      const site = request.headers["sec-fetch-site"];
+      const origin = request.headers.origin;
+      // Same-site sibling origins and different ports are not the application's origin. On plain HTTP
+      // browsers may omit Fetch Metadata but still send Origin; do not trust client-supplied proxy headers.
+      if (site === "cross-site" || site === "same-site" || (!site && origin !== undefined && origin !== `${request.protocol}://${request.host}`))
+        return reply.code(403).send({ error: "cross_site_request_refused" });
     });
 
     const sourceBrowser = new SourceBrowser(database.db, stateRoot);

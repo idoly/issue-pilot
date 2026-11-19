@@ -53,7 +53,15 @@ export function registerConfigurationRoutes(context: ApiRouteContext, cancelActi
         .from(serviceDeployments)
         .innerJoin(environments, eq(environments.id, serviceDeployments.environmentId))
         .where(eq(serviceDeployments.serviceId, service.id));
-      return { revision: service.revision, deployments: deployments.map((row) => ({ environmentKey: row.environmentKey, dbhub: row.config.dbhub ?? [] })) };
+      // Editing needs target identity only; the stored password stays on the server and an omitted password
+      // keeps it (see parseDbHubTargets).
+      return {
+        revision: service.revision,
+        deployments: deployments.map((row) => ({
+          environmentKey: row.environmentKey,
+          dbhub: (row.config.dbhub ?? []).map(({ password, ...target }) => ({ ...target, passwordConfigured: Boolean(password) })),
+        })),
+      };
     });
   });
   app.get<{ Params: { key: string } }>("/api/services/:key/configuration-description", { logLevel: "silent" }, async (request, _reply) => {

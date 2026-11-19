@@ -7,7 +7,8 @@ import { drizzle } from "drizzle-orm/libsql";
 import { applicationConfig } from "../config.ts";
 import * as schema from "./schema.ts";
 
-export function openDatabase(file = applicationConfig.databaseFile) {
+/** The database file is always explicit: a default here could open production state from an isolated root. */
+export function openDatabase(file: string) {
   const databasePath = path.resolve(file);
   const directory = path.dirname(databasePath);
   mkdirSync(directory, { recursive: true, mode: 0o700 });

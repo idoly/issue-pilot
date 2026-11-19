@@ -2,7 +2,7 @@ import { Badge, Button, Tag } from "../ui";
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import type { JSX } from "@solidjs/web";
-import { canWriteIssueCode } from "../../../domain/contracts";
+import { canUseIssueWorkMode, canWriteIssueCode, issueWorkMode } from "../../../domain/contracts";
 import { CheckCircle2, Code2, Download, Eye, GitBranch, Organization, MessageSquare, Paperclip, Pencil, Plus, RefreshCw } from "../ui/icons";
 import { canChangeIssueScope, canModifyIssueCode, attachmentUrl, isIssueActive, relatedIssueUpdateRefusal, retryIssue, updateIssueStatus, type IssueDetail } from "../data/client";
 import { IssueSessionControls } from "./IssueSessionControls";
@@ -86,6 +86,7 @@ export function IssueWorkspace(props: {
   const [retrying, setRetrying] = createSignal(false, { ownedWrite: true });
   const [retryError, setRetryError] = createSignal("", { ownedWrite: true });
   const [statusSaving, setStatusSaving] = createSignal(false, { ownedWrite: true });
+  const [statusCommittedAt, setStatusCommittedAt] = createSignal<string>();
   const [statusError, setStatusError] = createSignal("", { ownedWrite: true });
   const [scopeOpen, setScopeOpen] = createSignal(false, { ownedWrite: true });
   const [followUpOpen, setFollowUpOpen] = createSignal(false, { ownedWrite: true });
@@ -110,6 +111,7 @@ export function IssueWorkspace(props: {
     setRetrying(false);
     setRetryError("");
     setStatusSaving(false);
+    setStatusCommittedAt(undefined);
     setStatusError("");
     setScopeOpen(false);
     setFollowUpOpen(false);
@@ -136,11 +138,19 @@ export function IssueWorkspace(props: {
   const changeStatus = async (status: "open" | "resolved") => {
     const issueId = props.issue.id;
     const generation = issueGeneration;
+    const revision = props.issue.revision;
+    if (statusSaving() || revision === statusCommittedAt()) return;
     setStatusSaving(true);
     setStatusError("");
     try {
       await updateIssueStatus(issueId, status);
-      if (issueGeneration === generation) await props.onUpdated();
+      if (issueGeneration !== generation) return;
+      setStatusCommittedAt(revision);
+      try {
+        await props.onUpdated();
+      } catch {
+        if (issueGeneration === generation) setStatusError("状态已更新，但刷新工单失败；请刷新页面查看最新状态。");
+      }
     } catch (error) {
       if (issueGeneration !== generation) return;
       if (!(error instanceof Error && error.message === "invalid_issue_status_transition")) {
@@ -170,7 +180,12 @@ export function IssueWorkspace(props: {
   const canEditRelatedIssues = () => relatedRefusal() !== "related_issue_update_not_allowed";
   const canChangeScope = () => {
     const kind = issueKind();
-    return kind !== undefined && canChangeIssueScope({ environmentKind: kind, status: props.issue.status, workspaceStatus: props.issue.workspace.status, agentRunning: props.issue.agentRunning });
+    if (kind === undefined) return false;
+    // Code-changing Issues can only stay in their own work mode, which the preflight rejects for roles
+    // that cannot use it; do not offer an action that can only fail.
+    const mode = issueWorkMode(kind, props.issue.type);
+    if (mode !== undefined && !canUseIssueWorkMode(currentUser()?.role ?? "product", mode)) return false;
+    return canChangeIssueScope({ environmentKind: kind, status: props.issue.status, workspaceStatus: props.issue.workspace.status, agentRunning: props.issue.agentRunning });
   };
   const branchName = () => props.issue.repositories[0]?.workingBranch ?? props.issue.repositories[0]?.baseBranch ?? "-";
   return (
@@ -208,6 +223,7 @@ export function IssueWorkspace(props: {
               type="primary"
               icon={<CheckCircle2 size={15} />}
               loading={statusSaving()}
+              disabled={props.issue.revision === statusCommittedAt()}
               onClick={() => {
                 void changeStatus("resolved");
               }}
@@ -220,6 +236,7 @@ export function IssueWorkspace(props: {
               class="issue-status-action"
               icon={<RefreshCw size={15} />}
               loading={statusSaving()}
+              disabled={props.issue.revision === statusCommittedAt()}
               onClick={() => {
                 void changeStatus("open");
               }}

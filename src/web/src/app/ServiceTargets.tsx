@@ -44,7 +44,9 @@ export function DbHubTargetsEditor(props: { value: DbHubTarget[]; environment: s
         </Button>
       </div>
       <p class="settings-target-feedback">支持 PostgreSQL、MySQL、MariaDB、SQL Server、Oracle；DBHub 另支持 SQLite，本页配置远程数据库。</p>
-      <For each={targets()}>
+      {/* A non-keyed list keeps each row's DOM: replacing the draft updates the values without remounting
+          the fields, so changing the database type (which resets the port) does not drop focus. */}
+      <For each={targets()} keyed={false}>
         {(target, index) => (
           <div class="settings-target-row">
             <div class="settings-target-actions">
@@ -53,8 +55,8 @@ export function DbHubTargetsEditor(props: { value: DbHubTarget[]; environment: s
                 danger
                 size="small"
                 disabled={targets().length === 1}
-                aria-label={`移除 DBHub ${props.environment} ${index() + 1}`}
-                onClick={() => emit(targets().filter((value) => value !== target))}
+                aria-label={`移除 DBHub ${props.environment} ${index + 1}`}
+                onClick={() => emit(targets().filter((value) => value !== target()))}
               >
                 移除
               </Button>
@@ -63,13 +65,13 @@ export function DbHubTargetsEditor(props: { value: DbHubTarget[]; environment: s
               <label>
                 <span>数据库类型</span>
                 <Select
-                  aria-label={`dbhub ${props.environment} ${index() + 1} type`}
-                  value={target.type}
+                  aria-label={`dbhub ${props.environment} ${index + 1} type`}
+                  value={target().type}
                   options={DBHUB_DATABASES.map((database) => ({ value: database.value, label: database.label }))}
                   onChange={(value) => {
                     const database = DBHUB_DATABASES.find((database) => database.value === value);
                     if (!database) return;
-                    emit(targets().map((value) => (value === target ? { ...target, type: database.value, port: database.port } : value)));
+                    emit(targets().map((current) => (current === target() ? { ...current, type: database.value, port: database.port } : current)));
                   }}
                 />
               </label>
@@ -78,11 +80,12 @@ export function DbHubTargetsEditor(props: { value: DbHubTarget[]; environment: s
                   <label>
                     <span>{key}</span>
                     <Input
-                      aria-label={`dbhub ${props.environment} ${index() + 1} ${key}`}
-                      type={key === "port" ? "number" : "text"}
-                      value={target[key]}
+                      aria-label={`dbhub ${props.environment} ${index + 1} ${key}`}
+                      type={key === "port" ? "number" : key === "password" ? "password" : "text"}
+                      placeholder={key === "password" ? "已配置时留空保持不变" : undefined}
+                      value={target()[key]}
                       onInput={(event) => {
-                        Object.assign(target, { [key]: key === "port" ? Number(event.currentTarget.value) : event.currentTarget.value });
+                        Object.assign(target(), { [key]: key === "port" ? Number(event.currentTarget.value) : event.currentTarget.value });
                         emit([...targets()]);
                       }}
                     />

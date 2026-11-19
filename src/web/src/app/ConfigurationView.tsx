@@ -35,7 +35,6 @@ const serviceSaveErrors: ErrorTexts = {
   personal_dms_credentials_incomplete: "个人 DMS 凭据不完整，请补齐或清除后使用共享凭据",
   invalid_dms_url: "请填写有效的 DMS MCP HTTPS URL",
   invalid_dms_authorization: "请填写完整的 Bearer 格式 DMS MCP Authorization",
-  invalid_dms_database: "DMS 数据库解析结果无效，请重新填写",
   invalid_dms_databases: "请至少配置一个且不超过 20 个 DMS 数据库",
   duplicate_dms_database_schema: "DMS schema 不能重复",
   duplicate_dms_database_id: "同一个 DMS 数据库不能配置多次",
@@ -57,7 +56,6 @@ const serviceSaveErrors: ErrorTexts = {
   invalid_sls_project: "请填写 SLS project",
   invalid_sls_logstores: "请至少填写一个 SLS logstore",
   invalid_sls_logstore: "SLS logstore 无效",
-  credential_required: "该能力必须配置凭据",
   credential_not_configured: "没有可保留的现有凭据，请填写新凭据",
   invalid_credential_replacement: "请填写完整的新凭据",
   invalid_credential_update: "凭据更新状态无效，请刷新配置后重试",
@@ -548,9 +546,18 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
   const [configurationDescription, setConfigurationDescription] = createSignal<{ serviceKey: string; subject: string; context: string } | null>(null, { ownedWrite: true });
   const [descriptionError, setDescriptionError] = createSignal("", { ownedWrite: true });
   const descriptionTask = createLatestTask();
+  const [descriptionRetry, retryDescription] = createSignal(0);
+  let descriptionKey: string | undefined;
   createEffect(
-    () => ({ service: selectedService(), user: currentUser() }),
-    ({ service, user }) => {
+    () => {
+      const service = selectedService();
+      const user = currentUser();
+      return { service, user, key: JSON.stringify([service?.key, service?.revision, user?.subject, user?.role, descriptionRetry()]) };
+    },
+    ({ service, user, key }) => {
+      // Resource refreshes republish the same service/user objects; only real changes reset the description.
+      if (key === descriptionKey) return;
+      descriptionKey = key;
       descriptionTask.cancel();
       setConfigurationDescription(null);
       setDescriptionError("");
@@ -665,7 +672,14 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
         .then((value) => {
           if (owner !== editorGeneration) return;
           if (value.revision !== service.revision) throw new Error("configuration_changed");
-          const loaded = environmentDrafts(service).map((deployment) => ({ ...deployment, dbhub: value.deployments.find((row) => row.environmentKey === deployment.environmentKey)?.dbhub ?? [] }));
+          const loaded = environmentDrafts(service).map((deployment) => ({
+            ...deployment,
+            // The private endpoint returns identities only; an empty password keeps the stored one on save.
+            dbhub: (value.deployments.find((row) => row.environmentKey === deployment.environmentKey)?.dbhub ?? []).map(({ passwordConfigured: _configured, ...target }) => ({
+              ...target,
+              password: "",
+            })),
+          }));
           setServiceDeployments(() => loaded);
           setDbHubLoading(false);
         })
@@ -842,12 +856,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
               <Show when={descriptionError()}>
                 <div class="workspace-error" role="alert">
                   {descriptionError()}
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      void refreshConfiguration().catch(() => undefined);
-                    }}
-                  >
+                  <Button size="small" onClick={() => retryDescription((attempt) => attempt + 1)}>
                     重试
                   </Button>
                 </div>
@@ -976,6 +985,22 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
                           })
                         }
                       />
+                      {/* A new service may be analysis-only (for example HTTPS repositories, which development forbids).
+                          Removing a deployment from an existing service is a configuration change with its own impact. */}
+                      <Show when={!editingServiceKey()}>
+                        <Button
+                          type="text"
+                          size="small"
+                          danger
+                          onClick={() =>
+                            setServiceDeployments((rows) => {
+                              rows[index()]!.included = false;
+                            })
+                          }
+                        >
+                          不包含{environmentName(configuration().environments, deployment.environmentKey)}部署
+                        </Button>
+                      </Show>
                     </Show>
                   )}
                 </For>

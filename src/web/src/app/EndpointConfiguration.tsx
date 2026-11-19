@@ -35,9 +35,13 @@ export function EndpointConfiguration() {
       request.finish();
     }
   };
+  // A resource refresh republishes the same person as a new object; only an actual identity change reloads.
+  let loadedSubject: string | undefined;
   createEffect(
     () => currentUser()?.subject,
-    () => {
+    (subject) => {
+      if (subject === loadedSubject) return;
+      loadedSubject = subject;
       setEndpoints([]);
       setCopied("");
       setCopyError("");

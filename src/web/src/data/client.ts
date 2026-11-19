@@ -468,8 +468,9 @@ type RepositoryInput = Pick<ManagedRepository, "name" | "url" | "group">;
 export const registerRepository = (input: RepositoryInput) => jsonRequest<{ id: string }>("/api/repositories", "POST", input);
 export const updateRepository = (id: string, input: RepositoryInput & { expectedRevision: number }) => jsonRequest<{ ok: boolean }>(`/api/repositories/${encodeURIComponent(id)}`, "PATCH", input);
 export const deleteRepository = (id: string) => request<void>(`/api/repositories/${encodeURIComponent(id)}`, { method: "DELETE" });
+export type DbHubTargetSummary = Omit<import("../../../domain/contracts").DbHubTarget, "password"> & { passwordConfigured: boolean };
 export const loadServiceDbHubTargets = (key: string) =>
-  request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: import("../../../domain/contracts").DbHubTarget[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
+  request<{ revision: number; deployments: Array<{ environmentKey: string; dbhub: DbHubTargetSummary[] }> }>(`/api/services/${encodeURIComponent(key)}/dbhub-targets`);
 
 export const loadRepositories = (signal?: AbortSignal) => request<ManagedRepository[]>("/api/repositories", signal ? { signal } : undefined);
 

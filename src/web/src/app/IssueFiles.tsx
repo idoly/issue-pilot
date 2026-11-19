@@ -38,10 +38,12 @@ export function IssueFiles(props: { issue: IssueDetail; hidden?: boolean }) {
     },
   );
   // Only a real change reloads the list. An equal key short-circuits before the effect runs, so an
-  // unrelated Issue refresh cannot dispose its cleanup and abort the request in flight.
+  // unrelated Issue refresh cannot dispose its cleanup and abort the request in flight. The revision
+  // includes workspace state, so files written by an Agent round appear when the round starts or ends;
+  // it deliberately does not change for every message or file write.
   const listingKey = createMemo(
     () =>
-      `${props.issue.id}\0${currentUser()?.subject ?? ""}\0${currentUser()?.role ?? ""}\0${directory()}\0${props.issue.updatedAt}\0${JSON.stringify(props.issue.repositories.map((repository) => [repository.name, repository.url, repository.workingBranch]))}\0${props.hidden ? "hidden" : "visible"}\0${refresh()}`,
+      `${props.issue.id}\0${currentUser()?.subject ?? ""}\0${currentUser()?.role ?? ""}\0${directory()}\0${props.issue.revision}\0${JSON.stringify(props.issue.repositories.map((repository) => [repository.name, repository.url, repository.workingBranch]))}\0${props.hidden ? "hidden" : "visible"}\0${refresh()}`,
   );
   createEffect(listingKey, () => {
     const input = untrack(() => ({ key: props.issue.id, subject: currentUser()?.subject, directory: directory(), hidden: props.hidden }));

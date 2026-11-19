@@ -11,6 +11,43 @@ import type { SlsQuery } from "./sls.ts";
 
 const limits = issuePilotConfig.limits.capability;
 const TOO_LARGE = "sls_result_too_large_narrow_query";
+/**
+ * Codemode may issue independent SLS queries concurrently (the tool guidance encourages batched evidence
+ * reads), and each query runs its own `aliyun` child process. Bound the children per process; queued
+ * callers respect their own cancellation.
+ */
+const maximumConcurrentSlsQueries = 4;
+let runningSlsQueries = 0;
+const slsSlotWaiters: Array<{ wake: () => void }> = [];
+async function withSlsSlot<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  signal.throwIfAborted();
+  if (runningSlsQueries >= maximumConcurrentSlsQueries) {
+    await new Promise<void>((resolve, reject) => {
+      const waiter = {
+        wake: () => {
+          signal.removeEventListener("abort", abort);
+          resolve();
+        },
+      };
+      const abort = () => {
+        const index = slsSlotWaiters.indexOf(waiter);
+        if (index >= 0) slsSlotWaiters.splice(index, 1);
+        reject(signal.reason);
+      };
+      slsSlotWaiters.push(waiter);
+      signal.addEventListener("abort", abort, { once: true });
+    });
+  } else runningSlsQueries += 1;
+  try {
+    signal.throwIfAborted();
+    return await run();
+  } finally {
+    // Transfer the occupied slot to the oldest waiter without exposing a free slot in between.
+    const next = slsSlotWaiters.shift();
+    if (next) next.wake();
+    else runningSlsQueries -= 1;
+  }
+}
 const providerErrors = new Map<string, string>([
   ["Unauthorized", "sls_access_denied"],
   ["SignatureNotMatch", "sls_signature_mismatch"],
@@ -86,30 +123,32 @@ export async function readSlsCli(configured: CapabilityConfig<"sls">, query: Sls
     let analysis = false;
     while (true) {
       signal.throwIfAborted();
-      const result = await executor.execute(
-        "aliyun",
-        [
-          "sls",
-          "GetLogsV2",
-          "--project",
-          configured.project,
-          "--logstore",
-          query.logstore,
-          "--region",
-          configured.region,
-          "--secure",
-          "--config-path",
-          configPath,
-          "--retry-count",
-          "0",
-          "--read-timeout",
-          String(Math.ceil(applicationParameters().slsExecutionMs / 1000)),
-          "--connect-timeout",
-          String(Math.ceil(applicationParameters().capabilityConnectionMs / 1000)),
-          "--body",
-          JSON.stringify({ from: query.from, to: query.to, query: query.query, line: limits.sls.pageResults, offset: records.length, reverse: true }),
-        ],
-        { signal, environment, maxOutputBytes: limits.resultBytes, strictStdoutUtf8: true },
+      const result = await withSlsSlot(signal, () =>
+        executor.execute(
+          "aliyun",
+          [
+            "sls",
+            "GetLogsV2",
+            "--project",
+            configured.project,
+            "--logstore",
+            query.logstore,
+            "--region",
+            configured.region,
+            "--secure",
+            "--config-path",
+            configPath,
+            "--retry-count",
+            "0",
+            "--read-timeout",
+            String(Math.ceil(applicationParameters().slsExecutionMs / 1000)),
+            "--connect-timeout",
+            String(Math.ceil(applicationParameters().capabilityConnectionMs / 1000)),
+            "--body",
+            JSON.stringify({ from: query.from, to: query.to, query: query.query, line: limits.sls.pageResults, offset: records.length, reverse: true }),
+          ],
+          { signal, environment, maxOutputBytes: limits.resultBytes, strictStdoutUtf8: true },
+        ),
       );
       signal.throwIfAborted();
       if (result.killed) throw new DomainError("sls_query_timeout", "upstream");

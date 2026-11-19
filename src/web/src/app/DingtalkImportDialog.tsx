@@ -124,6 +124,12 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       task.finish();
     }
   };
+  // Closing during an import aborts the request; the server may already have created the Issue. Ask before
+  // discarding the only in-page confirmation. Identity changes still close through the parent without this.
+  const requestClose = () => {
+    if (busy() === "import" && !window.confirm("导入仍在进行。关闭会中断本次导入，可能留下已创建的工单；请关闭后到工单列表核对。确认关闭？")) return;
+    props.onClose();
+  };
   return (
     <Modal
       open
@@ -132,10 +138,10 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
       onOk={() => {
         void submit();
       }}
-      onCancel={props.onClose}
+      onCancel={requestClose}
       footer={
         <div class="dingtalk-footer">
-          <Button onClick={props.onClose}>关闭</Button>
+          <Button onClick={requestClose}>关闭</Button>
           <Button
             type="primary"
             loading={busy() === "import"}

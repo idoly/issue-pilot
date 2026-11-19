@@ -11,7 +11,8 @@ import { ISSUE_KEY_PATTERN, ISSUE_PRIORITIES, ISSUE_WORK_MODES, parseIssueKey } 
 import { isStableErrorCode } from "../diagnostics.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
-import { sessionTranscript } from "../agent/events.ts";
+import { sessionTranscript, type RunEvent } from "../agent/events.ts";
+import { agentDisplayEvent } from "../agent/event-display.ts";
 import { openBoundSession } from "../agent/session-file.ts";
 import { issueRoot } from "../workspace/state.ts";
 import { ensureCurrentSubject, requireIssue } from "../configuration/access.ts";
@@ -128,6 +129,23 @@ const bounded = (value: unknown) => {
   if (Buffer.byteLength(text) > limits.responseBytes) throw new Error("mcp_response_too_large_use_smaller_page");
   return { content: [{ type: "text" as const, text }] };
 };
+type ConversationItem = { id: string; issueId: string; createdAt: string; event: unknown };
+/**
+ * Paged conversation entries use the same display projection as HTTP/SSE: pasted images become their size
+ * instead of Base64 data. A single entry still larger than the response budget is replaced by a marker so
+ * one huge event cannot make every page containing it unreadable.
+ */
+const conversationItem = (envelope: RunEvent): ConversationItem => {
+  const projected = agentDisplayEvent(envelope);
+  const event = projected.event;
+  const visible =
+    event.type === "issue_user" && event.images?.length
+      ? { ...event, images: event.images.map((image) => ({ type: "image" as const, mimeType: image.mimeType, bytes: Buffer.byteLength(image.data, "base64") })) }
+      : event;
+  const item: ConversationItem = { id: projected.id, issueId: projected.issueId, createdAt: projected.createdAt, event: visible };
+  const bytes = Buffer.byteLength(JSON.stringify(item));
+  return bytes <= limits.responseBytes - 1024 ? item : { id: item.id, issueId: item.issueId, createdAt: item.createdAt, event: { type: "display_truncated", bytes } };
+};
 
 function createApplicationMcpServer(context: ApiRouteContext, request: Pick<FastifyRequest, "headers">) {
   const server = new Server({ name: "issue-pilot", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } });
@@ -214,7 +232,8 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       let transcript = [] as ReturnType<typeof sessionTranscript>;
       if (binding) transcript = sessionTranscript(await openBoundSession(binding.sessionFile, issueRoot(context.stateRoot, row.key)), row.id);
       const seen = new Set(transcript.map((event) => event.id));
-      return page([...transcript, ...context.events.replayCurrent(row.id).filter((event) => !seen.has(event.id))], input);
+      const selected = page([...transcript, ...context.events.replayCurrent(row.id).filter((event) => !seen.has(event.id))], input);
+      return { ...selected, items: selected.items.map(conversationItem) };
     }
     if (name === "work_file_read") {
       const parent = path.posix.dirname(String(input.path));

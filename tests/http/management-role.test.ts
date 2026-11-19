@@ -118,7 +118,6 @@ test("reauthorizes global management after a queued MCP import", async () => {
   registerMcpRoutes({
     app,
     database,
-    engine: f.engine,
     runScopeExclusive: async (operation) => {
       entered();
       await gate;

@@ -66,6 +66,10 @@ export class AgentEngine implements AgentController {
   /** Issue keys of Issues with Agent activity, so background failure logs name the Issue; cleared when activity ends. */
   private readonly issueKeys = new Map<string, string>();
   private readonly sessions = new Map<string, ManagedPiSession>();
+  /** Scope changes signalled while an Issue has no live session (for example during preparation) apply at its next registration. */
+  private readonly pendingScopeChanges = new Set<string>();
+  /** Admitted messages that already own a scheduled round; a queued continuation must not schedule a second one. */
+  private readonly scheduledMessageRounds = new Set<string>();
   private readonly checkoutLeases = new Map<string, SharedCheckoutLease>();
   private readonly personalGit = new Map<string, PersonalGitEnvironment>();
   /** Developer Issues commit with the credential owner's identity; a sender's identity must not override it. */
@@ -119,8 +123,10 @@ export class AgentEngine implements AgentController {
   /** A related Issue's code view changed; its live sessions re-prepare roots on the next round without reserving it. */
   markScopeChanged(issueIds: Iterable<string>): void {
     for (const issueId of issueIds) {
+      // A reader still preparing has no session yet; keep the signal until its session registers.
       const managed = this.sessions.get(issueId);
       if (managed) managed.scopeChanged = true;
+      else if (this.checkoutLeases.has(issueId)) this.pendingScopeChanges.add(issueId);
     }
   }
 
@@ -220,20 +226,35 @@ export class AgentEngine implements AgentController {
           }
           if (gitIdentity && !this.personalSessions.has(issueId)) managed.setGitIdentity(gitIdentity);
           const steered = promptWithRuntimeTime(userMessage);
-          const queuedBefore = managed.session.getSteeringMessages().length;
           // Persist admission and conservatively mark dispatch before Pi can accept side effects.
-          let entryId: string;
-          try {
-            entryId = await this.recordUserMessage(issueId, managed.session.sessionManager, userMessage, images, messageIssue, request, "started");
-          } catch (error) {
+          const admission = await this.sessionQueue.run(issueId, async () => {
+            await authorize?.();
+            this.assertNotReserved(issueId);
+            if (!this.isReusableSession(issueId, managed) || !managed.streaming) return undefined;
             try {
-              await this.stopSession(issueId, managed);
-            } catch (cleanup) {
-              throw new AggregateError([error, cleanup], "agent_message_record_failed");
+              const entryId = await this.recordUserMessage(issueId, managed.session.sessionManager, userMessage, images, messageIssue, request, "started");
+              return { entryId };
+            } catch (error) {
+              try {
+                await this.stopSessionLocked(issueId, managed);
+              } catch (cleanup) {
+                throw new AggregateError([error, cleanup], "agent_message_record_failed");
+              }
+              throw error;
             }
-            throw error;
+          });
+          if (!admission) {
+            await scheduleMessage();
+            return;
           }
-          if (!this.isCurrentSession(issueId, managed)) throw new DomainError("agent_message_outcome_unknown", "conflict");
+          const { entryId } = admission;
+          if (!this.isReusableSession(issueId, managed) || !managed.streaming) {
+            // The round that owned this session finished or retired during the admission flush; Pi never saw
+            // the steer, so requeue the admitted input instead of reporting it as an uncertain outcome.
+            await this.requeueSteeredMessage(issueId, messageIssue, entryId, userMessage, images, gitIdentity);
+            return;
+          }
+          const queuedBefore = managed.session.getSteeringMessages().length;
           try {
             await managed.session.steer(steered, images);
           } catch (error) {
@@ -250,10 +271,7 @@ export class AgentEngine implements AgentController {
           // so only do this when this steer is the only entry waiting there.
           if (!managed.streaming && queuedBefore === 0 && managed.session.getSteeringMessages().length === 1) {
             managed.session.clearQueue();
-            requeueAgentMessage(managed.session.sessionManager, entryId);
-            this.schedule(issueId, () =>
-              this.isReusableSession(issueId, managed) ? this.promptExisting(issueId, managed, userMessage, images, entryId) : this.run(issueId, userMessage, gitIdentity, images, entryId),
-            );
+            await this.requeueSteeredMessage(issueId, messageIssue, entryId, userMessage, images, gitIdentity);
             return;
           }
         } else {
@@ -440,7 +458,12 @@ export class AgentEngine implements AgentController {
     }
   }
 
-  private schedule(issueId: string, operation: () => Promise<void>): void {
+  private schedule(issueId: string, operation: () => Promise<void>, entryId?: string): void {
+    // Pi entry IDs are session-local. Only rounds still waiting in the Issue queue own a claim:
+    // once running, this round may select an older input and need a continuation for its original ID.
+    const claim = entryId && `${issueId}:${entryId}`;
+    if (claim && this.scheduledMessageRounds.has(claim)) return;
+    if (claim) this.scheduledMessageRounds.add(claim);
     const controller = new AbortController();
     const rounds = this.rounds.get(issueId) ?? new Set<AbortController>();
     this.rounds.set(issueId, rounds);
@@ -448,6 +471,7 @@ export class AgentEngine implements AgentController {
     if (this.aborts.has(issueId)) controller.abort();
     this.beginActivity(issueId);
     const round = this.issueQueue.run(issueId, async () => {
+      if (claim) this.scheduledMessageRounds.delete(claim);
       const release = await this.acquireSlot(controller.signal);
       if (!release) {
         rounds.delete(controller);
@@ -529,6 +553,29 @@ export class AgentEngine implements AgentController {
     void round.catch((error: unknown) => this.reportError(error, issueId));
   }
 
+  /**
+   * The session that received this admission was stopped (failed round, cancellation or scope change)
+   * before Pi could take the steer. The input is recorded but undelivered, so hand it to the next round.
+   */
+  private async requeueSteeredMessage(issueId: string, issue: { id: string; key: string }, entryId: string, message: string, images: ImageContent[], gitIdentity?: GitCommitIdentity): Promise<void> {
+    await this.sessionQueue.run(issueId, async () => {
+      const current = this.sessions.get(issueId);
+      const manager = current?.session.sessionManager ?? (await this.sessionManagerLocked(issue, await assertIssueRoot(this.stateRoot, issue.key)));
+      // Registration and admission share the session queue. An absent original is inconsistent;
+      // never dispatch from an unbound copy of the text without the durable scope and delivery checks.
+      if (!manager.getBranch().some((entry) => entry.id === entryId)) throw new Error("agent_message_state_changed");
+      const file = manager.getSessionFile();
+      if (!file) throw new Error("agent_session_file_missing");
+      requeueAgentMessage(manager, entryId);
+      await flushSessionEntries(file);
+      this.schedule(
+        issueId,
+        () => (current && this.isReusableSession(issueId, current) ? this.promptExisting(issueId, current, message, images, entryId) : this.run(issueId, message, gitIdentity, images, entryId)),
+        entryId,
+      );
+    });
+  }
+
   private async run(issueId: string, latestMessage?: string, requestedGitIdentity?: GitCommitIdentity, images: ImageContent[] = [], messageEntryId?: string): Promise<void> {
     const [issue] = await this.database.select().from(issues).where(eq(issues.id, issueId)).limit(1);
     if (!issue) throw new Error("issue_not_found");
@@ -592,6 +639,8 @@ export class AgentEngine implements AgentController {
     const workDirectory = await assertIssueRoot(this.stateRoot, issue.key);
     const checkoutLease = new SharedCheckoutLease();
     this.checkoutLeases.set(issue.id, checkoutLease);
+    // Signals raised before this preparation are satisfied by the views it is about to read.
+    this.pendingScopeChanges.delete(issue.id);
     const prepared = await prepareAgentRound({
       database: this.database,
       stateRoot: this.stateRoot,
@@ -637,6 +686,8 @@ export class AgentEngine implements AgentController {
       });
       managed.retireAfterRound = sharedRepositories;
       this.sessions.set(issue.id, managed);
+      // A related Issue changed while this round prepared, before it had a session to mark.
+      if (this.pendingScopeChanges.delete(issue.id)) managed.scopeChanged = true;
       // sessionManagerLocked created or opened this file and is its sole binder; this round must not rebind it.
       if (!manager.getSessionFile()) throw new Error("failed_to_initialize_agent_session");
       return { managed, hadMessages };
@@ -750,7 +801,7 @@ export class AgentEngine implements AgentController {
         }
         throw error;
       }
-      this.schedule(issue.id, () => operation(entryId));
+      this.schedule(issue.id, () => operation(entryId), entryId);
     });
   }
 
@@ -781,7 +832,7 @@ export class AgentEngine implements AgentController {
       startAgentMessage(manager, entryId, issue);
       await flushSessionEntries(file);
       const next = pendingAgentMessages(managed.session.sessionManager)[0];
-      if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, undefined, next.images, next.id));
+      if (next) this.schedule(issue.id, () => this.run(issue.id, next.message, undefined, next.images, next.id), next.id);
     });
   }
 
@@ -876,6 +927,7 @@ export class AgentEngine implements AgentController {
     this.personalGit.delete(issueId);
     const checkoutLease = this.checkoutLeases.get(issueId);
     this.checkoutLeases.delete(issueId);
+    this.pendingScopeChanges.delete(issueId);
     this.sessions.delete(issueId);
     const failures: unknown[] = [];
     try {

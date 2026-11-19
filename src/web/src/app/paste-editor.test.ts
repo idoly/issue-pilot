@@ -30,16 +30,32 @@ describe("Pi-style paste editor", () => {
     expect(editor.expandSelection(pasted.value, markerStart + 2, markerEnd - 2)).toEqual({ start: markerStart, end: markerEnd });
   });
 
-  it("deletes a whole marker and renumbers remaining pastes", () => {
+  it("deletes a whole marker and keeps the remaining paste expandable", () => {
     const editor = new PasteEditorModel();
     const first = editor.insert("", 0, 0, lines(11, "first"))!;
-    const second = editor.insert(first.value, first.selectionStart, first.selectionEnd, lines(12, "second"))!;
+    const second = editor.insert(first.value, first.selectionStart, first.selectionStart, lines(12, "second"))!;
     expect(second.value).toBe("[paste #1 +11 lines][paste #2 +12 lines]");
 
     const deleted = editor.delete(second.value, first.selectionStart, first.selectionStart, "backward")!;
-    expect(deleted.value).toBe("[paste #1 +12 lines]");
+    expect(deleted.value).toBe("[paste #2 +12 lines]");
     expect(deleted.selectionStart).toBe(0);
     expect(editor.expand(deleted.value)).toBe(lines(12, "second"));
+  });
+
+  it("expands a marker that is cut and pasted back in the same draft", () => {
+    const editor = new PasteEditorModel();
+    const pasted = editor.insert("x ", 2, 2, lines(20, "alpha"))!;
+    expect(pasted.value).toBe("x [paste #1 +20 lines]");
+    // Cutting removes the marker text; the input synchronizer must keep the content.
+    const cut = editor.reconcile("x ", 2, 2);
+    expect(editor.expand(cut.value)).toBe("x ");
+    const restored = editor.insert(cut.value, cut.selectionStart, cut.selectionEnd, "[paste #1 +20 lines]");
+    expect(restored!.value).toBe("x [paste #1 +20 lines]");
+    expect(editor.expand(restored!.value)).toBe(`x ${lines(20, "alpha")}`);
+    // A later large paste gets a fresh ID instead of reusing #1.
+    const later = editor.insert(restored!.value, restored!.selectionStart, restored!.selectionEnd, lines(15, "bravo"))!;
+    expect(later.value).toBe("x [paste #1 +20 lines][paste #2 +15 lines]");
+    expect(editor.expand(later.value)).toBe(`x ${lines(20, "alpha")}${lines(15, "bravo")}`);
   });
 
   it("removes a marker when only part of it is selected", () => {

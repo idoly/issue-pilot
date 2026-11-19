@@ -380,3 +380,24 @@ test("SLS stops before requesting another page once accumulated evidence exceeds
   assert.equal(f.calls.length, 2);
   await assert.rejects(access(f.calls[0]!.configPath), { code: "ENOENT" });
 });
+
+test("bounds concurrent aliyun processes across independent codemode queries", async () => {
+  let active = 0;
+  let peak = 0;
+  const executor: CommandExecutor = {
+    async execute() {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 40);
+      });
+      active -= 1;
+      return { code: 0, killed: false, stdout: JSON.stringify(page([])), stderr: "" };
+    },
+  };
+  // The tool guidance encourages batching evidence reads with Promise.allSettled; each query used to
+  // start its own aliyun child process without a process-wide bound.
+  await Promise.all(Array.from({ length: 8 }, () => readSlsLogs(base, configured, undefined, executor)));
+  assert.ok(peak <= 4, `peak concurrent queries: ${peak}`);
+  assert.equal(active, 0);
+});

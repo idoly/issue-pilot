@@ -1,5 +1,5 @@
 import { Button, Skeleton } from "../ui";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { isIssueActive, type IssueExecutionItem } from "../data/client";
 import { ChevronRight, RefreshCw } from "../ui/icons";
@@ -14,6 +14,10 @@ function attentionRank(issue: IssueExecutionItem): number {
 
 export function Dashboard(props: { issues: IssueExecutionItem[]; loading: boolean; loadError: string; refreshing: boolean; onRefresh: () => void; onSelectIssue: (issueKey: string) => void }) {
   const { catalog } = useApplicationResources();
+  // Rows keep the same summary objects between samples; a minute tick keeps "N 分钟前" truthful.
+  const [minute, setMinute] = createSignal(Date.now(), { ownedWrite: true });
+  const minuteTimer = window.setInterval(() => setMinute(Date.now()), 60_000);
+  onCleanup(() => window.clearInterval(minuteTimer));
   const activeIssues = createMemo(() => props.issues.filter((issue) => issue.status !== "resolved"));
   const focusIssues = createMemo(() =>
     activeIssues()
@@ -89,7 +93,7 @@ export function Dashboard(props: { issues: IssueExecutionItem[]; loading: boolea
                           </div>
                           <span class="dashboard-assignee">{issue().assignee ?? "未分配"}</span>
                           <time datetime={issue().updatedAt} title={localDateTime(issue().updatedAt)}>
-                            {relativeTime(issue().updatedAt)}
+                            {relativeTime(issue().updatedAt, minute())}
                           </time>
                           <ChevronRight size={15} aria-hidden="true" />
                         </button>

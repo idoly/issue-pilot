@@ -41,4 +41,5 @@ const names: Record<string, string> = {
 };
 export const sourceLanguage = (path: string, text: string) =>
   text.length > sharedConfig.web.sourceHighlightCharacters ? "plaintext" : (extensions[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? "plaintext");
-export const sourceLanguageName = (path: string) => names[extensions[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? "plaintext"]!;
+/** The status bar must name the language actually used; very large files fall back to plain text. */
+export const sourceLanguageName = (path: string, text?: string) => names[text === undefined ? (extensions[path.split(".").at(-1)?.toLowerCase() ?? ""] ?? "plaintext") : sourceLanguage(path, text)]!;

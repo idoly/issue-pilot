@@ -87,7 +87,9 @@ export function ApplicationResourcesProvider(props: ParentProps) {
   createEffect(
     () => currentUser()?.subject ?? null,
     (subject) => {
-      if (lastSubject !== undefined && subject !== lastSubject) agentDrafts.clearAll();
+      // An unresolved identity (null) is not a switch: work created while /api/me was failing belongs to the
+      // identity that resolves next. Only replacing one known person with another cancels the old work.
+      if (lastSubject != null && subject != null && subject !== lastSubject) agentDrafts.clearAll();
       lastSubject = subject;
     },
   );

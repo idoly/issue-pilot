@@ -24,7 +24,10 @@ export async function issuesObservingDeployments(reader: Reader, environmentIds:
     .where(inArray(issues.environmentId, [...ids]));
 }
 
-/** Shared model/runtime, shared credential and global MCP writes retain their application-wide reservation. */
+/**
+ * Shared model/runtime and shared credential writes retain their application-wide reservation.
+ * Global MCP rows are excluded: Agent sessions read only deployment-owned service rows.
+ */
 export function issuesAffectedByGlobalChange(reader: Reader): Promise<AffectedIssue[]> {
   return reader.select({ id: issues.id }).from(issues);
 }

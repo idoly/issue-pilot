@@ -50,13 +50,11 @@ export class PasteEditorModel {
     if (!content) return null;
 
     const selection = this.expandSelection(value, selectionStart, selectionEnd);
-    const selectedMarkers = this.ranges(value).filter((range) => range.start < selection.end && range.end > selection.start);
-    for (const marker of selectedMarkers) this.contents.delete(marker.id);
-
+    // Contents of replaced markers stay in the model: a cut marker can be pasted back later and must
+    // still expand. They are released with the model on send or reset.
     const withoutSelection = `${value.slice(0, selection.start)}${value.slice(selection.end)}`;
-    const reconciled = this.reconcile(withoutSelection, selection.start, selection.start);
-    const insertionPoint = reconciled.selectionStart;
-    if (/^[/~.]/.test(content) && /\w/.test(reconciled.value.at(insertionPoint - 1) ?? "")) content = ` ${content}`;
+    const insertionPoint = selection.start;
+    if (/^[/~.]/.test(content) && /\w/.test(withoutSelection.at(insertionPoint - 1) ?? "")) content = ` ${content}`;
 
     const nextId = this.counter + 1;
     const marker = markerLabel(nextId, content);
@@ -65,7 +63,7 @@ export class PasteEditorModel {
       this.counter = nextId;
       this.contents.set(nextId, content);
     }
-    const nextValue = `${reconciled.value.slice(0, insertionPoint)}${inserted}${reconciled.value.slice(insertionPoint)}`;
+    const nextValue = `${withoutSelection.slice(0, insertionPoint)}${inserted}${withoutSelection.slice(insertionPoint)}`;
     const cursor = insertionPoint + inserted.length;
     return { value: nextValue, selectionStart: cursor, selectionEnd: cursor };
   }
@@ -78,31 +76,15 @@ export class PasteEditorModel {
 
     const start = Math.min(intendedStart, ...touched.map((range) => range.start));
     const end = Math.max(intendedEnd, ...touched.map((range) => range.end));
-    for (const marker of touched) this.contents.delete(marker.id);
     return this.reconcile(`${value.slice(0, start)}${value.slice(end)}`, start, start);
   }
 
+  /**
+   * Kept for callers that synchronize after every input. Markers are deliberately not renumbered or
+   * released here: cutting and pasting a marker back must still expand, and stable IDs keep the mapping.
+   */
   reconcile(value: string, selectionStart: number, selectionEnd: number): PasteEditResult {
-    const activeIds = new Set(this.ranges(value).map((range) => range.id));
-    for (const id of this.contents.keys()) {
-      if (!activeIds.has(id)) this.contents.delete(id);
-    }
-
-    const idMap = new Map([...this.contents.keys()].sort((left, right) => left - right).map((id, index) => [id, index + 1]));
-    const renumber = (text: string) =>
-      text.replace(markerRegex(), (marker, idText: string, suffix: string | undefined) => {
-        const nextId = idMap.get(Number(idText));
-        return nextId === undefined ? marker : `[paste #${nextId}${suffix ?? ""}]`;
-      });
-    const nextValue = renumber(value);
-    const nextStart = renumber(value.slice(0, selectionStart)).length;
-    const nextEnd = renumber(value.slice(0, selectionEnd)).length;
-    const nextContents = new Map<number, string>();
-    for (const [oldId, newId] of idMap) nextContents.set(newId, this.contents.get(oldId)!);
-    this.contents.clear();
-    for (const [id, content] of nextContents) this.contents.set(id, content);
-    this.counter = this.contents.size;
-    return { value: nextValue, selectionStart: nextStart, selectionEnd: nextEnd };
+    return { value, selectionStart, selectionEnd };
   }
 
   expandSelection(value: string, selectionStart: number, selectionEnd: number): { start: number; end: number } {

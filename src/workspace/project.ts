@@ -354,6 +354,8 @@ export class IssueProjectManager {
       repositories.map(({ repository }) => repository.url),
       existingNames,
     );
+    // The runtime view carries related-Issue entries; migration replaces it just like conversion does.
+    const relatedIssues = await this.prepareRelatedIssueRuntimes(issue.id);
     const mode = developmentWorktreeMode(issue.type);
     try {
       return await this.worktrees.prepareBatch({
@@ -380,6 +382,7 @@ export class IssueProjectManager {
               repositoryPath: worktree.workspacePath,
             })),
             "write",
+            relatedIssues,
           );
           const complete = () => finalize({ prepared, repositories, existingRepositories, names });
           if (!removedRepositories.length) return complete();

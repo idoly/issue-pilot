@@ -7,4 +7,4 @@ import "./app/settings.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Missing #root element");
-render(() => <App />, rootElement);
+render(() => <App />, rootElement, undefined, { onError: (error) => console.error("application_render_error", error) });

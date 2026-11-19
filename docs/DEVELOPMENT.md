@@ -35,7 +35,7 @@ Linux x64 构建需用 `npm ls @solidjs/compiler-linux-x64-gnu` 核对原生编�
 node src/http/production.ts
 ```
 
-可在另一个终端运行 `npm run dev:web`；Vite 使用 4173 并代理 API 到 3000，不提供业务隔离。没有 `npm start` 或后端 watch。修改后端需重启自己的独立实例。
+可在另一个终端运行 `npm run dev:web`。它的代理目标来自根配置 `http.port`（默认 3000，即本机生产实例），不提供业务隔离；独立开发必须先在独立 checkout 中修改该端口，并确认代理没有指向生产，再启动 Vite（4173）。没有 `npm start` 或后端 watch。修改后端需重启自己的独立实例。
 
 ## 验证入口与边界
 

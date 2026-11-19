@@ -73,6 +73,30 @@ function evidenceTool(url: string) {
     execute: async (_id, _input, signal) => ({ content: [{ type: "text", text: await (await fetch(url, signal ? { signal } : {})).text() }], details: undefined }),
   });
 }
+test("Codemode fills the missing deadline without replacing the script's output budget or explicit timeout", async () => {
+  const { createIssueCodemodeExtension } = await import("../../src/agent/codemode-extension.ts");
+  const { parseCodemodeSource } = await import("@earendil-works/pi-codemode");
+  let toolCall!: (event: { toolName: string; input: { code: string } }) => void;
+  await createIssueCodemodeExtension("/unused")({
+    registerTool() {},
+    on(name: string, handler: typeof toolCall) {
+      if (name === "tool_call") toolCall = handler;
+    },
+  } as never);
+  for (const [header, expected] of [
+    ["", { timeoutMs: 300000 }],
+    ['// @options: {"max_output_tokens":12}\r\n', { maxOutputTokens: 12, timeoutMs: 300000 }],
+    ['// @options: {"timeout_ms":135}\n', { timeoutMs: 135 }],
+    ["//@options: ordinary JS comment\n", { timeoutMs: 300000 }],
+  ] as const) {
+    const input = { code: `${header}return 7;` };
+    toolCall({ toolName: "codemode", input });
+    const { code, options } = parseCodemodeSource(input.code);
+    assert.ok(code.trimEnd().endsWith("return 7;"));
+    assert.deepEqual(options, expected);
+  }
+});
+
 const call = (code: string, id = "script") => fauxAssistantMessage(fauxToolCall("codemode", { code }, { id }), { stopReason: "toolUse" });
 
 for (const nested of [false, true])

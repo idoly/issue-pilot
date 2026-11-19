@@ -78,6 +78,8 @@ const limits = deepFreeze({
     gitOutputBytes: 2 * 1024 * 1024,
     diskUsageMs: 120_000,
     diskUsageOutputBytes: 1024 * 1024,
+    // Streamed hardlink inspection; a checkout with more shared inodes needs inspection.
+    hardlinkEntries: 200_000,
   },
   capability: {
     resultBytes: 1024 * 1024,

@@ -80,6 +80,22 @@ test("stdio sandbox Git protection includes stores created after the connection 
   }
 });
 
+test("the sandbox mounts root configuration read-only even if the file does not yet exist", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-root-config-"));
+  const file = path.join(root, ".mcp.json");
+  let prepared;
+  try {
+    const inspect = `const mounts = require('node:fs').readFileSync('/proc/self/mountinfo', 'utf8').split('\\n').map(line => line.split(' ')); console.log(mounts.some(fields => fields[4] === process.argv[1] && fields[5].split(',').includes('ro')));`;
+    prepared = await prepareIssueCommand({ writeRoot: root }, [process.execPath, "-e", inspect, file]);
+    const result = await executeLocalCommand(prepared.argv[0]!, prepared.argv.slice(1), { cwd: root, timeout: 5000 });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout.trim(), "true");
+  } finally {
+    await prepared?.cleanup();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("unexpected .issue-git entries stay protected without disabling native tools", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-unknown-git-"));
   const stray = path.join(root, ".issue-git", "scratch.txt");

@@ -1,6 +1,6 @@
 import "./code-browser.css";
 import { createEffect, createMemo, createSignal, For, lazy, onCleanup, Show, untrack } from "solid-js";
-import { Button, Input, Modal } from "../ui";
+import { AsyncBoundary, Button, Input, Modal } from "../ui";
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Pencil, Trash2 } from "../ui/icons";
 import { Codicon } from "../ui/Codicon";
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
@@ -61,28 +61,33 @@ function Directory(props: { issueKey: string; repository: string; path: string; 
   const [error, setError] = createSignal("", { ownedWrite: true });
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   let controller: AbortController | undefined;
-  createEffect(
-    () => ({ issueKey: props.issueKey, repository: props.repository, path: props.path, version: props.version }),
-    (value) => {
-      controller?.abort();
-      const request = new AbortController();
-      controller = request;
-      setLoading(true);
-      setError("");
-      void loadSourceTree(value.issueKey, value.repository, value.path, request.signal)
-        .then((tree) => {
-          if (request.signal.aborted) return;
-          setEntries(tree.entries);
-          if (tree.truncated) setError("目录条目超过上限，请进入子目录查看");
-        })
-        .catch((cause) => {
-          if (!request.signal.aborted) setError(errorText(cause));
-        })
-        .finally(() => {
-          if (!request.signal.aborted) setLoading(false);
-        });
-    },
-  );
+  // A memo keeps the effect from re-running when a parent re-render publishes identical props; an effect
+  // that returned early would already have run its cleanup and abort the in-flight request.
+  let directoryInput!: { issueKey: string; repository: string; path: string };
+  const directoryKey = createMemo(() => {
+    directoryInput = { issueKey: props.issueKey, repository: props.repository, path: props.path };
+    return JSON.stringify([props.issueKey, props.repository, props.path, props.version]);
+  });
+  createEffect(directoryKey, () => {
+    const value = directoryInput;
+    controller?.abort();
+    const request = new AbortController();
+    controller = request;
+    setLoading(true);
+    setError("");
+    void loadSourceTree(value.issueKey, value.repository, value.path, request.signal)
+      .then((tree) => {
+        if (request.signal.aborted) return;
+        setEntries(tree.entries);
+        if (tree.truncated) setError("目录条目超过上限，请进入子目录查看");
+      })
+      .catch((cause) => {
+        if (!request.signal.aborted) setError(errorText(cause));
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setLoading(false);
+      });
+  });
   onCleanup(() => controller?.abort());
   return (
     <ul class="source-tree" aria-label={props.path || "仓库文件"}>
@@ -536,27 +541,30 @@ export default function CodeBrowser(props: {
       if (changesController === request) changesController = undefined;
     }
   };
-  createEffect(
-    () => ({ issueKey: props.issueKey, repository: repository(), view: view() }),
-    (value) => {
+  let changesInput!: { issueKey: string; repository: string; view: string };
+  const changesKey = createMemo(() => {
+    changesInput = { issueKey: props.issueKey, repository: repository(), view: view() };
+    return JSON.stringify([changesInput.issueKey, changesInput.repository, changesInput.view]);
+  });
+  createEffect(changesKey, () => {
+    const value = changesInput;
+    changesController?.abort();
+    changesController = undefined;
+    if (value.view !== "changes" || !value.repository) return;
+    const refresh = () => {
+      void refreshChanges();
+    };
+    const timer = setInterval(refresh, sharedConfig.web.sourceRefreshMs);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
       changesController?.abort();
       changesController = undefined;
-      if (value.view !== "changes" || !value.repository) return;
-      const refresh = () => {
-        void refreshChanges();
-      };
-      const timer = setInterval(refresh, sharedConfig.web.sourceRefreshMs);
-      window.addEventListener("focus", refresh);
-      document.addEventListener("visibilitychange", refresh);
-      return () => {
-        clearInterval(timer);
-        changesController?.abort();
-        changesController = undefined;
-        window.removeEventListener("focus", refresh);
-        document.removeEventListener("visibilitychange", refresh);
-      };
-    },
-  );
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  });
   createEffect(
     () => props.contentVersion,
     (value, previous) => {
@@ -904,35 +912,46 @@ export default function CodeBrowser(props: {
       if (owner === scope && !request.signal.aborted) setPanelLoading(false);
     }
   };
-  createEffect(
-    () => ({ issueKey: props.issueKey, repository: repository(), file: file(), line: cursor().line, loading: fileLoading(), dirty: dirty(), comparison: comparison() }),
-    (value) => {
-      setBlame(null);
-      if (!value.file || value.loading || value.comparison) {
-        setBlameStatus("行信息");
-        return;
-      }
-      if (value.dirty) {
-        setBlameStatus("未保存的更改");
-        return;
-      }
-      setBlameStatus("加载行信息…");
-      const request = new AbortController();
-      const timer = setTimeout(() => {
-        void loadSourceBlame(value.issueKey, value.repository, value.file!.path, value.line, request.signal)
-          .then((result) => {
-            if (!request.signal.aborted) setBlame(result);
-          })
-          .catch(() => {
-            if (!request.signal.aborted) setBlameStatus("暂无行信息");
-          });
-      }, sharedConfig.web.sourceBlameDebounceMs);
-      return () => {
-        clearTimeout(timer);
-        request.abort();
-      };
-    },
-  );
+  let blameInput!: {
+    issueKey: string;
+    repository: string;
+    file: ReturnType<typeof file>;
+    line: number;
+    loading: boolean;
+    dirty: boolean;
+    comparison: ReturnType<typeof comparison>;
+  };
+  const blameKey = createMemo(() => {
+    blameInput = { issueKey: props.issueKey, repository: repository(), file: file(), line: cursor().line, loading: fileLoading(), dirty: dirty(), comparison: comparison() };
+    return JSON.stringify([blameInput.issueKey, blameInput.repository, blameInput.file?.path ?? "", blameInput.line, blameInput.loading, blameInput.dirty, Boolean(blameInput.comparison)]);
+  });
+  createEffect(blameKey, () => {
+    const value = blameInput;
+    setBlame(null);
+    if (!value.file || value.loading || value.comparison) {
+      setBlameStatus("行信息");
+      return;
+    }
+    if (value.dirty) {
+      setBlameStatus("未保存的更改");
+      return;
+    }
+    setBlameStatus("加载行信息…");
+    const request = new AbortController();
+    const timer = setTimeout(() => {
+      void loadSourceBlame(value.issueKey, value.repository, value.file!.path, value.line, request.signal)
+        .then((result) => {
+          if (!request.signal.aborted) setBlame(result);
+        })
+        .catch(() => {
+          if (!request.signal.aborted) setBlameStatus("暂无行信息");
+        });
+    }, sharedConfig.web.sourceBlameDebounceMs);
+    return () => {
+      clearTimeout(timer);
+      request.abort();
+    };
+  });
   const blameLabel = () => {
     const value = blame();
     return value ? (value.commit ? `${value.author} · ${relativeTime(value.date!)} · ${value.subject}` : value.subject) : blameStatus();
@@ -1463,6 +1482,9 @@ export default function CodeBrowser(props: {
                           aria-expanded={commitFiles()[commit.hash] ? "true" : "false"}
                           onMouseEnter={(event) => showCommitHover(commit, event.currentTarget)}
                           onMouseLeave={hideCommitHover}
+                          // Keyboard users reach the same card (and its copy buttons) by focusing the row.
+                          onFocus={(event) => showCommitHover(commit, event.currentTarget)}
+                          onBlur={hideCommitHover}
                           onClick={() => {
                             void historyFiles(commit.hash);
                           }}
@@ -1612,28 +1634,32 @@ export default function CodeBrowser(props: {
           </div>
           <Show when={comparison()}>
             {(value) => (
-              <SourceDiff
-                value={value()}
-                toolbar={comparisonToolbar}
-                disabled={busy() || panelLoading() || !value().canOpen}
-                onOpen={() => {
-                  void openFile(value().path);
-                }}
-              />
+              <AsyncBoundary label="差异视图">
+                <SourceDiff
+                  value={value()}
+                  toolbar={comparisonToolbar}
+                  disabled={busy() || panelLoading() || !value().canOpen}
+                  onOpen={() => {
+                    void openFile(value().path);
+                  }}
+                />
+              </AsyncBoundary>
             )}
           </Show>
           <Show when={searchDocument()}>
             {(document) => (
-              <SourceText
-                path={`搜索结果 ${document().term}`}
-                value={document().content}
-                readonly
-                onInput={() => {}}
-                onSave={() => {}}
-                onPosition={(line, column) => {
-                  setCursor({ line, column });
-                }}
-              />
+              <AsyncBoundary label="搜索结果">
+                <SourceText
+                  path={`搜索结果 ${document().term}`}
+                  value={document().content}
+                  readonly
+                  onInput={() => {}}
+                  onSave={() => {}}
+                  onPosition={(line, column) => {
+                    setCursor({ line, column });
+                  }}
+                />
+              </AsyncBoundary>
             )}
           </Show>
           <Show when={!comparison() && !searchDocument()}>
@@ -1653,17 +1679,19 @@ export default function CodeBrowser(props: {
                 />
               }
             >
-              <SourceText
-                path={file()!.path}
-                value={draft()}
-                reveal={reveal()}
-                readonly={!editable() || mutating() || fileLoading()}
-                onInput={setDraft}
-                onSave={save}
-                onPosition={(line, column) => {
-                  setCursor({ line, column });
-                }}
-              />
+              <AsyncBoundary label="编辑器">
+                <SourceText
+                  path={file()!.path}
+                  value={draft()}
+                  reveal={reveal()}
+                  readonly={!editable() || mutating() || fileLoading()}
+                  onInput={setDraft}
+                  onSave={save}
+                  onPosition={(line, column) => {
+                    setCursor({ line, column });
+                  }}
+                />
+              </AsyncBoundary>
             </Show>
           </Show>
         </div>
@@ -1700,7 +1728,7 @@ export default function CodeBrowser(props: {
             </span>
             <span>UTF-8</span>
             <span>{lineEndings(file()?.content ?? "") === "mixed" ? "混合换行 · 只读" : lineEndings(file()?.content ?? "")}</span>
-            <span>{sourceLanguageName(activePath())}</span>
+            <span>{sourceLanguageName(activePath(), draft())}</span>
             <Show when={!writable()}>
               <span title={roleHint() ? "开发工单的代码只有开发角色可以修改" : undefined}>只读</span>
             </Show>

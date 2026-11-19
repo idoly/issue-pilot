@@ -39,7 +39,7 @@ function parseServiceDeployment(input: unknown, repositoryAliases: Set<string>, 
   )
     throw new DomainError("invalid_deployment_repository_branches", "bad_request");
   const config: StoredDeploymentConfig = resolveConfiguredCapabilitySections(deployment, capabilities);
-  const dbhub = parseDbHubTargets(deployment.dbhub);
+  const dbhub = parseDbHubTargets(deployment.dbhub, existing?.dbhub ?? []);
   if (development && dbhub.length) throw new DomainError("development_capabilities_inherited", "bad_request");
   if (dbhub.length) config.dbhub = dbhub;
   return { environmentKey, environmentKind, repositoryBranches, config };

@@ -22,7 +22,6 @@ export function deploymentContext(
   configuration: StoredDeploymentConfig,
   mcp: readonly { id: string; name: string; url: string; transport: string; enabled: boolean; deploymentId?: string | null }[],
   mcpCredentials: readonly { id: string; authorization: string }[] = [],
-  includePrivateDbHub = false,
 ): string {
   const sections = [`### ${environment.name}环境`];
   if (isDevelopmentEnvironment(environment.kind)) return [...sections, "代码基线继承正式分支，不单独设置；查询能力继承正式和测试环境，来源保持只读。"].join("\n\n");
@@ -34,7 +33,6 @@ export function deploymentContext(
           ["host", target.host],
           ["port", target.port],
           ["username", target.username],
-          ...(includePrivateDbHub ? [["password", target.password] as Field] : []),
           ["database", target.database],
         ]),
       );

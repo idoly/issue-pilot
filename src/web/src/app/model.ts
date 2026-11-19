@@ -111,8 +111,9 @@ export function environmentName(environments: ReadonlyArray<{ key: string; name:
 export const localDate = (value: string | number | Date) => dateFormat.format(new Date(value));
 export const localDateTime = (value: string | number | Date) => dateTimeFormat.format(new Date(value));
 
-export function relativeTime(value: string): string {
-  const elapsed = Date.now() - new Date(value).getTime();
+/** Callers that render long-lived rows pass a minute tick so the text does not freeze between samples. */
+export function relativeTime(value: string, now = Date.now()): string {
+  const elapsed = now - new Date(value).getTime();
   if (!Number.isFinite(elapsed)) return value;
   const minutes = Math.max(0, Math.floor(elapsed / 60_000));
   if (minutes < 1) return "刚刚";

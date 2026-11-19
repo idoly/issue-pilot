@@ -6,9 +6,16 @@ import { DBHUB_DATABASES, type DbHubTarget } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { choice, record, text } from "../domain/input.ts";
 
-export function parseDbHubTargets(value: unknown): DbHubTarget[] {
+/**
+ * Targets identify a database by type, host, port, database and username. An omitted (empty) password keeps
+ * the stored value for the same identity, so editing another field never sends the secret to the browser;
+ * a changed identity requires the password again.
+ */
+export function parseDbHubTargets(value: unknown, existing: readonly DbHubTarget[] = []): DbHubTarget[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new DomainError("invalid_dbhub_targets", "bad_request");
+  const identity = (target: Pick<DbHubTarget, "type" | "host" | "port" | "database" | "username">) => JSON.stringify([target.type, target.host, target.port, target.database, target.username]);
+  const retained = new Map(existing.map((target) => [identity(target), target.password]));
   const seen = new Set<string>();
   return value.map((raw) => {
     const input = record(raw);
@@ -20,12 +27,16 @@ export function parseDbHubTargets(value: unknown): DbHubTarget[] {
     const host = text(input.host, "dbhub_host", 255);
     const port = input.port ?? DBHUB_DATABASES.find((database) => database.value === type)!.port;
     if (/\s|[/\\\0@?#]/.test(host) || !Number.isInteger(port) || Number(port) < 1 || Number(port) > 65535) throw new DomainError("invalid_dbhub_target", "bad_request");
-    if (typeof input.password !== "string" || !input.password.length || input.password.includes("\0")) throw new DomainError("invalid_dbhub_password", "bad_request");
-    const target = { type, host, port: Number(port), username: text(input.username, "dbhub_username", 255), password: input.password, database: text(input.database, "dbhub_database", 255) };
-    const identity = JSON.stringify([type, host, port, target.database]);
-    if (seen.has(identity)) throw new DomainError("duplicate_dbhub_target", "bad_request");
-    seen.add(identity);
-    return target;
+    if (input.password !== undefined && (typeof input.password !== "string" || input.password.includes("\0"))) throw new DomainError("invalid_dbhub_password", "bad_request");
+    const username = text(input.username, "dbhub_username", 255);
+    const database = text(input.database, "dbhub_database", 255);
+    const target = { type, host, port: Number(port), username, database, password: "" };
+    const password = typeof input.password === "string" && input.password.length ? input.password : retained.get(identity(target));
+    if (!password) throw new DomainError("invalid_dbhub_password", "bad_request");
+    const duplicate = JSON.stringify([type, host, port, database]);
+    if (seen.has(duplicate)) throw new DomainError("duplicate_dbhub_target", "bad_request");
+    seen.add(duplicate);
+    return { ...target, password };
   });
 }
 export function dbHubDsn(target: DbHubTarget): string {

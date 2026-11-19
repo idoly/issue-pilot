@@ -179,3 +179,25 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
   expect(api.list).toHaveBeenCalledTimes(5);
   expect(list.error()).toBe("");
 });
+
+it("keeps an Issue published by a newer detail read when an older list sample returns without it", async () => {
+  const slow = deferred<IssueExecutionItem[]>();
+  api.list.mockReturnValueOnce(slow.promise);
+  let list!: IssueListResource;
+  function Probe() {
+    list = createIssueList();
+    return null;
+  }
+  render(() => <Probe />);
+  await settle();
+  expect(api.list).toHaveBeenCalledTimes(1);
+  // The user opens an Issue created after this sample started; its detail arrives first.
+  const fresh = "ISSUE-20261109-002";
+  list.beginDetailRead().publish({ ...row("fresh"), id: fresh, workspace: { status: "ready" }, relatedIssues: [] } as never);
+  await settle();
+  expect(list.detail(fresh)).toBeDefined();
+  slow.resolve([row("older")]);
+  await settle();
+  expect(list.summary(fresh)).toBeDefined();
+  expect(list.detail(fresh)).toBeDefined();
+});

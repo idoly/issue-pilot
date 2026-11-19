@@ -207,6 +207,21 @@ test("recovers queued messages in order alongside a newly admitted message and d
   }
 });
 
+test("sending after a restart drains the older pending input and the newly admitted one", async (t) => {
+  const f = await fixture(t);
+  try {
+    appendAgentMessage(f.manager, f.issue, "Queued before restart", []);
+    await f.engine.send(f.issue.id, "Admitted after restart");
+    await f.engine.close();
+    assert.equal(f.deliveries.length, 2);
+    assert.match(f.deliveries[0]!.message, /Queued before restart/);
+    assert.match(f.deliveries[1]!.message, /Admitted after restart/);
+    assert.deepEqual(pendingAgentMessages(SessionManager.open(f.manager.getSessionFile()!)), []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("scope changes reject stale queued intent before model work and leave new scope input usable", async (t) => {
   const f = await fixture(t);
   try {

@@ -302,4 +302,33 @@ describe("application configuration resources", () => {
       expect(client.loadCatalog).toHaveBeenCalledOnce();
       expect(client.loadConfig).toHaveBeenCalledOnce();
     });
+
+  it("keeps drafts made while the identity was unresolved until a different person is selected", async () => {
+    const client = await import("../data/client");
+    const alice: Person = { subject: "alice", name: "Alice", email: "alice@example.test", role: "product" };
+    const bob: Person = { subject: "bob", name: "Bob", email: "bob@example.test", role: "product" };
+    // The first load fails (for example during a restart); the page remains usable with no resolved user.
+    vi.mocked(client.loadUsers).mockRejectedValueOnce(new Error("service_unavailable")).mockResolvedValue([alice, bob]);
+    vi.mocked(client.loadCurrentUser).mockResolvedValue({ ...alice, identityLocked: false });
+    let resources!: ReturnType<typeof useApplicationResources>;
+    function Probe() {
+      resources = useApplicationResources();
+      return null;
+    }
+    render(() => (
+      <ApplicationResourcesProvider>
+        <Probe />
+      </ApplicationResourcesProvider>
+    ));
+    await waitFor(() => expect(resources.peopleError()).not.toBe(""));
+    expect(resources.currentUser()).toBeNull();
+    resources.agentDrafts.get("issue").text = "typed while unresolved";
+    await resources.refreshPeople();
+    await waitFor(() => expect(resources.currentUser()?.subject).toBe("alice"));
+    expect(resources.agentDrafts.get("issue").text).toBe("typed while unresolved");
+    // A real identity switch still cancels the old person's work.
+    resources.selectCurrentUser("bob");
+    await waitFor(() => expect(resources.currentUser()?.subject).toBe("bob"));
+    expect(resources.agentDrafts.get("issue").text).toBe("");
+  });
 });

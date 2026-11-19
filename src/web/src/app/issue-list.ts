@@ -92,6 +92,9 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
           const entity = previous.get(summary.id);
           next.set(summary.id, entity && entity.summaryRead > read ? entity : { summary: reuseSummary(entity?.summary, summary), summaryRead: read, detail: entity?.detail });
         }
+        // A detail published while this older sample was in flight (for example an Issue created meanwhile)
+        // is newer than the list snapshot; keep it instead of dropping the selected Issue.
+        for (const [id, entity] of previous) if (!next.has(id) && entity.summaryRead > read) next.set(id, entity);
         return next;
       });
       setListVersion(read);

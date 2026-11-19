@@ -1,4 +1,4 @@
-import { Button, Segmented, Select, Skeleton } from "../ui";
+import { AsyncBoundary, Button, Segmented, Select, Skeleton } from "../ui";
 import { createEffect, createSignal, lazy, Loading, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
@@ -61,20 +61,22 @@ function AgentWorkspace(props: {
         codeWriteAllowed={codeWriteAllowed()}
       />
       <Show when={props.sourceExpanded}>
-        <CodeBrowser
-          issueKey={props.issue.id}
-          repositoryVersion={JSON.stringify([props.issue.environmentKey, props.issue.status, props.issue.workspace.status, props.issue.workspace.sourceAvailable, props.issue.repositories])}
-          contentVersion={props.issue.updatedAt}
-          development={props.issue.environmentKey === "dev"}
-          codeWriteAllowed={codeWriteAllowed()}
-          agentOpen={props.sourceAgentOpen}
-          detailsOpen={props.sourceDetailsOpen}
-          onClose={props.onCloseSource}
-          onToggleAgent={props.onToggleAgent}
-          onToggleDetails={props.onToggleDetails}
-          onDirtyChange={props.onDirtyChange}
-          onResize={props.onResize}
-        />
+        <AsyncBoundary label="源码浏览器">
+          <CodeBrowser
+            issueKey={props.issue.id}
+            repositoryVersion={JSON.stringify([props.issue.environmentKey, props.issue.status, props.issue.workspace.status, props.issue.workspace.sourceAvailable, props.issue.repositories])}
+            contentVersion={props.issue.updatedAt}
+            development={props.issue.environmentKey === "dev"}
+            codeWriteAllowed={codeWriteAllowed()}
+            agentOpen={props.sourceAgentOpen}
+            detailsOpen={props.sourceDetailsOpen}
+            onClose={props.onCloseSource}
+            onToggleAgent={props.onToggleAgent}
+            onToggleDetails={props.onToggleDetails}
+            onDirtyChange={props.onDirtyChange}
+            onResize={props.onResize}
+          />
+        </AsyncBoundary>
       </Show>
     </section>
   );
@@ -447,15 +449,17 @@ function AppWorkspace(props: { initialView?: AppView }) {
               </Show>
             </Match>
             <Match when={view() === "configuration"}>
-              <Loading
-                fallback={
-                  <main class="settings-view" role="status">
-                    正在加载配置…
-                  </main>
-                }
-              >
-                <SettingsView />
-              </Loading>
+              <AsyncBoundary label="配置">
+                <Loading
+                  fallback={
+                    <main class="settings-view" role="status">
+                      正在加载配置…
+                    </main>
+                  }
+                >
+                  <SettingsView />
+                </Loading>
+              </AsyncBoundary>
             </Match>
           </Switch>
         </div>

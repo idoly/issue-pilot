@@ -79,3 +79,23 @@ test("health probes the open database connection and reports 503 once it is clos
     assert.deepEqual(unhealthy.json(), { ok: false, error: "database_unavailable" });
   });
 });
+
+test("refuses browser-marked cross-site writes while reads and header-less clients stay available", async () => {
+  await withApi(async (app) => {
+    const blocked = await app.inject({ method: "POST", url: "/api/issues", headers: { ...headers, "sec-fetch-site": "cross-site" }, payload: {} });
+    assert.equal(blocked.statusCode, 403);
+    assert.deepEqual(blocked.json(), { error: "cross_site_request_refused" });
+    for (const extra of [{ "sec-fetch-site": "same-site" }, { origin: "https://other.example.test" }, { origin: "null" }]) {
+      const refused = await app.inject({ method: "POST", url: "/api/issues", headers: { ...headers, ...extra }, payload: {} });
+      assert.equal(refused.statusCode, 403);
+      assert.equal(refused.json().error, "cross_site_request_refused");
+    }
+    const sameOrigin = await app.inject({ method: "POST", url: "/api/issues", headers: { ...headers, "sec-fetch-site": "same-origin" }, payload: {} });
+    assert.notEqual(sameOrigin.statusCode, 403);
+    // Reads are not state-changing, and CLI/MCP clients send no Sec-Fetch-Site header.
+    const read = await app.inject({ method: "GET", url: "/api/issues", headers: { ...headers, "sec-fetch-site": "cross-site" } });
+    assert.equal(read.statusCode, 200);
+    const headerless = await app.inject({ method: "POST", url: "/api/issues", headers, payload: {} });
+    assert.notEqual(headerless.statusCode, 403);
+  });
+});

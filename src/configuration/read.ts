@@ -21,12 +21,12 @@ type ServiceContextEntry = {
 };
 
 /** One owner for the description plus environment-ordered deployment sections used by both projections. */
-function serviceContext(description: string, entries: readonly ServiceContextEntry[], privateConfiguration: boolean): string {
+function serviceContext(description: string, entries: readonly ServiceContextEntry[]): string {
   return [
     description,
     ...entries
       .toSorted((left, right) => descriptionEnvironmentOrder.indexOf(left.environment.kind) - descriptionEnvironmentOrder.indexOf(right.environment.kind))
-      .map(({ environment, configuration, connections, credentials }) => deploymentContext(environment, configuration, connections, credentials ?? [], privateConfiguration)),
+      .map(({ environment, configuration, connections, credentials }) => deploymentContext(environment, configuration, connections, credentials ?? [])),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -137,7 +137,7 @@ async function projectConfiguration(database: DatabaseReader, agentModels: Agent
         key: service.key,
         name: service.name,
         description: service.description,
-        context: serviceContext(service.description, contextEntries, false),
+        context: serviceContext(service.description, contextEntries),
         deployments: deployments.map((deployment) => {
           const deploymentConfig = deployment.config;
           const environmentKey = environmentKeyById.get(deployment.environmentId);
@@ -179,7 +179,7 @@ export function loadServiceConfigurationDescription(database: Database, key: str
       const connections = serviceMcpConnections(mcp, [deployment.id]);
       return { environment, configuration: deployment.config, connections, credentials: connections };
     });
-    return { context: serviceContext(service.description, entries, true) };
+    return { context: serviceContext(service.description, entries) };
   });
 }
 

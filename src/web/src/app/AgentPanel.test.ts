@@ -720,11 +720,34 @@ describe("Agent conversation state", () => {
         expect(screen.getByText("check the uncertain operation")).toBeTruthy();
         expect(screen.getByAltText("uncertain.png")).toBeTruthy();
         expect((screen.getByLabelText("发送给 Agent") as HTMLTextAreaElement).disabled).toBe(code === "resolved_issue_cannot_run_agent");
+        const retry = screen.getByRole("button", { name: "按原 ID 重试" });
+        expect(retry).toHaveProperty("disabled", code === "resolved_issue_cannot_run_agent");
         expect(fetchRequest).toHaveBeenCalledTimes(1);
       } finally {
         view.unmount();
       }
     });
+
+  it("retries the retained payload under its original admission ID on explicit request", async () => {
+    const issue = issueFixture();
+    const fetchRequest = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const panel = render(() => AgentPanel({ issue, drafts: new AgentDraftStore(), onRefresh: async () => issue }));
+    try {
+      const editor = screen.getByLabelText("发送给 Agent");
+      fireEvent.input(editor, { target: { value: "retained input" } });
+      fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
+      fireEvent.click(await screen.findByRole("button", { name: "按原 ID 重试" }));
+      await waitFor(() => expect(screen.queryByLabelText("已提交消息")).toBeNull());
+      const requests = fetchRequest.mock.calls.map(([, init]) => ({ id: new Headers(init?.headers).get("x-issue-pilot-message-id"), body: init?.body }));
+      expect(requests[0]?.id).toBeTruthy();
+      expect(requests).toEqual([requests[0], requests[0]]);
+    } finally {
+      panel.unmount();
+    }
+  });
 
   it("updates auxiliary SDK usage without changing the main context or reconnecting", async () => {
     EventSourceMock.instances.length = 0;

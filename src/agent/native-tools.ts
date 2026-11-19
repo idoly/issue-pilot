@@ -20,20 +20,46 @@ export const issueLocalCommands = new KeyedSerialQueue();
 /** Shared writable inodes would bypass the mount boundary. Inspect before starting a session. */
 export async function assertIssueHardlinks(root: string): Promise<void> {
   // One find process instead of a serial readdir/lstat walk: every message restarts prod/test sessions,
-  // and large checkouts make the walk dominate session start.
-  const result = await executeLocalCommand("find", [root, "-xdev", "-type", "f", "-links", "+1", "-printf", "%D %i %n\n"], {
-    timeout: issuePilotConfig.limits.process.diskUsageMs,
-    maxOutputBytes: issuePilotConfig.limits.process.diskUsageOutputBytes,
-  });
-  if (result.code !== 0) throw new Error("issue_hardlink_inspection_failed", { cause: result.stderr });
+  // and large checkouts make the walk dominate session start. Output is streamed because a package store
+  // such as pnpm can contain many internal hardlinks; the old byte budget failed the whole session.
   const linked = new Map<string, { seen: number; links: number }>();
-  for (const line of result.stdout.split("\n")) {
+  const abort = new AbortController();
+  let carry = "";
+  let entries = 0;
+  let overflow = false;
+  const consume = (line: string) => {
     const [device, inode, links] = line.trim().split(" ");
-    if (!device || !inode || !links) continue;
+    if (!device || !inode || !links) return;
+    if (++entries > issuePilotConfig.limits.process.hardlinkEntries) {
+      overflow = true;
+      abort.abort();
+      return;
+    }
     const key = `${device}:${inode}`,
       previous = linked.get(key);
     linked.set(key, { seen: (previous?.seen ?? 0) + 1, links: Number(links) });
-  }
+  };
+  const result = await executeLocalCommand("find", [root, "-xdev", "-type", "f", "-links", "+1", "-printf", "%D %i %n\n"], {
+    timeout: issuePilotConfig.limits.process.diskUsageMs,
+    signal: abort.signal,
+    // Three 64-bit decimal fields plus separators fit in 64 bytes per entry. Keep stderr bounded too.
+    maxOutputBytes: 64 * issuePilotConfig.limits.process.hardlinkEntries + issuePilotConfig.limits.process.diskUsageOutputBytes,
+    onStdout: (chunk) => {
+      if (overflow) return;
+      const lines = `${carry}${chunk}`.split("\n");
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        if (overflow) return;
+        consume(line);
+      }
+    },
+  }).catch((error: unknown) => {
+    if (overflow) return undefined;
+    throw error;
+  });
+  if (carry && !overflow) consume(carry);
+  if (overflow) throw new Error("issue_hardlink_entry_limit_exceeded");
+  if (!result || result.killed || result.code !== 0) throw new Error("issue_hardlink_inspection_failed");
   if ([...linked.values()].some((entry) => entry.seen < entry.links)) throw new Error("issue_external_hardlink_requires_inspection");
 }
 export function issueCommandEnvironment(extra: Record<string, string> = {}): Record<string, string> {

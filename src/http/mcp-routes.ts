@@ -1,6 +1,5 @@
 import { loadMcpConnections } from "../configuration/service-mcp.ts";
 import { eq } from "drizzle-orm";
-import { issuesAffectedByGlobalChange } from "../configuration/impact.ts";
 import { mcpServices } from "../db/schema.ts";
 import { inspectMcp, type McpConfiguration } from "../mcp/client.ts";
 import { parseMcpConfiguration, parseMcpImport, publicMcpUrl } from "../configuration/mcp.ts";
@@ -8,7 +7,7 @@ import { errorDiagnostic, isClassifiedOwnerFailure } from "../diagnostics.ts";
 import { constraintFailure } from "../db/constraints.ts";
 import { DomainError } from "../domain/errors.ts";
 import { record } from "../domain/input.ts";
-import { requireAdmin, runIssueExclusive, type ApiRouteContext } from "./route-context.ts";
+import { requireAdmin, type ApiRouteContext } from "./route-context.ts";
 type McpRow = typeof mcpServices.$inferSelect;
 const project = (row: McpRow) => ({
   id: row.id,
@@ -18,29 +17,26 @@ const project = (row: McpRow) => ({
   enabled: row.enabled,
   credentialConfigured: row.transport === "stdio" ? Boolean(row.stdio) : Boolean(row.authorization || new URL(row.url).search),
 });
-export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "engine" | "runScopeExclusive">) {
-  const { app, database, engine, runScopeExclusive } = context;
+export function registerMcpRoutes(context: Pick<ApiRouteContext, "app" | "database" | "runScopeExclusive">) {
+  const { app, database, runScopeExclusive } = context;
   const requireService = async (id: string) => {
     const row = (await loadMcpConnections(database.db)).find((connection) => connection.id === id);
     if (!row) throw new DomainError("mcp_service_not_found", "not_found");
     return row;
   };
   const mutate = async <T>(operation: () => Promise<T>) => {
-    const affected = await issuesAffectedByGlobalChange(database.db);
     try {
-      return await runIssueExclusive(
-        engine,
-        affected.map((row) => row.id),
-        async (reservation) => {
-          for (const row of affected) await reservation.closeSession(row.id);
-          return operation();
-        },
-        "mcp_has_running_issues",
-      );
+      // Global rows are never Agent tools: service sessions read only deployment-owned rows through
+      // serviceMcpConnections, so a global write cannot change a running round. Keep the scope queue and
+      // the in-transaction name regeneration without reserving or closing any Issue.
+      return await operation();
     } catch (error) {
-      if (isClassifiedOwnerFailure(error)) throw error;
-      // Connection names are unique; the database boundary reports which constraint failed.
+      // A DomainError already carries its stable code (for example the generated DBHub name conflict).
+      if (error instanceof DomainError) throw error;
+      // Connection names are unique; the database boundary reports which constraint failed first, before
+      // the generic classified-failure rethrow can turn it into `conflict`.
       if (constraintFailure(error)?.code === "conflict") throw new DomainError("mcp_name_conflict", "conflict", { cause: error });
+      if (isClassifiedOwnerFailure(error)) throw error;
       app.log.error(errorDiagnostic(error));
       throw new DomainError("mcp_configuration_save_failed", "internal");
     }

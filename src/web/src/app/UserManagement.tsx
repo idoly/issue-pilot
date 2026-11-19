@@ -49,10 +49,18 @@ export function UserManagement() {
       request.finish();
     }
   };
+  // The management endpoint requires a developer; other roles get an explanation instead of a request
+  // that can only fail.
   createEffect(
-    () => `${currentUser()?.subject ?? ""}:${currentUser()?.role ?? ""}:${currentUser()?.isAdmin ?? false}`,
-    (identity, previous) => {
-      if (identity === previous) return;
+    () => {
+      const user = currentUser();
+      return {
+        identity: `${user?.subject ?? ""}:${user?.role ?? ""}:${user?.isAdmin ?? false}`,
+        allowsManagement: canManageDevelopmentConfiguration(user),
+      };
+    },
+    ({ identity, allowsManagement }, previous) => {
+      if (identity === previous?.identity) return;
       generation++;
       loadTask.cancel();
       close();
@@ -60,7 +68,7 @@ export function UserManagement() {
       setRows([]);
       setQuery("");
       setIncludeInactive(false);
-      if (identity.split(":")[0]) void load();
+      if (identity.split(":")[0] && allowsManagement) void load();
     },
   );
   onCleanup(() => {
@@ -141,25 +149,27 @@ export function UserManagement() {
             </Button>
           </Show>
         </header>
-        <div class="settings-list-toolbar">
-          <Input aria-label="搜索人员" value={query()} placeholder="搜索姓名或邮箱" onInput={(event) => setQuery(event.currentTarget.value)} />
-          <label>
-            <input type="checkbox" checked={includeInactive()} onChange={(event) => setIncludeInactive(event.currentTarget.checked)} />
-            显示停用人员
-          </label>
-        </div>
-        <Show when={error()}>
-          <div class="user-management-error" role="alert">
-            {error()}
-            <Button
-              size="small"
-              onClick={() => {
-                void refresh(generation);
-              }}
-            >
-              重试
-            </Button>
+        <Show when={canManageDevelopmentConfiguration(currentUser())} fallback={<p class="settings-target-feedback">人员管理仅对开发者开放；个人凭据请在“我的凭证”中管理。</p>}>
+          <div class="settings-list-toolbar">
+            <Input aria-label="搜索人员" value={query()} placeholder="搜索姓名或邮箱" onInput={(event) => setQuery(event.currentTarget.value)} />
+            <label>
+              <input type="checkbox" checked={includeInactive()} onChange={(event) => setIncludeInactive(event.currentTarget.checked)} />
+              显示停用人员
+            </label>
           </div>
+          <Show when={error()}>
+            <div class="user-management-error" role="alert">
+              {error()}
+              <Button
+                size="small"
+                onClick={() => {
+                  void refresh(generation);
+                }}
+              >
+                重试
+              </Button>
+            </div>
+          </Show>
         </Show>
       </div>
       <Show

@@ -17,6 +17,7 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
   const [plan, setPlan] = createSignal<IssueScopeTransitionPlan | null>(null);
   const [planning, setPlanning] = createSignal(false);
   const [applying, setApplying] = createSignal(false);
+  const [committed, setCommitted] = createSignal(false);
   const [error, setError] = createSignal("");
   const planTask = createLatestTask();
   let disposed = false;
@@ -44,6 +45,7 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
 
   // Opening is an event: start from the current work mode and service, with no stale plan.
   props.register(() => {
+    setCommitted(false);
     setMode(currentWorkMode() ?? "production_analysis");
     setService(props.issue.service.key);
     resetPlan();
@@ -66,6 +68,7 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
   };
 
   const apply = async () => {
+    if (applying() || committed()) return;
     const current = plan();
     if (!current) {
       await requestPlan();
@@ -76,12 +79,13 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
     try {
       await applyIssueScopeTransition(props.issue.id, { serviceKey: service(), workMode: mode() }, current);
       if (disposed) return;
+      setCommitted(true);
       await props.onApplied();
       if (!disposed) props.onClose();
     } catch (cause) {
       if (!disposed) {
-        setPlan(null);
-        setError(errorText(cause));
+        if (!committed()) setPlan(null);
+        setError(committed() ? `变更已提交，但刷新工单失败：${errorText(cause)}。请关闭后手动刷新。` : errorText(cause));
       }
     } finally {
       if (!disposed) setApplying(false);
@@ -96,7 +100,7 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
       cancelText="取消"
       confirmLoading={planning() || applying()}
       cancelButtonProps={{ disabled: planning() || applying() }}
-      okButtonProps={{ disabled: !service() }}
+      okButtonProps={{ disabled: committed() || !service() }}
       onOk={() => {
         void apply();
       }}
@@ -109,7 +113,7 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
           <span>目标处理方式</span>
           <Select
             aria-label="目标处理方式"
-            disabled={applying()}
+            disabled={applying() || committed()}
             value={mode()}
             onChange={(value) => {
               const selected = selectedChoice(
@@ -129,7 +133,7 @@ export function ScopeTransitionDialog(props: { issue: IssueDetail; open: boolean
           <span>目标服务</span>
           <Select
             aria-label="目标服务"
-            disabled={applying()}
+            disabled={applying() || committed()}
             value={service()}
             onChange={(value) => {
               const selected = selectedChoice(

@@ -335,6 +335,8 @@ export function AgentPanel(props: {
     { ownedWrite: true },
   );
   const [error, setError] = createSignal("", { ownedWrite: true });
+  /** Connection and refresh failures are not draft failures; a draft reload must not erase them. */
+  const [streamError, setStreamError] = createSignal("", { ownedWrite: true });
   const draftStore = props.drafts;
   let draftRecord = untrack(() => draftStore.get(props.issue.id));
   const [submitted, setSubmitted] = createSignal<SubmittedAgentMessage | undefined>(draftRecord.submitted, { ownedWrite: true });
@@ -554,17 +556,17 @@ export function AgentPanel(props: {
     void Promise.resolve()
       .then(() => props.onRefresh(issueKey))
       .then(() => {
-        if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId && error() === "issue_refresh_failed") setError("");
+        if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId && streamError() === "issue_refresh_failed") setStreamError("");
       })
       .catch(() => {
-        if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId) setError("issue_refresh_failed");
+        if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId) setStreamError("issue_refresh_failed");
       });
   };
   const streamController = new AgentStreamController(agentStreamUrl, sharedConfig.web.agentStreamReconnectMs, sharedConfig.web.agentStreamStaleMs, {
     onConnection: setSnapshotReady,
-    onError: (streamError) => {
-      if (!streamError && ["agent_event_connection_failed", "agent_event_protocol_error"].includes(error())) setError("");
-      else if (streamError) setError(streamError);
+    onError: (reported) => {
+      if (!reported && ["agent_event_connection_failed", "agent_event_protocol_error"].includes(streamError())) setStreamError("");
+      else if (reported) setStreamError(reported);
     },
     onSnapshot: (payload, replay, generation) => {
       // The snapshot is authoritative; deltas queued by the previous connection must not replay over it.
@@ -607,6 +609,7 @@ export function AgentPanel(props: {
       setFooter(emptyFooter());
       clearUnread();
       setError("");
+      setStreamError("");
       setSnapshotReady(false);
       setRunState(undefined);
       setActivity(null);
@@ -698,6 +701,35 @@ export function AgentPanel(props: {
       } else record.error = receipt.state === "rejected" ? "消息已接收后取消，请查看会话再决定是否重新发送。" : "暂时无法确认接收结果。原消息已保留，请查看会话后再决定是否重新发送。";
     } catch {
       if (draftStore.isCurrent(issueId, record)) record.error = "接收状态查询失败，原消息仍保留。";
+    } finally {
+      record.sending = false;
+      if (draftStore.isCurrent(issueId, record)) draftStore.touch();
+    }
+  };
+  /** Re-send the same message ID and payload: an admitted message is acknowledged, an unadmitted one runs once. */
+  const retrySubmission = async () => {
+    const value = draftRecord.submitted;
+    if (!value || draftRecord.sending || !canSend()) return;
+    const record = draftRecord;
+    const issueId = props.issue.id;
+    if (!draftStore.isCurrent(issueId, record)) return;
+    record.sending = true;
+    record.error = "";
+    draftStore.touch();
+    try {
+      await sendAgentMessage(
+        issueId,
+        value.message,
+        value.images.map(({ file }) => file),
+        value.id,
+      );
+      if (draftStore.isCurrent(issueId, record)) {
+        discardImages(value.images);
+        record.submitted = undefined;
+        record.error = "";
+      }
+    } catch (cause) {
+      if (draftStore.isCurrent(issueId, record)) record.error = errorText(cause instanceof Error ? cause.message : "agent_message_failed", sendErrors);
     } finally {
       record.sending = false;
       if (draftStore.isCurrent(issueId, record)) draftStore.touch();
@@ -841,7 +873,7 @@ export function AgentPanel(props: {
             <For each={entries()} keyed={(entry) => entry.id}>
               {(entry) => <ConversationItem issue={props.issue} entry={entry()} userSubject={props.userSubject} />}
             </For>
-            <Show when={!entries().length && (snapshotReady() || !error())}>
+            <Show when={!entries().length && (snapshotReady() || (!error() && !streamError()))}>
               <div class="agent-empty">{snapshotReady() ? "还没有对话" : "正在加载对话…"}</div>
             </Show>
           </div>
@@ -889,6 +921,9 @@ export function AgentPanel(props: {
               <Show when={!sending()}>
                 <Button size="small" onClick={() => void checkSubmission()}>
                   查询接收状态
+                </Button>
+                <Button size="small" disabled={!canSend()} onClick={() => void retrySubmission()}>
+                  按原 ID 重试
                 </Button>
                 <Button size="small" disabled={Boolean(draft() || images().length)} onClick={() => releaseSubmission(true)}>
                   移入空草稿
@@ -946,6 +981,11 @@ export function AgentPanel(props: {
             </div>
           </div>
         </div>
+        <Show when={streamError()}>
+          <div class="agent-panel-error" role="alert">
+            {errorText(streamError())}
+          </div>
+        </Show>
         <Show when={error()}>
           <div class="agent-panel-error" role="alert">
             {errorText(error())}

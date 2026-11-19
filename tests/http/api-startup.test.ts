@@ -485,3 +485,17 @@ test("HTTP preserves explicit mutation outcomes over nested conflicts without di
     await f.cleanup();
   }
 });
+
+test("opens the database under the effective state root when only the root is given", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-default-database-"));
+  let app: FastifyInstance | undefined;
+  try {
+    app = await buildApi({ stateRoot: root, engine: new StartupEngine(), modelCatalog, logger: false });
+    assert.equal((await app.inject("/health")).statusCode, 200);
+    // A caller-chosen root must never fall back to the production database while holding a lease on root.
+    assert.ok((await readFile(path.join(root, "issues.db"))).length >= 0);
+  } finally {
+    await app?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

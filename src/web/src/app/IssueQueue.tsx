@@ -42,6 +42,10 @@ export function IssueQueue(props: {
   onSelect: (id: string) => void;
 }) {
   const { catalog, people, currentUser, catalogError, peopleError, refreshCatalog } = useApplicationResources();
+  // Rows keep the same summary objects between samples; a minute tick keeps "N 分钟前" truthful.
+  const [minute, setMinute] = createSignal(Date.now(), { ownedWrite: true });
+  const minuteTimer = window.setInterval(() => setMinute(Date.now()), 60_000);
+  onCleanup(() => window.clearInterval(minuteTimer));
   const { items: issues, error: loadError, refresh: loadIssues } = props.issueList;
   const loading = () => props.issueList.loading() || props.issueList.refreshing();
   const openHintId = createUniqueId();
@@ -113,9 +117,13 @@ export function IssueQueue(props: {
   };
   let disposed = false;
   const pinsTask = createLatestTask();
+  let loadedSubject: string | undefined;
   createEffect(
     () => props.userSubject,
     (subject) => {
+      // Resource refreshes pass the same subject again; only a real identity change reloads pins.
+      if (subject === loadedSubject) return;
+      loadedSubject = subject;
       pinsTask.cancel();
       setPinError("");
       setPinnedIssueKeys([]);
@@ -406,7 +414,7 @@ export function IssueQueue(props: {
                       <span class="issue-key">{issue().id}</span>
                       <Tag color={priorityColor[issue().priority]}>{issue().priority.toUpperCase()}</Tag>
                       <span class="queue-time" title={localDateTime(issue().createdAt)}>
-                        {relativeTime(issue().updatedAt)}
+                        {relativeTime(issue().updatedAt, minute())}
                       </span>
                     </span>
                     <span class="queue-title" title={issue().title}>

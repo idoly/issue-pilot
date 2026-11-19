@@ -62,6 +62,45 @@ for (const [address, prefix] of [
   automaticNetworkDeny.addSubnet(address, prefix, "ipv6");
 for (const address of ["::", "::1", "fd20:ce::254", "fd00:c1::a9fe:a9fe", "fd00:42::42", "fd00:a9fe:a9fe::1", "fd00:100::100:200"]) automaticNetworkDeny.addAddress(address, "ipv6");
 
+/** Expand an IPv6 literal into eight 16-bit groups; undefined for anything unexpected. */
+function ipv6Groups(text: string): number[] | undefined {
+  const sections = text.split("::");
+  if (sections.length > 2) return undefined;
+  const parse = (part: string | undefined) =>
+    part
+      ? part.split(":").map((group) => {
+          if (!/^[0-9a-f]{1,4}$/i.test(group)) throw new Error("invalid_ipv6");
+          return Number.parseInt(group, 16);
+        })
+      : [];
+  try {
+    const head = parse(sections[0]);
+    if (sections.length === 1) return head.length === 8 ? head : undefined;
+    const tail = parse(sections[1]);
+    const fill = 8 - head.length - tail.length;
+    return fill < 0 ? undefined : [...head, ...Array<number>(fill).fill(0), ...tail];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * IPv4 addresses carried inside IPv6 transition forms. SRT's resolved-address guard skips IP literals,
+ * and Node's BlockList only recognizes `::ffff:a.b.c.d`, so NAT64, 6to4, IPv4-translated and
+ * IPv4-compatible literals need this unpacking before the automatic deny rules apply.
+ */
+function embeddedIPv4(text: string): string | undefined {
+  const groups = ipv6Groups(text);
+  if (!groups) return undefined;
+  const address = (high: number, low: number) => `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+  const zeros = (from: number, to: number) => groups.slice(from, to).every((group) => group === 0);
+  if (groups[0] === 0x64 && groups[1] === 0xff9b && zeros(2, 6)) return address(groups[6]!, groups[7]!); // NAT64
+  if (zeros(0, 4) && groups[4] === 0xffff) return address(groups[6]!, groups[7]!); // translated and mapped
+  if (zeros(0, 6)) return address(groups[6]!, groups[7]!); // IPv4-compatible
+  if (groups[0] === 0x2002) return address(groups[1]!, groups[2]!); // 6to4
+  return undefined;
+}
+
 function allowOpenNetworkTarget(host: string): boolean {
   if (applicationParameters().networkMode !== "open") return false;
   let hostname: string;
@@ -77,10 +116,12 @@ function allowOpenNetworkTarget(host: string): boolean {
   const family = isIP(hostname);
   if (!family) return true;
   const type = family === 6 ? "ipv6" : "ipv4";
-  if (automaticNetworkDeny.check(hostname, type)) return false;
   const local = new BlockList();
   for (const item of Object.values(os.networkInterfaces()).flatMap((items) => items ?? [])) local.addAddress(item.address.split("%", 1)[0]!, item.family === "IPv6" ? "ipv6" : "ipv4");
-  return !local.check(hostname, type);
+  const denied = (address: string, family: "ipv4" | "ipv6") => automaticNetworkDeny.check(address, family) || local.check(address, family);
+  if (denied(hostname, type)) return false;
+  const embedded = type === "ipv6" ? embeddedIPv4(hostname) : undefined;
+  return embedded === undefined || !denied(embedded, "ipv4");
 }
 
 // The proxy reads the configured allow list on each connection, so replacing it reaches running sessions too.
@@ -158,6 +199,26 @@ const agentReadableEntries = ["bin", "skills", "npm", "git"];
 // Python user site with openpyxl) and Pi's user-level ~/.agents/skills. Everything else in the home
 // directory (checkpoint databases, logs, Git/npm/cloud credentials, other agents' state) is hidden.
 const homeReadableEntries = [".local/bin", ".local/lib", ".agents/skills"];
+/**
+ * SRT's mandatory deny scan covers these names relative to its own working directory (the application
+ * checkout), not the writable Issue root. Any of them inside an Issue root could redirect package or shell
+ * behavior for later commands, so the sandbox denies them explicitly.
+ */
+const dangerousIssueRootNames = [
+  ".claude/commands",
+  ".claude/agents",
+  ".bash_profile",
+  ".bashrc",
+  ".gitconfig",
+  ".gitmodules",
+  ".idea",
+  ".mcp.json",
+  ".profile",
+  ".ripgreprc",
+  ".vscode",
+  ".zprofile",
+  ".zshrc",
+];
 export interface IssueReadPolicyInput {
   root: string;
   application: string;
@@ -252,6 +313,18 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
     if (failures.length) throw new AggregateError(failures, "issue_sandbox_cleanup_failed");
   };
   try {
+    // SRT re-binds its own write path (/tmp/claude) after mounting a tmpfs over /tmp. denyWrite keeps it
+    // read-only, but its contents would still be visible to every Issue, so refuse while it exists.
+    for (const shared of ["/tmp/claude", "/private/tmp/claude"]) {
+      const exists = await lstat(shared).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      );
+      if (exists) throw new Error("issue_sandbox_shared_temp_exists");
+    }
     const denyWrite = ["/tmp/claude", "/private/tmp/claude", path.join(os.homedir(), ".npm/_logs"), path.join(os.homedir(), ".claude/debug")];
     if (!writableStore) denyWrite.push(gitRoot);
     else
@@ -271,6 +344,8 @@ export async function prepareIssueCommand(policy: IssueFilesystemPolicy, command
       }
     // This is a snapshot: managed files created later stay writable to this sandbox. Owners therefore write
     // attachments and session files only while no sandboxed process of the Issue is alive (reservation + closeSession).
+    // Include absent names: SRT also protects their first missing component against creation.
+    denyWrite.push(...dangerousIssueRootNames.map((name) => path.join(root, name)));
     for (const name of await readdir(root)) {
       const file = path.join(root, name),
         info = await lstat(file);

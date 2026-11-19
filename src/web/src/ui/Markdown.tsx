@@ -24,24 +24,29 @@ const sanitizeOptions = {
   SANITIZE_NAMED_PROPS: true,
 };
 const sanitize = (html: string) => {
-  const cleaned = DOMPurify.sanitize(html, sanitizeOptions) as string;
-  // External links open in a new tab so Agent output never navigates the application away.
+  // External links open in a new tab so Agent output never navigates the application away. A sanitize-time
+  // hook keeps DOMPurify's single-parse guarantee (re-parsing sanitized HTML is the usual mXSS hazard).
   // Resolve every href so protocol-relative and mixed-case forms are handled too.
-  if (!/href=/i.test(cleaned)) return cleaned;
-  const template = document.createElement("template");
-  template.innerHTML = cleaned;
-  for (const link of template.content.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+  const externalLinks = (node: Element) => {
+    if (node.tagName !== "A") return;
+    const href = node.getAttribute("href");
+    if (!href) return;
     let url: URL;
     try {
-      url = new URL(link.getAttribute("href")!, window.location.href);
+      url = new URL(href, window.location.href);
     } catch {
-      continue;
+      return;
     }
-    if (url.origin === window.location.origin) continue;
-    link.setAttribute("target", "_blank");
-    link.setAttribute("rel", "noopener noreferrer");
+    if (url.origin === window.location.origin) return;
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  };
+  DOMPurify.addHook("afterSanitizeAttributes", externalLinks);
+  try {
+    return DOMPurify.sanitize(html, sanitizeOptions) as string;
+  } finally {
+    DOMPurify.removeHook("afterSanitizeAttributes", externalLinks);
   }
-  return template.innerHTML;
 };
 
 const parse = (source: string) => marked.parse(source, { async: false }) as string;

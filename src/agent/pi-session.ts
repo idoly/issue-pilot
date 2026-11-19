@@ -7,6 +7,7 @@ import { open, readlink, rm, writeFile, type FileHandle } from "node:fs/promises
 import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
+  DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
   SessionManager,
@@ -487,6 +488,13 @@ export class PiSessionRuntime {
       },
       { projectTrusted: false },
     );
+    // Refuse packages that currently need an install before starting the SDK loader. Operator package
+    // maintenance must not race the loader; offline Pi skips missing packages without an install.
+    if (settingsManager.getPackages().length) {
+      await new DefaultPackageManager({ cwd: agentDirectory, agentDir: agentDirectory, settingsManager }).resolve(async () => {
+        throw new Error("agent_package_source_missing");
+      });
+    }
     const mcpConfigurations: McpConfiguration[] = [];
     for (const configuration of options.mcpConfigurations ?? []) {
       if (!configuration.enabled || configuration.transport !== "stdio" || !configuration.stdio) {

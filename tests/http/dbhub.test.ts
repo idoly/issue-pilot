@@ -21,9 +21,13 @@ test("DBHub types, default ports and connection secrets are parsed without placi
     assert.equal(decodeURIComponent(url.password), target.password);
     assert.equal(decodeURIComponent(url.username), target.username);
   }
-  for (const change of [{ type: "sqlite" }, { type: "unknown" }, { port: 0 }, { host: "db/user" }, { host: "user@db" }, { password: "" }, { password: "\0" }])
+  for (const change of [{ type: "sqlite" }, { type: "unknown" }, { port: 0 }, { host: "db/user" }, { host: "user@db" }, { password: "\0" }])
     assert.throws(() => parseDbHubTargets([{ ...target, ...change }]));
   assert.throws(() => parseDbHubTargets([target, target]), /duplicate_dbhub_target/);
+  // An omitted password keeps the stored value for the same target identity only.
+  assert.equal(parseDbHubTargets([{ ...target, password: "" }], [target])[0]!.password, target.password);
+  assert.throws(() => parseDbHubTargets([{ ...target, password: "" }]), /invalid_dbhub_password/);
+  assert.throws(() => parseDbHubTargets([{ ...target, host: "other.example.test", password: "" }], [target]), /invalid_dbhub_password/);
 });
 
 test("DBHub connections derive from authoritative deployment targets without duplicate writes", async () => {
@@ -47,7 +51,11 @@ test("DBHub connections derive from authoritative deployment targets without dup
     assert.equal(projected.dbhub[0].passwordConfigured, true);
     const privateConfig = await f.app.inject({ method: "GET", url: `/api/services/${service.key}/dbhub-targets`, headers });
     assert.equal(privateConfig.headers["cache-control"], "private, no-store");
-    assert.equal(privateConfig.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0].password, target.password);
+    // Editing needs the identity only; the password never leaves the server and an omitted value keeps it.
+    const privateTarget = privateConfig.json().deployments.find((row: { environmentKey: string }) => row.environmentKey === "prod").dbhub[0];
+    assert.equal(privateTarget.password, undefined);
+    assert.equal(privateTarget.passwordConfigured, true);
+    assert.equal(privateConfig.body.includes("p@ss"), false);
     await database.db.insert(subjects).values({ subject: "viewer", role: "product" });
     assert.equal((await f.app.inject({ method: "GET", url: `/api/services/${service.key}/dbhub-targets`, headers: { "x-issue-pilot-subject": "viewer" } })).statusCode, 403);
     const connections = await loadMcpConnections(database.db);

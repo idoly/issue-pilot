@@ -10,7 +10,7 @@ import type { MultipartFile } from "@fastify/multipart";
 import type { Database } from "../db/client.ts";
 import { issueAttachments, retiredIssueAttachments } from "../db/schema.ts";
 import { domainError } from "../domain/errors.ts";
-import { issueRoot } from "./state.ts";
+import { assertIssueRoot } from "./state.ts";
 
 export interface PendingAttachment {
   fileName: string;
@@ -82,7 +82,11 @@ function validateAttachmentFile(metadata: { isFile(): boolean; mode: number; siz
 }
 
 async function assertAttachmentRoot(attachmentRoot: string): Promise<void> {
-  if (!(await lstat(attachmentRoot)).isDirectory() || (await realpath(attachmentRoot)) !== attachmentRoot) throw new Error("insecure_issue_attachment_file");
+  const metadata = await lstat(attachmentRoot).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") throw new Error("issue_root_missing", { cause: error });
+    throw error;
+  });
+  if (!metadata.isDirectory() || (await realpath(attachmentRoot)) !== attachmentRoot) throw new Error("insecure_issue_attachment_file");
 }
 
 export async function resolveSecureAttachmentFile(attachmentRoot: string, objectKey: string, expectedSize?: number): Promise<string> {
@@ -250,9 +254,8 @@ async function syncAttachmentDirectory(attachmentRoot: string): Promise<void> {
 /** Publish the staged inode without overwriting an existing name or copying bytes. */
 export async function publishPendingAttachments(stateRoot: string, issueKey: string, pendingAttachments: PendingAttachment[], writtenObjectKeys: string[]): Promise<PublishedAttachment[]> {
   if (!pendingAttachments.length) return [];
-  const attachmentRoot = issueRoot(stateRoot, issueKey);
   // Creation has already claimed this root. Edits must not recreate missing state or follow a replacement link.
-  await assertAttachmentRoot(attachmentRoot);
+  const attachmentRoot = await assertIssueRoot(stateRoot, issueKey);
   const published: PublishedAttachment[] = [];
   for (const pendingAttachment of pendingAttachments) {
     const objectKey = path.join(attachmentRoot, attachmentObjectName(pendingAttachment.fileName));

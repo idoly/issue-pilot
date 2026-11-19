@@ -43,7 +43,7 @@ async function recoverInterruptedIssues(database: DatabaseConnection): Promise<v
   );
 }
 
-export async function openApplicationDatabase(file?: string, connect: typeof openDatabase = openDatabase): Promise<DatabaseConnection> {
+export async function openApplicationDatabase(file: string, connect: typeof openDatabase = openDatabase): Promise<DatabaseConnection> {
   const database = connect(file);
   try {
     await database.client.execute("PRAGMA journal_mode = WAL");

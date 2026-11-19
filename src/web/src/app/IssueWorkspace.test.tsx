@@ -4,6 +4,8 @@ import { createSignal } from "solid-js";
 import type { IssueDetail, IssueScopeTransitionPlan } from "../data/client";
 
 const state = vi.hoisted(() => ({
+  related: vi.fn<typeof import("../data/client").updateIssueRelatedIssues>(),
+  apply: vi.fn<typeof import("../data/client").applyIssueScopeTransition>(),
   plan: vi.fn<typeof import("../data/client").planIssueScopeTransition>(),
   create: vi.fn<typeof import("../data/client").createIssue>(),
   list: vi.fn<typeof import("../data/client").listIssues>(),
@@ -14,6 +16,8 @@ vi.mock("../data/client", async (original) => ({
   ...(await original<typeof import("../data/client")>()),
   listIssueWorkFiles: vi.fn<typeof import("../data/client").listIssueWorkFiles>(async () => []),
   planIssueScopeTransition: state.plan,
+  updateIssueRelatedIssues: state.related,
+  applyIssueScopeTransition: state.apply,
   createIssue: state.create,
   listIssues: state.list,
   retryIssue: state.retry,
@@ -139,6 +143,34 @@ for (const outcome of ["success", "failure"] as const)
         finishCurrent?.();
       }
     });
+
+for (const scope of [false, true])
+  it(`does not repeat a committed ${scope ? "scope change" : "relation save"} while refreshing or after refresh failure`, async () => {
+    let failRefresh!: (error: Error) => void;
+    const onUpdated = vi.fn<() => Promise<void>>(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failRefresh = reject;
+        }),
+    );
+    state.list.mockResolvedValue([]);
+    state.plan.mockResolvedValue(plan(true));
+    render(() => <Workspace issue={issue} onOpenSource={() => {}} onUpdated={onUpdated} onCreatedFollowUp={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: scope ? "变更处理范围" : "编辑关联" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    if (scope) fireEvent.click(dialog.getByRole("button", { name: "预检变更" }));
+    const submit = await dialog.findByRole("button", { name: scope ? "确认变更" : "保存关联" });
+    await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+    fireEvent.click(submit);
+    await waitFor(() => expect(onUpdated).toHaveBeenCalledOnce());
+    const lockedDuringRefresh = (submit as HTMLButtonElement).disabled;
+    failRefresh(new Error("offline"));
+    await dialog.findByRole("alert");
+    expect(lockedDuringRefresh).toBe(true);
+    expect(submit).toHaveProperty("disabled", true);
+    expect(dialog.getByRole("button", { name: "关闭弹窗" })).toHaveProperty("disabled", false);
+    expect(scope ? state.apply : state.related).toHaveBeenCalledOnce();
+  });
 
 it("explains why queued intent from an earlier scope was not replayed", () => {
   const failed: IssueDetail = { ...issue, status: "open", workspace: { ...issue.workspace, status: "failed", retryable: true, lastError: "agent_message_scope_changed" } };

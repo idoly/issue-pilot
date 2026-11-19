@@ -62,7 +62,11 @@ export function QueryResult(props: { entry: ToolEntry; text: string; issueKey?: 
   const [loading, setLoading] = createSignal(false, { ownedWrite: true });
   const [failed, setFailed] = createSignal(false, { ownedWrite: true });
   const key = () => JSON.stringify([props.issueKey, props.userSubject, props.entry.result?.queryResult, props.entry.toolCallId]);
-  createEffect(key, () => {
+  let resetKey: string | undefined;
+  createEffect(key, (value) => {
+    // A detail refresh republishes the same entry as a new object; resetting would drop the full result.
+    if (value === resetKey) return;
+    resetKey = value;
     latest.cancel();
     setComplete(undefined);
     setLoading(false);

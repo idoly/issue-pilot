@@ -10,6 +10,7 @@ import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
 import { applicationParameterBounds } from "../../src/configuration/parameters.ts";
 import type { AgentReservation } from "../../src/agent/contracts.ts";
 import { AgentEngine } from "../../src/agent/engine.ts";
+import { pendingAgentMessages } from "../../src/agent/message-delivery.ts";
 import { DomainError } from "../../src/domain/errors.ts";
 import { repositoryPreparationMode } from "../../src/workspace/project.ts";
 import type { RunEvent } from "../../src/agent/events.ts";
@@ -507,14 +508,14 @@ test("a steer left undelivered when the round ends is taken back and queued inst
   const database = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ key: "ISSUE-20261103-002", status: "in_progress", serviceId: "service", environmentId: "environment" }] }) }) }),
   };
-  const sessionFile = await fixtureSessionFile(unusedStateRoot, "ISSUE-20261103-002");
+  const root = issueRoot(unusedStateRoot, "ISSUE-20261103-002");
+  const manager = await createPrivateSessionManager(root, root);
   const engine = new AgentEngine(database as never, unusedStateRoot);
   const internal = engine as unknown as { sessions: Map<string, unknown>; schedule(issueId: string, operation: () => Promise<void>): void };
   const scheduled: Array<() => Promise<void>> = [];
   internal.schedule = (_issueId, operation) => {
     scheduled.push(operation);
   };
-  const records: Array<{ message: string; queued: boolean }> = [];
   let streaming = true;
   let steering: string[] = [];
   let cleared = 0;
@@ -523,14 +524,7 @@ test("a steer left undelivered when the round ends is taken back and queued inst
       return streaming;
     },
     session: {
-      sessionManager: {
-        getSessionFile: () => sessionFile,
-        getBranch: () => [],
-        appendCustomEntry(_type: string, data: { message: string; delivery?: unknown }) {
-          if (_type === "issue-pilot-user") records.push({ message: data.message, queued: data.delivery !== undefined });
-          return `entry-${records.length}`;
-        },
-      },
+      sessionManager: manager,
       getSteeringMessages: () => steering,
       clearQueue() {
         cleared += 1;
@@ -548,7 +542,10 @@ test("a steer left undelivered when the round ends is taken back and queued inst
   });
   await engine.send("issue-1", "late input");
   assert.equal(cleared, 1);
-  assert.deepEqual(records, [{ message: "late input", queued: true }]);
+  assert.deepEqual(
+    pendingAgentMessages(manager).map((entry) => entry.message),
+    ["late input"],
+  );
   assert.equal(scheduled.length, 1);
 });
 

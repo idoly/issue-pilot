@@ -22,6 +22,7 @@ export function RelatedIssuesDialog(props: {
   const [keys, setKeys] = createSignal<string[]>([]);
   const [loading, setLoading] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
+  const [committed, setCommitted] = createSignal(false);
   const [error, setError] = createSignal("");
   const refreshTask = createLatestTask();
   let disposed = false;
@@ -37,6 +38,7 @@ export function RelatedIssuesDialog(props: {
   };
   // Opening is an event: seed the selection from the Issue and refresh candidates in the background.
   props.register(() => {
+    setCommitted(false);
     const request = refreshTask.begin();
     setKeys(props.issue.relatedIssues.map(({ id }) => id));
     setError("");
@@ -54,6 +56,7 @@ export function RelatedIssuesDialog(props: {
   const selectable = createMemo(() => props.issueList.items().filter((candidate) => candidate.id !== props.issue.id));
 
   const save = async () => {
+    if (saving() || committed()) return;
     const currentKeys = new Set(props.issue.relatedIssues.map(({ id }) => id));
     // A failed related context only blocks additions; the user can still detach broken relations.
     const refusal = relatedIssueUpdateRefusal(props.issue, { onlyRemoves: keys().every((id) => currentKeys.has(id)) });
@@ -66,10 +69,11 @@ export function RelatedIssuesDialog(props: {
     try {
       await updateIssueRelatedIssues(props.issue.id, keys());
       if (disposed) return;
+      setCommitted(true);
       await props.onSaved();
       if (!disposed) close();
     } catch (cause) {
-      if (!disposed) setError(errorText(cause, relatedSaveErrors));
+      if (!disposed) setError(committed() ? `关联已保存，但刷新工单失败：${errorText(cause)}。请关闭后手动刷新。` : errorText(cause, relatedSaveErrors));
     } finally {
       if (!disposed) setSaving(false);
     }
@@ -84,7 +88,7 @@ export function RelatedIssuesDialog(props: {
       cancelText="取消"
       confirmLoading={saving()}
       cancelButtonProps={{ disabled: saving() }}
-      okButtonProps={{ disabled: loading() || keys().length > sharedConfig.limits.relatedIssues }}
+      okButtonProps={{ disabled: committed() || loading() || keys().length > sharedConfig.limits.relatedIssues }}
       onOk={() => {
         void save();
       }}
