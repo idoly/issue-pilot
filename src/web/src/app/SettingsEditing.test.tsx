@@ -308,7 +308,7 @@ test("identity changes clear secret drafts and late credential success cannot mu
 async function chooseRepositoryGroup(dialog: HTMLElement, name: string) {
   const group = within(dialog).getByRole("combobox", { name: "仓库分组" });
   fireEvent.click(group);
-  const search = await screen.findByRole("combobox", { name: "搜索 仓库分组" });
+  const search = await screen.findByRole("searchbox", { name: "搜索 仓库分组" });
   await fireEvent.input(search, { target: { value: name } });
   const option = await screen.findByRole("option", { name });
   await waitFor(() => expect(search.getAttribute("aria-activedescendant")).toBe(option.id));

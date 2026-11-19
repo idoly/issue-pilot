@@ -180,7 +180,14 @@ try {
   assert.equal(await issueTitle.inputValue(), "Unsaved native dialog draft");
   const assignee = issueEditor.getByRole("combobox", { name: "编辑工单处理人", exact: true });
   await assignee.click();
-  await issueEditor.getByRole("listbox", { name: "编辑工单处理人", exact: true }).waitFor();
+  const assigneeList = issueEditor.getByRole("listbox", { name: "编辑工单处理人", exact: true });
+  await assigneeList.getByRole("option").first().waitFor();
+  const extraBottomSpace = await assigneeList.evaluate((list) => {
+    const popup = list.closest(".ui-select-popup");
+    const style = getComputedStyle(popup);
+    return popup.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom - parseFloat(style.paddingBottom) - parseFloat(style.borderBottomWidth);
+  });
+  assert.ok(Math.abs(extraBottomSpace) <= 1, `populated dropdown has ${extraBottomSpace}px of extra space below the list`);
   await page.keyboard.press("Escape");
   await issueEditor.getByRole("listbox").waitFor({ state: "hidden" });
   assert.ok(await isFocused(assignee), "Escape closes only the assignee dropdown and restores its trigger");
@@ -196,10 +203,12 @@ try {
   assert.ok(await isFocused(assignee), "clearing returns focus to the trigger");
   const cc = issueEditor.getByRole("combobox", { name: "编辑工单抄送人", exact: true });
   await cc.click();
-  const ccFilter = issueEditor.getByRole("combobox", { name: "搜索 编辑工单抄送人", exact: true });
+  const ccFilter = issueEditor.getByRole("searchbox", { name: "搜索 编辑工单抄送人", exact: true });
   const ccList = issueEditor.getByRole("listbox", { name: "编辑工单抄送人", exact: true });
-  // The native popover enters the top layer before its search field receives focus.
-  await page.waitForFunction((input) => input === document.activeElement, await ccFilter.elementHandle());
+  assert.ok(await isFocused(ccFilter), "the searchable dropdown focuses its filter");
+  await ccFilter.fill("no-such-fixture-recipient");
+  await ccList.getByText("没有匹配项", { exact: true }).waitFor();
+  await ccFilter.fill("");
   const firstCc = ccList.getByRole("option").first();
   await firstCc.waitFor();
   assert.equal(await firstCc.getAttribute("aria-selected"), "false");
