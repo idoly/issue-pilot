@@ -7,7 +7,7 @@ import { publicMcpUrl } from "../configuration/mcp.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
 import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
-import { canModifyIssueCode, configuredCapabilities, isDevelopmentEnvironment, type EnvironmentKind } from "../domain/contracts.ts";
+import { canModifyIssueCode, configuredCapabilities, isDevelopmentEnvironment, isSshRepositoryUrl, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueCommandEnvironment, issueLocalCommands } from "./native-tools.ts";
 import { objectToolParameters } from "./tool-schema.ts";
 import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
@@ -17,7 +17,8 @@ import { issueRepositoryWorkspaceNames, repositoryStorePath, type SharedCheckout
 import type { IssueProjectManager } from "../workspace/project.ts";
 import type { PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { resolveRecordedRepository } from "../workspace/runtime.ts";
-import { readIssueBranchCommit } from "../workspace/issue-git.ts";
+import { syncBoundBranch } from "./branch-sync.ts";
+import { readIssueBranchCommit, readIssueMergeHead } from "../workspace/issue-git.ts";
 import { classifyRepositoryState } from "../workspace/state.ts";
 import { executeLocalCommand } from "../process.ts";
 import { assertNoEmbeddedRepository, trustedGitArgs } from "../workspace/git-command.ts";
@@ -33,6 +34,8 @@ const inputShapes = {
   index: obj({ operation: oneOf(["stage", "unstage"]), repository: str(), paths: arr(str(), { minItems: 1, maxItems: issuePilotConfig.limits.sourceBrowser.changeFiles }) }),
   commit: obj({ operation: lit("commit"), repository: str(), message: str({ minLength: 1, maxLength: 4000 }) }),
   push: obj({ operation: lit("push"), repository: str() }),
+  sync: obj({ operation: lit("sync"), repository: str() }),
+  merge: obj({ operation: lit("merge"), repository: str(), localTip: str({ pattern: "^[a-f0-9]{40}$" }), remoteTip: str({ pattern: "^[a-f0-9]{40}$" }) }),
 };
 type WorkspaceInput = Static<(typeof inputShapes)[keyof typeof inputShapes]>;
 type GitInput = Extract<WorkspaceInput, { repository: string }>;
@@ -54,8 +57,69 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
   if (!repository) throw new Error("workspace_repository_not_found");
   const { root, store } = await resolveRecordedRepository(options.stateRoot, issue.key, repository, input.repository, "development_workspace");
   if (!store || !repository.workingBranch) throw new Error("workspace_git_read_only");
-  await readIssueBranchCommit(store, repository.workingBranch);
-  const push = input.operation === "push";
+  const branch = repository.workingBranch;
+  const synchronizing = input.operation === "sync" || input.operation === "merge";
+  if (synchronizing) {
+    const deadline = AbortSignal.timeout(issuePilotConfig.limits.process.gitOperationMs);
+    signal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  }
+  const git = async (args: string[], network = false, allowExitOne = false) => {
+    signal?.throwIfAborted();
+    if (network && (!options.personalGit?.env.GIT_SSH_COMMAND || !isSshRepositoryUrl(repository.url))) throw new Error("personal_git_ssh_credentials_required");
+    const prepared = await prepareIssueCommand(
+      {
+        writeRoot: options.runtimeRoot,
+        stateRoot: options.stateRoot,
+        writableGitStore: store,
+        readRoots: [path.join(repositoryStorePath(options.stateRoot, repository.url), "objects"), ...(network ? (options.personalGit?.readRoots ?? []) : [])],
+        networkDomains: options.networkDomains,
+      },
+      ["git", ...trustedGitArgs(["-C", root, "--literal-pathspecs", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", ...args])],
+      root,
+    );
+    let failure: unknown;
+    try {
+      const result = await executeLocalCommand(prepared.argv[0]!, prepared.argv.slice(1), {
+        cwd: root,
+        ...(signal ? { signal } : {}),
+        timeout: issuePilotConfig.limits.process.gitOperationMs,
+        maxOutputBytes: issuePilotConfig.limits.process.gitOutputBytes,
+        strictStdoutUtf8: synchronizing,
+        environment: issueCommandEnvironment({
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+          ...(network ? options.personalGit?.env : options.commitEnvironment),
+        }),
+      });
+      signal?.throwIfAborted();
+      if (result.killed) throw new Error("workspace_git_operation_timeout");
+      if (result.code !== 0 && !(allowExitOne && result.code === 1)) throw new Error(`workspace_git_${input.operation}_failed: ${result.stderr.trim() || result.stdout.trim() || result.code}`);
+      if (input.operation === "stage") await assertNoEmbeddedRepository(root);
+      return result;
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      try {
+        await prepared.cleanup();
+      } catch (error) {
+        // oxlint-disable-next-line no-unsafe-finally -- preserve the command error when cleanup also fails.
+        throw new AggregateError(failure === undefined ? [error] : [failure, error], "workspace_git_cleanup_failed");
+      }
+    }
+  };
+  // Historical worktrees can be browsed without an origin. Network operations cannot use a missing,
+  // ambiguous or rebound origin, and must never guess a replacement from the deployment catalog.
+  if (synchronizing || input.operation === "push") {
+    if ((await git(["remote", "get-url", "--all", "origin"])).stdout !== `${repository.url}\n`) throw new Error("workspace_git_configuration_invalid");
+  }
+  const details = { operation: input.operation, repository: input.repository, branch };
+  if (input.operation === "sync" || input.operation === "merge") {
+    const result = await syncBoundBranch(input, { stateRoot: options.stateRoot, root, store, branch, url: repository.url }, git, signal!);
+    return structuredJsonResult(capabilityTextResult(JSON.stringify({ ...details, ...result }), { operation: input.operation }));
+  }
+  await readIssueBranchCommit(store, branch);
   let args: string[];
   if ("paths" in input) {
     if (input.paths.some((value) => !value || value.includes("\0") || path.isAbsolute(value))) throw new Error("invalid_workspace_git_path");
@@ -67,51 +131,12 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
     await assertNoEmbeddedRepository(root);
     args = ["commit", "-m", message];
   } else {
-    if (!options.personalGit?.env.GIT_SSH_COMMAND || !/^(ssh:\/\/|[^/]+@[^:]+:)/.test(repository.url)) throw new Error("personal_git_ssh_credentials_required");
+    if (await readIssueMergeHead(store, root)) throw new Error("workspace_git_merge_in_progress");
     const ref = `refs/heads/${repository.workingBranch}`;
     args = ["push", "--no-follow-tags", "--recurse-submodules=no", "--", "origin", `${ref}:${ref}`];
   }
-  const prepared = await prepareIssueCommand(
-    {
-      writeRoot: options.runtimeRoot,
-      stateRoot: options.stateRoot,
-      writableGitStore: store,
-      readRoots: [path.join(repositoryStorePath(options.stateRoot, repository.url), "objects"), ...(push ? (options.personalGit?.readRoots ?? []) : [])],
-      networkDomains: options.networkDomains,
-    },
-    ["git", ...trustedGitArgs(["-C", root, "--literal-pathspecs", "-c", "maintenance.auto=false", "-c", "commit.gpgSign=false", ...args])],
-    root,
-  );
-  let failure: unknown;
-  try {
-    const { stdout, stderr, code, killed } = await executeLocalCommand(prepared.argv[0]!, prepared.argv.slice(1), {
-      cwd: root,
-      ...(signal ? { signal } : {}),
-      timeout: issuePilotConfig.limits.process.gitOperationMs,
-      maxOutputBytes: issuePilotConfig.limits.process.gitOutputBytes,
-      environment: issueCommandEnvironment({
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-        ...(push ? options.personalGit?.env : options.commitEnvironment),
-      }),
-    });
-    signal?.throwIfAborted();
-    if (killed) throw new Error("workspace_git_operation_timeout");
-    if (code !== 0) throw new Error(`workspace_git_${input.operation}_failed: ${stderr.trim() || stdout.trim() || code}`);
-    if (input.operation === "stage") await assertNoEmbeddedRepository(root);
-    return structuredJsonResult(capabilityTextResult(JSON.stringify({ operation: input.operation, repository: input.repository, branch: repository.workingBranch }), { operation: input.operation }));
-  } catch (error) {
-    failure = error;
-    throw error;
-  } finally {
-    try {
-      await prepared.cleanup();
-    } catch (error) {
-      // oxlint-disable-next-line no-unsafe-finally -- preserve the command error when cleanup also fails.
-      throw new AggregateError(failure === undefined ? [error] : [failure, error], "workspace_git_cleanup_failed");
-    }
-  }
+  await git(args, input.operation === "push");
+  return structuredJsonResult(capabilityTextResult(JSON.stringify(details), { operation: input.operation }));
 }
 
 export async function createWorkspaceTool(database: Database, issue: Issue, environmentKind: EnvironmentKind, projects: IssueProjectManager, options: WorkspaceToolOptions) {
@@ -126,7 +151,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
         inputShapes.list,
         ...available.map((row) => obj({ operation: lit("describe"), service: lit(row.service.key), environment: lit(row.environment.key) })),
         obj({ operation: oneOf(["include", "remove"]), service: oneOf(keys) }),
-        ...(canModifyIssueCode(environmentKind) ? [inputShapes.index, inputShapes.commit, inputShapes.push] : []),
+        ...(canModifyIssueCode(environmentKind) ? [inputShapes.index, inputShapes.commit, inputShapes.push, inputShapes.sync, inputShapes.merge] : []),
       ]),
     ),
   );
@@ -135,7 +160,7 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
     name: "workspace",
     label: "Cross-service workspace",
     description:
-      "List code services and investigation sources; describe an explicit source environment before service_query. include/remove manage repositories in this Issue's code environment. In development, stage/unstage take repository-relative paths, commit saves staged changes, and push sends only the bound branch to origin under the same name. Select the repository by its workspace directory name. Do not use bash to change Git metadata. No branch creation, switching, or target-branch publication.",
+      "List code services and investigation sources; describe an explicit source environment before service_query. include/remove manage repositories in this Issue's code environment. In development, stage/unstage take repository-relative paths, commit saves staged changes, and push sends only the bound branch to origin under the same name. On a sync request, sync fetches only that same-name branch, fast-forwards a clean worktree or reports both tips and unique commits. On explicit merge authorization, merge takes those localTip/remoteTip hashes and prepares a two-parent merge without committing. Resolve reported conflicts, stage named files and review before an authorized commit/push. Select the repository by its workspace directory name. Do not use bash to change Git metadata. No branch creation, switching, or target-branch publication.",
     parameters: schema,
     outputSchema: unknownSchema(),
     execute: async (_id, raw, signal) => {

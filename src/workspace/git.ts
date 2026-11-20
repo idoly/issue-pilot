@@ -9,7 +9,7 @@ import { normalizeIssueKey } from "../domain/contracts.ts";
 import { executeLocalCommand } from "../process.ts";
 import { KeyedSerialQueue } from "../serial.ts";
 import { indexGitlinkChanges, runGit, trustedGitArgs, trustedGitEnvironment } from "./git-command.ts";
-import { createPrivateIssueBranch, publishIssueBranch, readIssueBranchCommit, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
+import { createPrivateIssueBranch, publishIssueBranch, readIssueBranchCommit, readIssueMergeHead, readLinkedWorktreeHead, validateIssueGitStore, validateIssueWorktreeBinding } from "./issue-git.ts";
 import { assertIssueRoot, issueRoot, listSharedCheckouts, pathExists, repositoriesRoot, sharedCheckoutsRoot, workspacesRoot } from "./state.ts";
 
 export interface PrepareWorktreeInput {
@@ -338,6 +338,7 @@ export class WorktreeManager {
     await readLinkedWorktreeHead(store, resolvedWorkspace).catch((error: unknown) => {
       throw new Error("workspace_git_binding_invalid", { cause: error });
     });
+    if (await readIssueMergeHead(store, resolvedWorkspace)) throw new Error("workspace_has_changes");
     const inspect = async (args: string[]): Promise<string> => {
       try {
         return await this.git(args);

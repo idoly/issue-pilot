@@ -61,12 +61,19 @@ test("conversation Git cannot create or switch branches and stages and commits o
     await database.db
       .insert(issueRepositories)
       .values({ issueId: issue!.id, url: source, baseBranch: "main", workingBranch: own.workingBranch, localPath: own.workspacePath, workspaceName: "repo", commitBefore: own.baseCommit });
-    const tool = await createWorkspaceTool(database.db, issue!, "dev", new IssueProjectManager(database.db, state), {
+    const options = {
       stateRoot: state,
       runtimeRoot,
       commitEnvironment: gitIdentityEnvironment({ name: "Fixture", email: "fixture@example.test" }),
       networkDomains: [],
-    });
+    };
+    const project = new IssueProjectManager(database.db, state);
+    const tool = await createWorkspaceTool(database.db, issue!, "dev", project, options);
+    for (const kind of ["prod", "test"] as const) {
+      const analysis = await createWorkspaceTool(database.db, issue!, kind, project, options);
+      for (const input of [{ operation: "sync" }, { operation: "merge", localTip: before, remoteTip: before }])
+        await assert.rejects(analysis.execute("fixture", { repository: "repo", ...input } as never, undefined, undefined, {} as never), /invalid_workspace_input/);
+    }
     const update = (input: Record<string, unknown>, signal?: AbortSignal) => tool.execute("fixture", { repository: "repo", ...input } as never, signal, undefined, {} as never);
     const bash = issueNativeTools({ writeRoot: runtimeRoot, stateRoot: state, readRoots: [path.join(shared, "objects")] }, () => ({ GIT_OPTIONAL_LOCKS: "0" })).find((tool) => tool.name === "bash")!;
     // One sandboxed shell runs every probe in order; each probe gets its own subshell and reports its own exit code.
@@ -100,6 +107,10 @@ test("conversation Git cannot create or switch branches and stages and commits o
     await assert.rejects(update({ operation: "switch", branch: "fixture-existing" }), /invalid_workspace_input/);
     await assert.rejects(update({ operation: "push", ref: "refs/heads/main" }), /invalid_workspace_input/);
     await assert.rejects(update({ operation: "push" }), /personal_git_ssh_credentials_required/);
+    await assert.rejects(update({ operation: "sync", branch: "main" }), /invalid_workspace_input/);
+    await assert.rejects(update({ operation: "merge", remoteTip: before }), /invalid_workspace_input/);
+    await assert.rejects(update({ operation: "sync" }), /personal_git_ssh_credentials_required/);
+    await assert.rejects(update({ operation: "sync" }, AbortSignal.abort()), { name: "AbortError" });
     await assert.rejects(update({ operation: "stage", paths: ["file.txt"] }, AbortSignal.abort()), { name: "AbortError" });
     await update({ operation: "stage", paths: ["file.txt"] });
     assert.equal(await git(["-C", own.workspacePath, "show", ":file.txt"]), "after");

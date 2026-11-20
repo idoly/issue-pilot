@@ -27,6 +27,7 @@ test("gates code modification, development review and coding guidelines on the e
     // Native query and MCP guidance appear only when those tools are actually available.
     assert.doesNotMatch(prompt, /service_query|mcp__/);
     assert.equal(prompt.includes("Development change review:"), development);
+    assert.equal(prompt.includes("workspace merge with those reviewed tips"), development);
     assert.equal(prompt.includes("shared read-only snapshots of recorded baselines"), !development);
     assert.equal(prompt.includes("writable worktrees on its own branches and may be edited"), development);
     assert.equal(prompt.includes("explicitly select the source environment for every query"), development);

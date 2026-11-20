@@ -90,7 +90,8 @@ export async function indexGitlinkChanges(root: string, options: GitIndexOptions
       const field = pending.slice(0, end);
       pending = pending.slice(end + 1);
       if (!header) {
-        const match = /^:([0-7]{6}) ([0-7]{6}) [0-9a-f]{40} [0-9a-f]{40} [ADMT]$/.exec(field);
+        // U is an unresolved index entry: other conflict paths may legitimately be staged one at a time.
+        const match = /^:([0-7]{6}) ([0-7]{6}) [0-9a-f]{40} [0-9a-f]{40} [ADMTU]$/.exec(field);
         if (!match) throw new Error("workspace_git_index_invalid");
         header = { oldMode: match[1]!, newMode: match[2]! };
       } else {

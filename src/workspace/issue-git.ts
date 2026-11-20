@@ -103,6 +103,17 @@ export async function readLinkedWorktreeHead(store: string, workspace: string): 
   return (await readGitPointer(path.join(await linkedWorktreeMetadata(store, workspace), "HEAD"))).trim();
 }
 
+/** A two-parent merge is durable Git state even after every conflict is resolved in the index. */
+export async function readIssueMergeHead(store: string, workspace: string): Promise<string | null> {
+  const directory = await linkedWorktreeMetadata(store, workspace);
+  const head = await readGitPointer(path.join(directory, "MERGE_HEAD")).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (head !== null && !/^[a-f0-9]{40}\n$/.test(head)) throw new Error("workspace_git_merge_requires_inspection");
+  return head?.trim() ?? null;
+}
+
 export async function validateIssueWorktreeBinding(store: string, workspace: string, branch: string): Promise<void> {
   const head = await readLinkedWorktreeHead(store, workspace);
   if (head !== `ref: refs/heads/${branch}`) throw new Error("workspace_branch_does_not_match_issue_policy");
