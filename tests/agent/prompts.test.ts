@@ -42,6 +42,13 @@ test("gates code modification, development review and coding guidelines on the e
   assert.doesNotMatch(withTools, /serially with spacing|quota/);
 });
 
+test("allows a multi-step SQL draft in a read-only investigation without authorizing execution", () => {
+  const prompt = agentSystemPrompt({ ...baseContext, capabilities: ["dms"] }, { environmentKind: "prod", workMode: "production_analysis", mcpTools: true });
+  assert.match(prompt, /provide the requested SQL for human review, including UPDATE and DELETE/i);
+  assert.match(prompt, /do not execute the drafted changes through any tool/i);
+  assert.match(prompt, /provide the statements in dependency order even without a transaction/i);
+});
+
 test("injects the runtime time and gates repository and related-Issue workspace guidance", () => {
   const expected = new RegExp("2026-08-06T09:52:43\\+08:00");
   assert.match(runtimeTimeContext(now), expected);
