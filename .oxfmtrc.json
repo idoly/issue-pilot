@@ -20,7 +20,7 @@
     "**/drizzle",
     "**/docs",
     "**/deploy",
-    "**/patches",
+    "**/patches/*.patch",
     "**/examples",
     "**/.github",
     "**/*.yml",

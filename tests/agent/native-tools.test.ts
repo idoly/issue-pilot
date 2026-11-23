@@ -79,6 +79,25 @@ test("native tools reuse the host compile cache read-only and tolerate missing o
     await f.close();
   }
 });
+test("native find anchors path globs to the selected directory and recurses only when asked", async () => {
+  const f = await fixture();
+  try {
+    for (const file of ["service/src/api.ts", "service/pkg/src/other.ts"]) {
+      await mkdir(path.dirname(path.join(f.own, file)), { recursive: true });
+      await writeFile(path.join(f.own, file), "");
+    }
+    const find = issueNativeTools({ writeRoot: f.own }).find((tool) => tool.name === "find")!;
+    const matches = async (pattern: string) => {
+      const result = await invoke(find, { path: "service", pattern });
+      return result.content.flatMap((block) => (block.type === "text" ? block.text.trim().split("\n") : [])).sort();
+    };
+    assert.deepEqual(await matches("src/*.ts"), ["src/api.ts"]);
+    assert.deepEqual(await matches("./src/*.ts"), ["src/api.ts"]);
+    assert.deepEqual(await matches("**/src/*.ts"), ["pkg/src/other.ts", "src/api.ts"]);
+  } finally {
+    await f.close();
+  }
+});
 test("native write and edit can change this Issue's files but reject absolute, parent and symlink escapes", async () => {
   const f = await fixture();
   try {

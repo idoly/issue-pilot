@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { dependencyPatches } from "../../patches/manifest.ts";
 
 /**
  * Runtime dependency patches applied by scripts/apply-pi-sdk-patch.mjs at postinstall. An install that skipped
  * scripts (for example `npm ci --ignore-scripts`) would otherwise run the unpatched SDK silently.
  * Monaco is build-only and is not loaded by the server.
  */
-const RUNTIME_PATCHES = ["@earendil-works+pi-coding-agent+1.5.2.patch", "zod+4.6.7.patch"] as const;
+const RUNTIME_PATCHES = dependencyPatches.filter((patch) => !patch.buildOnly).map((patch) => patch.file);
 const checkoutRoot = new URL("../../", import.meta.url);
 
 let verified: Promise<void> | undefined;

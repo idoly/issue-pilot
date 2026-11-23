@@ -7,12 +7,13 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { dependencyPatches } from "../../patches/manifest.ts";
 
 const exec = promisify(execFile);
 const project = fileURLToPath(new URL("../../", import.meta.url));
 const probe = fileURLToPath(new URL("../helpers/zod-security-probe.mjs", import.meta.url));
-const patchFiles = ["@earendil-works+pi-coding-agent+1.5.2.patch", "zod+4.6.7.patch", "monaco-editor+0.57.0.patch"];
-const targets = ["zod", "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime", "@earendil-works/pi-coding-agent", "monaco-editor"];
+const patchFiles = dependencyPatches.map((patch) => patch.file);
+const targets = [...dependencyPatches.map((patch) => patch.name), "@modelcontextprotocol/sdk", "@anthropic-ai/sandbox-runtime"];
 
 async function patchedPaths(): Promise<string[]> {
   const files = await Promise.all(patchFiles.map((name) => readFile(path.join(project, "patches", name), "utf8")));
@@ -53,7 +54,7 @@ async function fixture() {
     await mkdir(path.join(root, "scripts"));
     await mkdir(path.join(root, "patches"));
     await copyFile(path.join(project, "scripts/apply-pi-sdk-patch.mjs"), path.join(root, "scripts/apply-pi-sdk-patch.mjs"));
-    for (const name of patchFiles) await copyFile(path.join(project, "patches", name), path.join(root, "patches", name));
+    for (const name of ["manifest.ts", ...patchFiles]) await copyFile(path.join(project, "patches", name), path.join(root, "patches", name));
     for (const file of await patchedPaths()) assert.ok((await realpath(path.join(root, file))).startsWith(root + path.sep), "every patched file must remain inside the isolated fixture");
     const patch = path.join(root, "patches/zod+4.6.7.patch");
     let installed = false;

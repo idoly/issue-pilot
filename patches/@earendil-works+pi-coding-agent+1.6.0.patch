@@ -122,10 +122,10 @@ index 2ee96fad28b6b73c84a3a9410e56cc78c16ab807..2233b6563442f5eef22331ce329114d9
      loadConfig?: (ctx: ExtensionContext) => LoadedMcpConfig;
      /** Defaults to stdio and streamable HTTP transports built from the server config. */
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js
-index 69edd29690f5a1513723e842e2ea4933658082e2..e37b45844ae4e6ef9fa88f258b00904f92d64955 100644
+index 073dcb09d824330d8c8c2bcc709438c7abf55000..4f1977698adde6ff473874572bbc57d2a5e79b54 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js
-@@ -315,7 +315,11 @@ export function createMcpExtension(options = {}) {
+@@ -312,7 +312,11 @@ export function createMcpExtension(options = {}) {
                      name: assignName(tool.name, `${server}\0${tool.name}`),
                      exposure: getMcpToolExposure(entry.config, tool.name),
                      namespace,
@@ -138,7 +138,7 @@ index 69edd29690f5a1513723e842e2ea4933658082e2..e37b45844ae4e6ef9fa88f258b00904f
                      getClient: async () => {
                          // A prepared call can outlive this definition's connection while the readiness
                          // hook waits for a disable/re-enable. Resolve the replacement at execution time.
-@@ -373,7 +377,7 @@ export function createMcpExtension(options = {}) {
+@@ -370,7 +374,7 @@ export function createMcpExtension(options = {}) {
                  return;
              const wasDirect = resourceToolsExposure === "direct";
              resourceToolsExposure = next;

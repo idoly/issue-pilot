@@ -24,17 +24,15 @@ test("installed DBHub preserves readonly SQL and rejects executing EXPLAIN optio
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    const sql = tools.find((tool) => tool.name.startsWith("execute_sql"))!;
-    const explain = tools.find((tool) => tool.name.startsWith("explain_sql"))!;
-    assert.ok(sql && explain);
-    const result = await client.callTool({ name: sql.name, arguments: { sql: "SELECT * FROM evidence" } });
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), ["execute_sql", "explain_sql", "search_objects"]);
+    const result = await client.callTool({ name: "execute_sql", arguments: { sql: "SELECT * FROM evidence" } });
     assert.ok(!result.isError, JSON.stringify(result));
-    const plan = await client.callTool({ name: explain.name, arguments: { sql: "SELECT * FROM evidence" } });
+    const plan = await client.callTool({ name: "explain_sql", arguments: { sql: "SELECT * FROM evidence" } });
     assert.ok(!plan.isError, JSON.stringify(plan));
-    const mutation = await client.callTool({ name: sql.name, arguments: { sql: "DELETE FROM evidence" } });
+    const mutation = await client.callTool({ name: "execute_sql", arguments: { sql: "DELETE FROM evidence" } });
     assert.equal(mutation.isError, true);
     for (const input of ["ANALYSE DELETE FROM evidence", '("ANALYZE" TRUE) DELETE FROM evidence', "('ANALYZE' TRUE) DELETE FROM evidence"]) {
-      const rejected = await client.callTool({ name: explain.name, arguments: { sql: input } });
+      const rejected = await client.callTool({ name: "explain_sql", arguments: { sql: input } });
       assert.equal(rejected.isError, true);
       assert.match(JSON.stringify(rejected), /does not support ANALYZE|only accepts these EXPLAIN options/);
     }

@@ -1,14 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { dependencyPatches } from "../patches/manifest.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const patches = [
-  { name: "@earendil-works/pi-coding-agent", version: "1.5.2", file: "patches/@earendil-works+pi-coding-agent+1.5.2.patch" },
-  { name: "zod", version: "4.6.7", file: "patches/zod+4.6.7.patch" },
-  { name: "monaco-editor", version: "0.57.0", file: "patches/monaco-editor+0.57.0.patch", buildOnly: true },
-];
-for (const patch of patches) {
+for (const patch of dependencyPatches) {
+  const patchFile = `patches/${patch.file}`;
   const packageFile = new URL(`../node_modules/${patch.name}/package.json`, import.meta.url);
   let metadata;
   try {
@@ -24,7 +21,7 @@ for (const patch of patches) {
   if (metadata.version !== patch.version) throw new Error(`dependency_patch_version_mismatch:${patch.name}`);
   const check = (args) => {
     try {
-      execFileSync("git", ["apply", ...args, patch.file], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+      execFileSync("git", ["apply", ...args, patchFile], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
       return true;
     } catch (error) {
       if (error.code === "ENOENT") throw new Error("git_required_for_dependency_patches");
@@ -35,7 +32,7 @@ for (const patch of patches) {
   };
   if (!check(["--reverse", "--check"])) {
     if (!check(["--check"])) throw new Error(`dependency_patch_does_not_apply:${patch.name}`);
-    execFileSync("git", ["apply", patch.file], { cwd: root, stdio: "inherit" });
+    execFileSync("git", ["apply", patchFile], { cwd: root, stdio: "inherit" });
   }
   console.log(`Verified dependency patch: ${patch.name}@${patch.version}.`);
 }
