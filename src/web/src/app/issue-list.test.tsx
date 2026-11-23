@@ -141,10 +141,10 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
     .mockReturnValueOnce(leaving.promise)
     .mockResolvedValueOnce([row("home")])
     .mockReturnValueOnce(closing.promise);
-  const [scope, setScope] = createSignal<string | false>("issues", { ownedWrite: true });
+  const [active, setActive] = createSignal(true, { ownedWrite: true });
   let list!: IssueListResource;
   function Probe() {
-    list = createIssueList(scope);
+    list = createIssueList(active);
     return (
       <output>
         {JSON.stringify(list.items())}:{list.error()}
@@ -159,7 +159,7 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
   await settle();
   expect(list.items()[0]?.title).toBe("new");
   const pending = list.refresh();
-  setScope(false);
+  setActive(false);
   // Testing Library polls with the faked setInterval here; vi.waitFor keeps real polling timers.
   await vi.waitFor(() => expect(api.list.mock.calls[2]![0]?.aborted).toBe(true));
   leaving.resolve([row("left page")]);
@@ -167,7 +167,7 @@ it("rejects old snapshots after explicit refresh, navigation and disposal", asyn
   await vi.advanceTimersByTimeAsync(20_000);
   expect(api.list).toHaveBeenCalledTimes(3);
   expect(list.items()[0]?.title).toBe("new");
-  setScope("dashboard");
+  setActive(true);
   await waitFor(() => expect(list.items()[0]?.title).toBe("home"));
   const final = list.refresh();
   view.unmount();

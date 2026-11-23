@@ -554,7 +554,7 @@ export function AgentPanel(props: {
   const refreshIssue = (issueKey: string, connectionGeneration: number) => {
     const currentRefresh = ++issueRefreshId;
     void Promise.resolve()
-      .then(() => props.onRefresh(issueKey))
+      .then(() => (streamController.isCurrent(connectionGeneration) ? props.onRefresh(issueKey) : undefined))
       .then(() => {
         if (streamController.isCurrent(connectionGeneration) && currentRefresh === issueRefreshId && streamError() === "issue_refresh_failed") setStreamError("");
       })
@@ -598,6 +598,9 @@ export function AgentPanel(props: {
         refreshIssue(props.issue.id, generation);
     },
   });
+  const syncStreamVisibility = () => streamController.setVisible(!document.hidden);
+  syncStreamVisibility();
+  document.addEventListener("visibilitychange", syncStreamVisibility);
   const connect = (issueId: string, resetForIssue = false) => {
     if (resetForIssue) {
       // A new Issue always opens at its latest message, whatever the previous transcript's scroll was.
@@ -845,6 +848,7 @@ export function AgentPanel(props: {
   );
   onCleanup(() => {
     issueGeneration += 1;
+    document.removeEventListener("visibilitychange", syncStreamVisibility);
     discardMessageUpdates();
     streamController.dispose();
   });

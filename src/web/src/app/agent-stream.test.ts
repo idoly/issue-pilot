@@ -241,6 +241,51 @@ describe("AgentStreamController", () => {
     }
   });
 
+  it("parks hidden streams through backoff and Issue switches, then reconnects only the current Issue", async () => {
+    vi.useFakeTimers();
+    const sources: ClosingErrorEventSource[] = [];
+    const onConnection = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onConnection"]>(),
+      onSnapshot = vi.fn<ConstructorParameters<typeof AgentStreamController>[3]["onSnapshot"]>();
+    const controller = new AgentStreamController(
+      (id) => `/stream/${id}`,
+      1000,
+      45000,
+      { onConnection, onSnapshot, onError() {}, onEvent() {} },
+      (url) => {
+        const source = new ClosingErrorEventSource(url);
+        sources.push(source);
+        return source as unknown as EventSource;
+      },
+    );
+    try {
+      controller.setVisible(false);
+      controller.connect("first");
+      expect(sources).toHaveLength(0);
+      controller.setVisible(true);
+      sources[0]!.dispatchEvent(new Event("error"));
+      controller.setVisible(false);
+      controller.connect("second");
+      await vi.advanceTimersByTimeAsync(50_000);
+      expect(sources).toHaveLength(1);
+      controller.setVisible(true);
+      expect(sources.map((source) => source.url)).toEqual(["/stream/first", "/stream/second"]);
+      sources[0]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot() }));
+      sources[1]!.dispatchEvent(new Event("open"));
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(onConnection).toHaveBeenLastCalledWith(false);
+      sources[1]!.dispatchEvent(new MessageEvent("snapshot_ready", { data: snapshot() }));
+      expect(onConnection).toHaveBeenLastCalledWith(true);
+      controller.setVisible(false);
+      controller.dispose();
+      controller.setVisible(true);
+      expect(sources).toHaveLength(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds the jittered reconnect delay between half and the full exponential ceiling", () => {
     expect(reconnectDelay(1000, 0, () => 0)).toBe(500);
     expect(reconnectDelay(1000, 0, () => 1)).toBe(1000);

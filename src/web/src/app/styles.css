@@ -2141,6 +2141,9 @@ summary.agent-tool-head > svg {
   }
 }
 .issue-loading {
+  grid-column: 2 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 28px;
   background: #fff;
 }

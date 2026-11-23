@@ -64,6 +64,7 @@ export class AgentStreamController {
   private generation = 0;
   private issueId = "";
   private disposed = false;
+  private visible = true;
   // Consecutive failures for this Issue since its last accepted snapshot; reconnects keep it, snapshot_ready or another Issue resets it.
   private failures = 0;
 
@@ -76,6 +77,12 @@ export class AgentStreamController {
     private readonly random: () => number = Math.random,
   ) {}
 
+  setVisible(visible: boolean): void {
+    if (this.disposed || this.visible === visible) return;
+    this.visible = visible;
+    if (this.issueId) this.connect(this.issueId);
+  }
+
   connect(issueId: string): void {
     if (this.disposed) return;
     if (this.issueId !== issueId) this.failures = 0;
@@ -85,6 +92,8 @@ export class AgentStreamController {
     this.clearReconnectTimer();
     this.clearStaleTimer();
     this.callbacks.onConnection(false);
+    // Hidden tabs must not occupy the origin's limited HTTP/1 connections, including during backoff.
+    if (!this.visible) return;
 
     let replayComplete = false;
     const replay = new ConversationProjection();

@@ -57,7 +57,7 @@ function summaryFromDetail(detail: IssueDetail): IssueExecutionItem {
  * Summaries and details of the same Issue share an entry; the server revision decides when
  * the detail must be refetched, so views do not maintain parallel copies.
  */
-export function createIssueList(scope: Accessor<string | false> = () => "issues") {
+export function createIssueList(active: Accessor<boolean> = () => true) {
   const [entities, setEntities] = createSignal<ReadonlyMap<string, IssueEntity>>(new Map(), { equals: false });
   let previousItems: IssueExecutionItem[] = [];
   const items = createMemo(() => {
@@ -109,13 +109,13 @@ export function createIssueList(scope: Accessor<string | false> = () => "issues"
       request.finish();
     }
   };
-  createEffect(scope, (active) => {
-    if (active) void refresh();
+  createEffect(active, (visible) => {
+    if (visible) void refresh();
     else cancel();
   });
   // Automatic samples never cancel slow reads. Explicit mutations/refreshes supersede older snapshots.
   const sample = () => {
-    if (!document.hidden && scope() && !latest.active) void refresh();
+    if (!document.hidden && active() && !latest.active) void refresh();
   };
   const timer = window.setInterval(sample, 10_000);
   document.addEventListener("visibilitychange", sample);

@@ -171,7 +171,7 @@ export function IssueQueue(props: {
   let appliedFilter: string | undefined;
   createEffect(
     () => ({
-      loading: loading(),
+      loading: props.issueList.loading(),
       selectedId: props.selectedId,
       visible: filtered(),
       items: issues(),
@@ -180,7 +180,7 @@ export function IssueQueue(props: {
       loadError: loadError(),
     }),
     ({ loading, selectedId, visible, items, filter, keepExternalSelection, loadError }) => {
-      if (loading || loadError) return;
+      if (loading || (loadError && !items.length)) return;
       const filterChanged = filter !== appliedFilter;
       appliedFilter = filter;
       // Background changes update rows, not navigation. Explicit filters and actual removal may select another Issue.

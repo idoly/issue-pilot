@@ -33,13 +33,25 @@ vi.mock("../data/client", async (original) => ({
   listIssues: async (signal?: AbortSignal) => (await api.list(signal)).map(api.stamp),
   getIssue: async (key: string, signal?: AbortSignal) => api.stampDetail(await api.detail(key, signal)),
   listIssuePins: async () => [],
-  loadUsers: async () => [{ subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" }],
+  loadUsers: async () => [
+    { subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" },
+    { subject: "bob", name: "Bob", email: "bob@example.test", role: "test" },
+  ],
   loadCurrentUser: async () => ({ subject: "alice", name: "Alice", email: "alice@example.test", role: "developer" }),
   loadCatalog: async () => ({ environments: [{ key: "prod", name: "正式" }], services: [{ key: "orders", name: "Orders", deployments: [{ environmentKey: "prod" }] }] }),
 }));
 import { App } from "./App";
 import { setCurrentUserSubject } from "../data/client";
 import { settle } from "../test-settle";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
 
 let current: IssueDetail;
 const summary = (): IssueExecutionItem => {
@@ -170,6 +182,116 @@ it("reconciles a newer list change that arrived during a slow detail request", a
   expect(api.detail).toHaveBeenCalledTimes(3);
 });
 
+it("opens the home list's first Issue while a sample is in flight, showing its summary before detail", async () => {
+  render(() => <App />);
+  await within(await screen.findByRole("list", { name: "待处理工单" })).findByText(current.title);
+  const sample = deferred<IssueExecutionItem[]>();
+  const detail = deferred<IssueDetail>();
+  api.list.mockReturnValueOnce(sample.promise);
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+  const signal = api.list.mock.calls[1]![0];
+  api.detail.mockReturnValueOnce(detail.promise);
+  fireEvent.click(screen.getByRole("radio", { name: "工单" }));
+  await waitFor(() => expect(api.detail).toHaveBeenCalledOnce());
+  expect(signal?.aborted).toBe(false);
+  expect(api.list).toHaveBeenCalledTimes(2);
+  const preview = screen.getByRole("status", { name: "正在加载工单详情" });
+  expect(preview.textContent).toContain(current.id);
+  expect(preview.textContent).toContain(current.title);
+  expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
+  detail.resolve(structuredClone(current));
+  await screen.findByRole("button", { name: "编辑工单" });
+  sample.resolve([summary()]);
+  await settle();
+  expect(screen.queryByRole("status", { name: "正在加载工单详情" })).toBeNull();
+});
+
+it("keeps the verified workspace visible on return and withdraws it if the new detail read fails", async () => {
+  current.description = "Last confirmed detail";
+  await open();
+  fireEvent.click(screen.getByRole("radio", { name: "首页" }));
+  await screen.findByRole("heading", { name: "运营总览" });
+  const detail = deferred<IssueDetail>();
+  api.detail.mockReturnValueOnce(detail.promise);
+  fireEvent.click(screen.getByRole("radio", { name: "工单" }));
+  await waitFor(() => expect(api.detail).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("heading", { name: current.title })).toBeTruthy();
+  expect(screen.getByText(current.description)).toBeTruthy();
+  detail.reject(new Error("detail_not_available"));
+  const retry = await screen.findByRole("button", { name: "重试" });
+  expect(screen.queryByText(current.description)).toBeNull();
+  expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
+  fireEvent.click(retry);
+  await screen.findByText(current.description);
+});
+
+it("shows the new summary instead of restoring a detail whose revision changed while away", async () => {
+  current.description = "Old details";
+  await open();
+  fireEvent.click(screen.getByRole("radio", { name: "首页" }));
+  await screen.findByRole("heading", { name: "运营总览" });
+  current.title = "New summary";
+  current.description = "New details";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await within(screen.getByRole("list", { name: "待处理工单" })).findByText(current.title);
+  const detail = deferred<IssueDetail>();
+  api.detail.mockReturnValueOnce(detail.promise);
+  fireEvent.click(screen.getByRole("radio", { name: "工单" }));
+  const preview = await screen.findByRole("status", { name: "正在加载工单详情" });
+  expect(preview.textContent).toContain(current.title);
+  expect(screen.queryByText("Old details")).toBeNull();
+  expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
+  detail.resolve(structuredClone(current));
+  await screen.findByText(current.description);
+});
+
+it("does not reuse a previous viewer's detail or publish their late response", async () => {
+  current.description = "Alice's checked detail";
+  window.history.replaceState(null, "", `/?issue=${current.id}`);
+  await open();
+  fireEvent.click(screen.getByRole("radio", { name: "首页" }));
+  await screen.findByRole("heading", { name: "运营总览" });
+  const old = deferred<IssueDetail>(),
+    fresh = deferred<IssueDetail>();
+  api.detail.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  fireEvent.click(screen.getByRole("radio", { name: "工单" }));
+  await screen.findByText(current.description);
+  // Both identities keep the same selection in the all-Issues scope.
+  fireEvent.click(screen.getByLabelText("按范围筛选"));
+  fireEvent.click(await screen.findByRole("option", { name: "全部" }));
+  fireEvent.click(screen.getByLabelText("当前用户"));
+  fireEvent.click(await screen.findByRole("option", { name: "Bob · bob@example.test" }));
+  await screen.findByRole("status", { name: "正在加载工单详情" });
+  old.resolve({ ...current, description: "Obsolete response" });
+  await settle();
+  expect(screen.queryByText("Obsolete response")).toBeNull();
+  expect(screen.queryByText(current.description)).toBeNull();
+  expect(screen.queryByRole("button", { name: "编辑工单" })).toBeNull();
+  fresh.resolve({ ...current, description: "New viewer's checked detail" });
+  await screen.findByText("New viewer's checked detail");
+});
+
+it("releases a hidden document's stream and replays once on return without losing the draft", async () => {
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  try {
+    const source = await open();
+    fireEvent.input(screen.getByLabelText("发送给 Agent"), { target: { value: "unsent" } });
+    hidden.mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(source.closed).toBe(true);
+    source.emit("message", { id: "obsolete", event: { type: "issue_user", message: "Stale frame" } });
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(EventSourceMock.instances).toHaveLength(2);
+    expect(screen.queryByText("Stale frame")).toBeNull();
+    expect(screen.getByLabelText("发送给 Agent")).toHaveProperty("value", "unsent");
+  } finally {
+    hidden.mockRestore();
+  }
+});
+
 it("reloads the same selected Issue when returning from another page", async () => {
   await open();
   fireEvent.click(screen.getByRole("radio", { name: "首页" }));
@@ -219,6 +341,8 @@ it("keeps one snapshot across the queue and homepage while a fresh sample is pen
         finish = () => resolve([summary()]);
       }),
   );
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitFor(() => expect(finish).toBeTypeOf("function"));
   fireEvent.click(screen.getByRole("radio", { name: "首页" }));
   await within(await screen.findByRole("list", { name: "待处理工单" })).findByText(current.title);
   expect(screen.getByRole("region", { name: "当前运营状态" })).toBeTruthy();

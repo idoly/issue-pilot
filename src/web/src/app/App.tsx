@@ -1,5 +1,5 @@
-import { AsyncBoundary, Button, Segmented, Select, Skeleton } from "../ui";
-import { createEffect, createSignal, lazy, Loading, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import { AsyncBoundary, Button, Segmented, Select } from "../ui";
+import { createEffect, createMemo, createSignal, lazy, Loading, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 
 import { getIssue, type IssueDetail } from "../data/client";
 import { createLatestTask } from "../data/latest";
@@ -122,11 +122,18 @@ function AppWorkspace(props: { initialView?: AppView }) {
   const linkedIssue = linkedIssueFromUrl();
   const [view, setView] = createSignal<AppView>(props.initialView ?? (linkedIssue ? "issues" : "dashboard"), { ownedWrite: true });
   const [selectedId, setSelectedId] = createSignal(linkedIssue, { ownedWrite: true });
-  const issueList = createIssueList(() => (view() === "configuration" ? false : view()));
+  const listActive = createMemo(() => view() !== "configuration");
+  const issueList = createIssueList(listActive);
+  const viewer = createMemo(() => {
+    const user = currentUser();
+    return user ? JSON.stringify([user.subject, user.role, Boolean(user.isAdmin)]) : null;
+  });
+  const [confirmed, setConfirmed] = createSignal<{ id: string; viewer: string | null }>();
   const issue = () => {
-    const id = selectedId();
-    return id ? (issueList.detail(id) ?? null) : null;
+    const selection = confirmed();
+    return selection && selection.id === selectedId() && selection.viewer === viewer() ? (issueList.detail(selection.id) ?? null) : null;
   };
+  const revisionsMatch = (detail: IssueDetail) => [detail, ...detail.relatedIssues].every((row) => issueList.summary(row.id)?.revision === row.revision);
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [issueError, setIssueError] = createSignal("", { ownedWrite: true });
   const [issueReloadToken, setIssueReloadToken] = createSignal(0, { ownedWrite: true });
@@ -195,12 +202,14 @@ function AppWorkspace(props: { initialView?: AppView }) {
     const request = detailTask.begin();
     const read = issueList.beginDetailRead();
     const reveal = revealNavigation === id;
-    const isCurrent = () => request.isCurrent() && untrack(selectedId) === id && untrack(view) === "issues";
+    const reader = untrack(viewer);
+    const isCurrent = () => request.isCurrent() && untrack(selectedId) === id && untrack(view) === "issues" && untrack(viewer) === reader;
     let published = false;
     try {
       const detail = await getIssue(id, request.signal);
       if (!isCurrent()) return;
       read.publish(detail);
+      setConfirmed({ id, viewer: reader });
       if (reveal && revealNavigation === id) setQueueReveal({ key: id, subject: currentUser()?.subject ?? "", issue: detail });
       setIssueError("");
       published = true;
@@ -224,13 +233,13 @@ function AppWorkspace(props: { initialView?: AppView }) {
     const current = untrack(issue);
     if (untrack(view) !== "issues" || untrack(loading) || !current || detailTask.active) return;
     // The server revision includes committed detail changes as well as summary and Agent state.
-    const changed = untrack(() => [current, ...current.relatedIssues].some((detail) => issueList.summary(detail.id)?.revision !== detail.revision));
+    const changed = !untrack(() => revisionsMatch(current));
     if (untrack(issueError) || changed) void readDetail(current.id, "sample").catch(() => undefined);
   }
   createEffect(issueList.listVersion, refreshSampledDetail);
   createEffect(
-    () => ({ id: selectedId(), reload: issueReloadToken(), active: view() === "issues" }),
-    ({ id, active }) => {
+    () => ({ id: selectedId(), reload: issueReloadToken(), active: view() === "issues", reader: viewer() }),
+    ({ id, active, reader }) => {
       detailTask.cancel();
       setQueueReveal(undefined);
       if (!active || revealNavigation !== id) revealNavigation = undefined;
@@ -241,7 +250,9 @@ function AppWorkspace(props: { initialView?: AppView }) {
         setLoading(false);
         return;
       }
-      setLoading(true);
+      // Returning to a still-current selection should not unmount it while the mandatory read runs.
+      const cached = untrack(issue);
+      setLoading(!(reader && cached && untrack(() => revisionsMatch(cached))));
       setIssueError("");
       void readDetail(id, "selection").catch(() => undefined);
     },
@@ -375,10 +386,13 @@ function AppWorkspace(props: { initialView?: AppView }) {
                 }}
               />
               <Show
-                when={!loading()}
+                when={!loading() && (selectedId() || !issueList.loading())}
                 fallback={
                   <main class="issue-loading" aria-busy="true">
-                    <Skeleton active paragraph={{ rows: 12 }} />
+                    <div class="issue-heading" role="status" aria-label="正在加载工单详情">
+                      <Show when={issueList.summary(selectedId())}>{(row) => <strong>{row().title}</strong>}</Show>
+                      <p class="muted">{selectedId() ? `正在读取 ${selectedId()} 的详情…` : "正在读取工单列表…"}</p>
+                    </div>
                   </main>
                 }
               >
