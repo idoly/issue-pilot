@@ -84,7 +84,7 @@ const openGroup = async (index: number) => {
 
 test("admins edit the shared DMS group by default without revealing its Authorization", async () => {
   const dialog = await openGroup(2);
-  expect(within(dialog).getByRole("checkbox", { name: /共享凭证/ })).toHaveProperty("checked", true);
+  expect(within(dialog).getByRole("checkbox", { name: /共享凭证/, checked: true })).toBeTruthy();
   expect(within(dialog).getByLabelText("DMS 地址")).toHaveProperty("value", "https://shared.example.test/sse");
   expect(within(dialog).getByLabelText("新凭证")).toHaveProperty("value", "");
   await fireEvent.input(within(dialog).getByLabelText("DMS 地址"), { target: { value: "https://new.example.test/sse" } });
@@ -142,7 +142,7 @@ test("clearing the shared API key confirms before saving", async () => {
 
 test("the shared API key reuses the model dialog and keeps the global runtime settings", async () => {
   const dialog = await openGroup(0);
-  expect(within(dialog).getByRole("checkbox", { name: /共享凭证/ })).toHaveProperty("checked", true);
+  expect(within(dialog).getByRole("checkbox", { name: /共享凭证/, checked: true })).toBeTruthy();
   expect(within(dialog).getByLabelText("模型").closest(".ui-select")?.textContent).toContain("shared-model");
   await fireEvent.input(within(dialog).getByLabelText("API Key"), { target: { value: "shared-key" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
@@ -196,8 +196,7 @@ test("non-admins see no shared switch and never read shared credential status", 
 test("admins without the developer role can still switch the API key to their own group but not SSH", async () => {
   state.user = () => ({ ...admin, role: "product" });
   const dialog = await openGroup(0);
-  const checkbox = within(dialog).getByRole("checkbox", { name: /共享凭证/ });
-  expect(checkbox).toHaveProperty("checked", true);
+  const checkbox = within(dialog).getByRole("checkbox", { name: /共享凭证/, checked: true });
   expect(checkbox).toHaveProperty("disabled", false);
   fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

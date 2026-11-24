@@ -1,5 +1,7 @@
 import { Button, Select, Skeleton } from "../ui";
-import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, Show } from "solid-js";
+import { Tabs, TabsList, TabsTab, TabsPanel } from "@ui-sdk/solid/tabs";
+import { Meter, MeterTrack, MeterIndicator, MeterValue } from "@ui-sdk/solid/meter";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { loadWorkspaceStats, type IssueListItem, type WorkspaceStats } from "../data/client";
 import { createLatestTask } from "../data/latest";
@@ -21,7 +23,6 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   const [loadError, setLoadError] = createSignal("", { ownedWrite: true });
   const [view, setView] = createSignal<InsightView>("distribution", { ownedWrite: true });
   const [period, setPeriod] = createSignal<StatisticsPeriod>("30d", { ownedWrite: true });
-  const tabId = createUniqueId();
   const latest = createLatestTask();
   const [sampling, setSampling] = createSignal(false, { ownedWrite: true });
   const [sampleError, setSampleError] = createSignal("", { ownedWrite: true });
@@ -161,7 +162,15 @@ export function Statistics(props: { issues: IssueListItem[] }) {
   };
 
   return (
-    <section class="statistics-workspace" aria-label="运营洞察">
+    <Tabs<InsightView>
+      render={(attrs) => <section {...attrs} />}
+      class="statistics-workspace"
+      aria-label="运营洞察"
+      value={view()}
+      onValueChange={(value) => {
+        if (value) setView(value);
+      }}
+    >
       <header class="statistics-header">
         <h2>运营洞察</h2>
         <Select
@@ -177,34 +186,16 @@ export function Statistics(props: { issues: IssueListItem[] }) {
           ]}
         />
       </header>
-      <nav class="insight-tabs" role="tablist" aria-label="统计分类">
+      <TabsList class="insight-tabs" aria-label="统计分类">
         <For each={insightTabs}>
-          {(tab, index) => (
-            <button
-              type="button"
-              role="tab"
-              id={`${tabId}-${tab.value}`}
-              aria-controls={`${tabId}-${tab.value}-panel`}
-              aria-selected={view() === tab.value ? "true" : "false"}
-              tabindex={view() === tab.value ? 0 : -1}
-              class={view() === tab.value ? "selected" : ""}
-              onClick={() => setView(tab.value)}
-              onKeyDown={(event) => {
-                // Automatic activation with a roving tab stop, as in the WAI-ARIA tabs pattern.
-                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                event.preventDefault();
-                const count = insightTabs.length;
-                const next = event.key === "Home" ? 0 : event.key === "End" ? count - 1 : (index() + (event.key === "ArrowLeft" ? -1 : 1) + count) % count;
-                setView(insightTabs[next]!.value);
-                (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
-              }}
-            >
+          {(tab) => (
+            <TabsTab value={tab.value} class={view() === tab.value ? "selected" : ""}>
               {tab.label}
-            </button>
+            </TabsTab>
           )}
         </For>
-      </nav>
-      <div class="insight-panel" role="tabpanel" id={`${tabId}-output-panel`} aria-labelledby={`${tabId}-output`} tabindex={0} hidden={view() !== "output"}>
+      </TabsList>
+      <TabsPanel class="insight-panel" value="output" keepMounted tabindex={0}>
         <section class="metric-strip" aria-label="周期产出指标">
           <div>
             <span>周期新增</span>
@@ -227,8 +218,8 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             <small>平均每日完成</small>
           </div>
         </section>
-      </div>
-      <div class="insight-panel" role="tabpanel" id={`${tabId}-distribution-panel`} aria-labelledby={`${tabId}-distribution`} tabindex={0} hidden={view() !== "distribution"}>
+      </TabsPanel>
+      <TabsPanel class="insight-panel" value="distribution" keepMounted tabindex={0}>
         <div class="distribution-grid" role="region" aria-label="工单分布" tabindex={0}>
           <section class="statistics-section">
             <div class="statistics-title">
@@ -270,8 +261,8 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             </div>
           </section>
         </div>
-      </div>
-      <div class="insight-panel" role="tabpanel" id={`${tabId}-team-panel`} aria-labelledby={`${tabId}-team`} tabindex={0} hidden={view() !== "team"}>
+      </TabsPanel>
+      <TabsPanel class="insight-panel" value="team" keepMounted tabindex={0}>
         <section class="statistics-section compact-panel" aria-labelledby="assignee-summary-title">
           <div class="statistics-title">
             <h2 id="assignee-summary-title">个人处理情况</h2>
@@ -296,8 +287,8 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             </For>
           </div>
         </section>
-      </div>
-      <div class="insight-panel" role="tabpanel" id={`${tabId}-resources-panel`} aria-labelledby={`${tabId}-resources`} tabindex={0} hidden={view() !== "resources"}>
+      </TabsPanel>
+      <TabsPanel class="insight-panel" value="resources" keepMounted tabindex={0}>
         <section class="statistics-section resource-full-panel" aria-labelledby="workspace-capacity-title" aria-busy={loading() ? "true" : "false"}>
           <div class="statistics-title workspace-storage-title">
             <h2 id="workspace-capacity-title">工作区存储</h2>
@@ -351,12 +342,12 @@ export function Statistics(props: { issues: IssueListItem[] }) {
                   </div>
                   <div class="workspace-capacity-control">
                     <Show when={stats().policy.highWaterBytes > 0}>
-                      <div class="workspace-capacity-meter" aria-label={`工单目录占用为回收触发线的 ${Math.round(capacityPercent())}%`}>
-                        <div>
-                          <i style={{ width: `${capacityPercent()}%` }} />
-                        </div>
-                        <span>{Math.round(capacityPercent())}%</span>
-                      </div>
+                      <Meter class="workspace-capacity-meter" value={capacityPercent()} aria-label="工单目录占用相对于回收触发线">
+                        <MeterTrack>
+                          <MeterIndicator render={(attrs) => <i {...attrs} />} />
+                        </MeterTrack>
+                        <MeterValue>{Math.round(capacityPercent())}%</MeterValue>
+                      </Meter>
                     </Show>
                     <div class="workspace-policy">
                       {stats().policy.maintenanceIntervalMinutes > 0 ? `每 ${stats().policy.maintenanceIntervalMinutes} 分钟自动检查` : "自动检查已关闭"} · {retentionLabel()}
@@ -393,7 +384,7 @@ export function Statistics(props: { issues: IssueListItem[] }) {
             </Show>
           </Show>
         </section>
-      </div>
-    </section>
+      </TabsPanel>
+    </Tabs>
   );
 }

@@ -56,6 +56,16 @@ Object.defineProperty(window, "matchMedia", {
 Object.defineProperty(globalThis, "ResizeObserver", { value: ResizeObserverMock, configurable: true });
 Object.defineProperty(globalThis, "EventSource", { value: EventSourceMock, configurable: true });
 Object.defineProperty(HTMLElement.prototype, "scrollTo", { value() {}, configurable: true });
+// jsdom has no layout; menu keyboard scrolling and active-item focus are covered in Chromium.
+if (!Element.prototype.scrollIntoView) Object.defineProperty(Element.prototype, "scrollIntoView", { value() {}, configurable: true, writable: true });
+// jsdom hides [popover] in its UA sheet but has no Popover or Web Animations API.
+// Exercise mounted/open parts here; the real top layer is verified in Chromium.
+if (!("showPopover" in HTMLElement.prototype)) {
+  const style = document.createElement("style");
+  style.textContent = "[popover][data-open]:not([hidden]) { display: block; }";
+  document.head.append(style);
+}
+if (!Element.prototype.getAnimations) Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] });
 // jsdom does not implement modal dialogs. Native focus, inertness and Escape are tested in Chromium.
 Object.assign(HTMLDialogElement.prototype, {
   showModal(this: HTMLDialogElement) {

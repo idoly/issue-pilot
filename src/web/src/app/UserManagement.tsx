@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { Button, Input, Modal, Select, Skeleton, Tag } from "../ui";
+import { Button, Checkbox, Input, Modal, Select, Skeleton, Tag } from "../ui";
 import { canEditManagedUser, canManageDevelopmentConfiguration, hasAdministratorAccess, USER_ROLES } from "../../../domain/contracts";
 import { createUser, loadManagedUsers, updateUser, type ManagedUser, type UserRole } from "../data/client";
 import { createLatestTask } from "../data/latest";
@@ -151,9 +151,9 @@ export function UserManagement() {
         </header>
         <Show when={canManageDevelopmentConfiguration(currentUser())} fallback={<p class="settings-target-feedback">人员管理仅对开发者开放；个人凭据请在“我的凭证”中管理。</p>}>
           <div class="settings-list-toolbar">
-            <Input aria-label="搜索人员" value={query()} placeholder="搜索姓名或邮箱" onInput={(event) => setQuery(event.currentTarget.value)} />
+            <Input aria-label="搜索人员" value={query()} placeholder="搜索姓名或邮箱" onValueChange={setQuery} />
             <label>
-              <input type="checkbox" checked={includeInactive()} onChange={(event) => setIncludeInactive(event.currentTarget.checked)} />
+              <Checkbox checked={includeInactive()} onChange={setIncludeInactive} />
               显示停用人员
             </label>
           </div>
@@ -269,11 +269,11 @@ export function UserManagement() {
           </Show>
           <label>
             <span>姓名</span>
-            <Input aria-label="人员姓名" value={name()} onInput={(event) => setName(event.currentTarget.value)} />
+            <Input aria-label="人员姓名" value={name()} onValueChange={setName} />
           </label>
           <label>
             <span>邮箱</span>
-            <Input aria-label="人员邮箱" type="email" value={email()} onInput={(event) => setEmail(event.currentTarget.value)} />
+            <Input aria-label="人员邮箱" type="email" value={email()} onValueChange={setEmail} />
           </label>
           <label>
             <span>角色</span>
@@ -288,7 +288,7 @@ export function UserManagement() {
           </label>
           <Show when={hasAdministratorAccess(currentUser())}>
             <label class="settings-checkbox">
-              <input type="checkbox" checked={admin()} onChange={(event) => setAdmin(event.currentTarget.checked)} />
+              <Checkbox checked={admin()} onChange={setAdmin} />
               管理权限
             </label>
           </Show>

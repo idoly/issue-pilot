@@ -239,7 +239,10 @@ describe("native code browser", () => {
     const editor = await open();
     expect(editor.readOnly).toBe(true);
     fireEvent.click(screen.getByLabelText("文件操作"));
-    expect((screen.getByRole("button", { name: "新建文件" }) as HTMLButtonElement).disabled).toBe(true);
+    const unavailable = await screen.findByRole("menuitem", { name: "新建文件" });
+    expect(unavailable.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(unavailable);
+    expect(screen.queryByLabelText("文件操作路径")).toBeNull();
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
     expect(api.saveSourceFile).not.toHaveBeenCalled();
   });
@@ -609,8 +612,8 @@ describe("native code browser", () => {
   it("keeps Graph hover details selectable and copies the complete commit hash", async () => {
     mount(true);
     const row = await screen.findByRole("button", { name: /Saved change/ });
-    fireEvent.mouseEnter(row);
-    const hover = await screen.findByRole("tooltip", { name: "提交信息" });
+    fireEvent.pointerEnter(row, { pointerType: "mouse" });
+    const hover = await screen.findByRole("group", { name: "提交信息" });
     expect(hover.textContent).toContain(revision);
     expect(hover.textContent).toContain("Fixture");
     fireEvent.click(within(hover).getByRole("button", { name: "复制提交号" }));
@@ -638,12 +641,12 @@ describe("native code browser", () => {
       );
       mount(true);
       try {
-        fireEvent.mouseEnter(await screen.findByRole("button", { name: /First commit, Fixture/ }));
-        fireEvent.click(within(await screen.findByRole("tooltip", { name: "提交信息" })).getByRole("button", { name: "复制提交号" }));
+        fireEvent.pointerEnter(await screen.findByRole("button", { name: /First commit, Fixture/ }), { pointerType: "mouse" });
+        fireEvent.click(within(await screen.findByRole("group", { name: "提交信息" })).getByRole("button", { name: "复制提交号" }));
         await waitFor(() => expect(finish).toBeTypeOf("function"));
-        fireEvent.mouseEnter(screen.getByRole("button", { name: /Second commit, Fixture/ }));
+        fireEvent.pointerEnter(screen.getByRole("button", { name: /Second commit, Fixture/ }), { pointerType: "mouse" });
         const current = await waitFor(() => {
-          const tooltip = screen.getByRole("tooltip", { name: "提交信息" });
+          const tooltip = screen.getByRole("group", { name: "提交信息" });
           expect(tooltip.textContent).toContain(secondHash);
           return tooltip;
         });
@@ -822,20 +825,20 @@ describe("native code browser", () => {
     mount();
     await screen.findByRole("button", { name: /a\.txt/ });
     fireEvent.click(screen.getByLabelText("文件操作"));
-    fireEvent.click(screen.getByRole("button", { name: "新建文件" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "新建文件" }));
     await fireEvent.input(await screen.findByLabelText("文件操作路径"), { target: { value: "new.txt" } });
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
     await waitFor(() => expect(api.createSourceFile).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "new.txt", ""));
     expect(await screen.findByLabelText("代码内容 new.txt")).toHaveProperty("value", "");
     fireEvent.click(screen.getByLabelText("文件操作"));
-    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "重命名" }));
     await fireEvent.input(await screen.findByLabelText("文件操作路径"), { target: { value: "renamed.txt" } });
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
     await waitFor(() => expect(api.renameSourcePath).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "new.txt", "renamed.txt", false));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await open();
     fireEvent.click(screen.getByLabelText("文件操作"));
-    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
     const dialog = await screen.findByRole("dialog", { name: "删除路径" });
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
     await waitFor(() => expect(api.deleteSourcePath).toHaveBeenCalledWith("ISSUE-20261017-001", "app", "a.txt", false));

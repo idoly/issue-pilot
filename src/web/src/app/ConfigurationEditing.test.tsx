@@ -335,6 +335,6 @@ test("DBHub is an optional service ability and can be added and removed like the
   expect(within(summary).queryByRole("checkbox")).toBeNull();
   expect(summary.querySelector("code")?.textContent).toBe("DBHub");
   await fireEvent.click(within(dialog).getByRole("button", { name: "展开部署2" }));
-  expect(within(summary).getByRole("checkbox", { name: "DBHub" })).toHaveProperty("checked", true);
+  expect(within(summary).getByRole("checkbox", { name: "DBHub", checked: true })).toBeTruthy();
   expect(await within(environment as HTMLElement).findByLabelText("dbhub test 1 host")).toHaveProperty("value", "retained-draft.example.test");
 });

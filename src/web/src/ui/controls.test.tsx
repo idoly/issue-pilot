@@ -1,10 +1,28 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Button, Input, Modal, PasswordInput, Select } from "./index";
+import { Button, Input, Modal, PasswordInput, Segmented, Select } from "./index";
 
 describe("local UI controls", () => {
   afterEach(() => cleanup());
+  it("activates segment boundaries through the controlled selection and respects a refused change", async () => {
+    const [value, setValue] = createSignal("middle", { ownedWrite: true });
+    const change = vi.fn<(next: string) => void>((next) => {
+      if (next !== "last") setValue(next);
+    });
+    render(() => <Segmented aria-label="视图" value={value()} options={["first", "middle", "last"].map((key) => ({ value: key, label: key }))} onChange={change} />);
+    const middle = screen.getByRole("radio", { name: "middle" });
+    const first = screen.getByRole("radio", { name: "first" });
+    middle.focus();
+    fireEvent.keyDown(middle, { key: "Home" });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+    expect(first.getAttribute("aria-checked")).toBe("true");
+    fireEvent.keyDown(first, { key: "End" });
+    await waitFor(() => expect(change.mock.calls.flat()).toEqual(["first", "last"]));
+    expect(first.getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement).toBe(first);
+  });
+
   it("supports keyboard single selection and restores focus after Escape", async () => {
     const [value, setValue] = createSignal("a", { ownedWrite: true });
     const view = render(() => (
@@ -52,12 +70,20 @@ describe("local UI controls", () => {
       </div>
     ));
     fireEvent.click(screen.getByRole("combobox", { name: "成员" }));
-    fireEvent.input(await screen.findByRole("searchbox", { name: "搜索 成员" }), { target: { value: "Bob" } });
+    const filter = await screen.findByRole("combobox", { name: "搜索 成员" });
+    await screen.findByText("找到 2 项");
+    fireEvent.input(filter, { target: { value: "Nobody" } });
+    await screen.findByText("没有匹配项");
+    expect(screen.queryByText(/^找到 \d+ 项$/)).toBeNull();
+    fireEvent.input(filter, { target: { value: "Bob" } });
+    await screen.findByText("找到 1 项");
     await waitFor(() => expect(screen.queryByRole("option", { name: "Alice" })).toBeNull());
     fireEvent.click(screen.getByRole("option", { name: "Bob" }));
     await waitFor(() => expect(value()).toEqual(["bob"]));
     expect(screen.getByRole("listbox")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "外部" }));
+    const outside = screen.getByRole("button", { name: "外部" });
+    fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
+    fireEvent.click(outside);
     await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "移除 bob" }));
     await waitFor(() => expect(value()).toEqual([]));
@@ -80,7 +106,7 @@ describe("local UI controls", () => {
       />
     ));
     fireEvent.click(screen.getByRole("combobox", { name: "成员" }));
-    const search = await screen.findByRole("searchbox", { name: "搜索 成员" });
+    const search = await screen.findByRole("combobox", { name: "搜索 成员" });
     // Focus is in the filter input, so it must expose the listbox and the active option.
     expect(search.getAttribute("aria-controls")).toBe(screen.getByRole("listbox").id);
     expect(search.getAttribute("aria-activedescendant")).toBe(screen.getByRole("option", { name: "Alice" }).id);
@@ -189,7 +215,7 @@ describe("local UI controls", () => {
     const change = vi.fn<(value: string) => void>();
     render(() => <Select aria-label="选择" showSearch options={options()} onChange={change} />);
     fireEvent.click(screen.getByRole("combobox"));
-    const input = await screen.findByRole("searchbox", { name: "搜索 选择" });
+    const input = await screen.findByRole("combobox", { name: "搜索 选择" });
     const deltaOption = () => screen.getByRole("option", { name: "Delta" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
     await waitFor(() => expect(input.getAttribute("aria-activedescendant")).toBe(deltaOption().id));

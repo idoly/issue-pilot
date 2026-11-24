@@ -1,5 +1,6 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
-import { Button, Input, PasswordInput, Select, Skeleton } from "../ui";
+import { Textarea } from "@ui-sdk/solid/textarea";
+import { Button, Checkbox, Input, PasswordInput, Select, Skeleton } from "../ui";
 import { hasAdministratorAccess } from "../../../domain/contracts";
 import {
   errorMessage,
@@ -246,7 +247,7 @@ export function ApplicationParametersView() {
                     value={numbers()[field.key] ?? ""}
                     placeholder={`例如 ${units[field.unit].example}`}
                     disabled={busy()}
-                    onInput={(event) => setNumbers((current) => ({ ...current, [field.key]: event.currentTarget.value }))}
+                    onValueChange={(value) => setNumbers((current) => ({ ...current, [field.key]: value }))}
                   />
                 </label>
               )}
@@ -273,14 +274,14 @@ export function ApplicationParametersView() {
                 <Show when={networkMode() === "allowlist"}>
                   <label>
                     <span>Agent 网络基础白名单</span>
-                    <textarea
+                    <Textarea
                       class="parameters-textarea"
                       aria-describedby="parameter-network-note"
                       rows={3}
                       value={lists().networkAllowedDomains ?? ""}
                       placeholder="例如 packages.example.com"
                       disabled={busy()}
-                      onInput={(event) => setLists((current) => ({ ...current, networkAllowedDomains: event.currentTarget.value }))}
+                      onValueChange={(networkAllowedDomains) => setLists((current) => ({ ...current, networkAllowedDomains }))}
                     />
                   </label>
                   <small id="parameter-network-note">每行一个域名。全局 Agent 配置可追加域名。</small>
@@ -293,7 +294,7 @@ export function ApplicationParametersView() {
                 <p>导入时，只从列表中的 HTTPS 主机下载附件。</p>
               </div>
               <div class="parameter-controls">
-                <textarea
+                <Textarea
                   class="parameters-textarea"
                   aria-labelledby="parameter-attachment-title"
                   aria-describedby="parameter-attachment-note"
@@ -301,7 +302,7 @@ export function ApplicationParametersView() {
                   value={lists().dingtalkAttachmentHosts ?? ""}
                   placeholder="例如 files.example.com"
                   disabled={busy()}
-                  onInput={(event) => setLists((current) => ({ ...current, dingtalkAttachmentHosts: event.currentTarget.value }))}
+                  onValueChange={(dingtalkAttachmentHosts) => setLists((current) => ({ ...current, dingtalkAttachmentHosts }))}
                 />
                 <small id="parameter-attachment-note">每行一个主机名，无需填写 https:// 或路径。</small>
               </div>
@@ -334,7 +335,7 @@ export function ApplicationParametersView() {
                       value={searchDraft().accountId}
                       maxlength={32}
                       disabled={busy()}
-                      onInput={(event) => setSearchDraft((current) => ({ ...current, accountId: event.currentTarget.value }))}
+                      onValueChange={(accountId) => setSearchDraft((current) => ({ ...current, accountId }))}
                     />
                   </label>
                   <label>
@@ -346,20 +347,19 @@ export function ApplicationParametersView() {
                       placeholder={state()?.issueSearch.tokenConfigured ? "已配置，留空保留" : "填写 API Token"}
                       maxlength={1024}
                       disabled={busy()}
-                      onInput={(event) => setSearchDraft((current) => ({ ...current, token: event.currentTarget.value }))}
+                      onValueChange={(token) => setSearchDraft((current) => ({ ...current, token }))}
                     />
                   </label>
                   <small id="parameter-search-token-note">需要 Workers AI Read 权限。更换账号时请同时填写新 Token。</small>
                 </Show>
                 <Show when={!searchDraft().enabled && state()?.issueSearch.tokenConfigured}>
                   <label class="parameter-check">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={searchDraft().clearToken}
                       disabled={busy()}
-                      onChange={(event) => {
+                      onChange={(clearToken) => {
                         setSaved(false);
-                        setSearchDraft((current) => ({ ...current, clearToken: event.currentTarget.checked }));
+                        setSearchDraft((current) => ({ ...current, clearToken }));
                       }}
                     />
                     <span>清除已保存的 Token</span>

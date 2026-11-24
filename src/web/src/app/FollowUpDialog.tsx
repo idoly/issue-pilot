@@ -91,7 +91,7 @@ export function FollowUpDialog(props: { issue: IssueDetail; open: boolean; regis
         </label>
         <label>
           <span>标题</span>
-          <Input aria-label="正式跟进标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} />
+          <Input aria-label="正式跟进标题" value={title()} onValueChange={setTitle} />
         </label>
         <DescriptionField value={description} inputLabel="正式跟进描述" expandLabel="放大正式跟进描述" onChange={setDescription} />
         <p>新工单会关联当前开发工单，并读取其已提交分支快照和 Pi 对话；附件不会复制。</p>

@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { Pagination, PaginationPrevious, PaginationNext } from "@ui-sdk/solid/pagination";
 import { Button, Input, Modal, Segmented } from "../ui";
 import { copyText } from "../ui/clipboard";
 import { Markdown } from "../ui/Markdown";
@@ -251,8 +252,8 @@ function QueryTable(props: { entry: ToolEntry; text: string }) {
                 placeholder="筛选本次结果，不重新查询"
                 value={filter()}
                 allowClear
-                onInput={(event) => {
-                  setFilter(event.currentTarget.value);
+                onValueChange={(value) => {
+                  setFilter(value);
                   setPage(0);
                 }}
               />
@@ -323,12 +324,14 @@ function QueryTable(props: { entry: ToolEntry; text: string }) {
                   {filtered().length ? `${currentPage() * PAGE_SIZE + 1}–${Math.min((currentPage() + 1) * PAGE_SIZE, filtered().length)}` : "0"} / {filtered().length} 条
                 </span>
                 <Show when={pageCount() > 1}>
-                  <Button size="small" disabled={currentPage() === 0} onClick={() => setPage(currentPage() - 1)}>
-                    上一页
-                  </Button>
-                  <Button size="small" disabled={currentPage() === pageCount() - 1} onClick={() => setPage(currentPage() + 1)}>
-                    下一页
-                  </Button>
+                  <Pagination class="agent-query-controls" aria-label="查询结果分页" page={currentPage() + 1} pageCount={pageCount()} onPageChange={(next) => setPage(next - 1)}>
+                    <PaginationPrevious class="ui-button ui-button-small" aria-label="上一页">
+                      上一页
+                    </PaginationPrevious>
+                    <PaginationNext class="ui-button ui-button-small" aria-label="下一页">
+                      下一页
+                    </PaginationNext>
+                  </Pagination>
                 </Show>
               </div>
             </Show>

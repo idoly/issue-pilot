@@ -305,7 +305,7 @@ export function IssueQueue(props: {
   return (
     <aside class="issue-queue" aria-label="工单队列" hidden={props.hidden}>
       <div class="queue-toolbar">
-        <Input aria-label="搜索工单" placeholder="搜索工单" allowClear prefix={<Search size={15} />} value={query()} onInput={(event) => setQuery(event.currentTarget.value)} />
+        <Input aria-label="搜索工单" placeholder="搜索工单" allowClear prefix={<Search size={15} />} value={query()} onValueChange={setQuery} />
         <Button class="icon-button" type="primary" shape="circle" icon={<Plus size={16} />} title="新建工单" aria-label="新建工单" disabled={!props.userSubject} onClick={openCreateIssue} />
       </div>
       <div class="queue-filter">
@@ -558,7 +558,7 @@ export function IssueQueue(props: {
           </label>
           <label>
             <span>标题</span>
-            <Input aria-label="工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} />
+            <Input aria-label="工单标题" value={title()} onValueChange={setTitle} />
           </label>
           <DescriptionField value={description} inputLabel="工单描述" expandLabel="放大工单描述" onChange={(value) => setDescription(value)} />
           <AttachmentPicker files={attachments} inputLabel="选择附件" onFilesChange={(files) => setAttachments(files)} onError={(message) => setCreateError(message)} />

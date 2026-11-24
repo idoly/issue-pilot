@@ -88,7 +88,8 @@
 .ui-button-round {
   border-radius: 9999px;
 }
-.ui-button:disabled {
+.ui-button:disabled,
+.ui-button[aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -281,6 +282,29 @@
   color: var(--ui-primary);
   box-shadow: 0 1px 3px rgb(20 39 32 / 9%);
 }
+.ui-checkbox {
+  display: inline-grid;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: Canvas;
+  color: var(--ui-muted);
+  font: bold 13px/1 sans-serif;
+}
+.ui-checkbox[aria-checked="true"] {
+  background: var(--ui-primary);
+  color: white;
+}
+.ui-checkbox [data-slot="checkbox-indicator"]::after {
+  content: "✓";
+}
+.ui-checkbox:disabled {
+  opacity: 0.5;
+}
 .ui-skeleton {
   display: grid;
   width: 100%;
@@ -359,6 +383,7 @@
   border-top: 1px solid #e5e9e7;
 }
 .ui-select {
+  position: relative;
   display: block;
   min-width: 0;
   width: 100%;
@@ -447,6 +472,15 @@
   color: var(--ui-primary);
   background: #e6f1eb;
 }
+.ui-select:has(> .ui-select-clear) > .ui-select-selector {
+  padding-right: 40px;
+}
+.ui-select > .ui-select-clear {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+}
 .ui-select.is-disabled {
   opacity: 0.5;
 }
@@ -481,7 +515,7 @@
   cursor: pointer;
   overflow-wrap: anywhere;
 }
-.ui-select-popup-list-item[data-active="true"] {
+.ui-select-popup-list-item[data-highlighted] {
   background: #f0f5f2;
 }
 .ui-select-popup-list-item[aria-selected="true"] {
@@ -510,7 +544,8 @@
   border-radius: 8px;
   font: inherit;
 }
-.ui-select-empty {
+/* The SDK keeps the live region mounted even when there are matches. Only pad a visible message. */
+.ui-select-empty[data-empty] {
   padding: 16px 12px;
   color: var(--ui-muted);
   text-align: center;

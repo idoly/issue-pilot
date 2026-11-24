@@ -346,14 +346,16 @@ describe("SLS result view", () => {
       const table = () => screen.getByRole("table");
       expect(within(table()).getAllByRole("row")).toHaveLength(51);
       expect(screen.getByText("1–50 / 105 条")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "上一页" }).hasAttribute("disabled")).toBe(true);
+      expect(screen.getByRole("button", { name: "上一页" }).getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+      expect(screen.getByText("1–50 / 105 条")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "下一页" }));
       await screen.findByText("51–100 / 105 条");
       expect(within(table()).getAllByRole("row")[1]!.textContent).toBe("查看50row 50Even");
       fireEvent.click(screen.getByRole("button", { name: "下一页" }));
       await screen.findByText("101–105 / 105 条");
       expect(within(table()).getAllByRole("row")).toHaveLength(6);
-      expect(screen.getByRole("button", { name: "下一页" }).hasAttribute("disabled")).toBe(true);
+      expect(screen.getByRole("button", { name: "下一页" }).getAttribute("aria-disabled")).toBe("true");
       const input = screen.getByRole("textbox", { name: "筛选本次查询结果" });
       fireEvent.input(input, { target: { value: " eVeN " } });
       await screen.findByText("1–50 / 53 条");

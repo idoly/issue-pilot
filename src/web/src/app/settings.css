@@ -57,14 +57,6 @@
   color: #65706c;
   font: 12px / 16px var(--app-font);
 }
-.settings-list-toolbar input[type="checkbox"],
-.settings-checkbox input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  flex: 0 0 16px;
-  accent-color: #176b5b;
-}
 .settings-view .ip-scrollbar {
   --ip-scrollbar-track: transparent;
   --ip-scrollbar-thumb: #bec7c2;

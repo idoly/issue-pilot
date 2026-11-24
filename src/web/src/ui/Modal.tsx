@@ -31,7 +31,7 @@ function ModalContent(props: ModalProps) {
     if (!panel?.isConnected) return;
     if (document.activeElement instanceof HTMLElement) opener = document.activeElement;
     panel.showModal();
-    panel.querySelector<HTMLElement>('input:not([type="hidden"]):not(:disabled),textarea:not(:disabled),[role="combobox"][tabindex="0"]')?.focus();
+    panel.querySelector<HTMLElement>('input:not([type="hidden"]):not([aria-hidden="true"]):not([tabindex="-1"]):not(:disabled),textarea:not(:disabled),[role="combobox"][tabindex="0"]')?.focus();
   });
   onCleanup(() => {
     panel?.close();

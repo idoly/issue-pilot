@@ -1,4 +1,5 @@
 import { Button } from "../ui";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@ui-sdk/solid/collapsible";
 import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 
@@ -133,22 +134,19 @@ function ToolEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry
 }
 
 function SessionSummaryEntry(props: { issue: IssueDetail; entry: Extract<ConversationEntry, { kind: "summary" }> }) {
-  const [expanded, setExpanded] = createSignal(false, { ownedWrite: true });
   const label = () => (props.entry.summaryType === "compaction" ? "压缩" : "分支");
   const description = () => (props.entry.summaryType === "compaction" ? `已压缩 ${(props.entry.tokensBefore ?? 0).toLocaleString()} tokens` : "分支摘要");
   return (
-    <section class="agent-summary">
-      <button type="button" aria-expanded={expanded() ? "true" : "false"} onClick={() => setExpanded((value) => !value)}>
+    <Collapsible class="agent-summary" render={(attrs) => <section {...attrs} />}>
+      <CollapsibleTrigger>
         <strong>[{label()}]</strong>
         <span>{description()}</span>
-        <ChevronRight class={expanded() ? "expanded" : ""} size={14} />
-      </button>
-      <Show when={expanded()}>
-        <div class="agent-summary-content">
-          <IssueMarkdown issue={props.issue} source={props.entry.summary} />
-        </div>
-      </Show>
-    </section>
+        <ChevronRight size={14} />
+      </CollapsibleTrigger>
+      <CollapsiblePanel class="agent-summary-content">
+        <IssueMarkdown issue={props.issue} source={props.entry.summary} />
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 

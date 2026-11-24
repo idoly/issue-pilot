@@ -291,7 +291,7 @@ export function IssueEditDialog(props: {
           </label>
           <label>
             <span>标题</span>
-            <Input aria-label="编辑工单标题" value={title()} onInput={(event) => setTitle(event.currentTarget.value)} />
+            <Input aria-label="编辑工单标题" value={title()} onValueChange={setTitle} />
           </label>
           <DescriptionField value={description} inputLabel="编辑工单描述" expandLabel="放大编辑工单描述" onChange={setDescription} />
           <AttachmentPicker

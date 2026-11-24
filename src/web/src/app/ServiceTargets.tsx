@@ -82,10 +82,11 @@ export function DbHubTargetsEditor(props: { value: DbHubTarget[]; environment: s
                     <Input
                       aria-label={`dbhub ${props.environment} ${index + 1} ${key}`}
                       type={key === "port" ? "number" : key === "password" ? "password" : "text"}
+                      data-agent-secret={key === "password" ? "" : undefined}
                       placeholder={key === "password" ? "已配置时留空保持不变" : undefined}
                       value={target()[key]}
-                      onInput={(event) => {
-                        Object.assign(target(), { [key]: key === "port" ? Number(event.currentTarget.value) : event.currentTarget.value });
+                      onValueChange={(value) => {
+                        Object.assign(target(), { [key]: key === "port" ? Number(value) : value });
                         emit([...targets()]);
                       }}
                     />
@@ -161,8 +162,8 @@ export function SlsTargetsEditor(props: { value: SlsTarget[]; deploymentIndex: n
                     <Input
                       aria-label={index() === 0 ? `sls ${key === "logstores" ? "logstore" : key} ${props.deploymentIndex}` : `sls ${key} ${props.deploymentIndex}-${index() + 1}`}
                       value={target[key]}
-                      onInput={(event) => {
-                        target[key] = event.currentTarget.value;
+                      onValueChange={(value) => {
+                        target[key] = value;
                         emit([...targets()]);
                       }}
                     />

@@ -1,5 +1,5 @@
-import { Button, Input, Modal, Select, Skeleton, TextArea } from "../ui";
-import { navigateTabList } from "../ui/tab-navigation";
+import { Button, Checkbox, Input, Modal, Select, Skeleton, TextArea } from "../ui";
+import { Tabs, TabsList, TabsPanel, TabsTab } from "@ui-sdk/solid/tabs";
 import { createEffect, createMemo, createSignal, createStore, For, Match, onCleanup, Show, snapshot, Switch, untrack } from "solid-js";
 
 import { sharedConfig } from "../../../../issue-pilot.config.ts";
@@ -209,7 +209,7 @@ function DmsDatabaseEditorRow(props: {
             aria-label={`dms instance ${props.deploymentIndex}-${props.databaseIndex}`}
             placeholder="例如 RDS-XHGJ-SRM"
             value={database().instanceAlias}
-            onInput={(event) => updateScope({ instanceAlias: event.currentTarget.value })}
+            onValueChange={(instanceAlias) => updateScope({ instanceAlias })}
           />
         </label>
         <label>
@@ -218,7 +218,7 @@ function DmsDatabaseEditorRow(props: {
             aria-label={`dms database ${props.deploymentIndex}-${props.databaseIndex}`}
             placeholder="例如 srm"
             value={database().schemaName}
-            onInput={(event) => updateScope({ schemaName: event.currentTarget.value })}
+            onValueChange={(schemaName) => updateScope({ schemaName })}
           />
         </label>
         <Show when={loading()}>
@@ -370,7 +370,7 @@ function ServiceDeploymentEditorRow(props: {
               <For each={["dbhub", ...CAPABILITY_KEYS] as const}>
                 {(key) => (
                   <label class="deployment-ability-choice">
-                    <input type="checkbox" checked={selectedAbilities().includes(key)} onChange={(event) => (event.currentTarget.checked ? addCapability(key) : removeCapability(key))} />
+                    <Checkbox checked={selectedAbilities().includes(key)} onChange={(checked) => (checked ? addCapability(key) : removeCapability(key))} />
                     <span>{abilityNames[key]}</span>
                   </label>
                 )}
@@ -404,7 +404,7 @@ function ServiceDeploymentEditorRow(props: {
                     <Input
                       aria-label={`部署 ${props.index + 1} 仓库 ${props.repositoryName(repository)} 分支`}
                       value={repositoryBranches().find((branch) => branch.repositoryKey === repository.key)?.baseBranch ?? ""}
-                      onInput={(event) => updateRepositoryBranch(repository.key, event.currentTarget.value)}
+                      onValueChange={(value) => updateRepositoryBranch(repository.key, value)}
                     />
                   }
                 >
@@ -795,29 +795,28 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
           </Show>
         </section>
       </Show>
-      <section class="service-panel" hidden={!configurationLoaded()}>
+      <Tabs
+        class="service-panel"
+        hidden={!configurationLoaded()}
+        value={selectedServiceKey()}
+        onValueChange={(key) => {
+          if (key !== null) {
+            setSelectedServiceKey(key);
+            props.onSelectService?.(key);
+          }
+        }}
+      >
         <div class="service-toolbar">
           <div class="service-toolbar-inner">
-            <div class="service-tab-list" role="tablist" aria-label="服务列表" onKeyDown={navigateTabList}>
+            <TabsList class="service-tab-list" aria-label="服务列表">
               <For each={configuration().services}>
                 {(service) => (
-                  <button
-                    type="button"
-                    role="tab"
-                    title={service.name}
-                    aria-selected={selectedServiceKey() === service.key ? "true" : "false"}
-                    tabindex={selectedServiceKey() === service.key ? 0 : -1}
-                    class={selectedServiceKey() === service.key ? "selected" : ""}
-                    onClick={() => {
-                      setSelectedServiceKey(service.key);
-                      props.onSelectService?.(service.key);
-                    }}
-                  >
+                  <TabsTab value={service.key} title={service.name} class={selectedServiceKey() === service.key ? "selected" : ""}>
                     {service.name}
-                  </button>
+                  </TabsTab>
                 )}
               </For>
-            </div>
+            </TabsList>
             <div class="service-tab-actions" role="group" aria-label="服务操作">
               <Button icon={<Plus size={14} />} disabled={!canConfigure()} onClick={openNewService}>
                 添加
@@ -852,7 +851,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
         </Show>
         <Show when={selectedService()} fallback={<div class="empty-band">暂无服务</div>}>
           {(service) => (
-            <>
+            <TabsPanel value={service().key} class="service-overview-panel">
               <Show when={descriptionError()}>
                 <div class="workspace-error" role="alert">
                   {descriptionError()}
@@ -862,10 +861,10 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
                 </div>
               </Show>
               <ServiceOverview service={service()} configurationDescription={visibleConfigurationDescription()} repositories={repositoryChoices()} environments={configuration().environments} />
-            </>
+            </TabsPanel>
           )}
         </Show>
-      </section>
+      </Tabs>
       <Modal
         width={780}
         open={serviceOpen()}
@@ -904,7 +903,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
           </Show>
           <label class="service-form-field">
             <span class="required-field">服务名称</span>
-            <Input aria-label="服务名称" value={serviceName()} onInput={(event) => setServiceName(event.currentTarget.value)} />
+            <Input aria-label="服务名称" value={serviceName()} onValueChange={setServiceName} />
           </label>
           <div class="service-form-section">
             <div class="service-form-section-header">
@@ -1014,7 +1013,7 @@ export function ConfigurationView(props: { selectedServiceKey?: string; onSelect
               placeholder="记录业务知识、排查步骤和查询范例；分支和公开能力参数会自动附加到展示及 AI 读取的描述中。"
               autoSize={{ minRows: 5, maxRows: 10 }}
               value={description()}
-              onInput={(event) => setDescription(event.currentTarget.value)}
+              onValueChange={setDescription}
             />
           </label>
           <Show when={editingServiceKey()}>

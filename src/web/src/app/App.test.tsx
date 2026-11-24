@@ -1109,7 +1109,7 @@ describe("issue pilot workspace", () => {
     await waitFor(() => expect((within(issueDialog).getByLabelText("编辑工单描述") as HTMLTextAreaElement).value).toBe("# 放大后的详细描述"));
     expect(within(issueDialog).getByText("existing.csv")).toBeTruthy();
     expect(within(issueDialog).getByText("1")).toBeTruthy();
-    const attachmentInput = within(issueDialog).getByLabelText("编辑工单选择附件") as HTMLInputElement;
+    const attachmentInput = within(issueDialog).getByRole("group", { name: "编辑工单选择附件" }).querySelector<HTMLInputElement>('input[type="file"]')!;
     Object.defineProperty(attachmentInput, "files", { configurable: true, value: [new File(["details"], "details.txt", { type: "text/plain" })] });
     fireEvent.change(attachmentInput);
     await waitFor(() => expect(within(issueDialog).getByText("details.txt")).toBeTruthy());
@@ -1247,7 +1247,7 @@ describe("issue pilot workspace", () => {
         .getAllByRole("checkbox")
         .map((item) => item.parentElement?.textContent),
     ).toEqual(["DBHub", "DMS", "SLS"]);
-    expect(within(serviceDialog).getByRole("checkbox", { name: "SLS" })).toHaveProperty("checked", true);
+    expect(within(serviceDialog).getByRole("checkbox", { name: "SLS", checked: true })).toBeTruthy();
     expect(within(serviceDialog).queryByRole("button", { name: "playwright" })).toBeNull();
     expect([...serviceDialog.querySelectorAll(".capability-settings-head code")].map((item) => item.textContent)).toEqual(["代码分支", "SLS"]);
     const projectInput = screen.getByLabelText("sls project 2");

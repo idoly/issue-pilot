@@ -1,3 +1,4 @@
+import { FileInput, FileInputTrigger } from "@ui-sdk/solid/file-input";
 import { Button, Modal, Segmented, Select, TextArea } from "../ui";
 import { createSignal, For, Show } from "solid-js";
 
@@ -25,7 +26,7 @@ export function DescriptionField(props: { value: () => string; inputLabel: strin
         <span>描述</span>
         <Button class="icon-button" type="text" shape="circle" icon={<Maximize2 size={14} />} title={props.expandLabel} aria-label={props.expandLabel} onClick={open} />
       </div>
-      <TextArea aria-label={props.inputLabel} autoSize={{ minRows: 3, maxRows: 5 }} value={props.value()} onInput={(event) => props.onChange(event.currentTarget.value)} />
+      <TextArea aria-label={props.inputLabel} autoSize={{ minRows: 3, maxRows: 5 }} value={props.value()} onValueChange={(value) => props.onChange(value)} />
       <Modal
         open={expanded()}
         title="编辑描述"
@@ -58,7 +59,7 @@ export function DescriptionField(props: { value: () => string; inputLabel: strin
             </div>
           }
         >
-          <TextArea class="description-expanded-input" aria-label="放大描述编辑器" value={draft()} onInput={(event) => setDraft(event.currentTarget.value)} />
+          <TextArea class="description-expanded-input" aria-label="放大描述编辑器" value={draft()} onValueChange={setDraft} />
         </Show>
       </Modal>
     </div>
@@ -119,34 +120,30 @@ export function AttachmentPicker(props: {
   onFilesChange: (files: File[]) => void;
   onError: (message: string) => void;
 }) {
-  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
-  let input: HTMLInputElement | undefined;
   const existingFiles = () => props.existingFiles?.() ?? [];
   const totalCount = () => existingFiles().length + props.files().length;
-  const selectFiles = (selected: File[]) => {
-    props.onFilesChange([...props.files(), ...selected]);
-    props.onError("");
-  };
   return (
-    <div class="attachment-picker">
-      <input
-        ref={input}
-        class="visually-hidden"
-        type="file"
-        multiple
-        aria-label={props.inputLabel}
-        onChange={(event) => {
-          selectFiles(Array.from(event.currentTarget.files ?? []));
-          event.currentTarget.value = "";
-        }}
-      />
+    <FileInput
+      class="attachment-picker"
+      role="group"
+      aria-label={props.inputLabel}
+      multiple
+      announcement={() => null}
+      value={props.files()}
+      onValueChange={(files) => {
+        props.onFilesChange(files);
+        props.onError("");
+      }}
+    >
       <div class="attachment-picker-header">
-        <span>
+        <span role="status" aria-atomic="true">
           附件 <small>{totalCount()}</small>
+          <span class="visually-hidden"> 个</span>
         </span>
-        <Button icon={<Paperclip size={14} />} onClick={() => input?.click()}>
+        <FileInputTrigger class="ui-button" data-variant="outlined">
+          <Paperclip size={14} />
           添加附件
-        </Button>
+        </FileInputTrigger>
       </div>
       <Show when={totalCount()}>
         <div class="attachment-file-list">
@@ -192,6 +189,6 @@ export function AttachmentPicker(props: {
           </For>
         </div>
       </Show>
-    </div>
+    </FileInput>
   );
 }

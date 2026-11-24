@@ -163,8 +163,8 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
             value={url()}
             disabled={Boolean(busy())}
             placeholder="https://alidocs.dingtalk.com/notable/record?dentryUuid=…&rowId=…&sheetId=…"
-            onInput={(event) => {
-              setUrl(event.currentTarget.value);
+            onValueChange={(value) => {
+              setUrl(value);
               // Keep the unavailable-connection explanation (and its retry) while the user edits the link.
               if (source()?.connection.available !== false) setError("");
             }}

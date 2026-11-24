@@ -115,9 +115,9 @@ export function IssueSearchDialog(props: { onOpenIssue: (key: string) => boolean
           allowClear
           value={query()}
           maxlength={500}
-          onInput={(event) => {
+          onValueChange={(value) => {
             cancel();
-            setQuery(event.currentTarget.value);
+            setQuery(value);
             setHits(undefined);
             setError("");
           }}

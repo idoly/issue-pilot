@@ -290,11 +290,11 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
           </Show>
           <label>
             <span>仓库地址</span>
-            <Input aria-label="仓库地址" value={url()} onInput={(event) => setUrl(event.currentTarget.value)} />
+            <Input aria-label="仓库地址" value={url()} onValueChange={setUrl} />
           </label>
           <label>
             <span>显示名称</span>
-            <Input aria-label="仓库显示名称" value={name()} placeholder="默认使用仓库名" onInput={(event) => setName(event.currentTarget.value)} />
+            <Input aria-label="仓库显示名称" value={name()} placeholder="默认使用仓库名" onValueChange={setName} />
           </label>
           <div class="settings-form-field">
             <span>分组</span>
@@ -303,7 +303,7 @@ export function RepositoryManagement(props: { onSelectService?: (key: string) =>
           <Show when={formGroup() === ""}>
             <label>
               <span>新分组名称</span>
-              <Input aria-label="新分组名称" value={newGroup()} onInput={(event) => setNewGroup(event.currentTarget.value)} />
+              <Input aria-label="新分组名称" value={newGroup()} onValueChange={setNewGroup} />
             </label>
           </Show>
           <Show when={editing()?.services.length}>

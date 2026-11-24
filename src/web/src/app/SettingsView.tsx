@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
-import { navigateTabList } from "../ui/tab-navigation";
+import { Tabs, TabsList, TabsPanel, TabsTab } from "@ui-sdk/solid/tabs";
 import { ApplicationParametersView } from "./ApplicationParameters";
 import { ConfigurationView } from "./ConfigurationView";
 import { useApplicationResources } from "./ApplicationResources";
@@ -32,63 +32,54 @@ export function SettingsView() {
     },
   );
   return (
-    <main class="settings-view">
-      <nav class="settings-tabs" role="tablist" aria-label="配置分类" onKeyDown={navigateTabList}>
+    <Tabs<SettingsPanel>
+      render={(attrs) => <main {...attrs} />}
+      class="settings-view"
+      value={selectedPanel()}
+      onValueChange={(value) => {
+        if (value) selectPanel(value);
+      }}
+    >
+      <TabsList class="settings-tabs" aria-label="配置分类">
         <For each={settingsPanels}>
           {(panel) => (
-            <button
-              type="button"
-              role="tab"
-              id={`settings-tab-${panel.key}`}
-              aria-controls={visitedPanels().includes(panel.key) ? `settings-panel-${panel.key}` : undefined}
-              aria-selected={selectedPanel() === panel.key ? "true" : "false"}
-              tabindex={selectedPanel() === panel.key ? 0 : -1}
-              class={selectedPanel() === panel.key ? "selected" : ""}
-              onClick={() => selectPanel(panel.key)}
-            >
+            <TabsTab value={panel.key} class={selectedPanel() === panel.key ? "selected" : ""}>
               {panel.label}
-            </button>
+            </TabsTab>
           )}
         </For>
-      </nav>
+      </TabsList>
       <Show when={visitedPanels().includes("users")}>
-        <div class="settings-panel users-settings-panel ip-scrollbar" id="settings-panel-users" role="tabpanel" aria-labelledby="settings-tab-users" tabindex={0} hidden={selectedPanel() !== "users"}>
+        <TabsPanel class="settings-panel users-settings-panel ip-scrollbar" value="users" keepMounted tabindex={0}>
           <PersonalCredentials />
           <UserManagement />
-        </div>
+        </TabsPanel>
       </Show>
       <Show when={visitedPanels().includes("endpoints")}>
-        <div class="settings-panel settings-panel-fixed" id="settings-panel-endpoints" role="tabpanel" aria-labelledby="settings-tab-endpoints" hidden={selectedPanel() !== "endpoints"}>
+        <TabsPanel class="settings-panel settings-panel-fixed" value="endpoints" keepMounted>
           <EndpointConfiguration />
-        </div>
+        </TabsPanel>
       </Show>
       <Show when={visitedPanels().includes("repositories")}>
-        <div class="settings-panel repository-settings-panel" id="settings-panel-repositories" role="tabpanel" aria-labelledby="settings-tab-repositories" hidden={selectedPanel() !== "repositories"}>
+        <TabsPanel class="settings-panel repository-settings-panel" value="repositories" keepMounted>
           <RepositoryManagement
             onSelectService={(key) => {
               setServiceKey(key);
               selectPanel("services");
             }}
           />
-        </div>
+        </TabsPanel>
       </Show>
       <Show when={visitedPanels().includes("parameters")}>
-        <div
-          class="settings-panel settings-panel-quiet"
-          id="settings-panel-parameters"
-          role="tabpanel"
-          aria-labelledby="settings-tab-parameters"
-          tabindex={0}
-          hidden={selectedPanel() !== "parameters"}
-        >
+        <TabsPanel class="settings-panel settings-panel-quiet" value="parameters" keepMounted tabindex={0}>
           <ApplicationParametersView />
-        </div>
+        </TabsPanel>
       </Show>
       <Show when={visitedPanels().includes("services")}>
-        <div class="settings-panel settings-panel-fixed" id="settings-panel-services" role="tabpanel" aria-labelledby="settings-tab-services" hidden={selectedPanel() !== "services"}>
+        <TabsPanel class="settings-panel settings-panel-fixed" value="services" keepMounted>
           <ConfigurationView selectedServiceKey={serviceKey()} onSelectService={(key) => setServiceKey(key)} />
-        </div>
+        </TabsPanel>
       </Show>
-    </main>
+    </Tabs>
   );
 }

@@ -1845,7 +1845,7 @@ summary.agent-tool-head > svg {
   color: var(--agent-dim);
   transition: transform var(--motion-ui);
 }
-.agent-summary > button .ui-icon.expanded {
+.agent-summary > button[aria-expanded="true"] .ui-icon {
   transform: rotate(90deg);
 }
 .agent-summary-content {
@@ -2756,6 +2756,7 @@ summary.agent-tool-head > svg {
   background: #e4e9e6;
 }
 .workspace-capacity-meter i {
+  width: var(--meter-value);
   display: block;
   height: 100%;
   background: #277a68;
@@ -3051,8 +3052,14 @@ summary.agent-tool-head > svg {
   flex: 1;
   flex-direction: column;
 }
-.service-panel > :not(.service-detail) {
+.service-panel > :not(.service-overview-panel) {
   flex: none;
+}
+.service-overview-panel:not([hidden]) {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
 }
 .service-toolbar {
   width: min(1032px, calc(100% - 48px));
@@ -3466,12 +3473,6 @@ summary.agent-tool-head > svg {
   align-items: center;
   gap: 8px;
   cursor: pointer;
-}
-.deployment-ability-choice input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: #176b5b;
 }
 .deployment-ability-choice:focus-within {
   outline: 2px solid #176b5b;

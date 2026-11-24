@@ -163,6 +163,16 @@ try {
   assert.equal(new URL(page.url()).searchParams.get("issue"), searchTarget.id);
   assert.ok(await isFocused(searchOpener), "opening a result restores focus to the surviving opener");
   assert.deepEqual(searchRequests, [expectedSearch, expectedSearch]);
+  const navigation = page.getByRole("radiogroup", { name: "工作台视图" });
+  for (const [key, name, content] of [
+    ["Home", "首页", page.getByRole("list", { name: "待处理工单" })],
+    ["End", "配置", page.getByRole("tablist", { name: "配置分类" })],
+  ]) {
+    await page.keyboard.press(key);
+    await navigation.getByRole("radio", { name, checked: true }).waitFor();
+    assert.ok(await isFocused(navigation.getByRole("radio", { name })), `${key} focuses the activated view`);
+    await content.waitFor();
+  }
   await page.unroute("**/api/catalog");
   await page.unroute("**/api/issue-search");
   await page.goto(`${origin}/?issue=${issue.key}`);
@@ -203,14 +213,36 @@ try {
   assert.ok(await isFocused(assignee), "clearing returns focus to the trigger");
   const cc = issueEditor.getByRole("combobox", { name: "编辑工单抄送人", exact: true });
   await cc.click();
-  const ccFilter = issueEditor.getByRole("searchbox", { name: "搜索 编辑工单抄送人", exact: true });
+  const ccFilter = issueEditor.getByRole("combobox", { name: "搜索 编辑工单抄送人", exact: true });
   const ccList = issueEditor.getByRole("listbox", { name: "编辑工单抄送人", exact: true });
-  assert.ok(await isFocused(ccFilter), "the searchable dropdown focuses its filter");
+  // The native popover enters the top layer before its search field receives focus.
+  await page.waitForFunction((input) => input === document.activeElement, await ccFilter.elementHandle());
   await ccFilter.fill("no-such-fixture-recipient");
-  await ccList.getByText("没有匹配项", { exact: true }).waitFor();
+  await issueEditor.getByText("没有匹配项", { exact: true }).waitFor();
+  // A body-level live region is inert behind showModal(), even when its DOM text is correct.
+  const assertModalStatus = async (selector, text) => {
+    await issueEditor.locator(selector).filter({ hasText: text }).waitFor({ state: "attached" });
+    const session = await page.context().newCDPSession(page);
+    try {
+      const { root } = await session.send("DOM.getDocument");
+      const { nodeId } = await session.send("DOM.querySelector", { nodeId: root.nodeId, selector: `dialog[open] ${selector}` });
+      const {
+        nodes: [node],
+      } = await session.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+      assert.equal(node.ignored, false, "Chromium must expose the status inside the active dialog");
+      assert.equal(node.role.value, "status");
+      assert.ok(node.properties.some((p) => p.name === "live" && p.value.value === "polite"));
+    } finally {
+      await session.detach();
+    }
+  };
+  await ccFilter.fill("@");
+  await assertModalStatus("[data-slot='select-status']", /^找到 1 项$/);
   await ccFilter.fill("");
   const firstCc = ccList.getByRole("option").first();
   await firstCc.waitFor();
+  const popupGap = await ccList.evaluate((list) => list.closest(".ui-select-popup").getBoundingClientRect().bottom - list.getBoundingClientRect().bottom);
+  assert.ok(popupGap >= 0 && popupGap <= 6, `nonempty select must not reserve an empty message row (gap ${popupGap}px)`);
   assert.equal(await firstCc.getAttribute("aria-selected"), "false");
   for (const ime of [{ isComposing: true }, { keyCode: 229 }]) {
     const handled = await ccFilter.evaluate((input, init) => !input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })), ime);
@@ -228,6 +260,12 @@ try {
   await ccList.waitFor({ state: "hidden" });
   assert.ok(await isFocused(cc), "Escape closes only the searchable dropdown and restores its trigger");
   assert.equal(await issueTitle.inputValue(), "Unsaved native dialog draft");
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), issueEditor.getByRole("button", { name: "添加附件" }).click()]);
+  await chooser.setFiles({ name: "sdk-picker.txt", mimeType: "text/plain", buffer: Buffer.from("fixture") });
+  await assertModalStatus(".attachment-picker-header [role='status']", /附件\s*1\s*个/);
+  await issueEditor.getByRole("button", { name: "移除sdk-picker.txt" }).click();
+  await issueEditor.getByText("sdk-picker.txt", { exact: true }).waitFor({ state: "hidden" });
+  await assertModalStatus(".attachment-picker-header [role='status']", /附件\s*0\s*个/);
   const descriptionInput = issueEditor.getByRole("textbox", { name: "编辑工单描述", exact: true });
   const descriptionHeight = () => descriptionInput.evaluate((input) => input.clientHeight);
   await descriptionInput.fill("");
@@ -262,7 +300,26 @@ try {
   await issueEditor.waitFor({ state: "hidden" });
   assert.equal(await editOpener.evaluate((button) => button === document.activeElement), true);
   await page.getByRole("button", { name: "浏览工单代码", exact: true }).click();
-  await page.getByRole("button", { name: "文件", exact: true }).click();
+  const sourceToolbar = page.getByRole("toolbar", { name: "代码视图" });
+  const fileTab = sourceToolbar.getByRole("button", { name: "文件", exact: true });
+  await fileTab.click();
+  await fileTab.press("ArrowRight");
+  assert.ok(await isFocused(sourceToolbar.getByRole("button", { name: "搜索", exact: true })), "toolbar arrows move focus without changing the open source view");
+  assert.equal(await fileTab.getAttribute("aria-pressed"), "true");
+  const actionsTrigger = page.getByRole("button", { name: "文件操作", exact: true });
+  await actionsTrigger.press("ArrowDown");
+  const fileMenu = page.getByRole("menu", { name: "文件操作", exact: true });
+  await fileMenu.getByRole("menuitem", { name: "新建文件" }).waitFor();
+  await page.keyboard.press("Escape");
+  await fileMenu.waitFor({ state: "hidden" });
+  assert.ok(await isFocused(actionsTrigger), "dismissing the file menu restores focus without executing an action");
+  await actionsTrigger.click();
+  await fileMenu.getByRole("menuitem", { name: "新建文件" }).click();
+  const createPathDialog = page.getByRole("dialog", { name: "新建文件", exact: true });
+  const pathDraft = createPathDialog.getByLabel("文件操作路径");
+  await page.waitForFunction((input) => input === document.activeElement, await pathDraft.elementHandle());
+  await page.keyboard.press("Escape");
+  await createPathDialog.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "sample.json", exact: true }).click();
   const editor = page.getByRole("textbox", { name: "代码内容 sample.json", exact: true });
   await editor.waitFor();
@@ -289,6 +346,13 @@ try {
   await page.getByLabel("文件保存状态", { exact: true }).filter({ hasText: "已保存" }).waitFor();
   assert.match(await readFile(path.join(checkout, "sample.json"), "utf8"), /edited 订单/);
   await page.getByRole("button", { name: "变更", exact: true }).click();
+  const historyRow = page.getByRole("button", { name: "Initial fixture, Fixture", exact: true });
+  await historyRow.hover();
+  const commitCard = page.getByRole("group", { name: "提交信息" });
+  await commitCard.getByRole("button", { name: "复制提交号" }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), commit);
+  await page.keyboard.press("Escape");
+  await commitCard.waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "查看差异 sample.json", exact: true }).click();
   await page.getByRole("region", { name: "代码差异", exact: true }).waitFor();
   await page.locator(".source-diff-summary .added").filter({ hasText: "+2" }).waitFor();
@@ -1669,6 +1733,8 @@ try {
         ],
         issue: issue.key,
         checks: [
+          "Home and End activate and focus the first and last workbench views",
+          "Chromium exposes Chinese search-result and attachment counts inside the active modal",
           "real HTTP and SQLite",
           "isolated Git worktree",
           "search keyboard navigation, focus restoration, IME guards and one POST per explicit search",

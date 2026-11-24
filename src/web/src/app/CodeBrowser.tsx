@@ -1,4 +1,7 @@
 import "./code-browser.css";
+import { Toolbar, ToolbarButton } from "@ui-sdk/solid/toolbar";
+import { Toggle } from "@ui-sdk/solid/toggle";
+import { Menu, MenuTrigger, MenuContent, MenuItem } from "@ui-sdk/solid/menu";
 import { createEffect, createMemo, createSignal, For, lazy, onCleanup, Show, untrack } from "solid-js";
 import { AsyncBoundary, Button, Input, Modal } from "../ui";
 import { Code2, File, GitBranch, PanelBottom, PanelRight, Search, X, Plus, Pencil, Trash2 } from "../ui/icons";
@@ -7,7 +10,7 @@ import { sharedConfig } from "../../../../issue-pilot.config.ts";
 import { sourceLanguageName } from "./source-language";
 import { sourceIndentation } from "./source-editor-settings";
 import { EditorFileIcon } from "./EditorIcons";
-import { Portal } from "@solidjs/web";
+import { createHoverCardController, HoverCard, HoverCardContent, HoverCardTrigger } from "@ui-sdk/solid/hover-card";
 import { copyText } from "../ui/clipboard";
 import { localDateTime, relativeTime } from "./model";
 import watermark from "./editor-watermark.svg";
@@ -46,6 +49,46 @@ import { errorText } from "./error-text";
 
 const SourceText = lazy(async () => ({ default: (await import("./SourceText")).SourceText }));
 const SourceDiff = lazy(async () => ({ default: (await import("./SourceDiff")).SourceDiff }));
+
+function CommitCardBody(props: { commit: SourceCommit }) {
+  const [notice, setNotice] = createSignal("", { name: "commitCopyNotice" });
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+  });
+  const copy = async (full: boolean) => {
+    const commit = props.commit;
+    try {
+      await copyText(full ? `${commit.hash}\n${commit.author}\n${localDateTime(commit.date)}\n\n${commit.subject}` : commit.hash);
+      if (!disposed) setNotice("已复制");
+    } catch {
+      if (!disposed) setNotice("复制失败，请选择文字后按 Ctrl+C");
+    }
+  };
+  return (
+    <>
+      <header>
+        <Codicon name="account" />
+        <strong>{props.commit.author}</strong>
+        <time>{localDateTime(props.commit.date)}</time>
+      </header>
+      <p>{props.commit.subject}</p>
+      <div class="source-commit-hash">
+        <Codicon name="git-commit" />
+        <code>{props.commit.hash}</code>
+      </div>
+      <footer>
+        <Button size="small" onClick={() => void copy(false)}>
+          复制提交号
+        </Button>
+        <Button size="small" onClick={() => void copy(true)}>
+          复制提交信息
+        </Button>
+        <span role="status">{notice()}</span>
+      </footer>
+    </>
+  );
+}
 
 function SourceStatusIcon(props: { status: SourceCommitFile["status"]; untracked: boolean }) {
   const letter = () => (props.untracked ? "U" : { added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C" }[props.status]);
@@ -280,31 +323,7 @@ export default function CodeBrowser(props: {
   const [historyCursor, setHistoryCursor] = createSignal<SourceHistoryCursor | null>(null, { ownedWrite: true });
   const [historyLoading, setHistoryLoading] = createSignal(false, { ownedWrite: true });
   const graphs = createMemo(() => historyGraph(commits()));
-  const [commitHover, setCommitHover] = createSignal<{ commit: SourceCommit; left: number; top: number } | null>(null, { ownedWrite: true });
-  const [copyStatus, setCopyStatus] = createSignal("", { ownedWrite: true });
-  let hoverTimer: ReturnType<typeof setTimeout> | undefined;
-  const cancelHoverHide = () => clearTimeout(hoverTimer);
-  const hideCommitHover = () => {
-    cancelHoverHide();
-    hoverTimer = setTimeout(() => setCommitHover(null), 200);
-  };
-  const showCommitHover = (commit: SourceCommit, element: HTMLElement) => {
-    cancelHoverHide();
-    setCopyStatus("");
-    const rect = element.getBoundingClientRect(),
-      width = Math.min(440, window.innerWidth - 16);
-    setCommitHover({ commit, left: Math.max(8, Math.min(rect.right + 8, window.innerWidth - width - 8)), top: Math.max(8, Math.min(rect.top, window.innerHeight - 240)) });
-  };
-  const copyCommit = async (commit: SourceCommit, detail: boolean) => {
-    const owner = commitHover();
-    try {
-      await copyText(detail ? `${commit.hash}\n${commit.author}\n${localDateTime(commit.date)}\n\n${commit.subject}` : commit.hash);
-      if (commitHover() === owner) setCopyStatus("已复制");
-    } catch {
-      if (commitHover() === owner) setCopyStatus("复制失败，请选择文字后按 Ctrl+C");
-    }
-  };
-  onCleanup(cancelHoverHide);
+  const commitCard = createHoverCardController<SourceCommit>();
   const [commitFiles, setCommitFiles] = createSignal<Record<string, SourceCommitFile[]>>({}, { ownedWrite: true });
   const [historySelection, setHistorySelection] = createSignal("", { ownedWrite: true });
   const [message, setMessage] = createSignal("", { ownedWrite: true });
@@ -348,8 +367,6 @@ export default function CodeBrowser(props: {
   let comparisonToolbar!: HTMLDivElement;
   // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
   let rootElement: HTMLElement | undefined;
-  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns this binding through the JSX ref attribute.
-  let fileActions: HTMLDetailsElement | undefined;
   const panelRange = (panel: SourcePanel) => {
     const root = rootElement?.getBoundingClientRect();
     if (!root) return { current: 0, minimum: 0, maximum: 0 };
@@ -449,7 +466,7 @@ export default function CodeBrowser(props: {
       historyController?.abort();
       setHistoryLoading(false);
       setSearching(false);
-      setCommitHover(null);
+      commitCard.close();
       const request = new AbortController();
       repositoryController = request;
       const owner = ++scope;
@@ -587,7 +604,7 @@ export default function CodeBrowser(props: {
     historyController?.abort();
     setCommitFiles({});
     setHistorySelection("");
-    setCommitHover(null);
+    commitCard.close();
     setError("");
     panelController?.abort();
     searchController?.abort();
@@ -803,8 +820,7 @@ export default function CodeBrowser(props: {
   createEffect(
     () => view(),
     (value) => {
-      cancelHoverHide();
-      setCommitHover(null);
+      commitCard.close();
       if (value === "search")
         queueMicrotask(() => {
           if (rootElement?.isConnected && view() === "search") rootElement.querySelector<HTMLInputElement>('[aria-label="代码搜索文字"]')?.focus();
@@ -956,12 +972,12 @@ export default function CodeBrowser(props: {
     const value = blame();
     return value ? (value.commit ? `${value.author} · ${relativeTime(value.date!)} · ${value.subject}` : value.subject) : blameStatus();
   };
-  const showBlameHover = (element: HTMLElement) => {
+  const blameCommit = createMemo<SourceCommit | undefined>(() => {
     const value = blame();
-    if (value?.commit && value.date) showCommitHover({ hash: value.commit, shortHash: value.shortCommit!, parents: [], author: value.author, date: value.date, subject: value.subject }, element);
-  };
+    if (value?.commit && value.shortCommit && value.date && file() && !comparison())
+      return { hash: value.commit, shortHash: value.shortCommit, parents: [], author: value.author, date: value.date, subject: value.subject };
+  });
   const openAction = (kind: PathAction["kind"]) => {
-    if (fileActions) fileActions.open = false;
     const target = selected();
     setError("");
     setAction({ kind, ...target, repository: target.repository || repository() });
@@ -1072,13 +1088,12 @@ export default function CodeBrowser(props: {
           <strong>代码</strong>
           <small>{props.issueKey}</small>
         </div>
-        <div class="source-view-switcher" role="toolbar" aria-label="代码视图">
+        <Toolbar class="source-view-switcher" aria-label="代码视图" loop>
           <For each={views}>
             {(item) => (
-              <Button
-                type="text"
-                shape="circle"
-                icon={<item.icon size={16} />}
+              <ToolbarButton
+                class="ui-button ui-button-circle"
+                data-variant="text"
                 aria-label={item.label}
                 title={item.title}
                 aria-pressed={view() === item.value ? "true" : "false"}
@@ -1086,12 +1101,18 @@ export default function CodeBrowser(props: {
                   setView(item.value);
                   void loadPanel(item.value);
                 }}
-              />
+              >
+                <item.icon size={16} />
+              </ToolbarButton>
             )}
           </For>
-        </div>
-        <Button type="text" shape="circle" icon={<PanelBottom size={16} />} aria-label="Agent面板" aria-pressed={props.agentOpen ? "true" : "false"} onClick={props.onToggleAgent} />
-        <Button type="text" shape="circle" icon={<PanelRight size={16} />} aria-label="工单详情" aria-pressed={props.detailsOpen ? "true" : "false"} onClick={props.onToggleDetails} />
+        </Toolbar>
+        <Toggle class="ui-button ui-button-circle" data-variant="text" aria-label="Agent面板" pressed={props.agentOpen} onPressedChange={props.onToggleAgent}>
+          <PanelBottom size={16} />
+        </Toggle>
+        <Toggle class="ui-button ui-button-circle" data-variant="text" aria-label="工单详情" pressed={props.detailsOpen} onPressedChange={props.onToggleDetails}>
+          <PanelRight size={16} />
+        </Toggle>
         <Button
           type="text"
           shape="circle"
@@ -1144,25 +1165,28 @@ export default function CodeBrowser(props: {
             </div>
           </Show>
           <Show when={view() === "files"}>
-            <details ref={fileActions} class="source-path-actions">
-              <summary aria-label="文件操作" title="File actions">
+            <Menu>
+              <MenuTrigger class="source-path-actions" aria-label="文件操作" title="File actions">
                 …
-              </summary>
-              <div>
-                <Button size="small" icon={<Plus size={13} />} disabled={!pathWritable() || busy()} onClick={() => openAction("file")}>
+              </MenuTrigger>
+              <MenuContent class="source-path-menu" align="end">
+                <MenuItem value="file" disabled={!pathWritable() || busy()} onSelect={() => openAction("file")}>
+                  <Plus size={13} />
                   新建文件
-                </Button>
-                <Button size="small" disabled={!pathWritable() || busy()} onClick={() => openAction("directory")}>
+                </MenuItem>
+                <MenuItem value="directory" disabled={!pathWritable() || busy()} onSelect={() => openAction("directory")}>
                   新建目录
-                </Button>
-                <Button size="small" icon={<Pencil size={13} />} disabled={!pathWritable() || busy() || !selected().path} onClick={() => openAction("rename")}>
+                </MenuItem>
+                <MenuItem value="rename" disabled={!pathWritable() || busy() || !selected().path} onSelect={() => openAction("rename")}>
+                  <Pencil size={13} />
                   重命名
-                </Button>
-                <Button size="small" icon={<Trash2 size={13} />} danger disabled={!pathWritable() || busy() || !selected().path} onClick={() => openAction("delete")}>
+                </MenuItem>
+                <MenuItem value="delete" class="source-delete-action" disabled={!pathWritable() || busy() || !selected().path} onSelect={() => openAction("delete")}>
+                  <Trash2 size={13} />
                   删除
-                </Button>
-              </div>
-            </details>
+                </MenuItem>
+              </MenuContent>
+            </Menu>
             <For each={repositories()} keyed={(row) => row.name}>
               {(row) => {
                 const [expanded, setExpanded] = createSignal(true, { ownedWrite: true });
@@ -1212,7 +1236,7 @@ export default function CodeBrowser(props: {
               }}
             >
               <div class="source-search-input">
-                <Input aria-label="代码搜索文字" placeholder="Search" value={query()} onInput={(event) => setQuery(event.currentTarget.value)} />
+                <Input aria-label="代码搜索文字" placeholder="Search" value={query()} onValueChange={setQuery} />
                 <div class="source-search-options">
                   <Button
                     type="text"
@@ -1358,7 +1382,7 @@ export default function CodeBrowser(props: {
                     placeholder="中文提交说明（Ctrl+Enter 提交）"
                     value={message()}
                     disabled={busy()}
-                    onInput={(event) => setMessage(event.currentTarget.value)}
+                    onValueChange={setMessage}
                     onKeyDown={(event) => {
                       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") commit(event);
                     }}
@@ -1476,15 +1500,13 @@ export default function CodeBrowser(props: {
                   {(commit, index) => (
                     <div class={`source-history-commit${historySelection().startsWith(commit.hash) ? " active" : ""}`}>
                       <div class={`source-history-row${historySelection() === commit.hash ? " selected" : ""}`}>
-                        <button
+                        <HoverCardTrigger
+                          controller={commitCard}
+                          payload={commit}
+                          render={(attrs) => <button {...attrs} type="button" />}
                           class="source-history-select"
                           aria-label={`${commit.subject}, ${commit.author}`}
                           aria-expanded={commitFiles()[commit.hash] ? "true" : "false"}
-                          onMouseEnter={(event) => showCommitHover(commit, event.currentTarget)}
-                          onMouseLeave={hideCommitHover}
-                          // Keyboard users reach the same card (and its copy buttons) by focusing the row.
-                          onFocus={(event) => showCommitHover(commit, event.currentTarget)}
-                          onBlur={hideCommitHover}
                           onClick={() => {
                             void historyFiles(commit.hash);
                           }}
@@ -1500,7 +1522,7 @@ export default function CodeBrowser(props: {
                               <span>{currentRepository()?.branch}</span>
                             </span>
                           </Show>
-                        </button>
+                        </HoverCardTrigger>
                         <Button
                           class="source-history-action"
                           type="text"
@@ -1712,9 +1734,21 @@ export default function CodeBrowser(props: {
         <div class="source-status-left">
           <Codicon name="vm-outline" size={14} />
           <span>{repository()}</span>
-          <span class="source-status-blame" aria-label="当前行归属" onMouseEnter={(event) => showBlameHover(event.currentTarget)} onMouseLeave={hideCommitHover}>
-            <Show when={file() && !comparison()}>{blameLabel()}</Show>
-          </span>
+          <Show
+            when={blameCommit()}
+            keyed
+            fallback={
+              <span class="source-status-blame" aria-label="当前行归属">
+                {file() && !comparison() ? blameLabel() : ""}
+              </span>
+            }
+          >
+            {(commit) => (
+              <HoverCardTrigger controller={commitCard} payload={commit} class="source-status-blame" aria-label="当前行归属" render={(attrs) => <span {...attrs} tabindex={0} />}>
+                {blameLabel()}
+              </HoverCardTrigger>
+            )}
+          </Show>
         </div>
         <div>
           <Show when={activePath()}>
@@ -1735,57 +1769,15 @@ export default function CodeBrowser(props: {
           </Show>
         </div>
       </footer>
-      <Show when={commitHover()}>
-        {(hover) => (
-          <Portal>
-            <div
-              class="source-commit-hover"
-              role="tooltip"
-              aria-label="提交信息"
-              style={{ left: `${hover().left}px`, top: `${hover().top}px` }}
-              onMouseEnter={cancelHoverHide}
-              onMouseLeave={hideCommitHover}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setCommitHover(null);
-              }}
-            >
-              <header>
-                <Codicon name="account" />
-                <strong>{hover().commit.author}</strong>
-                <time>{localDateTime(hover().commit.date)}</time>
-              </header>
-              <p>{hover().commit.subject}</p>
-              <div class="source-commit-hash">
-                <Codicon name="git-commit" />
-                <code>{hover().commit.hash}</code>
-              </div>
-              <footer>
-                <Button
-                  size="small"
-                  onFocus={cancelHoverHide}
-                  onBlur={hideCommitHover}
-                  onClick={() => {
-                    void copyCommit(hover().commit, false);
-                  }}
-                >
-                  复制提交号
-                </Button>
-                <Button
-                  size="small"
-                  onFocus={cancelHoverHide}
-                  onBlur={hideCommitHover}
-                  onClick={() => {
-                    void copyCommit(hover().commit, true);
-                  }}
-                >
-                  复制提交信息
-                </Button>
-                <span role="status">{copyStatus()}</span>
-              </footer>
-            </div>
-          </Portal>
-        )}
-      </Show>
+      <HoverCard controller={commitCard} delay={0} closeDelay={200}>
+        <HoverCardContent<SourceCommit> class="source-commit-hover" role="group" aria-label="提交信息" side="right" align="start" sideOffset={8} collisionPadding={8}>
+          {(state) => (
+            <Show when={state.payload} keyed>
+              {(commit) => <CommitCardBody commit={commit} />}
+            </Show>
+          )}
+        </HoverCardContent>
+      </HoverCard>
       <PanelResizeHandle name="调整左侧宽度" class="source-resize-navigation" orientation="vertical" range={() => panelRange("navigation")} onResize={(size) => props.onResize?.("navigation", size)} />
       <Show when={props.detailsOpen}>
         <PanelResizeHandle
@@ -1849,7 +1841,7 @@ export default function CodeBrowser(props: {
             </div>
           }
         >
-          <Input aria-label="转到文件路径" value={pickerPath()} onInput={(event) => setPickerPath(event.currentTarget.value)} placeholder="相对仓库路径，如 src/main.ts" />
+          <Input aria-label="转到文件路径" value={pickerPath()} onValueChange={setPickerPath} placeholder="相对仓库路径，如 src/main.ts" />
         </Show>
       </Modal>
       <Modal
@@ -1871,7 +1863,7 @@ export default function CodeBrowser(props: {
           fallback={
             <label>
               相对仓库路径
-              <Input aria-label="文件操作路径" value={pathDraft()} onInput={(event) => setPathDraft(event.currentTarget.value)} />
+              <Input aria-label="文件操作路径" value={pathDraft()} onValueChange={setPathDraft} />
             </label>
           }
         >

@@ -167,7 +167,7 @@ export function ModelCredentialDialog(props: {
               aria-label="API Key"
               value={apiKey()}
               placeholder={keyPreserved() ? "留空保留原值" : props.keyConfigured ? "更换 provider 需填写新的 API Key" : ""}
-              onInput={(event) => setApiKey(event.currentTarget.value)}
+              onValueChange={setApiKey}
             />
           </label>
         </Show>

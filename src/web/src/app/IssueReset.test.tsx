@@ -116,6 +116,8 @@ it("preserves drafts and does not reset when saving fails", async () => {
   expect(within(dialog).getByLabelText("编辑工单标题")).toHaveProperty("value", "保留草稿");
 });
 
+const uploadInput = (dialog: HTMLElement) => within(dialog).getByRole("group", { name: "编辑工单选择附件" }).querySelector<HTMLInputElement>('input[type="file"]')!;
+
 it("keeps the editor version across background refresh and preserves a conflicted draft until explicit reload", async () => {
   const latest = { ...issue, title: "Another editor's title", editVersion: "b".repeat(64) };
   const [current, setCurrent] = createSignal(issue, { ownedWrite: true });
@@ -126,7 +128,7 @@ it("keeps the editor version across background refresh and preserves a conflicte
   const dialog = await screen.findByRole("dialog", { name: "编辑工单" });
   fireEvent.input(within(dialog).getByLabelText("编辑工单标题"), { target: { value: "My draft" } });
   const file = new File(["draft evidence"], "draft.txt", { type: "text/plain" });
-  await fireEvent.change(within(dialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
+  await fireEvent.change(uploadInput(dialog), { target: { files: [file] } });
   setCurrent(latest);
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("工单已被修改");
@@ -149,7 +151,7 @@ it("preserves uploads and allows the unchanged edit to retry after atomic reset 
   const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}),
     dialog = await open(updated);
   const file = new File(["content"], "evidence.txt", { type: "text/plain" });
-  await fireEvent.change(within(dialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
+  await fireEvent.change(uploadInput(dialog), { target: { files: [file] } });
   fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
   expect((await within(dialog).findByRole("alert")).textContent).toContain("reset_failed");
   expect(within(dialog).getByText("evidence.txt")).toBeTruthy();
@@ -242,7 +244,7 @@ for (const change of ["identity", "issue"] as const)
         fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
         const currentDialog = await screen.findByRole("dialog", { name: "编辑工单" });
         const file = new File(["new content"], "new-evidence.txt", { type: "text/plain" });
-        await fireEvent.change(within(currentDialog).getByLabelText("编辑工单选择附件"), { target: { files: [file] } });
+        await fireEvent.change(uploadInput(currentDialog), { target: { files: [file] } });
         fireEvent.click(within(currentDialog).getByRole("button", { name: "移除existing.txt" }));
         await waitFor(() => expect(within(currentDialog).queryByRole("button", { name: "移除existing.txt" })).toBeNull());
 

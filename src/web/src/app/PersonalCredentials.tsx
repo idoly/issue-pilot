@@ -1,5 +1,5 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
-import { Button, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
+import { Button, Checkbox, Input, PasswordInput, Modal, Skeleton, Tag, TextArea } from "../ui";
 import { createLatestTask } from "../data/latest";
 import { hasAdministratorAccess, hasPersonalGitIdentity } from "../../../domain/contracts";
 import {
@@ -127,7 +127,7 @@ export function PersonalCredentials() {
   const targetSwitch = (group: Group | null) => (
     <Show when={isAdmin() && group && sharedGroups.includes(group)}>
       <label class="settings-checkbox">
-        <input type="checkbox" checked={shared()} disabled={saving() || !canEditPersonal(group!)} onChange={(event) => switchTarget(event.currentTarget.checked)} />
+        <Checkbox checked={shared()} disabled={saving() || !canEditPersonal(group!)} onChange={switchTarget} />
         共享凭证（影响所有未配置个人凭证的人）
       </label>
     </Show>
@@ -328,34 +328,22 @@ export function PersonalCredentials() {
             <Show when={selected() === "dms"}>
               <label>
                 <span>DMS 地址</span>
-                <Input aria-label="DMS 地址" value={url()} onInput={(event) => setUrl(event.currentTarget.value)} />
+                <Input aria-label="DMS 地址" value={url()} onValueChange={setUrl} />
               </label>
             </Show>
             <Show when={selected() === "sls"}>
               <label>
                 <span>AccessKey ID</span>
-                <PasswordInput
-                  aria-label="AccessKey ID"
-                  value={accessKeyId()}
-                  placeholder={selected() && targetConfigured(selected()!) ? "留空保留原值" : ""}
-                  onInput={(event) => setAccessKeyId(event.currentTarget.value)}
-                />
+                <PasswordInput aria-label="AccessKey ID" value={accessKeyId()} placeholder={selected() && targetConfigured(selected()!) ? "留空保留原值" : ""} onValueChange={setAccessKeyId} />
               </label>
             </Show>
             <label>
               <span>{selected() === "git" ? "SSH 私钥" : selected() === "dms" ? "Authorization" : "AccessKey Secret"}</span>
               <Show
                 when={selected() === "git"}
-                fallback={
-                  <PasswordInput
-                    aria-label="新凭证"
-                    value={secret()}
-                    placeholder={selected() && targetConfigured(selected()!) ? "留空保留原值" : ""}
-                    onInput={(event) => setSecret(event.currentTarget.value)}
-                  />
-                }
+                fallback={<PasswordInput aria-label="新凭证" value={secret()} placeholder={selected() && targetConfigured(selected()!) ? "留空保留原值" : ""} onValueChange={setSecret} />}
               >
-                <TextArea aria-label="SSH 私钥" value={secret()} placeholder="留空保留原值" onInput={(event) => setSecret(event.currentTarget.value)} autoSize={{ minRows: 5, maxRows: 10 }} />
+                <TextArea data-agent-secret="" aria-label="SSH 私钥" value={secret()} placeholder="留空保留原值" onValueChange={setSecret} autoSize={{ minRows: 5, maxRows: 10 }} />
               </Show>
             </label>
             <Show when={selected() && targetConfigured(selected()!)}>
