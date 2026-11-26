@@ -112,10 +112,14 @@ else:
     await assert.rejects(run("start-fails"), /failed process did not stop/);
     assert.equal(await readFile(trace, "utf8"), "stop old old runner=old\nstop old old runner=old\nstart new new runner=new\nstop new new runner=new\n");
     assert.match(await readFile(path.join(live, "src/web/dist/index.html"), "utf8"), /newABCDE/);
-    assert.match(await readFile(path.join(live, "src/web/dist/index.previous.html"), "utf8"), /oldABCDE/);
+    const retiredBundle = path.join(live, "src/web/dist/assets/index-oldABCDE.js");
+    assert.equal(await readFile(retiredBundle, "utf8"), "old"); // No prune on failure.
+    for (const metadata of ["index.previous.html", ".vite/manifest.previous.json"]) await assert.rejects(readFile(path.join(live, "src/web/dist", metadata)), { code: "ENOENT" });
 
     assert.match((await run("ok")).stdout, /release complete/);
-    assert.match(await readFile(path.join(live, "src/web/dist/index.previous.html"), "utf8"), /oldABCDE/);
+    await assert.rejects(readFile(retiredBundle), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(live, "src/web/dist/assets/index-newABCDE.js"), "utf8"), "new");
+    assert.match((await run("ok")).stdout, /Would remove 0 files/);
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }

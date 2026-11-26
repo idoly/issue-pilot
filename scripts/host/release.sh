@@ -240,16 +240,14 @@ PY
   echo "Checkpoint: $checkpoint"
 fi
 
-# 7. Switch the checkout and Web after shutdown. Rerunning with the same build must not rotate again.
+# 7. Switch the checkout and Web after shutdown. Publish assets before their entry points.
 [[ $(git -C "$root" rev-parse HEAD) == "$previous" ]] || fail "Live HEAD changed during release."
 [[ -z $(git -C "$root" status --porcelain) ]] || fail "Live checkout changed during release."
 git -C "$root" merge --ff-only "$head"
 [[ $(git -C "$root" rev-parse HEAD) == "$head" ]] || fail "Live HEAD did not reach the candidate."
 if cmp -s "$build/index.html" "$web_root/index.html" && cmp -s "$build/.vite/manifest.json" "$web_root/.vite/manifest.json"; then
-  echo "Web generation already matches the build; skipping rotation."
+  echo "Web entry and manifest already match the build."
 else
-  cp -p "$web_root/index.html" "$web_root/index.previous.html"
-  cp -p "$web_root/.vite/manifest.json" "$web_root/.vite/manifest.previous.json"
   mkdir -p "$web_root/assets"
   cp -rp "$build/assets/." "$web_root/assets/"
   cp -p "$build/.vite/manifest.json" "$web_root/.vite/manifest.json.tmp"
@@ -274,10 +272,10 @@ curl -fsS --max-time 10 "$base_url/health" || fail "Health endpoint did not conf
 echo
 "$python_bin" "$runner" --root "$root" --node "$node_bin" status
 
-# 9. Prune bundles that neither generation references; never pipe output (EPIPE aborts deletion).
+# 9. Prune retired outputs only after health succeeds; never pipe output (EPIPE aborts deletion).
 "$node_bin" "$root/scripts/prune-web-assets.ts" "$web_root" >"$work/prune-dry-run.txt"
 sed -n '1p' "$work/prune-dry-run.txt"
 "$node_bin" "$root/scripts/prune-web-assets.ts" "$web_root" --apply >"$work/prune-applied.txt"
 sed -n '1p' "$work/prune-applied.txt"
-echo "Both Web generations are intact; release complete at revision $head."
+echo "Current Web build verified; release complete at revision $head."
 success=1
