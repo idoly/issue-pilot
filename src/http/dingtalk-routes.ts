@@ -10,10 +10,12 @@ import { DingtalkError, dingtalkIssueRecord, dingtalkAttachments, parseDingtalkT
 import type { DingtalkImportResponse, DingtalkSourceResponse } from "../mcp/dingtalk-contracts.ts";
 import { downloadDingtalkAttachments } from "./dingtalk-attachments.ts";
 import { choice, closedRecord, text } from "../domain/input.ts";
-import type { IssueCreationScopeResolver, IssueCreator } from "./issue-routes.ts";
+import { createIssue, resolveCreationScope } from "../issues/create-command.ts";
+import { IssueCreatedError } from "../issues/creation-receipt.ts";
+import { errorChain, errorCode } from "../diagnostics.ts";
 import { authorizeWorkMode, requireCurrentUser, serializePerson, type ApiRouteContext } from "./route-context.ts";
 
-export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: IssueCreator, resolveCreationScope: IssueCreationScopeResolver, connect: McpConnector = connectMcp): void {
+export function registerDingtalkRoutes(context: ApiRouteContext, connect: McpConnector = connectMcp, now = () => new Date()): void {
   const { app, database, runScopeExclusive, stateRoot } = context;
   const handle =
     <T>(operation: (request: FastifyRequest, signal: AbortSignal) => Promise<T>) =>
@@ -31,6 +33,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
       } catch (error) {
         // A cancellation must not hide incomplete cleanup of the response or staged files.
         if (error instanceof Error && ["dingtalk_attachment_cleanup_failed", "dingtalk_connection_close_failed"].includes(error.message)) throw error;
+        if (errorChain(error).some((cause) => cause instanceof IssueCreatedError)) throw error;
         if (signal.aborted) throw new DomainError("dingtalk_request_cancelled_or_timed_out", "timeout");
         throw error;
       } finally {
@@ -112,7 +115,7 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
         if (!data.creatable) throw new DomainError("dingtalk_record_invalid", "bad_request");
         const manualMatches = await runScopeExclusive(async () => {
           await authorizeWorkMode(database, request, workMode);
-          const scope = await resolveCreationScope(workMode, serviceKey);
+          const scope = await resolveCreationScope(database.db, workMode, serviceKey);
           // Only hand-created Issues match by title; an Issue imported from another record belongs to that record.
           return database.db
             .select({ key: issues.key, assigneeSubject: issues.assigneeSubject })
@@ -134,12 +137,24 @@ export function registerDingtalkRoutes(context: ApiRouteContext, createIssue: Is
           signal.throwIfAborted();
           const pending = await downloadDingtalkAttachments(stateRoot, dingtalkAttachments(row, columns.attachments), signal);
           const created = await createIssue(
+            context,
             { title: data.title, description: `${data.description}\n\n钉钉来源：${table.url}`, priority, workMode, serviceKey, assigneeSubject, ccSubjects: [] },
-            request,
-            pending,
-            { dingtalk: { baseId: table.baseId, tableId: table.tableId, recordId: table.recordId, sourceUrl: table.url }, startAgent: input.startAgent === true, signal },
+            {
+              authorize: (mode) => authorizeWorkMode(database, request, mode),
+              attachments: pending,
+              now,
+              onCleanupError: (error) => request.log.error({ code: errorCode(error) }, "attachment_staging_cleanup_failed"),
+              dingtalk: { baseId: table.baseId, tableId: table.tableId, recordId: table.recordId, sourceUrl: table.url },
+              startAgent: input.startAgent === true,
+              signal,
+            },
           );
-          outcome = await result(created.created ? "created" : "existing", created.issue.id, created.issue.assigneeSubject ?? assigneeSubject);
+          try {
+            outcome = await result(created.created ? "created" : "existing", created.issue.key, created.issue.assigneeSubject);
+          } catch (cause) {
+            if (created.created) throw new IssueCreatedError("issue_created_summary_unavailable", created.issue.key, { cause });
+            throw cause;
+          }
         }
       } catch (error) {
         failed = true;

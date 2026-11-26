@@ -6,7 +6,7 @@ import { test } from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { AgentEventBus, sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../../src/agent/events.ts";
+import { AgentEventBus, sessionTranscript, sessionTranscriptPage, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../../src/agent/events.ts";
 import { sessionFooterStats } from "../../src/agent/footer.ts";
 import { agentDisplayEvent } from "../../src/agent/event-display.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
@@ -653,7 +653,8 @@ test("keeps the visible active-branch transcript after context compaction", () =
     usage,
     timestamp: Date.now(),
   });
-  manager.appendCompaction("Earlier work summary", firstKept, 42_000);
+  manager.appendMessage({ role: "system", content: "Hidden checkpoint prompt", timestamp: Date.now() });
+  const compaction = manager.appendCompaction("Earlier work summary", firstKept, 42_000);
   assert.deepEqual(sessionFooterStats(manager, 20000, true, manager.buildSessionContext()), sessionFooterStats(manager, 20000, true));
 
   const transcript = sessionTranscript(manager, "issue-1");
@@ -667,6 +668,17 @@ test("keeps the visible active-branch transcript after context compaction", () =
   assert.equal(JSON.stringify(transcript).includes("Latest answer"), true);
   assert.equal(JSON.stringify(transcript).includes("Old internal prompt"), false);
   assert.equal(JSON.stringify(transcript).includes("Runtime-wrapped latest prompt"), false);
+  assert.equal(transcript.at(-1)?.id, `${compaction}:1`, "preserve the original index after hiding the checkpoint's system message");
+  for (const limit of [1, 2, transcript.length]) {
+    const paged: RunEvent[] = [];
+    let offset: number | null = 0;
+    do {
+      const page = sessionTranscriptPage(manager, "issue-1", offset, limit);
+      paged.push(...page.events);
+      offset = page.nextOffset;
+    } while (offset !== null);
+    assert.deepEqual(paged, transcript);
+  }
   const summary = transcript.at(-1)!.event;
   assert.ok("message" in summary && typeof summary.message === "object" && summary.message.role === "compactionSummary");
   if ("message" in summary && typeof summary.message === "object" && summary.message.role === "compactionSummary") assert.equal(summary.message.tokensBefore, 42_000);

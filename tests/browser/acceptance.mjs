@@ -92,6 +92,31 @@ try {
     : await chromium.launch(launchOptions);
   page = await browser.newPage({ viewport: { width: 1680, height: 1050 }, permissions: ["clipboard-read", "clipboard-write"] });
   page.setDefaultTimeout(15000);
+  // Exercise the Web's recovery from a known commit without creating a second Issue. The HTTP
+  // owner tests separately inject real enqueue/summary failures after the SQLite commit.
+  const receiptPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  try {
+    let posts = 0;
+    await receiptPage.route("**/api/issues", (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      posts++;
+      return route.fulfill({ status: 500, json: { error: "issue_created_summary_unavailable", outcome: "committed", issueKey: issue.key } });
+    });
+    await receiptPage.goto(`${origin}/?issue=${issue.key}`);
+    await receiptPage.getByRole("button", { name: "新建工单", exact: true }).click();
+    const form = receiptPage.getByRole("dialog", { name: "新建工单" });
+    await form.getByLabel("工单标题", { exact: true }).fill("Synthetic receipt fixture");
+    await form.getByRole("button", { name: "创建", exact: true }).click();
+    const receipt = receiptPage.getByRole("dialog", { name: "工单已创建" });
+    const [opened] = await Promise.all([receiptPage.waitForEvent("popup"), receipt.getByRole("link").click()]);
+    await opened.getByRole("heading", { name: issue.title, exact: true }).waitFor();
+    assert.equal(new URL(opened.url()).searchParams.get("issue"), issue.key);
+    await opened.close();
+    await receipt.getByRole("button", { name: "关闭", exact: true }).click();
+    assert.equal(posts, 1);
+  } finally {
+    await receiptPage.close();
+  }
   const failures = [];
   page.on("pageerror", (error) => failures.push(error.message));
   page.on("console", (message) => {
@@ -1733,6 +1758,7 @@ try {
         ],
         issue: issue.key,
         checks: [
+          "a committed creation receipt opens the recorded Issue without resubmitting",
           "Home and End activate and focus the first and last workbench views",
           "Chromium exposes Chinese search-result and attachment counts inside the active modal",
           "real HTTP and SQLite",

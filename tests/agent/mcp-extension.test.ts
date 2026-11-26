@@ -468,6 +468,29 @@ test("SDK exposes MCP resources through the native resource tools", async () => 
   }
 });
 
+test("long MCP resource and template lists retain their complete payload in private Issue work files", async () => {
+  const f = await fixture({ MCP_FIXTURE_RESOURCES: "1", MCP_FIXTURE_LARGE_LIST: "1" });
+  let managed: ManagedPiSession | undefined;
+  try {
+    f.faux.setResponses([fauxAssistantMessage("Connected.")]);
+    managed = await f.runtime.start(f.options);
+    await managed.prompt("Inspect the resource catalog.");
+    const context = managed.session.extensionRunner.createToolContext("catalog", undefined);
+    for (const name of ["list_mcp_resources", "list_mcp_resource_templates"]) {
+      const { result, isError } = await context.executeTool(name, {});
+      assert.equal(isError, false);
+      const saved = (result.details as { fullOutputPath?: string }).fullOutputPath;
+      assert.ok(saved && path.dirname(saved) === f.root, "the full list belongs to this Issue, not host temp");
+      assert.equal((await stat(saved)).mode & 0o777, 0o600);
+      assert.deepEqual(JSON.parse(await readFile(saved, "utf8")), result.structuredContent);
+      assert.ok(JSON.stringify(result.content).includes(saved));
+    }
+  } finally {
+    await managed?.stop();
+    await f.close();
+  }
+});
+
 test("rejects loader environment overrides before starting a stdio sandbox", async () => {
   const f = await fixture({ LD_PRELOAD: "./untrusted-loader.so" });
   try {

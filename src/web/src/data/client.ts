@@ -1,3 +1,5 @@
+import { readCreationReceipt } from "../../../issues/creation-receipt";
+import { parseIssueKey } from "../../../domain/contracts";
 import type { MutationOutcome } from "../../../operation-error";
 import type { IssueSearchHit } from "../../../search/contracts";
 export type { IssueSearchHit } from "../../../search/contracts";
@@ -213,16 +215,20 @@ export function setCurrentUserSubject(subject: string | null, remember = true): 
 
 export class RequestError extends Error {
   readonly outcome?: MutationOutcome;
-  constructor(code: string, outcome?: MutationOutcome) {
+  readonly status?: number;
+  constructor(code: string, outcome?: MutationOutcome, status?: number) {
     super(code);
     this.outcome = outcome;
+    this.status = status;
   }
 }
 
 async function requestError(response: Response): Promise<Error> {
   const body = (await response.json().catch(() => undefined)) as { error?: string; outcome?: unknown } | undefined;
+  const receipt = readCreationReceipt(body);
+  if (receipt) return receipt;
   const outcome = body?.outcome;
-  return new RequestError(body?.error ?? `request_failed:${response.status}`, outcome === "committed" || outcome === "not_committed" || outcome === "unknown" ? outcome : undefined);
+  return new RequestError(body?.error ?? `request_failed:${response.status}`, outcome === "committed" || outcome === "not_committed" || outcome === "unknown" ? outcome : undefined, response.status);
 }
 
 function requestHeaders(init?: HeadersInit): Headers {
@@ -488,12 +494,15 @@ export async function fetchAttachment(key: string, attachmentId: string, signal?
   return previewBlob(attachmentUrl(key, attachmentId), signal);
 }
 
-export function createIssue(input: IssueCreateInput, files: File[] = []): Promise<IssueExecutionItem> {
-  if (!files.length) return jsonRequest("/api/issues", "POST", input);
-  const form = new FormData();
-  form.append("issue", JSON.stringify(input));
-  appendFiles(form, files);
-  return request("/api/issues", { method: "POST", body: form });
+export async function createIssue(input: IssueCreateInput, files: File[] = []): Promise<IssueExecutionItem> {
+  const form = files.length ? new FormData() : undefined;
+  if (form) {
+    form.append("issue", JSON.stringify(input));
+    appendFiles(form, files);
+  }
+  const issue = await request<IssueExecutionItem>("/api/issues", { method: "POST", body: form ?? JSON.stringify(input) });
+  if (typeof issue?.id !== "string" || !parseIssueKey(issue.id)) throw new RequestError("issue_creation_unconfirmed", "unknown");
+  return issue;
 }
 export function updateIssue(
   key: string,

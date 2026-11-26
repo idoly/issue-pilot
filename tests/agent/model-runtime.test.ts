@@ -89,8 +89,9 @@ test("shares one offline Pi catalog refresh and lists every model of the Operato
       return { aborted: false, errors: new Map() };
     },
     // Availability depends on host authentication, which no longer selects candidates.
-    getModels() {
-      return [model("z-provider", "second"), model("built-in", "unlisted"), model("a-provider", "first")];
+    getModels(provider?: string) {
+      assert.ok(provider === "a-provider" || provider === "z-provider", "only enumerate configured providers");
+      return [model(provider, provider === "a-provider" ? "first" : "second"), model("built-in", "unlisted")];
     },
   } as unknown as ModelRuntime;
   const sharedRuntime: PiModelRuntime = {

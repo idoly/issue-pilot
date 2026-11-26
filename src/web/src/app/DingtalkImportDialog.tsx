@@ -10,6 +10,8 @@ import {
   type IssueWorkMode,
   type Person,
 } from "../data/client";
+import { IssueCreatedError } from "../../../issues/creation-receipt";
+import { creationNoticeText } from "./IssueCreationNotice";
 import { createLatestTask } from "../data/latest";
 import { useApplicationResources } from "./ApplicationResources";
 import { availableWorkModes, priorityOptions, servicesForWorkMode } from "./model";
@@ -118,7 +120,13 @@ export function DingtalkImportDialog(props: { user: Person; onClose: () => void;
         if (response.connectionCleanup !== "failed" && props.onOpenIssue(response.issueKey)) props.onClose();
       }
     } catch (error) {
-      if (current(task)) setError(message(error));
+      if (!current(task)) return;
+      if (error instanceof IssueCreatedError) {
+        setResults((rows) => [...rows.filter((row) => row.issueKey !== error.issueKey), { user: props.user, status: "created", issueKey: error.issueKey }]);
+        setUrl("");
+        setError(creationNoticeText(error));
+        props.onCreated();
+      } else setError(message(error));
     } finally {
       if (current(task)) setBusy("");
       task.finish();

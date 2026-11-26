@@ -1,49 +1,25 @@
 import { DomainError } from "../domain/errors.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { createIssueRecord, type DingtalkImportClaim } from "../issues/create.ts";
+import { createIssue } from "../issues/create-command.ts";
+import { IssueCreatedError } from "../issues/creation-receipt.ts";
+import { parseIssueMetadataInput, parseRelatedIssueKeys, requireDevelopmentOwner, validateRelatedIssues } from "../issues/form-input.ts";
 import { updateIssueRecord } from "../issues/edit.ts";
 import { updateIssueRelations } from "../issues/relations.ts";
 import { transitionIssue } from "../issues/status.ts";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 
-import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { errorCode } from "../diagnostics.ts";
 import { readSnapshot, type DatabaseReader } from "../db/client.ts";
 import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
 import { issueSessionHistory, resetIssueSession } from "../agent/session-reset.ts";
-import {
-  agentSessions,
-  dingtalkIssueImports,
-  environments,
-  issueAttachments,
-  issueCcRecipients,
-  issuePins,
-  issueRelations,
-  issueRepositories,
-  issues,
-  issueWorkspaces,
-  serviceDeployments,
-  services,
-  subjects,
-} from "../db/schema.ts";
-import {
-  canWriteIssueCode,
-  credentialOwnerSubject,
-  ISSUE_PRIORITIES,
-  ISSUE_WORK_MODES,
-  issueScopeForWorkMode,
-  parseIssueKey,
-  relatedIssueUpdateRefusal,
-  requiresDeveloperOwner,
-  type EnvironmentKind,
-  type IssueWorkMode,
-} from "../domain/contracts.ts";
+import { agentSessions, environments, issueAttachments, issueCcRecipients, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, services, subjects } from "../db/schema.ts";
+import { canWriteIssueCode, credentialOwnerSubject, relatedIssueUpdateRefusal, requiresDeveloperOwner } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { classifyRepositoryState, hasRepositoryView, issueRoot, pathExists } from "../workspace/state.ts";
 import { type PendingAttachment, readMultipartAttachment, removePendingAttachments, resolveSecureAttachmentFile, serializeAttachment } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
-import { choice, optionalText, record, strings, text } from "../domain/input.ts";
+import { choice, record, strings, text } from "../domain/input.ts";
 import type { IssueDetail, IssueExecutionItem } from "./contracts.ts";
 import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
 import {
@@ -99,9 +75,6 @@ async function readIssueInput(stateRoot: string, request: FastifyRequest): Promi
   }
 }
 
-export type IssueCreator = ReturnType<typeof registerIssueRoutes>["createIssue"];
-export type IssueCreationScopeResolver = ReturnType<typeof registerIssueRoutes>["resolveCreationScope"];
-
 export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = () => new Date()) {
   const { app, database, engine, stateRoot, workspaces, scopeTransitions, runScopeExclusive, events } = context;
 
@@ -116,74 +89,6 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     });
     return reply.code(204).send();
   });
-  const findEnvironmentByKind = async (kind: EnvironmentKind) => (await database.db.select().from(environments).where(eq(environments.kind, kind)).limit(1))[0];
-  const findServiceDeployment = async (key: string, environmentId: string) =>
-    (
-      await database.db
-        .select({ service: services, deployment: serviceDeployments })
-        .from(services)
-        .innerJoin(serviceDeployments, and(eq(serviceDeployments.serviceId, services.id), eq(serviceDeployments.environmentId, environmentId)))
-        .where(eq(services.key, key))
-        .limit(1)
-    )[0];
-  const validateSubjects = async (subjectValues: Array<string | null>): Promise<void> => {
-    const requestedSubjects = [...new Set(subjectValues.filter((value): value is string => Boolean(value)))];
-    if (!requestedSubjects.length) return;
-    const matchingSubjects = await database.db
-      .select({ subject: subjects.subject })
-      .from(subjects)
-      .where(and(inArray(subjects.subject, requestedSubjects), eq(subjects.active, true)));
-    if (matchingSubjects.length !== requestedSubjects.length) throw new DomainError("invalid_subject", "bad_request");
-  };
-  // Development credentials belong to the owner (assignee, else reporter), who must be an active developer.
-  const requireDevelopmentOwner = async (subject: string): Promise<void> => {
-    const [owner] = await database.db.select({ role: subjects.role, active: subjects.active }).from(subjects).where(eq(subjects.subject, subject)).limit(1);
-    if (owner?.role !== "developer" || !owner.active) throw new DomainError("issue_developer_owner_required", "bad_request");
-  };
-  const parseIssueMetadataInput = async (input: Record<string, unknown>) => {
-    const assigneeSubject = optionalText(input.assigneeSubject, 255);
-    const ccSubjects = [...new Set(strings(input.ccSubjects ?? [], "cc_subjects"))];
-    await validateSubjects([assigneeSubject, ...ccSubjects]);
-    return {
-      title: text(input.title, "title", 300),
-      description: optionalText(input.description) ?? "",
-      priority: choice(input.priority, "priority", ISSUE_PRIORITIES),
-      assigneeSubject,
-      ccSubjects,
-    };
-  };
-  const resolveCreationScope = async (workMode: IssueWorkMode, serviceKey: string) => {
-    const scope = issueScopeForWorkMode(workMode);
-    const environment = await findEnvironmentByKind(scope.environmentKind);
-    if (!environment) throw new DomainError("invalid_work_mode", "bad_request");
-    const serviceDeployment = await findServiceDeployment(serviceKey, environment.id);
-    if (!serviceDeployment) throw new DomainError("invalid_service_for_work_mode", "bad_request");
-    return { type: scope.issueType, environment, serviceId: serviceDeployment.service.id, service: { key: serviceDeployment.service.key, name: serviceDeployment.service.name } };
-  };
-  const parseCreateIssueInput = async (input: Record<string, unknown>) => {
-    if (Object.hasOwn(input, "environmentKey") || Object.hasOwn(input, "type")) throw new DomainError("issue_create_scope_contract_invalid", "bad_request");
-    const workMode = choice(input.workMode, "work_mode", ISSUE_WORK_MODES);
-    return {
-      ...(await parseIssueMetadataInput(input)),
-      workMode,
-      ...(await resolveCreationScope(workMode, text(input.serviceKey, "service_key", 100))),
-    };
-  };
-  const parseRelatedIssueKeys = (input: Record<string, unknown>) => {
-    const rawKeys = strings(input.relatedIssueKeys ?? [], "related_issue_keys");
-    if (rawKeys.length > issuePilotConfig.limits.relatedIssues) throw new DomainError("related_issue_limit_exceeded", "bad_request");
-    const keys = [...new Set(rawKeys.map((key) => parseIssueKey(key.trim())).filter((key): key is string => Boolean(key)))];
-    if (keys.length !== rawKeys.length) throw new DomainError("invalid_related_issues", "bad_request");
-    return keys;
-  };
-  const validateRelatedIssues = async (keys: string[]) => {
-    if (!keys.length) return [];
-    const relatedRows = await database.db.select().from(issues).where(inArray(issues.key, keys));
-    const byKey = new Map(relatedRows.map((issue) => [issue.key, issue]));
-    if (byKey.size !== keys.length) throw new DomainError("invalid_related_issues", "bad_request");
-    return keys.map((key) => byKey.get(key)!);
-  };
-  const parseRelatedIssues = (input: Record<string, unknown>) => validateRelatedIssues(parseRelatedIssueKeys(input));
   const serializeIssueSummaryRow = (row: IssueSummaryRow): IssueExecutionItem => serializeIssueSummary(row, engine.getRunState(row.issue.id));
   const readIssueSummary = async (issueId: string, reader?: DatabaseReader) => {
     const row = (await issueSummaryQuery(reader ?? database.db).where(eq(issues.id, issueId)))[0];
@@ -226,75 +131,22 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     if (failures.length) return removePendingAttachments(pending, failures);
     await removePendingAttachments(pending).catch((error: unknown) => request.log.error({ code: errorCode(error) }, "attachment_staging_cleanup_failed"));
   };
-  const createIssue = async (
-    input: Record<string, unknown>,
-    request: FastifyRequest,
-    initialAttachments: PendingAttachment[] = [],
-    options: { dingtalk?: DingtalkImportClaim; startAgent?: boolean; signal?: AbortSignal } = {},
-  ) => {
-    const failures: unknown[] = [];
-    try {
-      const reporterSubject = await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
-      let created = true;
-      const createdIssue = await runScopeExclusive(async () => {
-        await authorizeWorkMode(database, request, choice(input.workMode, "work_mode", ISSUE_WORK_MODES));
-        options.signal?.throwIfAborted();
-        if (options.dingtalk) {
-          const source = options.dingtalk;
-          const [existing] = await database.db
-            .select({ issue: issues })
-            .from(dingtalkIssueImports)
-            .innerJoin(issues, eq(issues.id, dingtalkIssueImports.issueId))
-            .where(and(eq(dingtalkIssueImports.baseId, source.baseId), eq(dingtalkIssueImports.tableId, source.tableId), eq(dingtalkIssueImports.recordId, source.recordId)))
-            .limit(1);
-          if (existing) {
-            created = false;
-            return existing.issue;
-          }
-        }
-        const issueValues = await parseCreateIssueInput(input);
-        if (requiresDeveloperOwner(issueValues.environment.kind)) await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject }));
-        const relatedIssues = await parseRelatedIssues(input);
-        const issueId = randomUUID();
-        return runIssueExclusive(engine, [issueId, ...relatedIssues.map(({ id }) => id)], async (reservation) => {
-          options.signal?.throwIfAborted();
-          const issue = await createIssueRecord({
-            database: database.db,
-            stateRoot,
-            issueId,
-            values: {
-              title: issueValues.title,
-              description: issueValues.description,
-              priority: issueValues.priority,
-              type: issueValues.type,
-              serviceId: issueValues.serviceId,
-              environmentId: issueValues.environment.id,
-              assigneeSubject: issueValues.assigneeSubject,
-              ccSubjects: issueValues.ccSubjects,
-            },
-            reporterSubject,
-            relatedIssueIds: relatedIssues.map(({ id }) => id),
-            attachments: initialAttachments,
-            now: now(),
-            ...(options.dingtalk ? { dingtalk: options.dingtalk } : {}),
-          });
-          if (options.startAgent !== false) reservation.enqueue(issue.id);
-          return issue;
-        });
-      });
-      return { issue: await readIssueSummary(createdIssue.id), created };
-    } catch (error) {
-      failures.push(error);
-      throw error;
-    } finally {
-      await removeStagedAttachments(request, initialAttachments, failures);
-    }
-  };
   app.post("/api/issues", async (request, reply) => {
     await ensureCurrentSubject(database, request);
     const { input, attachments } = await readIssueInput(stateRoot, request);
-    const result = await createIssue(input, request, attachments);
-    return reply.code(201).send(result.issue);
+    const { issue } = await createIssue(context, input, {
+      authorize: (mode) => authorizeWorkMode(database, request, mode),
+      attachments,
+      now,
+      onCleanupError: (error) => request.log.error({ code: errorCode(error) }, "attachment_staging_cleanup_failed"),
+    });
+    let summary: IssueExecutionItem;
+    try {
+      summary = await readIssueSummary(issue.id);
+    } catch (cause) {
+      throw new IssueCreatedError("issue_created_summary_unavailable", issue.key, { cause });
+    }
+    return reply.code(201).send(summary);
   });
 
   app.patch<{ Params: { key: string } }>("/api/issues/:key", async (request) => {
@@ -336,14 +188,14 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
           const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
             database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
             database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, currentIssue.serviceId)).limit(1),
-            parseIssueMetadataInput(input),
+            parseIssueMetadataInput(database.db, input),
           ]);
           if (!issueEnvironment || !issueService) throw new DomainError("issue_scope_not_found", "conflict");
           const removedAttachmentIdSet = new Set(removedAttachmentIds);
           const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
           if (removedAttachments.length !== removedAttachmentIds.length) throw new DomainError("attachment_not_found", "not_found");
           if (requiresDeveloperOwner(issueEnvironment.kind))
-            await requireDevelopmentOwner(credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
+            await requireDevelopmentOwner(database.db, credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
           const attachmentRoot = issueRoot(stateRoot, issue.key);
           await Promise.all(removedAttachments.map(({ objectKey, size }) => resolveSecureAttachmentFile(attachmentRoot, objectKey, size)));
           await reservation.closeSession(issue.id);
@@ -412,7 +264,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
         const refusal = relatedIssueUpdateRefusal({ status: currentIssue.status, workspace }, { onlyRemoves });
         if (refusal) throw new DomainError(refusal, "conflict");
         if (requestedKeys.includes(currentIssue.key)) throw new DomainError("invalid_related_issues", "bad_request");
-        const relatedIssues = await validateRelatedIssues(requestedKeys);
+        const relatedIssues = await validateRelatedIssues(database.db, requestedKeys);
         const currentIds = currentRelations.map(({ relatedIssueId }) => relatedIssueId).sort();
         const requestedIds = relatedIssues.map(({ id }) => id).sort();
         if (currentIds.length === requestedIds.length && currentIds.every((id, index) => id === requestedIds[index])) return;
@@ -511,6 +363,4 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     };
     return detail;
   });
-
-  return { createIssue, resolveCreationScope };
 }

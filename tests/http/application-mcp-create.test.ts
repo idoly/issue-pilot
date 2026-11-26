@@ -82,6 +82,29 @@ test("MCP creation delegates to the standard transaction, attributes the reporte
   }
 });
 
+test("MCP creation preserves the committed HTTP receipt without exposing its cause", async (t) => {
+  const f = await createApiFixture();
+  const client = new Client({ name: "receipt-fixture", version: "1" });
+  try {
+    await createService(f.app, "MCP Create");
+    const address = await f.app.listen({ host: "127.0.0.1", port: 0 });
+    await client.connect(new StreamableHTTPClientTransport(new URL(address + "/mcp")) as Parameters<Client["connect"]>[0]);
+    const hook = t.mock.method(f.engine, "getRunState", () => {
+      throw new Error("fixture_private_cause");
+    });
+    const failure = await client.callTool({ name: "issue_create", arguments: payload("receipt") });
+    hook.mock.restore();
+    assert.equal(failure.isError, true);
+    const rows = (await f.app.inject({ url: "/api/issues" })).json();
+    assert.equal(rows.length, 1);
+    assert.deepEqual(parsed(failure), { error: "issue_created_summary_unavailable", outcome: "committed", issueKey: rows[0].id });
+    assert.equal(f.engine.enqueued.length, 1);
+  } finally {
+    await client.close();
+    await f.cleanup();
+  }
+});
+
 test("MCP inputs stay strict instead of inheriting the Agent tool pipeline's coercion", async () => {
   const f = await createApiFixture();
   const client = new Client({ name: "strict-schema-fixture", version: "1" });

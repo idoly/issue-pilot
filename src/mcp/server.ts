@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import path from "node:path";
 
 import { ISSUE_KEY_PATTERN, ISSUE_PRIORITIES, ISSUE_WORK_MODES, parseIssueKey } from "../domain/contracts.ts";
+import { IssueCreatedError, readCreationReceipt } from "../issues/creation-receipt.ts";
 import { isStableErrorCode } from "../diagnostics.ts";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { agentSessions } from "../db/schema.ts";
@@ -180,12 +181,15 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
     }
     const response = await context.app.inject({ method: payload ? "POST" : "GET", url, headers: { ...headers, ...extraHeaders }, ...(multipart ?? (payload ? { payload } : {})) });
     if (response.statusCode >= 400) {
-      let code = "mcp_api_failed";
+      let body: { error?: unknown } | undefined;
       try {
-        const error = JSON.parse(response.body).error;
-        if (typeof error === "string" && isStableErrorCode(error)) code = error;
-      } catch {}
-      throw new Error(code);
+        body = response.json();
+      } catch {
+        /* Non-JSON framework failures retain the stable fallback below. */
+      }
+      const receipt = readCreationReceipt(body);
+      if (receipt) throw receipt;
+      throw new Error(typeof body?.error === "string" && isStableErrorCode(body.error) ? body.error : "mcp_api_failed");
     }
     return response;
   };
@@ -272,6 +276,7 @@ function createApplicationMcpServer(context: ApiRouteContext, request: Pick<Fast
       if (!validators.get(definition.name)!.check(input)) throw new Error("mcp_invalid_input_or_operation_failed");
       return bounded(await call(definition.name, input));
     } catch (error) {
+      if (error instanceof IssueCreatedError) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify(error.receipt()) }] };
       const message = error instanceof Error && isStableErrorCode(error.message) ? error.message : "mcp_invalid_input_or_operation_failed";
       return { isError: true, content: [{ type: "text" as const, text: message }] };
     }

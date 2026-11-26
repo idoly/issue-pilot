@@ -1,3 +1,4 @@
+import { IssueCreatedError } from "../issues/creation-receipt.ts";
 import { OperationError } from "../operation-error.ts";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -216,7 +217,7 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
       const operationError = errorChain(error).find((cause): cause is OperationError => cause instanceof OperationError);
       if (operationError) {
         app.log.error(errorDiagnostic(error));
-        return reply.code(500).send({ error: operationError.message, outcome: operationError.outcome });
+        return reply.code(500).send(operationError instanceof IssueCreatedError ? operationError.receipt() : { error: operationError.message, outcome: operationError.outcome });
       }
       // A rollback or cleanup failure dominates the constraint error wrapped in its AggregateError: the state was not
       // cleanly settled, so reporting a retryable conflict (or keeping the failure out of the log) would mislead.
@@ -288,8 +289,8 @@ export async function buildApi(options: ApiOptions = {}): Promise<FastifyInstanc
     registerApplicationMcp(routeContext);
     const cancelActiveSearches = registerIssueSearchRoutes(routeContext, options.issueSearchFetch);
     registerConfigurationRoutes(routeContext, cancelActiveSearches, options.applyIssueSandboxNetwork);
-    const { createIssue, resolveCreationScope } = registerIssueRoutes(routeContext, options.now);
-    registerDingtalkRoutes(routeContext, createIssue, resolveCreationScope, options.dingtalkConnector);
+    registerIssueRoutes(routeContext, options.now);
+    registerDingtalkRoutes(routeContext, options.dingtalkConnector, options.now);
     registerAttachmentRoutes(routeContext);
     registerAgentRoutes(routeContext);
     registerSourceBrowserRoutes(routeContext);

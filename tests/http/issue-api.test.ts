@@ -11,6 +11,28 @@ import { openDatabase } from "../../src/db/client.ts";
 import { agentSessions, issueKeySequences, issueRelations, issueRepositories, issues, issueWorkspaces } from "../../src/db/schema.ts";
 import { workspaceStatistics, issueEditVersion, createApiFixture, createIssue, createService, issueMetadataPayload, issuePayload, json } from "./fixture.ts";
 
+for (const step of ["enqueue", "summary"] as const)
+  test(`returns the committed Issue key if ${step} fails after creation`, async (t) => {
+    const f = await createApiFixture();
+    try {
+      await createService(f.app, "create-receipt");
+      const fail = () => {
+        throw new Error("fixture_private_detail");
+      };
+      const hook = step === "enqueue" ? t.mock.method(f.engine, "enqueue", fail) : t.mock.method(f.engine, "getRunState", fail);
+      const response = await f.app.inject({ method: "POST", url: "/api/issues", payload: issuePayload("create-receipt") });
+      hook.mock.restore();
+      const rows = (await f.app.inject({ url: "/api/issues" })).json();
+      assert.equal(rows.length, 1);
+      assert.equal(response.statusCode, 500);
+      assert.deepEqual(response.json(), { error: step === "enqueue" ? "issue_created_enqueue_unconfirmed" : "issue_created_summary_unavailable", outcome: "committed", issueKey: rows[0].id });
+      assert.equal((await f.app.inject({ url: `/api/issues/${rows[0].id}` })).statusCode, 200);
+      assert.equal(f.engine.enqueued.length, step === "enqueue" ? 0 : 1);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
 test("every edit requires a valid version before metadata, attachments or session state can change", async () => {
   const f = await createApiFixture();
   try {

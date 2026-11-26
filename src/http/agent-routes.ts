@@ -6,7 +6,7 @@ import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { loadGlobalAgentConfiguration, selectAgentConfiguration } from "../configuration/agent.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
-import { sessionTranscript, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
+import { sessionTranscript, sessionTranscriptPage, subscribeBufferedAgentDisplayEvents, type RunEvent } from "../agent/events.ts";
 import { agentDisplayEvent } from "../agent/event-display.ts";
 import { assertBoundSessionPath, openBoundSession } from "../agent/session-file.ts";
 import { resetIssueSession, issueSessionHistory, readIssueSessionHistory } from "../agent/session-reset.ts";
@@ -79,16 +79,14 @@ export function registerAgentRoutes(context: Pick<ApiRouteContext, "app" | "data
   app.get<{ Params: { key: string; sessionId: string }; Querystring: { offset?: string } }>("/api/issues/:key/sessions/:sessionId", async (request, _reply) => {
     await requireCurrentUser(database, request);
     const issue = await requireIssue(database, request.params.key);
+    const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new DomainError("invalid_offset", "bad_request");
     const manager = await runScopeExclusive(async () => {
       await requireCurrentUser(database, request);
       return readIssueSessionHistory(database.db, stateRoot, issue, request.params.sessionId);
     });
-    // A readonly transcript uses the same private-entry projection as the live conversation.
-    const offset = request.query.offset === undefined ? 0 : Number(request.query.offset);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new DomainError("invalid_offset", "bad_request");
-    const transcript = sessionTranscript(manager, issue.id),
-      page = transcript.slice(offset, offset + 50).map(agentDisplayEvent);
-    return { events: page, nextOffset: offset + page.length < transcript.length ? offset + page.length : null };
+    const page = sessionTranscriptPage(manager, issue.id, offset, 50);
+    return { events: page.events.map(agentDisplayEvent), nextOffset: page.nextOffset };
   });
 
   app.get<{ Params: { key: string; sessionId: string; entryId: string } }>("/api/issues/:key/sessions/:sessionId/query-results/:entryId", async (request, reply) => {

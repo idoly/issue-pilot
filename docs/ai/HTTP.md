@@ -193,7 +193,7 @@ Events arriving during replay are projected before entering the display buffer. 
 | MCP lists/conversation | Zero-based offset, default 30/max 100, total/offset/items/nextOffset |
 | Source history | Dedicated cursor, not caller-incremented offset |
 
-Pages are not stable cross-mutation cursors. Incomplete sessions fail SSE before headers with agent_session_file_incomplete; no Agent startup or automatic file repair.
+History offsets count visible events on the selected branch, not raw JSONL entries. History validates the complete bound file, then projects only through the first visible event beyond the requested page. SSE and inbound MCP still take complete snapshots. Pages are not stable cross-mutation cursors. Incomplete sessions fail SSE before headers with agent_session_file_incomplete; no Agent startup or automatic file repair.
 
 ## Inbound Issue MCP
 
@@ -224,7 +224,7 @@ Ordinary errors usually return {"error":"stable_code"}; framework routing errors
 | 500 missing/invalid root or session | Preserve state, inspect; do not recreate |
 | Rollback/finalize/post-commit failure | Do not assume complete rollback or safe retry |
 
-Ordinary creation has no generic client idempotency key; Agent messages use the scoped admission IDs above. Lost responses do not prove no effect. Read Issues/conversations/files first. DingTalk source deduplication does not generalize to other mutations.
+After ordinary creation commits, failure to confirm enqueue or read the summary returns HTTP 500 with `{error, outcome:"committed", issueKey}`. `issue_created_enqueue_unconfirmed` does not mean the Agent definitely did or did not start. `issue_created_summary_unavailable` means the response projection failed. Open the returned key; never repeat creation to repair its receipt. Inbound MCP preserves these receipts as JSON text in an error result. Ordinary creation has no generic client idempotency key; Agent messages use the scoped admission IDs above. Lost responses do not prove no effect. Read Issues/conversations/files first. DingTalk source deduplication does not generalize to other mutations.
 
 Configuration revisions, source hashes and Git CAS protect different facts. Do not apply one retry/locking rule everywhere. Fixture tests do not prove comprehensive real-model/external-service safety.
 

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { IssueCreatedError } from "../../../issues/creation-receipt";
 import type { IssueExecutionItem } from "../data/client";
 
 const mocks = vi.hoisted(() => ({
@@ -302,6 +303,26 @@ it("keeps a newly created Issue when an older initial list finishes later", asyn
     finishOld();
   }
 });
+
+for (const confirmed of [true, false])
+  it(`reconciles creation without resending (known key: ${confirmed})`, async () => {
+    const key = "ISSUE-20261126-123";
+    mocks.create.mockRejectedValueOnce(confirmed ? new IssueCreatedError("issue_created_enqueue_unconfirmed", key) : new TypeError("Failed to fetch"));
+    render(() => <Queue selectedId="alice" userSubject="alice" onSelect={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
+    const form = await screen.findByRole("dialog", { name: "新建工单" });
+    fireEvent.input(within(form).getByLabelText("工单标题"), { target: { value: "receipt fixture" } });
+    const save = within(form).getByRole("button", { name: "创建" });
+    await waitFor(() => expect(save).toHaveProperty("disabled", false));
+    fireEvent.click(save);
+    const receipt = await screen.findByRole("dialog", { name: confirmed ? "工单已创建" : "创建结果待核对" });
+    expect(screen.queryByRole("button", { name: "创建" })).toBeNull();
+    expect(within(receipt).queryByRole("link")?.getAttribute("href")).toBe(confirmed ? `/?issue=${key}` : undefined);
+    fireEvent.click(within(receipt).getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建工单" }));
+    expect(await screen.findByLabelText("工单标题")).toHaveProperty("value", confirmed ? "" : "receipt fixture");
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
 
 it("does not select an Issue created after the queue unmounts", async () => {
   let finish!: () => void;

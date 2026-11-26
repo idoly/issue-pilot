@@ -112,6 +112,21 @@ test("shows connection cleanup failure without hiding the committed Issue", asyn
   expect(created).toHaveBeenCalledOnce();
   expect(opened).not.toHaveBeenCalled();
 });
+test("offers the committed key rather than resubmitting an unconfirmed enqueue", async () => {
+  const { IssueCreatedError } = await import("../../../issues/creation-receipt");
+  const { created, opened } = await open();
+  fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });
+  vi.mocked(importDingtalkRecords).mockRejectedValueOnce(new IssueCreatedError("issue_created_enqueue_unconfirmed", "ISSUE-20261022-001"));
+  const submit = screen.getByRole("button", { name: "导入工单" });
+  await waitFor(() => expect(submit).toHaveProperty("disabled", false));
+  fireEvent.click(submit);
+  expect((await screen.findByRole("alert")).textContent).toContain("无法确认 Agent 是否已入队");
+  expect(submit).toHaveProperty("disabled", true);
+  fireEvent.click(screen.getByRole("button", { name: "ISSUE-20261022-001" }));
+  expect(opened).toHaveBeenCalledOnce();
+  expect(created).toHaveBeenCalledOnce();
+  expect(importDingtalkRecords).toHaveBeenCalledOnce();
+});
 test("shows a useful import failure and keeps the entered link for retry", async () => {
   await open();
   fireEvent.input(screen.getByRole("textbox", { name: "钉钉记录链接" }), { target: { value: url } });

@@ -86,6 +86,33 @@ test("reset preserves the old transcript and files, binds an empty session, and 
   }
 });
 
+test("history pages count visible events, validate offsets first, and refuse damage after the page", async () => {
+  const f = await fixture();
+  try {
+    for (let index = 0; index < 99; index++) {
+      f.manager.appendMessage({ role: "user", content: "internal prompt", timestamp: index });
+      f.manager.appendCustomEntry("issue-pilot-user", { message: `visible ${index}` });
+    }
+    const url = `/api/issues/${f.issue.key}/sessions/${f.manager.getSessionId()}`;
+    const read = (offset: number) => f.app.inject({ url: `${url}?offset=${offset}`, headers });
+    type Page = { events: { event: { message: string } }[]; nextOffset: number | null };
+    const first = (await read(0)).json<Page>(),
+      second = (await read(50)).json<Page>();
+    assert.equal(first.nextOffset, 50);
+    assert.equal(second.nextOffset, null);
+    assert.deepEqual(
+      [...first.events, ...second.events].map(({ event }) => event.message),
+      ["Saved old question", ...Array.from({ length: 99 }, (_, i) => `visible ${i}`)],
+    );
+    assert.deepEqual((await read(100)).json(), { events: [], nextOffset: null });
+    await appendFile(f.manager.getSessionFile()!, "bad-json\n");
+    assert.equal((await read(-1)).json().error, "invalid_offset");
+    assert.equal((await read(0)).json().error, "agent_session_file_incomplete");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("an SSE handshake refuses a transcript whose session resets during file preparation", { timeout: 10_000 }, async (context) => {
   const f = await fixture();
   const file = f.manager.getSessionFile()!;

@@ -216,6 +216,20 @@ it("places attachments immediately after the Issue header", () => {
   expect(header.nextElementSibling?.getAttribute("aria-labelledby")).toBe("attachments-title");
 });
 
+it("opens a committed follow-up by key instead of offering a second create", async () => {
+  const { IssueCreatedError } = await import("../../../issues/creation-receipt");
+  const key = "ISSUE-20261126-123";
+  state.create.mockRejectedValueOnce(new IssueCreatedError("issue_created_summary_unavailable", key));
+  const development: IssueDetail = { ...issue, environmentKey: "dev", type: "defect_fix", workspace: { ...issue.workspace, sourceAvailable: true } };
+  render(() => <Workspace issue={development} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "创建正式跟进" }));
+  fireEvent.click(within(await screen.findByRole("dialog", { name: "创建正式跟进工单" })).getByRole("button", { name: "创建并关联" }));
+  const notice = await screen.findByRole("dialog", { name: "工单已创建" });
+  expect(within(notice).getByRole("link").getAttribute("href")).toBe(`/?issue=${key}`);
+  expect(screen.queryByRole("button", { name: "创建并关联" })).toBeNull();
+  expect(state.create).toHaveBeenCalledOnce();
+});
+
 for (const change of ["unmount", "subject", "role"] as const)
   it(`does not navigate to an old follow-up after ${change}`, async () => {
     let finish!: () => void;

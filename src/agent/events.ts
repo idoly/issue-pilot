@@ -223,19 +223,31 @@ function timestamp(value: string | undefined): string {
   return value && !Number.isNaN(Date.parse(value)) ? value : new Date().toISOString();
 }
 
-export function sessionTranscript(manager: SessionManager, issueId: string): RunEvent[] {
+/** Count visible events, not raw entries. Stop once another visible event proves the page is not the last. */
+export function sessionTranscriptPage(manager: SessionManager, issueId: string, offset: number, limit: number) {
   const events: RunEvent[] = [];
+  let skip = offset,
+    more = false;
+  const include = () => {
+    if (skip > 0) {
+      skip--;
+      return false;
+    }
+    if (events.length < limit) return true;
+    more = true;
+    return false;
+  };
   for (const entry of manager.getBranch()) {
-    const createdAt = timestamp(entry.timestamp);
+    if (more) break;
     const query = savedQueryCompletion(manager.getSessionId(), entry);
     if (query) {
-      events.push({ id: entry.id, issueId, createdAt, event: query });
+      if (include()) events.push({ id: entry.id, issueId, createdAt: timestamp(entry.timestamp), event: query });
       continue;
     }
     if (entry.type === "custom") {
       if (entry.customType === "issue-pilot-user") {
         const customData = entry.data as { message?: unknown; images?: unknown } | undefined;
-        if (typeof customData?.message === "string") {
+        if (typeof customData?.message === "string" && include()) {
           const images = Array.isArray(customData.images)
             ? customData.images.filter((image): image is ImageContent =>
                 Boolean(
@@ -247,14 +259,15 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
                 ),
               )
             : [];
-          events.push({ id: entry.id, issueId, createdAt, event: { type: "issue_user", message: customData.message, ...(images.length ? { images } : {}) } });
+          events.push({ id: entry.id, issueId, createdAt: timestamp(entry.timestamp), event: { type: "issue_user", message: customData.message, ...(images.length ? { images } : {}) } });
         }
       }
       continue;
     }
     const messages = sessionEntryToContextMessages(entry);
     for (const [index, message] of messages.entries()) {
-      if (message.role === "user" || message.role === "system") continue;
+      if (message.role === "user" || message.role === "system" || !include()) continue;
+      const createdAt = timestamp(entry.timestamp);
       const id = messages.length === 1 ? entry.id : `${entry.id}:${index}`;
       if (message.role === "toolResult") {
         const result = { content: message.content, details: message.details, ...(message.nestedCalls ? { nestedCalls: message.nestedCalls } : {}) };
@@ -276,5 +289,10 @@ export function sessionTranscript(manager: SessionManager, issueId: string): Run
       }
     }
   }
-  return events;
+  return { events, nextOffset: more ? offset + limit : null };
+}
+
+/** SSE and MCP need a complete snapshot before merging live events. */
+export function sessionTranscript(manager: SessionManager, issueId: string): RunEvent[] {
+  return sessionTranscriptPage(manager, issueId, 0, Infinity).events;
 }

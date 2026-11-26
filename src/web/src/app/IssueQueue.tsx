@@ -4,6 +4,7 @@ import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup,
 import { ChevronRight, Pin, Plus, Search } from "../ui/icons";
 import { canUseIssueWorkMode } from "../../../domain/contracts";
 import { createIssue, listIssuePins, setIssuePinned, type IssuePriority, type IssueWorkMode } from "../data/client";
+import { creationProblem, IssueCreationNotice, type CreationProblem } from "./IssueCreationNotice";
 import { createLatestTask } from "../data/latest";
 import { errorText } from "./error-text";
 import { useApplicationResources } from "./ApplicationResources";
@@ -210,6 +211,7 @@ export function IssueQueue(props: {
   const [attachments, setAttachments] = createSignal<File[]>([], { ownedWrite: true });
   const [saving, setSaving] = createSignal(false, { ownedWrite: true });
   const [createError, setCreateError] = createSignal("", { ownedWrite: true });
+  const [receiptProblem, setReceiptProblem] = createSignal<CreationProblem>();
   let contextGeneration = 0;
   const relatedTask = createLatestTask();
   onCleanup(() => {
@@ -221,6 +223,7 @@ export function IssueQueue(props: {
   const closeCreateIssue = () => {
     relatedTask.cancel();
     setCreateOpen(false);
+    setReceiptProblem(undefined);
     setRelatedLoading(false);
   };
   createEffect(
@@ -269,8 +272,14 @@ export function IssueQueue(props: {
       setService((current) => (compatibleServices.some((candidate) => candidate.key === current) ? current : (compatibleServices[0]?.key ?? "")));
     },
   );
+  const clearCreatedDraft = () => {
+    setTitle("");
+    setDescription("");
+    setAttachments([]);
+    setRelatedIssueKeys([]);
+  };
   const submitIssue = async () => {
-    if (!props.userSubject || saving() || !title().trim() || !service()) return;
+    if (!props.userSubject || receiptProblem() || saving() || !title().trim() || !service()) return;
     const owner = contextGeneration;
     setSaving(true);
     setCreateError("");
@@ -292,12 +301,16 @@ export function IssueQueue(props: {
       props.issueList.created(issue);
       props.onSelect(issue.id);
       closeCreateIssue();
-      setTitle("");
-      setDescription("");
-      setAttachments([]);
-      setRelatedIssueKeys([]);
+      clearCreatedDraft();
     } catch (error) {
-      if (owner === contextGeneration) setCreateError(errorText(error));
+      if (owner !== contextGeneration) return;
+      const problem = creationProblem(error);
+      if (!problem) setCreateError(errorText(error));
+      else {
+        setReceiptProblem(problem);
+        if (problem !== "unknown") clearCreatedDraft();
+        void props.issueList.refresh();
+      }
     } finally {
       if (owner === contextGeneration) setSaving(false);
     }
@@ -454,7 +467,7 @@ export function IssueQueue(props: {
         </Show>
       </div>
       <Modal
-        open={createOpen()}
+        open={createOpen() && !receiptProblem()}
         title="新建工单"
         okText="创建"
         cancelText="取消"
@@ -569,6 +582,7 @@ export function IssueQueue(props: {
           </Show>
         </div>
       </Modal>
+      <IssueCreationNotice problem={receiptProblem()} onClose={closeCreateIssue} />
     </aside>
   );
 }

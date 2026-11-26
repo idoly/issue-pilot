@@ -21,7 +21,7 @@ npm run typecheck
 npm run build
 ```
 
-`npm ci` 必须正常执行 postinstall 补丁校验。`npm run build` 只构建 Web，不生成后端 dist，也不启动服务。
+`npm ci` 必须正常执行 postinstall 补丁校验。升级 Pi 或 Monaco 时，按[补丁说明](../patches/README.md)核对上游是否已覆盖原行为；分别验证完整安装和 `npm ci --omit=dev`，不要跳过脚本来绕过版本不匹配。`npm run build` 只构建 Web，不生成后端 dist，也不启动服务。
 
 Web 使用 [Solid 2 正式版](https://www.solidjs.com/blog/solid-2-0-the-long-hold)，`solid-js`、`@solidjs/web` 和 `@solidjs/vite-plugin` 按兼容组合更新。Solid 2.0 在 `node_modules/solid-js` 内自带面向 AI 助手的资料：改动前读 `skills/solid-2.0/SKILL.md`，查名字看 `CHEATSHEET.md`（末尾有 1.x 到 2.0 的变化表），出现 `[REACTIVE_WRITE_IN_OWNED_SCOPE]` 这类诊断码时按 `skills/reactivity-diagnostics/SKILL.md` 修复，不要压制。测试库当前使用支持 Solid 2 的 `@solidjs/testing-library` 1.0 RC；升级时核对 peerDependencies 和发布通道，不能仅按 npm 的 latest 标签选择。前端框架更新需通过完整 Web 测试、生产构建和独立浏览器验收。
 

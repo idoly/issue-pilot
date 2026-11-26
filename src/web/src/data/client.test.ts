@@ -176,6 +176,26 @@ describe("API client", () => {
     expect(await submittedFile.text()).toBe("evidence");
   });
 
+  it("accepts only a known post-commit code and a valid Issue key as a creation receipt", async () => {
+    const issueKey = "ISSUE-20260810-123";
+    const body = { error: "issue_created_summary_unavailable", outcome: "committed", issueKey };
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal("fetch", fetch);
+    const post = () =>
+      createIssue({ title: "fixture", description: "", priority: "p2", workMode: "test_analysis", serviceKey: "example", assigneeSubject: null, ccSubjects: [], relatedIssueKeys: [] });
+    fetch.mockResolvedValueOnce(Response.json(body, { status: 500 }));
+    await expect(post()).rejects.toMatchObject({ issueKey, outcome: "committed", message: body.error });
+    for (const invalid of [
+      { ...body, issueKey: "not-an-issue" },
+      { ...body, error: "other_error" },
+      { ...body, outcome: "unknown" },
+    ]) {
+      fetch.mockResolvedValueOnce(Response.json(invalid, { status: 500 }));
+      await expect(post()).rejects.not.toHaveProperty("issueKey");
+    }
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
   it("updates issue metadata and attachment changes in one request", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({ id: "ISSUE-20260810-001" }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);

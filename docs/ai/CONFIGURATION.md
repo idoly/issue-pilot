@@ -40,7 +40,7 @@ try {
 NODE
 ```
 
-[model-runtime.ts](../../src/agent/model-runtime.ts) refreshes without network and lists providers defined by the Operator. Empty-DB initialization chooses the first provider/id-sorted model, prefers medium thinking, otherwise its first supported level, and starts Codemode on. It does not select the best model. Existing configuration is not automatically reselected after catalog changes. Owner: [agent.ts](../../src/configuration/agent.ts).
+[model-runtime.ts](../../src/agent/model-runtime.ts) refreshes without network and queries Pi's chat-model catalog by the provider IDs in the Operator configuration. Do not enumerate unrelated providers or filter the choices by host authentication. Empty-DB initialization chooses the first provider/id-sorted model, prefers medium thinking, otherwise its first supported level, and starts Codemode on. It does not select the best model. Existing configuration is not automatically reselected after catalog changes. Owner: [agent.ts](../../src/configuration/agent.ts).
 
 ## Identity and permissions
 

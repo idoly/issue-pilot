@@ -129,9 +129,10 @@ test("validates the Monaco build patch and permits production installations with
   try {
     const install = path.join(root, "scripts/apply-pi-sdk-patch.mjs");
     await exec(process.execPath, [install], { cwd: root });
-    await exec("git", ["apply", "--reverse", "patches/monaco-editor+0.57.0.patch"], { cwd: root });
+    const editor = dependencyPatches.find((patch) => patch.name === "monaco-editor")!;
+    await exec("git", ["apply", "--reverse", `patches/${editor.file}`], { cwd: root });
     const first = await exec(process.execPath, [install], { cwd: root });
-    assert.match(first.stdout, /Verified dependency patch: monaco-editor@0\.57\.0/);
+    assert.ok(first.stdout.includes(`Verified dependency patch: monaco-editor@${editor.version}.`));
     const installed = await hashes(root);
     await exec(process.execPath, [install], { cwd: root });
     assert.deepEqual(await hashes(root), installed);
@@ -145,7 +146,7 @@ test("validates the Monaco build patch and permits production installations with
 
     const metadata = path.join(root, "node_modules/monaco-editor/package.json");
     const packageContents = await readFile(metadata, "utf8");
-    await writeFile(metadata, JSON.stringify({ ...JSON.parse(packageContents), version: "0.58.0" }));
+    await writeFile(metadata, JSON.stringify({ ...JSON.parse(packageContents), version: "0.0.0-drift" }));
     await assert.rejects(exec(process.execPath, [install], { cwd: root }), /dependency_patch_version_mismatch:monaco-editor/);
     await writeFile(metadata, packageContents);
 

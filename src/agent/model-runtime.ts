@@ -135,10 +135,9 @@ export class PiAgentModelCatalog implements AgentModelCatalog {
     const runtime = await this.runtime.load();
     await runtime.refresh({ allowNetwork: false });
     // Candidates are the Operator models.json providers; SQLite keys make them usable, so host authentication is not a filter.
-    const providers = new Set(Object.keys((await readOperatorModels(this.agentDir))?.providers ?? {}));
-    return runtime
-      .getModels()
-      .filter((model) => providers.has(model.provider))
+    const providers = Object.keys((await readOperatorModels(this.agentDir))?.providers ?? {});
+    return providers
+      .flatMap((provider) => runtime.getModels(provider).filter((model) => model.provider === provider))
       .map((model) => ({
         provider: model.provider,
         id: model.id,

@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 if (process.env.MCP_FIXTURE_PID_FILE) await writeFile(process.env.MCP_FIXTURE_PID_FILE, String(process.pid), { mode: 0o600 });
 const secret = process.env.MCP_FIXTURE_SECRET ?? "fixture-secret";
@@ -65,7 +65,10 @@ if (process.env.MCP_FIXTURE_HANG) {
     });
   };
   if (process.env.MCP_FIXTURE_RESOURCES) {
-    server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [{ uri: "fixture://evidence", name: "Evidence", mimeType: "text/plain" }] }));
+    const description = process.env.MCP_FIXTURE_LARGE_LIST ? "fixture entry ".repeat(2_000) : undefined;
+    server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: [{ uri: "fixture://evidence", name: "Evidence", mimeType: "text/plain", description }] }));
+    if (description)
+      server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({ resourceTemplates: [{ uriTemplate: "fixture://evidence/{id}", name: "Evidence template", description }] }));
     server.setRequestHandler(ReadResourceRequestSchema, async (request, context) => {
       if (request.params.uri === "fixture://slow") await delay(context.signal);
       return {

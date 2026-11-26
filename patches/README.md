@@ -6,9 +6,9 @@ The lockfile fixes package versions. The [patch manifest](manifest.ts) selects t
 
 ## Pi output persistence
 
-Patch: [pi-coding-agent 1.6.0](@earendil-works+pi-coding-agent+1.6.0.patch).
+Patch: [pi-coding-agent 1.6.1](@earendil-works+pi-coding-agent+1.6.1.patch).
 
-Codemode/MCP extensions accept optional saveOutput(data, extension), including read_mcp_resource. The Issue work-file owner persists images, binary and truncated output through 0600 temporary files and atomic replacement. Without the callback, SDK behavior is unchanged.
+Codemode/MCP extensions accept optional saveOutput(data, extension). Resource reads and large resource/template listings pass that callback to Pi's model-content conversion and output limiter; the application does not implement another MCP renderer. The Issue work-file owner persists images, binary and truncated output through 0600 temporary files and atomic replacement. Without the callback, SDK behavior is unchanged.
 
 This does not change tool schemas, discovery, transport, authorization or session format. Remove the corresponding patch when an equivalent supported upstream API exists; retain persistence/cancellation/failure tests.
 
@@ -30,7 +30,7 @@ Normal, asynchronous and unbounded schemas retain their behavior. No new busines
 
 ## Monaco inline-diff copying
 
-Patch: [monaco-editor 0.57.0](monaco-editor+0.57.0.patch).
+Patch: [monaco-editor 0.58.0](monaco-editor+0.58.0.patch).
 
 Inline deleted-line copying uses the original model selection already available in the native copy event and writes event.clipboardData directly. This avoids recursive textarea/execCommand fallback on HTTP pages without Clipboard API and preserves CRLF. Without event clipboard data, upstream fallback remains.
 

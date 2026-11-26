@@ -37,7 +37,7 @@ SQLite, JSONL, Git, attachments and work files jointly retain facts. There is no
 | HTTP route context, reauthorization after waits and Issue reservations | [route-context.ts](../../src/http/route-context.ts) |
 | Admission, scheduling, reservations, cancellation and recovery | [engine.ts](../../src/agent/engine.ts), [message-delivery.ts](../../src/agent/message-delivery.ts); callers depend on [contracts.ts](../../src/agent/contracts.ts) |
 | Round preparation (workspace, evidence, credentials, tools, prompt context) | [round-preparation.ts](../../src/agent/round-preparation.ts) |
-| Issue creation: key claim, root claim, attachment publication, one transaction and rollback | [issues/create.ts](../../src/issues/create.ts) |
+| Issue creation: reauthorization and reservations, key/root claim, transaction and rollback, post-commit scheduling | [create-command.ts](../../src/issues/create-command.ts), [create.ts](../../src/issues/create.ts) |
 | Issue status writes: one guarded transition; callers own their stable refusal codes | [issues/status.ts](../../src/issues/status.ts) |
 | Issue edit persistence (attachments, recipients, rollback) and related-Issue sets | [issues/edit.ts](../../src/issues/edit.ts), [issues/relations.ts](../../src/issues/relations.ts) |
 | Pi sessions, model isolation and resources | [pi-session.ts](../../src/agent/pi-session.ts), [model-runtime.ts](../../src/agent/model-runtime.ts), [pi-runtime.ts](../../src/configuration/pi-runtime.ts) |

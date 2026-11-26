@@ -340,6 +340,27 @@ test("MCP connection closure failure is visible after a committed import and doe
   }
 });
 
+test("a post-commit enqueue failure keeps the imported key even if the connection also fails to close", async (t) => {
+  const f = await fixture();
+  try {
+    f.state.closeError = true;
+    t.mock.method(f.engine, "enqueue", () => {
+      throw new Error("fixture-private-enqueue");
+    });
+    const response = await f.submit({ startAgent: true });
+    assert.equal(response.statusCode, 500);
+    const rows = await f.database.db.select({ key: issues.key }).from(issues);
+    assert.equal(rows.length, 1);
+    assert.deepEqual(response.json(), { error: "issue_created_enqueue_unconfirmed", outcome: "committed", issueKey: rows[0]!.key });
+    const retry = await f.submit({ startAgent: true });
+    assert.equal(retry.json().status, "existing");
+    assert.equal(retry.json().issueKey, rows[0]!.key);
+    assert.equal(f.engine.enqueued.length, 0);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("import and MCP closure failures retain both causes without exposing private details", async () => {
   const f = await fixture();
   try {
