@@ -33,6 +33,45 @@ for (const step of ["enqueue", "summary"] as const)
     }
   });
 
+for (const step of ["before-enqueue", "after-enqueue", "summary"] as const)
+  test(`an edit reports committed metadata and uploads after ${step} failure`, async (t) => {
+    const f = await createApiFixture();
+    try {
+      await createService(f.app, "edit-receipt");
+      const issue = await createIssue(f.app, "edit-receipt"),
+        url = `/api/issues/${issue.id}`;
+      f.engine.running.clear();
+      const expectedEditVersion = await issueEditVersion(f.app, issue.id);
+      const enqueue = f.engine.enqueue.bind(f.engine);
+      const fail = () => {
+        throw new Error("fixture_private_detail");
+      };
+      const hook =
+        step === "summary"
+          ? t.mock.method(f.engine, "getRunState", fail)
+          : t.mock.method(f.engine, "enqueue", (id: string) => {
+              if (step === "after-enqueue") enqueue(id);
+              fail();
+            });
+      const form = new FormData();
+      form.append("issue", JSON.stringify({ ...issueMetadataPayload("Committed edit"), expectedEditVersion }));
+      form.append("files", new Blob(["fixture evidence"]), "receipt.txt");
+      const request = new Request("http://fixture.test", { method: "PATCH", body: form });
+      const result = await f.app.inject({ method: "PATCH", url, headers: { "content-type": request.headers.get("content-type")! }, payload: Buffer.from(await request.arrayBuffer()) });
+      hook.mock.restore();
+      assert.equal(result.statusCode, 500);
+      assert.deepEqual(result.json(), { error: step === "summary" ? "issue_edit_summary_unavailable" : "issue_edit_enqueue_unconfirmed", outcome: "committed" });
+      const saved = (await f.app.inject({ url })).json();
+      assert.equal(saved.title, "Committed edit");
+      assert.notEqual(saved.editVersion, expectedEditVersion);
+      assert.equal(saved.attachments.length, 1);
+      assert.equal(await readFile(path.join(saved.workingDirectory, saved.attachments[0].storedFileName), "utf8"), "fixture evidence");
+      assert.equal(f.engine.enqueued.length, step === "before-enqueue" ? 1 : 2);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
 test("every edit requires a valid version before metadata, attachments or session state can change", async () => {
   const f = await createApiFixture();
   try {
@@ -116,7 +155,7 @@ test("concurrent editors cannot overwrite metadata, CC or attachment changes wit
     const withAttachment = await detail();
     assert.notEqual(withAttachment.editVersion, withCc.editVersion);
     const closedBefore = f.engine.closedSessions.length;
-    const conflict = await save(withCc.editVersion, { removedAttachmentIds: [withAttachment.attachments[0].id], resetSession: true });
+    const conflict = await save(withCc.editVersion, { removedAttachmentIds: [withAttachment.attachments[0].id], resetSession: true, expectedResetVersion: "0".repeat(64) });
     assert.equal(conflict.statusCode, 409);
     assert.equal(conflict.json().error, "issue_edit_conflict");
     assert.equal(f.engine.closedSessions.length, closedBefore);

@@ -504,19 +504,29 @@ export async function createIssue(input: IssueCreateInput, files: File[] = []): 
   if (typeof issue?.id !== "string" || !parseIssueKey(issue.id)) throw new RequestError("issue_creation_unconfirmed", "unknown");
   return issue;
 }
-export function updateIssue(
+export async function updateIssue(
   key: string,
   input: IssueMetadataInput & { expectedEditVersion: string },
   removedAttachmentIds: string[] = [],
   files: File[] = [],
-  resetSession = false,
+  expectedResetVersion?: string,
 ): Promise<IssueExecutionItem> {
-  const body = resetSession ? { ...input, resetSession } : input;
-  if (!removedAttachmentIds.length && !files.length) return jsonRequest(issuePath(key), "PATCH", body);
-  const form = new FormData();
-  form.append("issue", JSON.stringify({ ...body, removedAttachmentIds }));
-  appendFiles(form, files);
-  return request(issuePath(key), { method: "PATCH", body: form });
+  const body = expectedResetVersion !== undefined ? { ...input, resetSession: true, expectedResetVersion } : input;
+  const form = removedAttachmentIds.length || files.length ? new FormData() : undefined;
+  if (form) {
+    form.append("issue", JSON.stringify({ ...body, removedAttachmentIds }));
+    appendFiles(form, files);
+  }
+  let summary: IssueExecutionItem;
+  try {
+    summary = await request(issuePath(key), { method: "PATCH", body: form ?? JSON.stringify(body) });
+  } catch (cause) {
+    // A proxy error page or lost response is not an application receipt.
+    if (cause instanceof RequestError && (cause.outcome || cause.message !== `request_failed:${cause.status}`)) throw cause;
+    throw new RequestError("issue_edit_unconfirmed", "unknown");
+  }
+  if (summary?.id !== key) throw new RequestError("issue_edit_unconfirmed", "unknown");
+  return summary;
 }
 export const updateIssueStatus = (key: string, status: "open" | "resolved") => jsonRequest<IssueExecutionItem>(issuePath(key, "/status"), "PATCH", { status });
 export const planIssueScopeTransition = (key: string, target: { serviceKey: string; workMode: IssueWorkMode }, signal?: AbortSignal) =>

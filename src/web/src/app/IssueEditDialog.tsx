@@ -8,6 +8,11 @@ import { AttachmentPicker, DescriptionField, selectedChoice } from "./IssueForm"
 import { errorText, type ErrorTexts } from "./error-text";
 import { environmentKind, personLabel, priorityOptions } from "./model";
 
+const recoveryNotices = {
+  metadata: "工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。",
+  session: "会话已被重置，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。",
+  unknown: "无法确认保存结果。草稿仍保留，请先核对工单，不要重复提交。",
+};
 const editErrors: ErrorTexts = { issue_already_running: "工单正在处理，请等待处理结束后再保存。" };
 
 /** The one Issue edit draft: metadata, recipients, attachments and the optional save-and-reset. */
@@ -21,7 +26,7 @@ export function IssueEditDialog(props: {
 }) {
   const { currentUser, people, peopleError } = useApplicationResources();
   const [base, setBase] = createSignal<IssueDetail | null>(null);
-  const [conflict, setConflict] = createSignal(false);
+  const [recovery, setRecovery] = createSignal<keyof typeof recoveryNotices>();
   const [title, setTitle] = createSignal("");
   const [description, setDescription] = createSignal("");
   const [priority, setPriority] = createSignal<IssuePriority>("p2");
@@ -33,11 +38,15 @@ export function IssueEditDialog(props: {
   const [resetting, setResetting] = createSignal(false);
   const [committed, setCommitted] = createSignal("");
   const [error, setError] = createSignal("");
+  const formMessage = () => {
+    const reason = recovery();
+    return error() || (reason ? recoveryNotices[reason] : peopleError());
+  };
   let disposed = false;
 
   const initialize = (issue: IssueDetail) => {
     setBase(issue);
-    setConflict(false);
+    setRecovery(undefined);
     setTitle(issue.title);
     setDescription(issue.description);
     setPriority(issue.priority);
@@ -84,7 +93,9 @@ export function IssueEditDialog(props: {
   };
   // Active work conflicts with the edit/reset reservation even when the server's reset rule passes.
   const resetDisabled = () =>
-    !canResetIssueSession({ actorRole: currentUser()?.role ?? "product", status: props.issue.status, agentRunning: props.issue.agentRunning }) || isWorkspaceBusy(props.issue.workspace.status);
+    !base()?.resetVersion ||
+    !canResetIssueSession({ actorRole: currentUser()?.role ?? "product", status: props.issue.status, agentRunning: props.issue.agentRunning }) ||
+    isWorkspaceBusy(props.issue.workspace.status);
 
   const close = () => {
     setAttachments([]);
@@ -136,7 +147,7 @@ export function IssueEditDialog(props: {
   };
   const save = async (reset = false) => {
     const current = base();
-    if (!current || saving() || committed() || !title().trim() || (reset && resetDisabled())) return;
+    if (!current || saving() || committed() || recovery() === "unknown" || !title().trim() || (reset && resetDisabled())) return;
     setSaving(true);
     setResetting(reset);
     setError("");
@@ -154,18 +165,18 @@ export function IssueEditDialog(props: {
         },
         [...removedAttachmentIds()],
         [...attachments()],
-        reset,
+        reset ? current.resetVersion : undefined,
       );
       if (disposed) return;
       markCommitted(reset ? "工单已保存并重置" : "工单已保存");
       await refreshSaved();
     } catch (cause) {
       if (disposed) return;
-      if (cause instanceof RequestError && cause.outcome === "committed") markCommitted("工单已保存，后续清理失败，请重新读取");
-      else if (cause instanceof Error && cause.message === "issue_edit_conflict") {
-        setConflict(true);
-        setError("工单已被修改，当前草稿仍保留。请复制需要保留的内容，再重新载入最新工单。");
-      } else setError(errorText(cause, editErrors));
+      if (cause instanceof RequestError && cause.outcome === "committed") markCommitted(errorText(cause, undefined, "工单已保存，请重新读取"));
+      else if (cause instanceof RequestError && cause.outcome === "unknown") setRecovery("unknown");
+      else if (cause instanceof Error && cause.message === "issue_edit_conflict") setRecovery("metadata");
+      else if (cause instanceof Error && cause.message === "agent_session_changed") setRecovery("session");
+      else setError(errorText(cause, editErrors));
     } finally {
       if (!disposed) {
         setSaving(false);
@@ -194,7 +205,7 @@ export function IssueEditDialog(props: {
               <>
                 <Button
                   danger
-                  disabled={saving() || !title().trim() || resetDisabled()}
+                  disabled={saving() || recovery() === "unknown" || !title().trim() || resetDisabled()}
                   loading={saving() && resetting()}
                   onClick={() => {
                     void save(true);
@@ -204,7 +215,7 @@ export function IssueEditDialog(props: {
                 </Button>
                 <Button
                   type="primary"
-                  disabled={saving() || !title().trim()}
+                  disabled={saving() || recovery() === "unknown" || !title().trim()}
                   loading={saving() && !resetting()}
                   onClick={() => {
                     void save();
@@ -232,10 +243,10 @@ export function IssueEditDialog(props: {
         }
       >
         <div class="create-issue-form compact-issue-form edit-issue-form">
-          <Show when={error() || peopleError()}>
+          <Show when={formMessage()}>
             <div class="create-error modal-form-error" role="alert">
-              {error() || peopleError()}
-              <Show when={conflict()}>
+              {formMessage()}
+              <Show when={recovery()}>
                 <Button size="small" disabled={saving()} onClick={() => void reloadDraft()}>
                   重新载入（放弃草稿）
                 </Button>

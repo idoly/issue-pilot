@@ -29,6 +29,7 @@ const issue: IssueDetail = {
   agentRunning: false,
   resolvedAt: null,
   editVersion: "a".repeat(64),
+  resetVersion: "b".repeat(64),
   id: "ISSUE-20261018-001",
   title: "Synthetic scope",
   description: "",
@@ -78,7 +79,7 @@ it("saves edits and resets from the footer without confirmation", async () => {
   expect(within(dialog).getByText(/重置会保存当前修改并创建新会话/)).toBeTruthy();
   fireEvent.click(reset);
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
-  expect(state.update).toHaveBeenCalledWith(issue.id, expect.objectContaining({ title: "修改后的标题" }), [], [], true);
+  expect(state.update).toHaveBeenCalledWith(issue.id, expect.objectContaining({ title: "修改后的标题" }), [], [], issue.resetVersion);
   expect(confirm).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑工单" })).toBeNull());
 });
@@ -146,6 +147,59 @@ it("keeps the editor version across background refresh and preserves a conflicte
   expect(state.update.mock.calls[1]?.[1]).toMatchObject({ title: latest.title, expectedEditVersion: latest.editVersion });
   expect(state.update.mock.calls[1]?.[3]).toEqual([]);
 });
+it("pins the reset generation at open and preserves uploads on a stale reset until explicit reload", async () => {
+  const next = { ...issue, resetVersion: "c".repeat(64) };
+  const [current, setCurrent] = createSignal(issue);
+  state.update.mockRejectedValueOnce(new RequestError("agent_session_changed"));
+  state.read.mockResolvedValueOnce(next);
+  render(() => <Workspace issue={current()} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "编辑工单" }));
+  const dialog = await screen.findByRole("dialog", { name: "编辑工单" });
+  await fireEvent.change(uploadInput(dialog), { target: { files: [new File(["keep"], "draft.txt")] } });
+  setCurrent(next);
+  fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("会话已被重置");
+  expect(state.update.mock.calls[0]?.at(-1)).toBe(issue.resetVersion);
+  expect(within(dialog).getByText("draft.txt")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "重新载入（放弃草稿）" }));
+  await waitFor(() => expect(within(dialog).queryByText("draft.txt")).toBeNull());
+  fireEvent.click(within(dialog).getByRole("button", { name: "重置" }));
+  await waitFor(() => expect(state.update.mock.calls[1]?.at(-1)).toBe(next.resetVersion));
+});
+
+for (const [code, notice] of [
+  ["issue_edit_summary_unavailable", "未能读取最新摘要"],
+  ["issue_edit_enqueue_unconfirmed", "无法确认 Agent 是否已入队"],
+] as const)
+  it(`offers only a read after ${code}`, async () => {
+    state.update.mockRejectedValueOnce(new RequestError(code, "committed"));
+    const refresh = vi.fn<() => Promise<void>>(async () => {});
+    const dialog = await open(refresh);
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(notice);
+    expect(within(dialog).queryByRole("button", { name: "保存" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "重新读取" }));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(state.update).toHaveBeenCalledOnce();
+  });
+
+it("keeps an unconfirmed upload visible without offering another write until reload", async () => {
+  state.update.mockRejectedValueOnce(new RequestError("issue_edit_unconfirmed", "unknown"));
+  const dialog = await open();
+  await fireEvent.change(uploadInput(dialog), { target: { files: [new File(["keep"], "draft.txt")] } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toContain("无法确认保存结果");
+  expect(within(dialog).getByText("draft.txt")).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", true);
+  expect(within(dialog).getByRole("button", { name: "重置" })).toHaveProperty("disabled", true);
+  // Changing picked files clears transient picker errors, not the uncertain write or its read-only recovery action.
+  await fireEvent.change(uploadInput(dialog), { target: { files: [new File(["more"], "more.txt")] } });
+  expect(within(dialog).getByRole("alert").textContent).toContain("无法确认保存结果");
+  fireEvent.click(within(dialog).getByRole("button", { name: "重新载入（放弃草稿）" }));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "保存" })).toHaveProperty("disabled", false));
+  expect(state.update).toHaveBeenCalledOnce();
+});
+
 it("preserves uploads and allows the unchanged edit to retry after atomic reset failure", async () => {
   state.update.mockRejectedValueOnce(new Error("reset_failed"));
   const updated = vi.fn<NonNullable<Parameters<typeof IssueWorkspace>[0]["onUpdated"]>>(async () => {}),
@@ -166,7 +220,7 @@ it("saves normally without reading or resetting the session", async () => {
     dialog = await open(updated);
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(updated).toHaveBeenCalledOnce());
-  expect(state.update.mock.calls[0]!.at(-1)).toBe(false);
+  expect(state.update.mock.calls[0]!.at(-1)).toBeUndefined();
 });
 it("disables editing while an Agent round is queued or running and keeps history reachable", () => {
   render(() => <Workspace issue={{ ...issue, agentRunning: true }} onOpenSource={() => {}} onUpdated={async () => {}} onCreatedFollowUp={() => {}} />);
@@ -255,7 +309,7 @@ for (const change of ["identity", "issue"] as const)
         expect(within(currentDialog).queryByRole("alert")).toBeNull();
         fireEvent.click(within(currentDialog).getByRole("button", { name: "保存" }));
         await waitFor(() => expect(state.update).toHaveBeenCalledTimes(2));
-        expect(state.update.mock.calls[1]).toEqual([currentIssue().id, expect.anything(), [attachment.id], [file], false]);
+        expect(state.update.mock.calls[1]).toEqual([currentIssue().id, expect.anything(), [attachment.id], [file], undefined]);
       } finally {
         rejectPending(new Error("test_cleanup"));
         await pending.catch(() => undefined);

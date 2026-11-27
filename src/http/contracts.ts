@@ -63,6 +63,8 @@ export interface IssueExecutionItem extends IssueListItem {
 
 export interface IssueDetail extends IssueExecutionItem {
   editVersion: string;
+  /** Present for a bound conversation, independent of metadata and transcript appends. */
+  resetVersion?: string;
   description: string;
   repositories: Array<{ name: string; url: string; baseBranch: string; workingBranch: string | null }>;
   workspace: { status: WorkspaceStatus; sourceAvailable: boolean; runtimeReady: boolean; lastError: string | null; retryable: boolean };

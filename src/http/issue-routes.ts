@@ -1,9 +1,9 @@
 import { DomainError } from "../domain/errors.ts";
-import { createHash, randomUUID } from "node:crypto";
+import { OperationError } from "../operation-error.ts";
 import { createIssue } from "../issues/create-command.ts";
 import { IssueCreatedError } from "../issues/creation-receipt.ts";
-import { parseIssueMetadataInput, parseRelatedIssueKeys, requireDevelopmentOwner, validateRelatedIssues } from "../issues/form-input.ts";
-import { updateIssueRecord } from "../issues/edit.ts";
+import { parseRelatedIssueKeys, validateRelatedIssues } from "../issues/form-input.ts";
+import { applyIssueEdit, issueEditVersion, parseIssueEdit, sessionBindingVersion } from "../issues/edit-command.ts";
 import { updateIssueRelations } from "../issues/relations.ts";
 import { transitionIssue } from "../issues/status.ts";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -11,15 +11,13 @@ import type { FastifyRequest } from "fastify";
 
 import { errorCode } from "../diagnostics.ts";
 import { readSnapshot, type DatabaseReader } from "../db/client.ts";
-import { issueMetadataUpdatePrompt } from "../agent/prompts.ts";
-import { issueSessionHistory, resetIssueSession } from "../agent/session-reset.ts";
-import { agentSessions, environments, issueAttachments, issueCcRecipients, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, services, subjects } from "../db/schema.ts";
-import { canWriteIssueCode, credentialOwnerSubject, relatedIssueUpdateRefusal, requiresDeveloperOwner } from "../domain/contracts.ts";
+import { agentSessions, issueAttachments, issueCcRecipients, issuePins, issueRelations, issueRepositories, issues, issueWorkspaces, subjects } from "../db/schema.ts";
+import { canWriteIssueCode, relatedIssueUpdateRefusal } from "../domain/contracts.ts";
 import { issueRepositoryWorkspaceNames } from "../workspace/git.ts";
 import { classifyRepositoryState, hasRepositoryView, issueRoot, pathExists } from "../workspace/state.ts";
-import { type PendingAttachment, readMultipartAttachment, removePendingAttachments, resolveSecureAttachmentFile, serializeAttachment } from "../workspace/attachments.ts";
+import { type PendingAttachment, readMultipartAttachment, removePendingAttachments, serializeAttachment } from "../workspace/attachments.ts";
 import { participatingServices } from "../workspace/issue-services.ts";
-import { choice, record, strings, text } from "../domain/input.ts";
+import { choice, record, text } from "../domain/input.ts";
 import type { IssueDetail, IssueExecutionItem } from "./contracts.ts";
 import { issueSummaryQuery, serializeIssueSummary, type IssueSummaryRow } from "./issue-summary.ts";
 import {
@@ -29,6 +27,7 @@ import {
   requireAdmin,
   requireCurrentUser,
   requireDeveloper,
+  requireDeveloperUser,
   requireIssue,
   runIssueExclusive,
   serializePerson,
@@ -36,27 +35,6 @@ import {
 } from "./route-context.ts";
 
 const MANUAL_ISSUE_STATUSES = ["open", "resolved"] as const;
-const ISSUE_SCOPE_INPUT_FIELDS = ["serviceKey", "environmentKey", "type", "workMode", "relatedIssueKeys"] as const;
-
-/** Version only the edited state; Agent progress must not invalidate a draft. */
-function issueEditVersion(issue: typeof issues.$inferSelect, attachments: readonly { id: string }[], ccSubjects: readonly string[]): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        issue.id,
-        issue.title,
-        issue.description,
-        issue.priority,
-        issue.assigneeSubject,
-        issue.serviceId,
-        issue.environmentId,
-        issue.type,
-        attachments.map(({ id }) => id).sort(),
-        [...ccSubjects].sort(),
-      ]),
-    )
-    .digest("hex");
-}
 
 async function readIssueInput(stateRoot: string, request: FastifyRequest): Promise<{ input: Record<string, unknown>; attachments: PendingAttachment[] }> {
   if (!request.isMultipart()) return { input: record(request.body), attachments: [] };
@@ -155,78 +133,28 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     const { input, attachments: pendingAttachments } = await readIssueInput(stateRoot, request);
     const failures: unknown[] = [];
     try {
-      const expectedEditVersion = input.expectedEditVersion;
-      if (typeof expectedEditVersion !== "string" || !/^[0-9a-f]{64}$/.test(expectedEditVersion)) throw new DomainError("invalid_issue_edit_version", "bad_request");
-      if (input.resetSession !== undefined && typeof input.resetSession !== "boolean") throw new DomainError("invalid_reset_session", "bad_request");
-      // Saving and resetting in one reservation: the reset must not find a metadata round already queued.
-      const resetSession = input.resetSession === true;
-      if (resetSession) await requireDeveloper(database, request);
-      const removedAttachmentIds = [...new Set(strings(input.removedAttachmentIds ?? [], "attachment_ids"))];
-      if (ISSUE_SCOPE_INPUT_FIELDS.some((field) => Object.hasOwn(input, field))) throw new DomainError("issue_scope_update_not_allowed", "bad_request");
+      const edit = parseIssueEdit(input);
+      if (edit.expectedResetVersion) await requireDeveloper(database, request);
       return await runScopeExclusive(() =>
         runIssueExclusive(engine, [issue.id], async (reservation) => {
-          const editor = await requireCurrentUser(database, request);
-          const editorSubject = editor.subject;
+          const editor = edit.expectedResetVersion ? await requireDeveloperUser(database, request) : await requireCurrentUser(database, request);
           const currentIssue = await requireIssue(database, issue.key);
-          const currentAttachments = await database.db.select().from(issueAttachments).where(eq(issueAttachments.issueId, issue.id));
-          const recipients = await database.db.select({ subject: issueCcRecipients.subject }).from(issueCcRecipients).where(eq(issueCcRecipients.issueId, issue.id));
-          if (
-            expectedEditVersion !==
-            issueEditVersion(
-              currentIssue,
-              currentAttachments,
-              recipients.map(({ subject }) => subject),
-            )
-          )
-            throw new DomainError("issue_edit_conflict", "conflict");
-          if (resetSession) {
-            await requireDeveloper(database, request);
-            if (currentIssue.status === "resolved") throw new DomainError("resolved_issue_cannot_reset_session", "conflict");
-          }
-          const currentSession = resetSession ? (await issueSessionHistory(database.db, stateRoot, currentIssue))[0] : undefined;
-          if (resetSession && !currentSession) throw new DomainError("agent_session_not_found", "conflict");
-          const [[issueEnvironment], [issueService], issueValues] = await Promise.all([
-            database.db.select({ key: environments.key, kind: environments.kind }).from(environments).where(eq(environments.id, currentIssue.environmentId)).limit(1),
-            database.db.select({ key: services.key, name: services.name }).from(services).where(eq(services.id, currentIssue.serviceId)).limit(1),
-            parseIssueMetadataInput(database.db, input),
-          ]);
-          if (!issueEnvironment || !issueService) throw new DomainError("issue_scope_not_found", "conflict");
-          const removedAttachmentIdSet = new Set(removedAttachmentIds);
-          const removedAttachments = currentAttachments.filter((attachment) => removedAttachmentIdSet.has(attachment.id));
-          if (removedAttachments.length !== removedAttachmentIds.length) throw new DomainError("attachment_not_found", "not_found");
-          if (requiresDeveloperOwner(issueEnvironment.kind))
-            await requireDevelopmentOwner(database.db, credentialOwnerSubject({ assigneeSubject: issueValues.assigneeSubject, reporterSubject: currentIssue.reporterSubject }));
-          const attachmentRoot = issueRoot(stateRoot, issue.key);
-          await Promise.all(removedAttachments.map(({ objectKey, size }) => resolveSecureAttachmentFile(attachmentRoot, objectKey, size)));
-          await reservation.closeSession(issue.id);
-          const createdAttachments = await updateIssueRecord({
+          await applyIssueEdit({
             database: database.db,
             stateRoot,
-            issue,
-            values: issueValues,
-            editorSubject,
-            removedAttachments,
-            addedAttachments: pendingAttachments,
-            persist: (save) =>
-              resetSession ? resetIssueSession(database.db, stateRoot, currentIssue, editorSubject, currentSession!.sessionId, save).then(() => undefined) : database.db.transaction(save),
+            reservation,
+            events,
+            issue: currentIssue,
+            editor,
+            edit,
+            uploads: pendingAttachments,
             onFinalizeError: (error) => request.log.error({ issueKey: issue.key, code: errorCode(error) }, "attachment_finalize_failed"),
           });
-          const attachmentDtos = [...currentAttachments.filter((attachment) => !removedAttachmentIdSet.has(attachment.id)).map(serializeAttachment), ...createdAttachments];
-          if (resetSession) {
-            events.publish({ id: randomUUID(), issueId: issue.id, createdAt: new Date().toISOString(), event: { type: "session_reset" } });
-          } else if (currentIssue.status !== "resolved" && canWriteIssueCode(editor, issueEnvironment.kind)) {
-            reservation.enqueue(
-              issue.id,
-              issueMetadataUpdatePrompt({
-                issue: { ...currentIssue, ...issueValues },
-                service: issueService,
-                environmentKey: issueEnvironment.key,
-                attachments: attachmentDtos,
-                attachmentPath: attachmentRoot,
-              }),
-            );
+          try {
+            return await readIssueSummary(issue.id);
+          } catch (cause) {
+            throw new OperationError("issue_edit_summary_unavailable", "committed", { cause });
           }
-          return readIssueSummary(issue.id);
         }),
       );
     } catch (error) {
@@ -333,6 +261,7 @@ export function registerIssueRoutes(context: ApiRouteContext, now: () => Date = 
     const sourceAvailable = Boolean(repositoryState !== "invalid" && hasRepositoryView(repositoryState, workspace) && (await pathExists(issueRoot(stateRoot, issue.key))));
     const detail: IssueDetail = {
       ...summary,
+      ...(sessionBinding ? { resetVersion: sessionBindingVersion(issue.id, sessionBinding.sessionFile) } : {}),
       editVersion: issueEditVersion(
         issue,
         attachmentRows,

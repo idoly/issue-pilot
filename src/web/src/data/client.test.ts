@@ -212,6 +212,26 @@ describe("API client", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("sends the pinned reset version in JSON and multipart and treats a lost edit receipt as unknown", async () => {
+    const key = "ISSUE-20260810-001",
+      expectedResetVersion = "b".repeat(64);
+    const input = { title: "Updated", description: "", priority: "p2" as const, assigneeSubject: null, ccSubjects: [], expectedEditVersion: "a".repeat(64) };
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal("fetch", fetch);
+    for (const files of [[], [new File(["abc"], "abc.txt")]]) {
+      fetch.mockResolvedValueOnce(Response.json({ id: key }));
+      await updateIssue(key, input, [], files, expectedResetVersion);
+      const body = fetch.mock.calls.at(-1)?.[1]?.body;
+      expect(JSON.parse(String(body instanceof FormData ? body.get("issue") : body))).toMatchObject({ resetSession: true, expectedResetVersion });
+    }
+    fetch
+      .mockRejectedValueOnce(new TypeError("connection closed"))
+      .mockResolvedValueOnce(Response.json({}))
+      .mockResolvedValueOnce(new Response("gateway timeout", { status: 504 }));
+    for (let i = 0; i < 3; i++) await expect(updateIssue(key, input)).rejects.toMatchObject({ message: "issue_edit_unconfirmed", outcome: "unknown" });
+    expect(fetch).toHaveBeenCalledTimes(5);
+  });
+
   it("sends the selected user identity with API requests", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

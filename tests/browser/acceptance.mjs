@@ -1277,7 +1277,9 @@ try {
     await page.getByRole("heading", { name: synchronizedTitle, exact: true }).waitFor();
     await page.getByLabel("工单队列", { exact: true }).getByText(synchronizedTitle, { exact: true }).waitFor();
     await page.getByRole("button", { name: "编辑工单", exact: true }).click();
-    await page.waitForFunction((button) => !button.disabled, await edit.getByRole("button", { name: "重置", exact: true }).elementHandle());
+    // No bound conversation in this fixture yet. Saving metadata stays available, resetting does not.
+    assert.equal(await edit.getByRole("button", { name: "重置", exact: true }).isDisabled(), true);
+    assert.equal(await edit.getByRole("button", { name: "保存", exact: true }).isEnabled(), true);
     await edit.getByRole("button", { name: "取消", exact: true }).click();
     const externallyEditedDescription = "Description changed without an updated timestamp";
     await synchronization.db.update(issues).set({ description: externallyEditedDescription }).where(eq(issues.id, issue.id));
@@ -1590,6 +1592,9 @@ try {
     return response.json().sessionId;
   };
   appendRound(evidenceSession, "round one");
+  await page.getByRole("button", { name: "编辑工单", exact: true }).click();
+  const resetEditor = page.getByRole("dialog", { name: "编辑工单", exact: true });
+  await resetEditor.getByLabel("编辑工单标题").fill("Stale reset draft");
   const secondSessionId = await resetEvidence(evidenceSession.getSessionId());
   const historyDatabase = openDatabase(databaseFile);
   try {
@@ -1597,7 +1602,15 @@ try {
   } finally {
     historyDatabase.close();
   }
-  await resetEvidence(secondSessionId);
+  // A separate reset replaced this editor's generation without changing metadata. No third generation until explicit reload and a new reset.
+  await resetEditor.getByRole("button", { name: "重置", exact: true }).click();
+  await resetEditor.getByRole("alert").filter({ hasText: "会话已被重置" }).waitFor();
+  assert.equal(await resetEditor.getByLabel("编辑工单标题").inputValue(), "Stale reset draft");
+  assert.equal((await app.inject({ url: `/api/issues/${evidenceIssue.id}/sessions` })).json().length, 2);
+  await resetEditor.getByRole("button", { name: "重新载入（放弃草稿）" }).click();
+  await page.waitForFunction((input) => input.value !== "Stale reset draft", await resetEditor.getByLabel("编辑工单标题").elementHandle());
+  await resetEditor.getByRole("button", { name: "重置", exact: true }).click();
+  await resetEditor.waitFor({ state: "hidden" });
   const verifyHistory = async (label) => {
     const header = page.locator(".issue-header");
     await header.getByRole("button", { name: "查看历史", exact: true }).click();

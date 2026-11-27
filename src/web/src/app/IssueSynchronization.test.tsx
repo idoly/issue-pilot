@@ -115,6 +115,7 @@ async function open() {
 
 it("finishes cleanup in both the conversation and details even when the business status stays pending", async () => {
   current.agentRunning = true;
+  current.resetVersion = "b".repeat(64); // This conversation stays bound after cleanup.
   const stream = await open();
   expect(screen.getByTitle("中断当前处理并取消后续排队，保留未发送草稿")).toBeTruthy();
   stream.emit("message", { id: "complete", event: { type: "issue_status", status: "complete" } });

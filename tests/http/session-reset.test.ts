@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { issuePilotConfig } from "../../issue-pilot.config.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createPrivateSessionManager } from "../../src/agent/pi-session.ts";
+import { AgentEventBus } from "../../src/agent/events.ts";
 import { cachedReceiptIndexCount, readIssueMessageReceipt } from "../../src/agent/session-reset.ts";
 import { appendFile } from "node:fs/promises";
 import { openDatabase } from "../../src/db/client.ts";
@@ -20,7 +21,8 @@ import { issueRoot } from "../../src/workspace/state.ts";
 import { issueEditVersion, createApiFixture, createService, createIssue, issueMetadataPayload } from "./fixture.ts";
 const headers = { "x-issue-pilot-subject": issuePilotConfig.bootstrapUser.subject };
 async function fixture() {
-  const f = await createApiFixture();
+  const events = new AgentEventBus();
+  const f = await createApiFixture({ events });
   const db = openDatabase(f.databaseFile);
   await createService(f.app, "Sessions");
   const summary = await createIssue(f.app, "sessions");
@@ -35,8 +37,16 @@ async function fixture() {
   manager.appendCustomEntry("issue-pilot-user", { message: "Saved old question" });
   await db.db.insert(agentSessions).values({ issueId: issue.id, sessionFile: manager.getSessionFile()!, workspacePath: root });
   await writeFile(root + "/report.txt", "existing report");
+  const editVersions = async () => {
+    const detail = await f.app.inject({ url: `/api/issues/${issue.key}` });
+    assert.equal(detail.statusCode, 200);
+    const { editVersion, resetVersion } = detail.json();
+    return { expectedEditVersion: editVersion, expectedResetVersion: resetVersion };
+  };
   return {
     ...f,
+    events,
+    editVersions,
     db,
     issue,
     root,
@@ -263,6 +273,60 @@ for (const kind of ["directory", "FIFO"] as const)
       await f.cleanup();
     }
   });
+test("only one combined reset can consume the generation shown in an unchanged editor", async () => {
+  const f = await fixture();
+  try {
+    const url = `/api/issues/${f.issue.key}`;
+    const versions = await f.editVersions();
+    const reset = { ...issueMetadataPayload(f.issue.title), ...versions, resetSession: true };
+    const patch = (payload: object) => f.app.inject({ method: "PATCH", url, headers, payload });
+    for (const expectedResetVersion of [undefined, 1, "", "not-a-version"]) {
+      const refused = await patch({ ...reset, expectedResetVersion });
+      assert.equal(refused.statusCode, 400);
+      assert.equal(refused.json().error, "invalid_reset_version");
+    }
+    f.manager.appendCustomEntry("issue-pilot-user", { message: "new entry, same generation" });
+    assert.deepEqual(await f.editVersions(), versions);
+    const old = await readFile(f.manager.getSessionFile()!);
+    const responses = await Promise.all([patch(reset), patch(reset)]);
+    assert.deepEqual(responses.map((r) => r.statusCode).sort(), [200, 409]);
+    assert.equal(responses.find((r) => r.statusCode === 409)!.json().error, "agent_session_changed");
+    const next = await f.editVersions();
+    assert.match(next.expectedResetVersion, /^[0-9a-f]{64}$/);
+    assert.notEqual(next.expectedResetVersion, versions.expectedResetVersion);
+    assert.equal(next.expectedEditVersion, versions.expectedEditVersion);
+    assert.equal(f.engine.closedSessions.length, 1);
+    assert.equal(f.engine.enqueued.length, 1);
+    assert.equal((await readdir(f.root)).filter((name) => name.startsWith(".session-")).length, 2);
+    assert.deepEqual(await readFile(f.manager.getSessionFile()!), old);
+    // Replacing the conversation does not invalidate a metadata-only save from the same editor.
+    assert.equal((await patch({ ...issueMetadataPayload("Plain save"), expectedEditVersion: versions.expectedEditVersion })).statusCode, 200);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a failed reset notification leaves one committed edit and replacement binding", async (t) => {
+  const f = await fixture();
+  try {
+    const url = `/api/issues/${f.issue.key}`;
+    const versions = await f.editVersions();
+    const hook = t.mock.method(f.events, "publish", () => {
+      throw new Error("fixture_private_notification_error");
+    });
+    const result = await f.app.inject({ method: "PATCH", url, headers, payload: { ...issueMetadataPayload("Committed reset"), ...versions, resetSession: true } });
+    hook.mock.restore();
+    assert.equal(result.statusCode, 500);
+    assert.deepEqual(result.json(), { error: "issue_edit_reset_notification_failed", outcome: "committed" });
+    assert.equal((await f.app.inject({ url })).json().title, "Committed reset");
+    assert.notEqual((await f.editVersions()).expectedResetVersion, versions.expectedResetVersion);
+    assert.equal((await f.app.inject({ url: `${url}/sessions` })).json().length, 2);
+    assert.equal(f.engine.enqueued.length, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("saving metadata with resetSession resets in the same reservation without starting a round", async () => {
   const f = await fixture();
   try {
@@ -272,7 +336,7 @@ test("saving metadata with resetSession resets in the same reservation without s
       method: "PATCH",
       url: `/api/issues/${f.issue.key}`,
       headers,
-      payload: { ...issueMetadataPayload("Saved with reset"), expectedEditVersion: await issueEditVersion(f.app, f.issue.key), resetSession: true },
+      payload: { ...issueMetadataPayload("Saved with reset"), ...(await f.editVersions()), resetSession: true },
     });
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.json().title, "Saved with reset");
@@ -303,6 +367,7 @@ for (const condition of ["resolved", "unbound"] as const) {
   test(`combined save/reset rejects ${condition} Issues before saving metadata or closing the session`, async () => {
     const f = await fixture();
     try {
+      const versions = await f.editVersions();
       if (condition === "resolved") await f.db.db.update(issues).set({ status: "resolved", resolvedAt: new Date() }).where(eq(issues.id, f.issue.id));
       else await f.db.db.delete(agentSessions).where(eq(agentSessions.issueId, f.issue.id));
       const originalFiles = await readdir(f.root);
@@ -312,7 +377,7 @@ for (const condition of ["resolved", "unbound"] as const) {
         method: "PATCH",
         url: `/api/issues/${f.issue.key}`,
         headers,
-        payload: { ...issueMetadataPayload("Must not be saved"), expectedEditVersion: await issueEditVersion(f.app, f.issue.key), resetSession: true },
+        payload: { ...issueMetadataPayload("Must not be saved"), ...versions, resetSession: true },
       });
       assert.equal(response.statusCode, 409, response.body);
       assert.equal(response.json().error, condition === "resolved" ? "resolved_issue_cannot_reset_session" : "agent_session_not_found");
@@ -336,14 +401,14 @@ for (const failure of ["binding failure", "session disappearance"] as const) {
       const oldFile = f.manager.getSessionFile()!;
       const originalSession = await readFile(oldFile);
       const originalIssue = (await f.db.db.select().from(issues).where(eq(issues.id, f.issue.id)))[0]!;
-      const expectedEditVersion = await issueEditVersion(f.app, f.issue.key);
+      const versions = await f.editVersions();
       if (failure === "binding failure") await f.db.client.execute("CREATE TRIGGER fail_reset BEFORE UPDATE ON issue_pilot_sessions BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
       else f.engine.closeSessionHook = async () => rm(oldFile);
       const response = await f.app.inject({
         method: "PATCH",
         url: `/api/issues/${f.issue.key}`,
         headers,
-        payload: { ...issueMetadataPayload("Atomic edit"), expectedEditVersion, resetSession: true },
+        payload: { ...issueMetadataPayload("Atomic edit"), ...versions, resetSession: true },
       });
       assert.equal(response.statusCode, 500, response.body);
       assert.deepEqual((await f.db.db.select().from(issues).where(eq(issues.id, f.issue.id)))[0], originalIssue);
@@ -357,7 +422,7 @@ for (const failure of ["binding failure", "session disappearance"] as const) {
         f.engine.closeSessionHook = undefined;
         await writeFile(oldFile, originalSession, { mode: 0o600 });
       }
-      const retry = await f.app.inject({ method: "PATCH", url: `/api/issues/${f.issue.key}`, headers, payload: { ...issueMetadataPayload("Atomic edit"), expectedEditVersion, resetSession: true } });
+      const retry = await f.app.inject({ method: "PATCH", url: `/api/issues/${f.issue.key}`, headers, payload: { ...issueMetadataPayload("Atomic edit"), ...versions, resetSession: true } });
       assert.equal(retry.statusCode, 200, retry.body);
       assert.notEqual((await f.db.db.select().from(agentSessions))[0]!.sessionFile, oldFile);
       assert.deepEqual(await readFile(oldFile), originalSession);
