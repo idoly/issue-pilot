@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 
-import type { Database } from "../db/client.ts";
+import type { DatabaseReader } from "../db/client.ts";
 import { serviceDeploymentRepositories, serviceDeployments, serviceRepositories, environments } from "../db/schema.ts";
 import { DomainError } from "../domain/errors.ts";
 
@@ -15,7 +15,7 @@ export interface DeploymentRepository {
 }
 
 export async function loadDeploymentRepositories(
-  database: Database,
+  database: DatabaseReader,
   input: { serviceId: string; environmentId: string },
 ): Promise<{ deployment: typeof serviceDeployments.$inferSelect; repositories: DeploymentRepository[] }> {
   const [scope, repositories] = await Promise.all([

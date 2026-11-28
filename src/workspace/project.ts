@@ -7,7 +7,7 @@ import { agentSessions, environments, issueRelations, issueRepositories, issues,
 import { canModifyIssueCode, type EnvironmentKind, type IssueType } from "../domain/contracts.ts";
 import { loadIssueCredentialOwner } from "../configuration/user-credentials.ts";
 import { createPersonalGitEnvironment } from "./git-credentials.ts";
-import { loadIssueDeployments } from "./issue-services.ts";
+import { currentIssueScope, issueServiceIds, loadIssueDeployments, loadServiceRepositorySet, proposedServiceIds, setServiceIncluded, type ServiceScopeChange } from "./issue-services.ts";
 import type { loadDeploymentRepositories } from "./deployment.ts";
 import { issueRepositoryWorkspaceNames, repositoryStorePath, repositoryWorkspaceNames, WorktreeManager, WorktreeRollbackFailure, type PreparedWorktree } from "./git.ts";
 import { prepareIssueRuntime, resolveRecordedRepository, type IssueRuntimeRepository, type RelatedIssueRuntime } from "./runtime.ts";
@@ -437,25 +437,33 @@ export class IssueProjectManager {
     }
   }
 
-  async prepare(issue: ProjectIssue, environmentKind: EnvironmentKind, gitEnvironment?: Record<string, string>, signal?: AbortSignal): Promise<PreparedIssueProject> {
-    return this.worktrees.withSignal(signal, () => this.prepareLocked(issue, environmentKind, gitEnvironment, signal));
-  }
-
-  private async prepareLocked(
+  async prepare(
     issue: ProjectIssue,
     environmentKind: EnvironmentKind,
-    gitEnvironment: Record<string, string> | undefined,
-    signal: AbortSignal | undefined,
+    gitEnvironment?: Record<string, string>,
+    signal?: AbortSignal,
+    readOnlyScope?: ServiceScopeChange,
   ): Promise<PreparedIssueProject> {
+    const prepare = () => this.prepareLocked(issue, environmentKind, signal, readOnlyScope);
+    return this.worktrees.withSignal(signal, () => (gitEnvironment ? this.worktrees.withGitEnvironment(gitEnvironment, prepare) : prepare()));
+  }
+
+  private async prepareLocked(issue: ProjectIssue, environmentKind: EnvironmentKind, signal: AbortSignal | undefined, readOnlyScope?: ServiceScopeChange): Promise<PreparedIssueProject> {
     signal?.throwIfAborted();
-    if (gitEnvironment) return this.worktrees.withGitEnvironment(gitEnvironment, () => this.prepareLocked(issue, environmentKind, undefined, signal));
+    if (readOnlyScope) {
+      if (canModifyIssueCode(environmentKind) || (readOnlyScope.operation === "remove" && readOnlyScope.serviceId === issue.serviceId)) throw new Error("issue_scope_changed");
+      // Only readiness changes before Git and view publication. A failed attempt never publishes the proposed DB scope.
+      await this.database.update(issueWorkspaces).set({ runtimeReady: false, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    }
     await assertIssueRoot(this.stateRoot, issue.key);
+    const mode = repositoryPreparationMode(environmentKind, issue.type);
+    const shared = mode === "shared";
+    const targetIds = readOnlyScope ? proposedServiceIds(readOnlyScope) : undefined;
     const [{ repositories: repositoryRows }, existingRepositoryRows] = await Promise.all([
-      loadIssueDeployments(this.database, issue),
+      targetIds ? loadServiceRepositorySet(this.database, targetIds, issue.environmentId) : loadIssueDeployments(this.database, issue),
       this.database.select().from(issueRepositories).where(eq(issueRepositories.issueId, issue.id)),
     ]);
     signal?.throwIfAborted();
-    const shared = repositoryPreparationMode(environmentKind, issue.type) === "shared";
     const repositoryUrls = new Set(repositoryRows.map(({ repository }) => repository.url));
     const removedRepositories = existingRepositoryRows.filter((repository) => !repositoryUrls.has(repository.url));
     const existingState = existingRepositoryRows.length ? classifyRepositoryState(existingRepositoryRows) : undefined;
@@ -475,8 +483,18 @@ export class IssueProjectManager {
       existingNames,
     );
     const saveRepositoryRows = async (prepared: PreparedWorktree[]) => {
-      await this.database.transaction((transaction) =>
-        replaceIssueRepositoryRows(
+      await this.database.transaction(async (transaction) => {
+        if (readOnlyScope && targetIds) {
+          await currentIssueScope(transaction, issue);
+          const current = await issueServiceIds(transaction, issue);
+          if (current.length !== readOnlyScope.before.length || current.some((id) => !readOnlyScope.before.includes(id))) throw new Error("issue_scope_changed");
+          const latest = await loadServiceRepositorySet(transaction, targetIds, issue.environmentId);
+          const branch = ({ repository, baseBranch }: DeploymentRepository) => ({ url: repository.url, baseBranch });
+          assertSameRepositorySet(latest.repositories.map(branch), repositoryRows.map(branch));
+          const included = readOnlyScope.operation === "include";
+          if (included !== current.includes(readOnlyScope.serviceId)) await setServiceIncluded(transaction, issue.id, readOnlyScope.serviceId, included);
+        }
+        await replaceIssueRepositoryRows(
           transaction,
           issue.id,
           existingRepositoryRows,
@@ -492,8 +510,17 @@ export class IssueProjectManager {
             };
           }),
           new Date(),
-        ),
-      );
+        );
+        if (readOnlyScope) {
+          const updated = await transaction
+            .update(issueWorkspaces)
+            .set({ runtimeReady: true, releasedAt: null, updatedAt: new Date() })
+            .where(eq(issueWorkspaces.issueId, issue.id))
+            .returning({ issueId: issueWorkspaces.issueId });
+          if (!updated.length) throw new Error("workspace_missing");
+          signal?.throwIfAborted();
+        }
+      });
     };
 
     const readRoots = new Set<string>();
@@ -508,9 +535,7 @@ export class IssueProjectManager {
         prepared.push(await this.worktrees.prepareShared({ url: repository.url, baseBranch }, checkedCheckouts));
       }
       signal?.throwIfAborted();
-      await saveRepositoryRows(prepared);
     } else {
-      const mode = developmentWorktreeMode(issue.type);
       prepared = await this.worktrees.prepareBatch({
         worktrees: repositoryRows.map(({ repository, baseBranch }) => {
           const existing = existingByUrl.get(repository.url);
@@ -555,7 +580,7 @@ export class IssueProjectManager {
       const sharedStore = repositoryStorePath(this.stateRoot, repositoryRows[index]!.repository.url);
       allowRepositoryRead(readRoots, sharedStore, workspace.workspacePath, shared ? undefined : workspace.cachePath);
     }
-    return {
+    const project: PreparedIssueProject = {
       runtimeRoot,
       readRoots: [...readRoots],
       repositories: prepared.map((workspace, index) => {
@@ -572,5 +597,10 @@ export class IssueProjectManager {
       relatedIssueKeys: relatedIssues.map(({ key }) => key),
       runtimeReady: true,
     };
+    if (shared) {
+      signal?.throwIfAborted();
+      await saveRepositoryRows(prepared);
+    }
+    return project;
   }
 }

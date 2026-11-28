@@ -6,7 +6,7 @@ The lockfile fixes package versions. The [patch manifest](manifest.ts) selects t
 
 ## Pi output persistence
 
-Patch: [pi-coding-agent 1.6.1](@earendil-works+pi-coding-agent+1.6.1.patch).
+Patch: [pi-coding-agent 1.7.0](@earendil-works+pi-coding-agent+1.7.0.patch).
 
 Codemode/MCP extensions accept optional saveOutput(data, extension). Resource reads and large resource/template listings pass that callback to Pi's model-content conversion and output limiter; the application does not implement another MCP renderer. The Issue work-file owner persists images, binary and truncated output through 0600 temporary files and atomic replacement. Without the callback, SDK behavior is unchanged.
 

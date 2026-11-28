@@ -1,20 +1,20 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { arr, compile, lit, obj, oneOf, str, union, unknown as unknownSchema, type Static } from "@earendil-works/pi-schema";
 import type { Database } from "../db/client.ts";
 import { loadMcpConnections, serviceMcpConnections } from "../configuration/service-mcp.ts";
 import { publicMcpUrl } from "../configuration/mcp.ts";
 import { deploymentContext } from "../configuration/service-context.ts";
-import { issues, issueRepositories, issueServiceScopes, issueWorkspaces, repositories as repositoryCatalog } from "../db/schema.ts";
+import { type issues, issueRepositories, issueWorkspaces, repositories as repositoryCatalog } from "../db/schema.ts";
 import { capabilityTextResult, structuredJsonResult } from "../capabilities/contracts.ts";
 import { canModifyIssueCode, configuredCapabilities, isDevelopmentEnvironment, isSshRepositoryUrl, type EnvironmentKind } from "../domain/contracts.ts";
 import { issueCommandEnvironment, issueLocalCommands } from "./native-tools.ts";
 import { objectToolParameters } from "./tool-schema.ts";
-import { issueServiceIds, listEnvironmentServices, loadServiceRepositorySet } from "../workspace/issue-services.ts";
+import { currentIssueScope, issueServiceIds, listEnvironmentServices, loadServiceRepositorySet, proposedServiceIds, setServiceIncluded, type ServiceScopeChange } from "../workspace/issue-services.ts";
 import { loadDeploymentRepositories } from "../workspace/deployment.ts";
 import path from "node:path";
 import { issueRepositoryWorkspaceNames, repositoryStorePath, type SharedCheckoutLease } from "../workspace/git.ts";
-import type { IssueProjectManager } from "../workspace/project.ts";
+import type { IssueProjectManager, PreparedIssueProject } from "../workspace/project.ts";
 import type { PersonalGitEnvironment } from "../workspace/git-credentials.ts";
 import { resolveRecordedRepository } from "../workspace/runtime.ts";
 import { syncBoundBranch } from "./branch-sync.ts";
@@ -139,6 +139,33 @@ async function updateBoundBranch(database: Database, issue: Issue, input: GitInp
   return structuredJsonResult(capabilityTextResult(JSON.stringify(details), { operation: input.operation }));
 }
 
+// Development preparation creates/removes real worktrees using the persisted membership.
+// On failure undo only this operation's membership change, never an existing include.
+async function prepareDevelopmentScope(database: Database, issue: Issue, scope: ServiceScopeChange, prepare: () => Promise<PreparedIssueProject>, signal?: AbortSignal) {
+  const included = scope.operation === "include";
+  const changed = scope.before.includes(scope.serviceId) !== included;
+  await loadServiceRepositorySet(database, proposedServiceIds(scope), issue.environmentId);
+  const recordMembership = (present: boolean) =>
+    database.transaction(async (tx) => {
+      if (changed) await setServiceIncluded(tx, issue.id, scope.serviceId, present);
+      await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    });
+  await recordMembership(included);
+  try {
+    const project = await prepare();
+    signal?.throwIfAborted();
+    await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
+    return project;
+  } catch (error) {
+    try {
+      await recordMembership(!included);
+    } catch (revertError) {
+      throw new AggregateError([error, revertError], "workspace_scope_revert_failed");
+    }
+    throw error;
+  }
+}
+
 export async function createWorkspaceTool(database: Database, issue: Issue, environmentKind: EnvironmentKind, projects: IssueProjectManager, options: WorkspaceToolOptions) {
   const { runtimeRoot, personalGit, onScopeChanged } = options;
   const available = await listEnvironmentServices(database, issue.environmentId);
@@ -213,47 +240,25 @@ export async function createWorkspaceTool(database: Database, issue: Issue, envi
       }
       return issueLocalCommands.run(runtimeRoot, async () => {
         signal?.throwIfAborted();
-        const [current] = await database.select().from(issues).where(eq(issues.id, issue.id)).limit(1);
-        if (!current || current.status === "resolved" || current.environmentId !== issue.environmentId || current.serviceId !== issue.serviceId) throw new Error("issue_scope_changed");
+        const current = await currentIssueScope(database, issue);
         if ("repository" in input) return updateBoundBranch(database, current, input, options, signal);
         const target = available.find((row) => row.service.key === input.service && row.environment.id === issue.environmentId);
         if (!target) throw new Error("service_not_available_in_environment");
         if (input.operation === "remove" && target.service.id === issue.serviceId) throw new Error("entry_service_cannot_be_removed");
         const included = await issueServiceIds(database, issue);
         const [workspace] = await database.select().from(issueWorkspaces).where(eq(issueWorkspaces.issueId, issue.id)).limit(1);
-        const already = included.includes(target.service.id);
-        const adding = input.operation === "include" && !already;
-        const removing = input.operation === "remove" && already;
-        if (adding || removing || (input.operation === "include" && !workspace?.runtimeReady)) {
-          const next = input.operation === "include" ? [...new Set([...included, target.service.id])] : included.filter((id) => id !== target.service.id);
-          await loadServiceRepositorySet(database, next, issue.environmentId);
-          await database.transaction(async (tx) => {
-            if (adding) await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
-            else if (removing) await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
-            await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-          });
-          // Persist intent before cross-media preparation. A failed attempt retires the session too,
-          // but only completed preparation grants the new paths to native tools in this round.
+        const include = input.operation === "include";
+        if (include !== included.includes(target.service.id) || (include && !workspace?.runtimeReady)) {
+          const scope = { before: included, serviceId: target.service.id, operation: input.operation };
+          const development = canModifyIssueCode(environmentKind);
+          const prepare = () =>
+            development
+              ? prepareDevelopmentScope(database, current, scope, () => projects.prepare(current, environmentKind, personalGit?.env), signal)
+              : projects.prepare(current, environmentKind, personalGit?.env, signal, scope);
           let readRoots: string[] | undefined;
           try {
-            const prepare = () => projects.prepare(current, environmentKind, personalGit?.env);
             const project = await (options.checkoutLease ? options.checkoutLease.run(prepare) : prepare());
-            signal?.throwIfAborted();
-            await database.update(issueWorkspaces).set({ runtimeReady: project.runtimeReady, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
             readRoots = project.readRoots;
-          } catch (error) {
-            // Revert only our membership change. Retrying an existing include owns no such change;
-            // keep the view invalid so the next round re-prepares it.
-            try {
-              await database.transaction(async (tx) => {
-                if (adding) await tx.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issue.id), eq(issueServiceScopes.serviceId, target.service.id)));
-                else if (removing) await tx.insert(issueServiceScopes).values({ issueId: issue.id, serviceId: target.service.id }).onConflictDoNothing();
-                await tx.update(issueWorkspaces).set({ runtimeReady: false, releasedAt: null, updatedAt: new Date() }).where(eq(issueWorkspaces.issueId, issue.id));
-              });
-            } catch (revertError) {
-              throw new AggregateError([error, revertError], "workspace_scope_revert_failed");
-            }
-            throw error;
           } finally {
             onScopeChanged?.(readRoots);
           }

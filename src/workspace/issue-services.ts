@@ -1,11 +1,28 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Database, DatabaseReader } from "../db/client.ts";
-import { issueServiceScopes, environments, services, serviceDeployments } from "../db/schema.ts";
+import { issues, issueServiceScopes, environments, services, serviceDeployments } from "../db/schema.ts";
 import { ENVIRONMENT_KINDS, isDevelopmentEnvironment } from "../domain/contracts.ts";
 import { DomainError } from "../domain/errors.ts";
 import { loadDeploymentRepositories } from "./deployment.ts";
 
 type IssueScope = { id: string; serviceId: string; environmentId: string };
+export type ServiceScopeChange = { before: string[]; serviceId: string; operation: "include" | "remove" };
+
+export function proposedServiceIds({ before, serviceId, operation }: ServiceScopeChange): string[] {
+  return operation === "include" ? [...new Set([...before, serviceId])] : before.filter((id) => id !== serviceId);
+}
+
+export async function currentIssueScope(reader: DatabaseReader, issue: IssueScope) {
+  const [current] = await reader.select().from(issues).where(eq(issues.id, issue.id)).limit(1);
+  if (!current || current.status === "resolved" || current.environmentId !== issue.environmentId || current.serviceId !== issue.serviceId) throw new Error("issue_scope_changed");
+  return current;
+}
+
+export async function setServiceIncluded(writer: Pick<Database, "insert" | "delete">, issueId: string, serviceId: string, included: boolean) {
+  if (included) await writer.insert(issueServiceScopes).values({ issueId, serviceId }).onConflictDoNothing();
+  else await writer.delete(issueServiceScopes).where(and(eq(issueServiceScopes.issueId, issueId), eq(issueServiceScopes.serviceId, serviceId)));
+}
+
 export async function listEnvironmentServices(database: Database, environmentId: string) {
   const [current] = await database.select().from(environments).where(eq(environments.id, environmentId)).limit(1);
   const includeSources = isDevelopmentEnvironment(current?.kind);
@@ -17,11 +34,11 @@ export async function listEnvironmentServices(database: Database, environmentId:
     .where(includeSources ? inArray(environments.kind, ENVIRONMENT_KINDS) : eq(serviceDeployments.environmentId, environmentId))
     .orderBy(asc(environments.key), asc(services.createdAt), asc(services.key));
 }
-export async function issueServiceIds(database: Database, issue: IssueScope) {
+export async function issueServiceIds(database: DatabaseReader, issue: IssueScope) {
   const extra = await database.select().from(issueServiceScopes).where(eq(issueServiceScopes.issueId, issue.id)).orderBy(asc(issueServiceScopes.createdAt), asc(issueServiceScopes.serviceId));
   return [...new Set([issue.serviceId, ...extra.map((row) => row.serviceId)])];
 }
-export async function loadServiceRepositorySet(database: Database, serviceIds: string[], environmentId: string) {
+export async function loadServiceRepositorySet(database: DatabaseReader, serviceIds: string[], environmentId: string) {
   const primary = await loadDeploymentRepositories(database, { serviceId: serviceIds[0]!, environmentId });
   const repositories = [...primary.repositories];
   const byUrl = new Map(repositories.map((row) => [row.repository.url, row]));

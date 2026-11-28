@@ -303,7 +303,6 @@ export class IssueWorkFileStore {
       });
       if (present && !present.isFile()) throw new Error("invalid_work_file");
       const handle = await open(temporary, "wx", 0o600);
-      const failures: unknown[] = [];
       try {
         signal?.throwIfAborted();
         const result = await producer(async (content) => {
@@ -312,13 +311,12 @@ export class IssueWorkFileStore {
         const metadata = await handle.stat();
         await handle.close();
         signal?.throwIfAborted();
+        const receipt = { fileName: selected, size: metadata.size, updatedAt: metadata.mtime.toISOString(), result };
         await rename(temporary, target);
-        return { fileName: selected, size: metadata.size, updatedAt: metadata.mtime.toISOString(), result };
+        return receipt;
       } catch (error) {
-        failures.push(error);
+        await cleanupWorkFile(handle, temporary, [error]);
         throw error;
-      } finally {
-        await cleanupWorkFile(handle, temporary, failures);
       }
     });
     if (!signal) return queued;

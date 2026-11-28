@@ -30,12 +30,12 @@
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.83",
     "@bytebase/dbhub": "2.1.0",
-    "@earendil-works/pi-ai": "1.6.1",
-    "@earendil-works/pi-codemode": "1.6.1",
-    "@earendil-works/pi-coding-agent": "1.6.1",
-    "@earendil-works/pi-schema": "1.6.1",
+    "@earendil-works/pi-ai": "1.7.0",
+    "@earendil-works/pi-codemode": "1.7.0",
+    "@earendil-works/pi-coding-agent": "1.7.0",
+    "@earendil-works/pi-schema": "1.7.0",
     "@fastify/multipart": "^10.1.9",
-    "@fastify/static": "^10.1.12",
+    "@fastify/static": "^11.0.0",
     "@libsql/client": "^0.18.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "content-disposition": "3.1.0",
@@ -60,7 +60,7 @@
     "oxlint": "1.95.0",
     "solid-js": "2.0.4",
     "typescript": "^7.0.2",
-    "vite": "^8.3.8",
+    "vite": "^8.4.0",
     "vitest": "^5.1.2"
   },
   "overrides": {

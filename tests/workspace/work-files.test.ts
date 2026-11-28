@@ -111,6 +111,30 @@ test("query results are ordinary working files with direct download links", asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+test("a successful export rename needs no unlink to confirm the published result", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-export-commit-"));
+  try {
+    await claimIssueRoot(root, key);
+    const store = new IssueWorkFileStore(root, key);
+    const unlink = context.mock.method(fs, "unlink", () => {
+      throw new Error("unexpected post-publication unlink");
+    });
+    syncBuiltinESMExports();
+    const receipt = await store.generate("result.txt", async (append) => {
+      await append("complete");
+      return 1;
+    });
+    assert.equal(receipt.result, 1);
+    assert.equal(unlink.mock.callCount(), 0);
+    assert.equal(await readFile(path.join(store.directory, "result.txt"), "utf8"), "complete");
+    assert.deepEqual(await readdir(store.directory), ["result.txt"]);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("failed or cancelled generation retains the old file and removes temporary files", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "issue-pilot-work-store-failure-")),
     store = new IssueWorkFileStore(root, "ISSUE-20261022-001");

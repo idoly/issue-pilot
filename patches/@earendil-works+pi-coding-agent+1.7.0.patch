@@ -1,8 +1,8 @@
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js
-index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd47c85bd61 100644
+index f8df8bd..cdf0081 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/execute.js
-@@ -331,9 +331,9 @@ function formatError(result, calls) {
+@@ -359,9 +359,9 @@ function formatError(result, calls) {
      return `${head}\n\n${formatCallSummary(calls)}`;
  }
  /** Write the full text output to a temp file, like bash does for truncated output. */
@@ -14,7 +14,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
      }
      catch (error) {
          return { error: error instanceof Error ? error.message : String(error) };
-@@ -351,7 +351,7 @@ const IMAGE_EXTENSIONS = {
+@@ -379,7 +379,7 @@ const IMAGE_EXTENSIONS = {
   * image but has no other way to reach its bytes: scripts cannot write files, and `write` only takes
   * text. Images shown more than once are saved once.
   */
@@ -23,7 +23,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
      const labels = new Map();
      const label = async ({ data, mimeType }) => {
          const bytes = Buffer.from(data, "base64");
-@@ -362,7 +362,7 @@ async function saveImages(items) {
+@@ -390,7 +390,7 @@ async function saveImages(items) {
          // A failed write (disk full, unwritable temp dir) must not discard the result of a script whose
          // tool calls already ran, so it becomes part of the label.
          try {
@@ -32,7 +32,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
              return `[Image saved to ${path} (${kind})]`;
          }
          catch (error) {
-@@ -386,7 +386,7 @@ async function saveImages(items) {
+@@ -414,7 +414,7 @@ async function saveImages(items) {
   * item that keeps the start and end of the text, and images follow it. The full text is written to
   * a temp file.
   */
@@ -41,7 +41,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
      const texts = items.filter((item) => item.type === "text").map((item) => item.text);
      const combined = texts.join("\n");
      const budget = maxTokens * CHARS_PER_TOKEN;
-@@ -398,7 +398,7 @@ async function truncateOutput(items, maxTokens) {
+@@ -426,7 +426,7 @@ async function truncateOutput(items, maxTokens) {
      const head = sliceHead(combined, headChars);
      const tail = sliceTail(combined, tailChars);
      let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
@@ -50,7 +50,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
      text +=
          "path" in spilled
              ? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
-@@ -428,6 +428,7 @@ function toScriptValue(tool, outcome) {
+@@ -456,6 +456,7 @@ function toScriptValue(tool, outcome) {
   * tools, `store()` starts empty, and writes are dropped.
   */
  export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx, options = {}) {
@@ -58,7 +58,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
      const startedAt = performance.now();
      const { code, options: sourceOptions } = parseCodemodeSource(input.code);
      const calls = [];
-@@ -561,10 +562,10 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
+@@ -589,10 +590,10 @@ export async function executeCodemode(toolCallId, input, signal, onUpdate, ctx,
              text: `Note: models.generateImages() returned ${generatedImages} image${generatedImages === 1 ? "" : "s"} that the script did not show. Show each image block of result.output with image(block).`,
          });
      }
@@ -72,7 +72,7 @@ index 6f1f86f34b7a04a8014ec8803f90ad4d302d6c5c..5aa16671753287db0a40689ec8660bd4
      const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
      const details = snapshot();
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.d.ts
-index 7de9c24e9d7ac437265eeb911ca9c841b36dca9f..af051ba7c021da84ab45e7ddd4212b8689f04531 100644
+index 7de9c24..af051ba 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.d.ts
 @@ -8,6 +8,8 @@
@@ -85,7 +85,7 @@ index 7de9c24e9d7ac437265eeb911ca9c841b36dca9f..af051ba7c021da84ab45e7ddd4212b86
      mode?: CodemodeMode;
      /** Overrides the `codemode.inlineBudget` setting. */
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.js b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.js
-index 5c7cf3ca70024249b0bac77db4ad03687e28564a..dbb83e673963b00ad13e44cb94ea0d75fd20de04 100644
+index 5c7cf3c..dbb83e6 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/index.js
 @@ -20,6 +20,7 @@ export function createCodemodeExtension(options = {}) {
@@ -97,7 +97,7 @@ index 5c7cf3ca70024249b0bac77db4ad03687e28564a..dbb83e673963b00ad13e44cb94ea0d75
                  getToolGuidelines: () => new Map(pi.getAllTools().map((tool) => [tool.name, tool.promptGuidelines ?? []])),
                  getMode: () => options.mode ?? readMode(pi),
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/tool.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/tool.d.ts
-index 961a48e75cdac5ab1d37be6733f5b05eaf661e7f..654608f89bc5d28515b61760ac1f779fc5a43236 100644
+index 961a48e..654608f 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/tool.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/codemode/tool.d.ts
 @@ -37,6 +37,7 @@ export interface CodemodeStoreEntryData {
@@ -109,7 +109,7 @@ index 961a48e75cdac5ab1d37be6733f5b05eaf661e7f..654608f89bc5d28515b61760ac1f779f
      getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
      /** Prompt guidelines of every tool, by tool name, shown with declarations by `describeTool()` and `ALL_TOOLS`. */
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.d.ts
-index 2ee96fad28b6b73c84a3a9410e56cc78c16ab807..2233b6563442f5eef22331ce329114d9d6e8bf59 100644
+index 2ee96fa..2233b65 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.d.ts
 @@ -31,6 +31,8 @@ import type { McpOAuthCredentialStore } from "./oauth.ts";
@@ -122,7 +122,7 @@ index 2ee96fad28b6b73c84a3a9410e56cc78c16ab807..2233b6563442f5eef22331ce329114d9
      loadConfig?: (ctx: ExtensionContext) => LoadedMcpConfig;
      /** Defaults to stdio and streamable HTTP transports built from the server config. */
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js
-index 073dcb09d824330d8c8c2bcc709438c7abf55000..4f1977698adde6ff473874572bbc57d2a5e79b54 100644
+index 073dcb0..4f19776 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/index.js
 @@ -312,7 +312,11 @@ export function createMcpExtension(options = {}) {
@@ -148,7 +148,7 @@ index 073dcb09d824330d8c8c2bcc709438c7abf55000..4f1977698adde6ff473874572bbc57d2
                  pi.registerTool(definition);
              if (wasDirect) {
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.d.ts
-index d8f5cc5b3af0b4376d5130a821dcf8c73aa17e9b..fbd0e5e33107225374852cfdb730449d04ddba98 100644
+index d8f5cc5..fbd0e5e 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.d.ts
 @@ -32,5 +32,6 @@ export interface McpResourceServer {
@@ -160,7 +160,7 @@ index d8f5cc5b3af0b4376d5130a821dcf8c73aa17e9b..fbd0e5e33107225374852cfdb730449d
  //# sourceMappingURL=resources.d.ts.map
 \ No newline at end of file
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.js b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.js
-index 0b4f16307afab1892f6ce8d1a3edf9244ab65772..24ec755bac72ed0cc8f46f4218340d346ea0fc73 100644
+index 0b4f163..24ec755 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/resources.js
 @@ -139,8 +139,8 @@ function stringArgument(params, key) {
@@ -212,7 +212,7 @@ index 0b4f16307afab1892f6ce8d1a3edf9244ab65772..24ec755bac72ed0cc8f46f4218340d34
              return {
                  content,
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.d.ts b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.d.ts
-index 6ba4ea90be14303f3d6d9dfbfcc918c983f34c9e..7af81cc8b6994ba34929efabd9f2995c1d31401d 100644
+index 6ba4ea9..7af81cc 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.d.ts
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.d.ts
 @@ -48,6 +48,7 @@ export declare function createMcpToolDefinition(options: {
@@ -224,7 +224,7 @@ index 6ba4ea90be14303f3d6d9dfbfcc918c983f34c9e..7af81cc8b6994ba34929efabd9f2995c
      /** Whether `read_mcp_resource` can read the server's resources. */
      readableResources?: () => boolean;
 diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js
-index f506a0497920d53416efd8b24baafb41ea0f3531..b6e6c5f66312c5fe71e92fe88425d996ffc5f403 100644
+index f506a04..b6e6c5f 100644
 --- a/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js
 +++ b/node_modules/@earendil-works/pi-coding-agent/dist/extensions/mcp/tools.js
 @@ -95,7 +95,7 @@ export function createMcpToolDefinition(options) {
